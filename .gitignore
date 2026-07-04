@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+
+# Test artifacts
+coverage/
+
+# Runtime
+*.log
+.DS_Store
+Thumbs.db
+
+# Local DBs (never commit)
+*.human.db
+*.human.db-*
+*.db
+*.db-*
+*.db.zst
+
+# Backups
+*.bak
+*.bak.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Local config overrides
+.codebase-memory.local.json

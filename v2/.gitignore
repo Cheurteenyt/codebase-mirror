@@ -1,0 +1,38 @@
+# Codebase Memory V2 — .gitignore
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+
+# Test artifacts
+coverage/
+.vitest/
+
+# Runtime
+*.log
+.DS_Store
+Thumbs.db
+
+# Local config (keep the template, ignore overrides)
+.codebase-memory.local.json
+
+# Vault (don't commit by default — opt-in per project)
+# Uncomment the next line to ignore the vault:
+# .codebase-memory-vault/
+
+# Backups
+*.bak
+*.bak.*
+
+# Local DBs (never commit)
+*.human.db
+*.human.db-*
+*.db.zst
+
+# IDE
+.idea/
+.vscode/
+*.swp
