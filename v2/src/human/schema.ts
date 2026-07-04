@@ -179,6 +179,11 @@ CREATE INDEX IF NOT EXISTS idx_human_metrics_project ON human_metrics(project);
 CREATE INDEX IF NOT EXISTS idx_human_metrics_doc ON human_metrics(project, documentation_coverage);
 CREATE INDEX IF NOT EXISTS idx_human_metrics_risk ON human_metrics(project, risk_score);
 
+-- sync_state: tracks the last sync hash for each vault file.
+-- Currently write-only (populated by markSynced on every export/import).
+-- Future: read this table before sync to detect conflicts (when both DB
+-- and vault file changed since last sync). The canonical hash is computed
+-- from body_markdown + sorted(cbm_node_ids) + sorted(tags).
 CREATE TABLE IF NOT EXISTS sync_state (
     project             TEXT NOT NULL,
     obsidian_path       TEXT NOT NULL,

@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { HumanMemoryStore } from '../human/store.js';
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { ToolHandler, ALL_TOOLS, TOOL_CLASSES } from './tools/index.js';
+import { MCP_MAX_LINE_LENGTH } from '../constants.js';
 
 export interface McpServerOptions {
   project: string;
@@ -36,7 +37,7 @@ const JSONRPC_ERROR_CODES = {
   INTERNAL_ERROR: -32603,
 } as const;
 
-const MAX_LINE_LENGTH = 10 * 1024 * 1024; // 10M UTF-16 code units (~20-40MB UTF-8) — protects against OOM.
+// MCP_MAX_LINE_LENGTH imported from constants.ts
 
 // Read version from package.json at runtime for single source of truth.
 let SERVER_VERSION: string;
@@ -75,8 +76,8 @@ export class McpServer {
     return new Promise<void>((resolve) => {
       this.rl.on('line', (line) => {
         // Protect against huge payloads.
-        if (line.length > MAX_LINE_LENGTH) {
-          process.stderr.write(`[cbm-v2 mcp] dropping line exceeding ${MAX_LINE_LENGTH} bytes\n`);
+        if (line.length > MCP_MAX_LINE_LENGTH) {
+          process.stderr.write(`[cbm-v2 mcp] dropping line exceeding ${MCP_MAX_LINE_LENGTH} bytes\n`);
           return;
         }
         const p = this.handleLine(line)

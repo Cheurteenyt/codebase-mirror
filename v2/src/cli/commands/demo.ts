@@ -188,9 +188,8 @@ export function registerDemoCommand(program: Command): void {
             } catch (e: any) {
         console.error('Error: ' + e.message);
         process.exitCode = 1;
-        humanStore.close();
-        return;
       }
+      humanStore.close();
 
       // Cleanup
       if (cleanup) {

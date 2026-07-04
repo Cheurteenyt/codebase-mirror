@@ -317,8 +317,12 @@ export class CodeGraphReader {
            LIMIT ?`
         )
         .all(project, phraseQuery, limit) as any[];
-      // Trust FTS5 — return whatever it found (including empty).
-      return rows.map(deserializeCodeNode);
+      // If FTS5 found results, return them. If zero results, fall through
+      // to LIKE (FTS5 tokenization may differ from substring matching).
+      if (rows.length > 0) {
+        return rows.map(deserializeCodeNode);
+      }
+      // Fall through to LIKE fallback.
     } catch {
       // Fall through to LIKE fallback.
     }
@@ -362,7 +366,7 @@ export class CodeGraphReader {
         .prepare(
           `SELECT * FROM nodes
            WHERE project = ? AND label = 'Route'
-             AND json_extract(properties_json, '$.route_method') = ?
+             AND LOWER(json_extract(properties_json, '$.route_method')) = LOWER(?)
              AND json_extract(properties_json, '$.route_path') = ?
            LIMIT 1`
         )

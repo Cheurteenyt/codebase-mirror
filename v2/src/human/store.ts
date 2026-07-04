@@ -174,7 +174,7 @@ export class HumanMemoryStore {
     }
     if (attempt >= 100) {
       throw new Error(
-        `Could not find a free slug for "${slug}" in project "${input.project}" after 100 attempts. ` +
+        `Could not find a free slug for "${slug}" in project "${input.project}" after SLUG_COLLISION_MAX_ATTEMPTS attempts. ` +
         `Use a different title or delete one of the existing notes.`
       );
     }
@@ -343,7 +343,13 @@ export class HumanMemoryStore {
   }
 
   deleteNode(id: number): boolean {
+    // Fetch the node first to clean up sync_state (keyed by project + obsidian_path, not by id).
+    const node = this.getNodeById(id);
     const result = this.db.prepare('DELETE FROM human_nodes WHERE id = ?').run(id);
+    if (result.changes > 0 && node && node.obsidian_path) {
+      this.db.prepare('DELETE FROM sync_state WHERE project = ? AND obsidian_path = ?')
+        .run(node.project, node.obsidian_path);
+    }
     return result.changes > 0;
   }
 
@@ -402,6 +408,19 @@ export class HumanMemoryStore {
       throw new Error(
         `Cross-project edge rejected: source node id=${input.source_human_node_id} belongs to project "${srcNode.project}", but input.project is "${input.project}".`
       );
+    }
+
+    // For human-target edges, validate the target node belongs to the same project.
+    if (input.target_kind === 'human' && input.target_human_node_id != null) {
+      const targetNode = this.getNodeById(input.target_human_node_id!);
+      if (!targetNode) {
+        throw new Error(`Target human node id=${input.target_human_node_id} not found.`);
+      }
+      if (targetNode.project !== input.project) {
+        throw new Error(
+          `Cross-project edge rejected: target node id=${input.target_human_node_id} belongs to project "${targetNode.project}", but input.project is "${input.project}".`
+        );
+      }
     }
 
     // Dedup: if an identical edge already exists, return it instead of throwing.
