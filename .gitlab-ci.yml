@@ -1,0 +1,60 @@
+# GitLab CI/CD pipeline for Codebase Memory V2
+# Runs typecheck, build, and tests on every push/merge request.
+
+stages:
+  - lint
+  - build
+  - test
+
+variables:
+  NODE_VERSION: "20"
+
+# Cache npm dependencies between jobs
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - v2/node_modules/
+
+# ── Type-check (fastest gate) ──────────────────────────────────────
+typecheck:
+  stage: lint
+  image: node:${NODE_VERSION}
+  script:
+    - cd v2
+    - npm ci
+    - npm run typecheck
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+# ── Build ──────────────────────────────────────────────────────────
+build:
+  stage: build
+  image: node:${NODE_VERSION}
+  script:
+    - cd v2
+    - npm ci
+    - npm run build
+  artifacts:
+    paths:
+      - v2/dist/
+    expire_in: 1 week
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+# ── Test (requires build first) ────────────────────────────────────
+test:
+  stage: test
+  image: node:${NODE_VERSION}
+  needs:
+    - build
+  script:
+    - cd v2
+    - npm ci
+    - npm run build
+    - npm test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+  coverage: '/Tests.*?(\d+).*?passing/'

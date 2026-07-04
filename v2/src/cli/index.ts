@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // v2/src/cli/index.ts
 // Entry point for the cbm-v2 CLI.
 
@@ -5,6 +6,9 @@ import { Command } from 'commander';
 import { registerObsidianCommand } from './commands/obsidian.js';
 import { registerHumanCommand } from './commands/human.js';
 import { registerReportCommand } from './commands/report.js';
+import { registerStatsCommand } from './commands/stats.js';
+import { registerBackupCommand } from './commands/backup.js';
+import { registerDemoCommand } from './commands/demo.js';
 import { McpServer } from '../mcp/server.js';
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
 import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
@@ -26,6 +30,9 @@ program
 registerObsidianCommand(program);
 registerHumanCommand(program);
 registerReportCommand(program);
+registerStatsCommand(program);
+registerBackupCommand(program);
+registerDemoCommand(program);
 
 program
   .command('mcp')
