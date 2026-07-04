@@ -1,6 +1,7 @@
 // v2/src/mcp/tools/get_module_context.ts
 
 import { BaseTool } from './base.js';
+import { safeJsonParse } from '../../constants.js';
 import { ToolDefinition } from './index.js';
 import { computeRiskScore } from '../../reports/risk.js';
 
@@ -56,7 +57,7 @@ export class GetModuleContextTool extends BaseTool {
       }
       const module = modules[0];
       const degree = codeReader.getNodeDegree(module.id);
-      const props = JSON.parse(module.properties_json || '{}');
+      const props = safeJsonParse(module.properties_json, {} as Record<string, any>);
 
       const result: Record<string, unknown> = {
         module: {

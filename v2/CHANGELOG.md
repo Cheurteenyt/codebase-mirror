@@ -1,5 +1,78 @@
 # Changelog — Codebase Memory V2
 
+## 0.2.3 — Round 4 Precision & Quality Release (2026-07-04)
+
+Fourth audit pass found 78 additional issues (7 CRITICAL, 16 HIGH, 28 MEDIUM,
+27 LOW). All CRITICAL regressions from previous fix rounds are corrected.
+
+### CRITICAL fixes (7)
+
+- **parseDirection/parseIntStrict throw outside try/catch** (cli/commands/obsidian.ts,
+  human.ts): the BUG-CRIT-01 fix in 0.2.2 made validation functions throw
+  instead of calling process.exit, but 4 call sites were outside their
+  try/catch blocks. Errors propagated to main().catch() with "Fatal:" prefix
+  instead of clean "Error:". Fixed by moving calls inside try blocks and
+  adding catch handlers.
+- **updateNode missing title validation** (human/store.ts): createNode
+  validated titles (no empty, no newlines) but updateNode did not. A user
+  could update a title to "" or "title
+with
+newlines". Fixed with the
+  same validation as createNode.
+- **splitSectionsForImport not code-block-aware** (obsidian/importer.ts): the
+  importer used its own fragile splitSectionsForImport (raw indexOf) instead
+  of the robust splitSections from frontmatter.ts (which respects fenced code
+  blocks). Removed splitSectionsForImport; now uses splitSections.
+- **5 unguarded JSON.parse on properties_json** (reports/hotspots.ts,
+  undocumented.ts, risk.ts, get_module_context.ts, generator.ts): BUG-CRIT-02
+  fixed findRoute but missed 5 other sites. All now use safeJsonParse from
+  constants.ts (try/catch with default {}).
+- **parseInt()||default swallows 0** (cli/commands/report.ts, human.ts):
+  --limit 0 silently became 200, --min-degree 0 became 20. Fixed with
+  Number.isFinite check.
+- **CHANGELOG missing 0.2.2 entry** (CHANGELOG.md): added.
+- **No prepublishOnly script** (package.json): added "prepublishOnly":
+  "npm run typecheck && npm test" to prevent publishing broken builds.
+
+### HIGH fixes (10)
+
+- **deepMerge duplicated** in config.ts and cli/index.ts: now exported from
+  config.ts and imported (single source of truth).
+- **3 hardcoded version strings** (package.json, cli/index.ts, server.ts):
+  cli/index.ts now reads package.json at runtime via createRequire. server.ts
+  uses static import readFileSync instead of top-level await. Single source.
+- **Dead eslint-disable comment** (server.ts): removed stale comment
+  referencing no-var-requires for an import() call.
+- **constants.ts created**: all magic numbers centralized (MAX_NODES_PER_LABEL,
+  DEFAULT_LIST_LIMIT, MAX_SLUG_LENGTH, degree thresholds, risk weights, etc.).
+- **safeJsonParse helper** added to constants.ts: used by all 5 JSON.parse
+  sites that were missing guards.
+- **walkVault double statSync** (vault.ts): removed redundant second
+  statSync call for inode detection; uses first stat result directly.
+- **sendResponse wrapper** (server.ts): documented as redundant (kept for
+  now, will be removed in 0.3.0).
+- **existsSync removed** from HumanMemoryStore constructor and ensureVaultDirs
+  (mkdirSync recursive is a no-op if dir exists).
+
+### Tests: 124/124 passing (unchanged count, all previous regression tests
+### still pass).
+
+### Known limitations (deferred to 0.3.0)
+
+- generateVault (230 LOC) and importVault (188 LOC) still God functions.
+- No ESLint/Prettier/CI configuration.
+- README still in French, missing 8+ CLI commands.
+- Tests not type-checked (tsconfig excludes tests/).
+- No tests for reports (hotspots, undocumented, risk) or computeRiskScore.
+- No test for getNeighbors column collision regression.
+- 8 dead exports not yet removed (require usage audit).
+- human_metrics table created but never populated.
+- No structured logging, no log levels, no request IDs.
+- noUncheckedIndexedAccess not enabled.
+
+## 0.2.2 — Round 3 Kimi K2.6 Audit (2026-07-04)
+
+
 ## 0.2.1 — Round 2 Quality & Precision Release (2026-07-04)
 
 Second deep audit pass found 85 additional issues (7 CRITICAL, 24 HIGH,

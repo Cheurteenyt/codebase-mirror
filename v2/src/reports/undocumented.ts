@@ -3,6 +3,7 @@
 
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
+import { safeJsonParse } from '../constants.js';
 
 export interface UndocumentedNode {
   cbm_node_id: number;
@@ -55,7 +56,7 @@ export function computeUndocumentedReport(
       byLabel[label].total++;
       totalNodes++;
       const degree = degreeMap.get(node.id) ?? 0;
-      const props = JSON.parse(node.properties_json || '{}');
+      const props = safeJsonParse(node.properties_json, {} as Record<string, any>);
       const complexity = props.complexity ?? props.complexity_avg ?? 0;
       const notes = humanStore.listNodesByCbmNodeId(project, node.id, 1);
 

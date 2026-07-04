@@ -65,7 +65,6 @@ export function registerObsidianCommand(program: Command): void {
       const config = loadConfig();
       const project = deriveProject(opts);
       const vaultPath = deriveVault(opts, config);
-      const direction = parseDirection(opts.direction);
       const dryRun = !!opts.dryRun;
       const backup = opts.backup !== false && config.v2.obsidian.backupBeforeWrite;
       const autoModules = opts.autoModules !== false && config.v2.obsidian.autoGenerateModuleNotes;
@@ -73,18 +72,28 @@ export function registerObsidianCommand(program: Command): void {
       const minDegreeParsed = opts.minDegree ? parseInt(opts.minDegree, 10) : NaN;
       const minDegree = Number.isFinite(minDegreeParsed) ? minDegreeParsed : config.v2.obsidian.minDegreeForModuleNote;
 
-      console.log(`Syncing project "${project}" — direction: ${direction}${dryRun ? ' (dry-run)' : ''}`);
-
-      const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
-      let codeReader: CodeGraphReader | undefined;
+      let direction: Direction;
       try {
-        codeReader = new CodeGraphReader(defaultCodeDbPath(project));
+        direction = parseDirection(opts.direction);
       } catch (e: any) {
-        console.warn(`⚠️  Code graph not available: ${e.message}`);
-        console.warn('    Sync will work in human-only mode (no auto module/route notes).');
+        console.error(`Error: ${e.message}`);
+        process.exitCode = 1;
+        return;
       }
 
+      console.log(`Syncing project "${project}" — direction: ${direction}${dryRun ? ' (dry-run)' : ''}`);
+
+      let humanStore: HumanMemoryStore | null = null;
+      let codeReader: CodeGraphReader | undefined;
       try {
+        humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
+        try {
+          codeReader = new CodeGraphReader(defaultCodeDbPath(project));
+        } catch (e: any) {
+          console.warn(`⚠️  Code graph not available: ${e.message}`);
+          console.warn('    Sync will work in human-only mode (no auto module/route notes).');
+        }
+
         if (direction === 'export' || direction === 'both') {
           console.log('');
           console.log('→ Export (DB → vault):');
@@ -142,7 +151,7 @@ export function registerObsidianCommand(program: Command): void {
         console.log('');
         console.log('✅ Sync complete');
       } finally {
-        humanStore.close();
+        humanStore?.close();
         codeReader?.close();
       }
     });
@@ -173,7 +182,7 @@ export function registerObsidianCommand(program: Command): void {
         });
         console.log(`✅ Export: ${result.created.length} created, ${result.updated.length} updated, ${result.unchanged.length} unchanged`);
       } finally {
-        humanStore.close();
+        humanStore?.close();
         codeReader?.close();
       }
     });
@@ -196,7 +205,7 @@ export function registerObsidianCommand(program: Command): void {
         const result = importVault({ project, vaultPath, humanStore, codeReader, dryRun: !!opts.dryRun });
         console.log(`✅ Import: ${result.created.length} created, ${result.updated.length} updated, ${result.unchanged.length} unchanged, ${result.edgesCreated} edges created, ${result.edgesDeleted} edges deleted`);
       } finally {
-        humanStore.close();
+        humanStore?.close();
         codeReader?.close();
       }
     });
@@ -303,7 +312,7 @@ export function registerObsidianCommand(program: Command): void {
           return;
         }
       } finally {
-        humanStore.close();
+        humanStore?.close();
         codeReader?.close();
       }
     });
@@ -357,7 +366,7 @@ export function registerObsidianCommand(program: Command): void {
           return;
         }
       } finally {
-        humanStore.close();
+        humanStore?.close();
         codeReader?.close();
       }
     });
@@ -412,7 +421,7 @@ export function registerObsidianCommand(program: Command): void {
           return;
         }
       } finally {
-        humanStore.close();
+        humanStore?.close();
         codeReader?.close();
       }
     });

@@ -31,8 +31,8 @@ export function registerReportCommand(program: Command): void {
       }
       try {
         const rep = computeHotspotsReport(project, codeReader, humanStore, {
-          minDegree: parseInt(opts.minDegree, 10) || 20,
-          limit: parseInt(opts.limit, 10) || 100,
+          minDegree: (() => { const n = parseInt(opts.minDegree, 10); return Number.isFinite(n) ? n : 20; })(),
+          limit: (() => { const n = parseInt(opts.limit, 10); return Number.isFinite(n) ? n : 100; })(),
         });
         if (opts.format === 'json') {
           console.log(JSON.stringify(rep, null, 2));
@@ -93,7 +93,7 @@ export function registerReportCommand(program: Command): void {
       }
       try {
         const rep = computeRiskReport(project, codeReader, humanStore, {
-          limit: parseInt(opts.limit, 10) || 200,
+          limit: (() => { const n = parseInt(opts.limit, 10); return Number.isFinite(n) ? n : 200; })(),
         });
         if (opts.format === 'json') {
           console.log(JSON.stringify(rep, null, 2));

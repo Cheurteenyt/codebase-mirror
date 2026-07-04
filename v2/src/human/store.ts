@@ -275,6 +275,12 @@ export class HumanMemoryStore {
     const params: any[] = [];
 
     if (input.title !== undefined) {
+      if (!input.title.trim()) {
+        throw new Error('Cannot set an empty title.');
+      }
+      if (/[\r\n]/.test(input.title)) {
+        throw new Error('Title cannot contain newlines (\\r or \\n).');
+      }
       sets.push('title = ?');
       params.push(input.title);
       // Don't change slug on title change (would break wikilinks)

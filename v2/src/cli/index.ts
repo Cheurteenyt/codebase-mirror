@@ -9,10 +9,12 @@ import { McpServer } from '../mcp/server.js';
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
 import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { loadConfig, DEFAULT_CONFIG, deriveProjectName } from '../config.js';
+import { loadConfig, DEFAULT_CONFIG, deriveProjectName, deepMerge } from '../config.js';
 
-// Read version from package.json at build time would be ideal; for now hardcode.
-const VERSION = '0.2.2';
+// Read version from package.json at runtime for single source of truth.
+import { createRequire } from 'node:module';
+const require2 = createRequire(import.meta.url);
+const VERSION = require2('../../package.json').version;
 
 const program = new Command();
 
@@ -158,18 +160,4 @@ main().catch((e) => {
   return;
 });
 
-// Deep-merge helper (kept local to avoid circular import).
-function deepMerge<T>(base: T, override: any): T {
-  if (override == null) return base;
-  if (typeof base !== 'object' || base === null) return override as T;
-  if (Array.isArray(base)) return (Array.isArray(override) ? override : base) as T;
-  const result: any = { ...base };
-  for (const key of Object.keys(override)) {
-    if (typeof (base as any)[key] === 'object' && (base as any)[key] !== null && typeof override[key] === 'object' && override[key] !== null) {
-      result[key] = deepMerge((base as any)[key], override[key]);
-    } else if (override[key] !== undefined) {
-      result[key] = override[key];
-    }
-  }
-  return result as T;
-}
+// deepMerge is imported from ../config.js (single source of truth).

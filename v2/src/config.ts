@@ -83,7 +83,7 @@ export function deriveProjectName(cwd: string = process.cwd()): string {
 /**
  * Deep-merge two objects. Arrays are replaced (not merged).
  */
-function deepMerge<T>(base: T, override: any): T {
+export function deepMerge<T>(base: T, override: any): T {
   if (override == null) return base;
   if (typeof base !== 'object' || base === null) return override as T;
   if (Array.isArray(base)) return (Array.isArray(override) ? override : base) as T;

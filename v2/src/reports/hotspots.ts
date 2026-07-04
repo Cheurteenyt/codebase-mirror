@@ -4,6 +4,7 @@
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
 import { computeRiskScore } from './risk.js';
+import { safeJsonParse } from '../constants.js';
 
 export interface Hotspot {
   cbm_node_id: number;
@@ -57,7 +58,7 @@ export function computeHotspotsReport(
     const degree = degreeMap.get(module.id) ?? 0;
     if (degree < minDegree) continue;
 
-    const props = JSON.parse(module.properties_json || '{}');
+    const props = safeJsonParse(module.properties_json, {} as Record<string, any>);
     const complexityAvg = props.complexity_avg ?? props.complexity ?? 0;
     const notesCount = humanStore.listNodesByCbmNodeId(project, module.id).length;
     const riskScore = computeRiskScore(degree, complexityAvg, notesCount);

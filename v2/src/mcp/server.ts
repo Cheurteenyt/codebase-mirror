@@ -37,15 +37,15 @@ const JSONRPC_ERROR_CODES = {
 
 const MAX_LINE_LENGTH = 10 * 1024 * 1024; // 10M UTF-16 code units (~20-40MB UTF-8) — protects against OOM.
 
-// Read package.json version lazily (avoids JSON import assertions complexity).
-let SERVER_VERSION = '0.2.2';
+// Read version from package.json at runtime for single source of truth.
+import { readFileSync } from 'node:fs';
+let SERVER_VERSION: string;
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const fs = await import('node:fs');
-  const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'));
-  if (pkg.version) SERVER_VERSION = pkg.version;
+  const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'));
+  SERVER_VERSION = pkg.version || '0.2.3';
 } catch {
-  // keep default
+  SERVER_VERSION = '0.2.3 (fallback)';
+  process.stderr.write('[cbm-v2 mcp] warning: could not read package.json version\n');
 }
 
 export class McpServer {

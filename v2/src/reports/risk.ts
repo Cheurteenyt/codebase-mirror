@@ -4,6 +4,7 @@
 
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
+import { safeJsonParse } from '../constants.js';
 
 export interface RiskItem {
   cbm_node_id: number;
@@ -82,7 +83,7 @@ export function computeRiskReport(
   for (const f of functions) {
     const degree = degreeMap.get(f.id) ?? 0;
     if (degree === 0) {
-      const props = JSON.parse(f.properties_json || '{}');
+      const props = safeJsonParse(f.properties_json, {} as Record<string, any>);
       if (props.is_exported) continue;
       if (props.is_test) continue;
       items.push({

@@ -64,9 +64,9 @@ export function registerHumanCommand(program: Command): void {
       try {
         const tags: string[] = Array.isArray(opts.tag) ? opts.tag : (opts.tag ? [opts.tag] : []);
         const linkCbmStrs: string[] = Array.isArray(opts.linkCbm) ? opts.linkCbm : (opts.linkCbm ? [opts.linkCbm] : []);
-        const linkCbm = linkCbmStrs.map((s) => parseIntStrict(s, '--link-cbm'));
 
         try {
+          const linkCbm = linkCbmStrs.map((s) => parseIntStrict(s, '--link-cbm'));
           const node = humanStore.createNode({
             project,
             label: opts.type as HumanNodeLabel,
@@ -97,6 +97,9 @@ export function registerHumanCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
+      } catch (e: any) {
+        console.error(`Error: ${e.message}`);
+        process.exitCode = 1;
       } finally {
         humanStore.close();
       }
@@ -116,7 +119,7 @@ export function registerHumanCommand(program: Command): void {
         const nodes = humanStore.listNodes(project, {
           label: opts.type as HumanNodeLabel,
           status: opts.status as any,
-          limit: parseInt(opts.limit, 10) || 200,
+          limit: (() => { const n = parseInt(opts.limit, 10); return Number.isFinite(n) ? n : 200; })(),
         });
         if (nodes.length === 0) {
           console.log('No notes found.');
@@ -139,10 +142,10 @@ export function registerHumanCommand(program: Command): void {
     .argument('<id>', 'Note ID')
     .option('--project <name>')
     .action((idStr, opts) => {
-      const id = parseIntStrict(idStr, '<id>');
       const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       try {
+        const id = parseIntStrict(idStr, '<id>');
         const node = humanStore.getNodeById(id);
         if (!node) {
           console.error(`Note ${id} not found`);
@@ -150,6 +153,9 @@ export function registerHumanCommand(program: Command): void {
           return;
         }
         console.log(JSON.stringify(node, null, 2));
+      } catch (e: any) {
+        console.error(`Error: ${e.message}`);
+        process.exitCode = 1;
       } finally {
         humanStore.close();
       }
@@ -173,11 +179,11 @@ export function registerHumanCommand(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      const noteId = parseIntStrict(noteIdStr, '<noteId>');
-      const cbmId = parseIntStrict(opts.toCbmNode, '--to-cbm-node');
       const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       try {
+        const noteId = parseIntStrict(noteIdStr, '<noteId>');
+        const cbmId = parseIntStrict(opts.toCbmNode, '--to-cbm-node');
         const node = humanStore.getNodeById(noteId);
         if (!node) {
           console.error(`Error: note ${noteId} not found`);
@@ -203,6 +209,9 @@ export function registerHumanCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
+      } catch (e: any) {
+        console.error(`Error: ${e.message}`);
+        process.exitCode = 1;
       } finally {
         humanStore.close();
       }
