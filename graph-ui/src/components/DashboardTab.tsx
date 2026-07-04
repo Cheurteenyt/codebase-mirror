@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useDashboard } from "../hooks/useDashboard";
-import { colorForFreshness, colorForRisk } from "../lib/colors";
+import { colorForFreshness, colorForLabel } from "../lib/colors";
 import { formatNumber, formatAge, cn } from "../lib/utils";
 import type { DashboardData } from "../lib/types";
 
@@ -118,7 +118,7 @@ export function DashboardTab({ project, onNavigateToGraph }: DashboardTabProps) 
                 <div key={label} className="flex items-center gap-2 text-[12px]">
                   <span
                     className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: getColorForLabel(label) }}
+                    style={{ backgroundColor: colorForLabel(label) }}
                   />
                   <span className="text-foreground/50">{label}</span>
                   <span className="text-foreground/80 font-mono ml-auto">{formatNumber(count)}</span>
@@ -172,19 +172,6 @@ function KpiCard({
   );
 }
 
-function getColorForLabel(label: string): string {
-  const colors: Record<string, string> = {
-    Function: "#60a5fa",
-    Method: "#818cf8",
-    Class: "#a78bfa",
-    Interface: "#c084fc",
-    Module: "#34d399",
-    File: "#6b7280",
-    Route: "#fbbf24",
-    Package: "#f97316",
-    Variable: "#94a3b8",
-    Resource: "#ec4899",
-    Channel: "#14b8a6",
-  };
+;
   return colors[label] ?? "#7dd3fc";
 }

@@ -142,3 +142,12 @@ export interface ProcessInfo {
   command: string;
   is_self: boolean;
 }
+
+/** Git remote metadata for building GitHub deep-links. */
+export interface RepoInfo {
+  root_path: string;
+  branch: string;
+  remote_url: string;
+  web_base: string;
+  blob_base: string;
+}

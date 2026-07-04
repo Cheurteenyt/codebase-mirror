@@ -97,3 +97,13 @@ export function colorForHumanNote(label: string): string {
       return "#7dd3fc"; // default
   }
 }
+
+/** Dead-code status legend (for FilterPanel). */
+export const STATUS_LEGEND = [
+  { status: "dead", label: "Dead", color: "#ef4444" },
+  { status: "single", label: "Single", color: "#f97316" },
+  { status: "entry", label: "Entry", color: "#34d399" },
+  { status: "test", label: "Test", color: "#a78bfa" },
+  { status: "exported", label: "Exported", color: "#60a5fa" },
+  { status: "structural", label: "Structural", color: "#6b7280" },
+];

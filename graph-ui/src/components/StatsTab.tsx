@@ -2,12 +2,12 @@
 // V2: Project list with health dots, ADR button, and create-index modal.
 // Adapted from V1 to use V2 API client.
 
-import { useEffect, useState, useCallback, useMemo } from "react";
-import { api } from "../api/client";
-import { colorForLabel } from "../lib/colors";
+
+
+
 import { useProjects } from "../hooks/useProjects";
-import { formatBytes, formatNumber, cn } from "../lib/utils";
-import type { Project, ProjectHealth } from "../lib/types";
+
+
 
 interface StatsTabProps {
   onSelectProject: (project: string) => void;
@@ -59,7 +59,8 @@ export function StatsTab({ onSelectProject }: StatsTabProps) {
             <ProjectCard
               key={p.name}
               project={p}
-              onClick={() => onSelectProject(p.name)}
+              schema={null}
+              onSelect={() => onSelectProject(p.name)}
             />
           ))}
         </div>

@@ -24,8 +24,8 @@ interface SimNode extends GraphNode {
 }
 
 interface SimEdge {
-  source: number;
-  target: number;
+  source: number | SimNode;
+  target: number | SimNode;
   type: string;
 }
 
@@ -46,6 +46,8 @@ export function GraphCanvas({
   const transformRef = useRef({ x: 0, y: 0, k: 1 });
   const nodesRef = useRef<SimNode[]>([]);
   const edgesRef = useRef<SimEdge[]>([]);
+  const drawRef = useRef(draw);
+  useEffect(() => { drawRef.current = draw; }, [draw]);
   const dragRef = useRef<{ node: SimNode | null; startX: number; startY: number }>({
     node: null,
     startX: 0,
@@ -77,12 +79,13 @@ export function GraphCanvas({
       .alphaDecay(0.02);
 
     sim.on("tick", () => {
-      draw();
+      drawRef.current();
     });
 
     simRef.current = sim;
 
     return () => {
+      sim.on("tick", null);
       sim.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -108,12 +111,16 @@ export function GraphCanvas({
     ctx.translate(width / 2 + tx, height / 2 + ty);
     ctx.scale(tk, tk);
 
-    // Draw edges
+    // Draw edges — forceLink mutates source/target into object refs, so handle both.
+    const nodeMap = new Map<number, SimNode>();
+    for (const n of nodesRef.current) nodeMap.set(n.id, n);
     ctx.strokeStyle = "rgba(100, 116, 139, 0.15)";
     ctx.lineWidth = 0.5 / tk;
     for (const edge of edgesRef.current) {
-      const source = nodesRef.current.find((n) => n.id === edge.source);
-      const target = nodesRef.current.find((n) => n.id === edge.target);
+      const sId = typeof edge.source === "number" ? edge.source : edge.source.id;
+      const tId = typeof edge.target === "number" ? edge.target : edge.target.id;
+      const source = nodeMap.get(sId);
+      const target = nodeMap.get(tId);
       if (!source || !target) continue;
 
       // Highlight edges connected to highlighted nodes

@@ -2,7 +2,7 @@
 // V2 graph view — 2D force-directed canvas with filters, sidebar, and detail panel.
 // Replaces V1's 3D Three.js scene with a cleaner 2D approach.
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useGraphData } from "../hooks/useGraphData";
 import { GraphCanvas } from "./GraphCanvas";
 import { FilterPanel } from "./FilterPanel";
@@ -35,6 +35,8 @@ export function GraphTab({ project }: GraphTabProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
+  const firstLoad = useRef(true);
+  const [showLabels, setShowLabels] = useState(true);
   const [leftWidth, setLeftWidth] = useState(() => loadWidth("cbm-left-w", 260));
   const [rightWidth, setRightWidth] = useState(() => loadWidth("cbm-right-w", 280));
 
@@ -46,7 +48,8 @@ export function GraphTab({ project }: GraphTabProps) {
   const [hideTests, setHideTests] = useState(false);
 
   useEffect(() => {
-    if (!data) return;
+    if (!data || !firstLoad.current) return;
+    firstLoad.current = false;
     const labels = new Set(data.nodes.map((n) => n.label));
     const types = new Set(data.edges.map((e) => e.type));
     setEnabledLabels(labels);
@@ -75,6 +78,7 @@ export function GraphTab({ project }: GraphTabProps) {
 
   useEffect(() => {
     if (project) {
+      firstLoad.current = true;
       fetchOverview(project);
       setHighlightedIds(null);
       setSelectedPath(null);
@@ -179,6 +183,9 @@ export function GraphTab({ project }: GraphTabProps) {
           onToggleLabel={toggleLabel}
           onToggleEdgeType={toggleEdgeType}
           onEnableAll={enableAll}
+          onDisableAll={() => { setEnabledLabels(new Set()); setEnabledEdgeTypes(new Set()); }}
+          showLabels={showLabels}
+          onToggleShowLabels={() => setShowLabels((v) => !v)}
           deadCodeView={deadCodeView}
           showOnlyDead={showOnlyDead}
           hideEntryPoints={hideEntryPoints}
@@ -288,7 +295,11 @@ export function GraphTab({ project }: GraphTabProps) {
           >
             <NodeDetailPanel
               node={selectedNode}
+              allNodes={filteredData.nodes}
+              allEdges={filteredData.edges}
               project={project}
+              repoInfo={null}
+              onNavigate={(n) => setSelectedNode(n)}
               onClose={() => {
                 setSelectedNode(null);
                 setHighlightedIds(null);
