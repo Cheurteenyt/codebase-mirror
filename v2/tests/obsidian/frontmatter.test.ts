@@ -152,12 +152,12 @@ describe('parseCbmNodeIds', () => {
 });
 
 describe('parseTags', () => {
-  it('handles array (lowercases)', () => {
-    expect(parseTags({ tags: ['Foo', 'BAR'] })).toEqual(['foo', 'bar']);
+  it('handles array (preserves case)', () => {
+    expect(parseTags({ tags: ['Foo', 'BAR'] })).toEqual(['Foo', 'BAR']);
   });
 
-  it('handles comma string (lowercases)', () => {
-    expect(parseTags({ tags: 'Foo, Bar, baz' })).toEqual(['foo', 'bar', 'baz']);
+  it('handles comma string (preserves case)', () => {
+    expect(parseTags({ tags: 'Foo, Bar, baz' })).toEqual(['Foo', 'Bar', 'baz']);
   });
 
   it('handles null', () => {

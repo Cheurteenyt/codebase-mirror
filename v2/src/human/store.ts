@@ -250,7 +250,7 @@ export class HumanMemoryStore {
     }
     const limit = opts.limit ?? 200;
     const offset = opts.offset ?? 0;
-    const sql = `SELECT * FROM human_nodes WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    const sql = `SELECT * FROM human_nodes WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?`;
     const rows = this.db.prepare(sql).all(...params, limit, offset) as any[];
     return rows.map(deserializeNode);
   }

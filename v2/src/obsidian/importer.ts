@@ -70,7 +70,7 @@ export function importVault(opts: ImportOptions): ImportResult {
         continue;
       }
 
-      const title = extractTitle(parsed.body) ?? relPath;
+      const title = extractTitle(parsed.body, relPath) ?? relPath.replace(/\.md$/i, "");
       const slug = slugify(title);
       const cbmNodeIds = parseCbmNodeIds(fm);
       const tags = parseTags(fm);
@@ -271,8 +271,14 @@ function inferLabelFromFrontmatter(
   return null;
 }
 
-function extractTitle(body: string): string | null {
+function extractTitle(body: string, relPath?: string): string | null {
   const match = body.match(/^#\s+(.+)$/m);
-  return match ? match[1].trim() : null;
+  if (match) return match[1].trim();
+  // Fallback: use the filename without extension as title.
+  if (relPath) {
+    const basename = relPath.split(/[\/]/).pop() || relPath;
+    return basename.replace(/\.md$/i, '');
+  }
+  return null;
 }
 

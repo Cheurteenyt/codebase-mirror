@@ -92,7 +92,10 @@ export function generateVault(opts: GenerateOptions): GenerateResult {
           const newFm = mergeFrontmatter(parsed.frontmatter, buildFrontmatter(node));
           const fullContent = serializeNote(newFm, newBody);
 
-          if (fullContent !== existingContent) {
+          // Compare ignoring last_synced (which changes on every export, causing infinite re-writes).
+          // Strip last_synced lines from both contents before comparing.
+          const normalizeForDiff = (s: string) => s.replace(/^last_synced:.*$/gm, '');
+          if (normalizeForDiff(fullContent) !== normalizeForDiff(existingContent)) {
             if (!opts.dryRun) {
               const writeResult = writeNote(opts.vaultPath, relPath, fullContent, {
                 backupBeforeWrite: opts.backupBeforeWrite ?? true,
