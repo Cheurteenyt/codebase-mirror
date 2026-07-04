@@ -9,7 +9,7 @@ export interface Wikilink {
   endIndex: number;
 }
 
-const WIKILINK_REGEX = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+const WIKILINK_REGEX = /\[\[([^\]|\[]+)(?:\|([^\]]+))?\]\]/g;
 
 export function parseWikilinks(markdown: string): Wikilink[] {
   const links: Wikilink[] = [];
@@ -71,19 +71,17 @@ export function inferEdgeTypeFromContext(
   markdown: string,
   wikilink: Wikilink
 ): 'DECIDES' | 'AFFECTS' | 'TODO_FOR' | 'MENTIONS' | 'EXPLAINS' {
-  // Find the closest preceding heading
+  // Find the closest preceding heading. O(n) single scan via regex.
   const before = markdown.substring(0, wikilink.startIndex);
-  const headingMatch = before.match(/^(#{1,6})\s+(.+)$/gm);
-  if (!headingMatch) return 'MENTIONS';
+  const headingMatches = [...before.matchAll(/^(#{1,6})\s+(.+)$/gm)];
+  if (headingMatches.length === 0) return 'MENTIONS';
 
-  const lastHeading = headingMatch[headingMatch.length - 1]
-    .toLowerCase()
-    .trim();
+  const lastHeading = headingMatches[headingMatches.length - 1][2].toLowerCase().trim();
 
   if (lastHeading.includes('décision') || lastHeading.includes('decision')) return 'DECIDES';
   if (lastHeading.includes('bug')) return 'AFFECTS';
   if (lastHeading.includes('à faire') || lastHeading.includes('todo') || lastHeading.includes('refactor')) return 'TODO_FOR';
-  if (lastHeading.includes('explication') || lastHeading.includes('explication') || lastHeading.includes('contexte')) return 'EXPLAINS';
+  if (lastHeading.includes('explication') || lastHeading.includes('explique') || lastHeading.includes('explications') || lastHeading.includes('contexte')) return 'EXPLAINS';
 
   return 'MENTIONS';
 }

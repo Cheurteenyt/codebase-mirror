@@ -2,6 +2,7 @@
 
 import { BaseTool } from './base.js';
 import { ToolDefinition } from './index.js';
+import { computeRiskScore } from '../../reports/risk.js';
 
 export class GetModuleContextTool extends BaseTool {
   get definition(): ToolDefinition {
@@ -18,8 +19,7 @@ export class GetModuleContextTool extends BaseTool {
           include_adrs: { type: 'boolean', default: true },
           include_bugs: { type: 'boolean', default: true },
           include_refactors: { type: 'boolean', default: true },
-          depth: { type: 'number', default: 2, description: 'BFS depth for neighbors' },
-          max_nodes: { type: 'number', default: 200 },
+          max_nodes: { type: 'number', default: 200, description: 'Maximum code neighbors to return' },
         },
         required: ['module_name'],
         additionalProperties: false,
@@ -29,25 +29,30 @@ export class GetModuleContextTool extends BaseTool {
   }
 
   async handle(args: Record<string, unknown>) {
-    const project = this.optionalString(args, 'project') ?? this.project;
-    const moduleName = this.requireString(args, 'module_name');
-    const includeCode = args.include_code !== false;
-    const includeHuman = args.include_human !== false;
-    const includeAdrs = args.include_adrs !== false;
-    const includeBugs = args.include_bugs !== false;
-    const includeRefactors = args.include_refactors !== false;
-    const maxNodes = this.optionalNumber(args, 'max_nodes') ?? 200;
-
     try {
+      const project = this.optionalString(args, 'project') ?? this.project;
+      const moduleName = this.requireString(args, 'module_name');
+      const includeCode = args.include_code !== false;
+      const includeHuman = args.include_human !== false;
+      const includeAdrs = args.include_adrs !== false;
+      const includeBugs = args.include_bugs !== false;
+      const includeRefactors = args.include_refactors !== false;
+      const maxNodes = this.optionalNumber(args, 'max_nodes') ?? 200;
+
       const codeReader = this.codeReader;
       if (!codeReader) {
-        return this.error('Code graph reader not configured');
+        return this.error('Code graph reader not configured. Index the project with V1 first.');
       }
 
-      // Find module by name
+      // Find module by name.
       const modules = codeReader.findModulesByName(project, moduleName, 10);
       if (modules.length === 0) {
-        return this.error(`No module found matching "${moduleName}" in project "${project}"`);
+        // Suggest similar modules.
+        const suggestions = codeReader.findModulesByName(project, moduleName.slice(0, Math.max(3, Math.floor(moduleName.length / 2))), 5);
+        return this.error(
+          `No module found matching "${moduleName}" in project "${project}".` +
+          (suggestions.length > 0 ? ` Did you mean: ${suggestions.map((m) => `"${m.name}"`).join(', ')}?` : '')
+        );
       }
       const module = modules[0];
       const degree = codeReader.getNodeDegree(module.id);
@@ -66,7 +71,9 @@ export class GetModuleContextTool extends BaseTool {
       };
 
       if (includeCode) {
-        const neighbors = codeReader.getNeighbors(module.id, 'both', maxNodes);
+        // Fetch maxNodes + 1 to detect truncation accurately.
+        const neighbors = codeReader.getNeighbors(module.id, 'both', maxNodes + 1);
+        const truncated = neighbors.length > maxNodes;
         result['code_nodes'] = neighbors.slice(0, maxNodes).map(({ edge, node }) => ({
           id: node.id,
           label: node.label,
@@ -77,12 +84,13 @@ export class GetModuleContextTool extends BaseTool {
         }));
         result['code_stats'] = {
           neighbors_count: neighbors.length,
-          truncated: neighbors.length === maxNodes,
+          truncated,
         };
       }
 
+      let humanNotes: any[] = [];
       if (includeHuman) {
-        const humanNotes = this.humanStore.listNodesByCbmNodeId(project, module.id);
+        humanNotes = this.humanStore.listNodesByCbmNodeId(project, module.id);
         result['human_notes'] = humanNotes.map((n) => ({
           id: n.id,
           label: n.label,
@@ -126,12 +134,10 @@ export class GetModuleContextTool extends BaseTool {
         }
       }
 
-      // Compute risk score
-      const degreeScore = Math.min(degree / 100, 1.0);
-      const complexityScore = Math.min((props.complexity_avg ?? props.complexity ?? 0) / 20, 1.0);
-      const notesCount = this.humanStore.listNodesByCbmNodeId(project, module.id, 1).length;
-      const documentationPenalty = notesCount > 0 ? 0 : 0.2;
-      const riskScore = Math.min(degreeScore * 0.5 + complexityScore * 0.3 + documentationPenalty, 1.0);
+      // Compute risk score using the shared formula.
+      const notesCount = humanNotes.length;
+      const complexityAvg = props.complexity_avg ?? props.complexity ?? 0;
+      const riskScore = computeRiskScore(degree, complexityAvg, notesCount);
 
       result['stats'] = {
         documentation_coverage: notesCount > 0 ? 1.0 : 0.0,

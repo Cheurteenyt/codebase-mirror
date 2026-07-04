@@ -7,6 +7,26 @@ import { generateVault } from '../../obsidian/generator.js';
 import { importVault } from '../../obsidian/importer.js';
 import { ensureVaultDirs, walkVault } from '../../obsidian/vault.js';
 import { resolve } from 'node:path';
+import { loadConfig, deriveProjectName } from '../../config.js';
+
+const VALID_DIRECTIONS = ['both', 'export', 'import'] as const;
+type Direction = (typeof VALID_DIRECTIONS)[number];
+
+function parseDirection(v: string): Direction {
+  if (!VALID_DIRECTIONS.includes(v as Direction)) {
+    console.error(`Error: --direction must be one of: ${VALID_DIRECTIONS.join(', ')} (got "${v}")`);
+    process.exit(1);
+  }
+  return v as Direction;
+}
+
+function deriveProject(opts: any): string {
+  return opts.project || deriveProjectName();
+}
+
+function deriveVault(opts: any, config: ReturnType<typeof loadConfig>): string {
+  return resolve(opts.vault || config.v2.obsidian.vaultPath);
+}
 
 export function registerObsidianCommand(program: Command): void {
   const obsidian = program.command('obsidian').description('Obsidian vault management');
@@ -15,9 +35,10 @@ export function registerObsidianCommand(program: Command): void {
     .command('init')
     .description('Initialize the Obsidian vault structure (.codebase-memory-vault/)')
     .option('--project <name>', 'Project name')
-    .option('--vault <path>', 'Vault path (default: .codebase-memory-vault)', '.codebase-memory-vault')
+    .option('--vault <path>', 'Vault path (default: .codebase-memory-vault)')
     .action((opts) => {
-      const vaultPath = resolve(opts.vault);
+      const config = loadConfig();
+      const vaultPath = deriveVault(opts, config);
       console.log(`Initializing vault at: ${vaultPath}`);
       ensureVaultDirs(vaultPath);
       console.log('✅ Vault structure created:');
@@ -33,22 +54,23 @@ export function registerObsidianCommand(program: Command): void {
     .command('sync')
     .description('Sync the human memory DB with the Obsidian vault (both directions)')
     .option('--project <name>', 'Project name')
-    .option('--vault <path>', 'Vault path', '.codebase-memory-vault')
+    .option('--vault <path>', 'Vault path')
     .option('--direction <dir>', 'Direction: both | export | import', 'both')
     .option('--dry-run', 'Preview without writing')
     .option('--no-backup', 'Skip backup files before write')
     .option('--no-auto-modules', 'Skip auto-generating module notes')
     .option('--no-auto-routes', 'Skip auto-generating route notes')
-    .option('--min-degree <n>', 'Min degree for auto module notes', '20')
+    .option('--min-degree <n>', 'Min degree for auto module notes')
     .action((opts) => {
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
-      const vaultPath = resolve(opts.vault);
-      const direction = opts.direction as 'both' | 'export' | 'import';
+      const config = loadConfig();
+      const project = deriveProject(opts);
+      const vaultPath = deriveVault(opts, config);
+      const direction = parseDirection(opts.direction);
       const dryRun = !!opts.dryRun;
-      const backup = opts.backup !== false;
-      const autoModules = opts.autoModules !== false;
-      const autoRoutes = opts.autoRoutes !== false;
-      const minDegree = parseInt(String(opts.minDegree), 10) || 20;
+      const backup = opts.backup !== false && config.v2.obsidian.backupBeforeWrite;
+      const autoModules = opts.autoModules !== false && config.v2.obsidian.autoGenerateModuleNotes;
+      const autoRoutes = opts.autoRoutes !== false && config.v2.obsidian.autoGenerateRouteNotes;
+      const minDegree = opts.minDegree ? parseInt(opts.minDegree, 10) : config.v2.obsidian.minDegreeForModuleNote;
 
       console.log(`Syncing project "${project}" — direction: ${direction}${dryRun ? ' (dry-run)' : ''}`);
 
@@ -85,6 +107,7 @@ export function registerObsidianCommand(program: Command): void {
             for (const e of result.errors.slice(0, 5)) {
               console.log(`    - ${e.path}: ${e.error}`);
             }
+            if (result.errors.length > 5) console.log(`    ... and ${result.errors.length - 5} more`);
           }
         }
 
@@ -101,7 +124,8 @@ export function registerObsidianCommand(program: Command): void {
           console.log(`  Created: ${result.created.length}`);
           console.log(`  Updated: ${result.updated.length}`);
           console.log(`  Unchanged: ${result.unchanged.length}`);
-          console.log(`  Edges created: ${result.edgesCreated}`);
+          console.log(`  Edges created/refreshed: ${result.edgesCreated}`);
+          console.log(`  Edges deleted (stale): ${result.edgesDeleted}`);
           if (result.orphanNotes.length > 0) {
             console.log(`  Orphan notes (no cbm_node_id): ${result.orphanNotes.length}`);
           }
@@ -110,6 +134,7 @@ export function registerObsidianCommand(program: Command): void {
             for (const e of result.errors.slice(0, 5)) {
               console.log(`    - ${e.path}: ${e.error}`);
             }
+            if (result.errors.length > 5) console.log(`    ... and ${result.errors.length - 5} more`);
           }
         }
 
@@ -125,12 +150,13 @@ export function registerObsidianCommand(program: Command): void {
     .command('export')
     .description('Export DB → vault (one-shot, with HUMAN NOTES preserved)')
     .option('--project <name>')
-    .option('--vault <path>', 'Vault path', '.codebase-memory-vault')
+    .option('--vault <path>')
     .option('--force', 'Regenerate even if unchanged', false)
     .option('--dry-run', 'Preview without writing')
     .action((opts) => {
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
-      const vaultPath = resolve(opts.vault);
+      const config = loadConfig();
+      const project = deriveProject(opts);
+      const vaultPath = deriveVault(opts, config);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       let codeReader: CodeGraphReader | undefined;
       try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch {}
@@ -138,10 +164,13 @@ export function registerObsidianCommand(program: Command): void {
       try {
         const result = generateVault({
           project, vaultPath, humanStore, codeReader,
-          backupBeforeWrite: true, dryRun: opts.dryRun,
-          autoGenerateModuleNotes: true, autoGenerateRouteNotes: true,
+          backupBeforeWrite: config.v2.obsidian.backupBeforeWrite,
+          dryRun: !!opts.dryRun,
+          autoGenerateModuleNotes: config.v2.obsidian.autoGenerateModuleNotes,
+          autoGenerateRouteNotes: config.v2.obsidian.autoGenerateRouteNotes,
+          minDegreeForModuleNote: config.v2.obsidian.minDegreeForModuleNote,
         });
-        console.log(`✅ Export: ${result.created.length} created, ${result.updated.length} updated`);
+        console.log(`✅ Export: ${result.created.length} created, ${result.updated.length} updated, ${result.unchanged.length} unchanged`);
       } finally {
         humanStore.close();
         codeReader?.close();
@@ -152,18 +181,19 @@ export function registerObsidianCommand(program: Command): void {
     .command('import')
     .description('Import vault → DB (one-shot)')
     .option('--project <name>')
-    .option('--vault <path>', 'Vault path', '.codebase-memory-vault')
+    .option('--vault <path>')
     .option('--dry-run', 'Preview without writing')
     .action((opts) => {
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
-      const vaultPath = resolve(opts.vault);
+      const config = loadConfig();
+      const project = deriveProject(opts);
+      const vaultPath = deriveVault(opts, config);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       let codeReader: CodeGraphReader | undefined;
       try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch {}
 
       try {
-        const result = importVault({ project, vaultPath, humanStore, codeReader, dryRun: opts.dryRun });
-        console.log(`✅ Import: ${result.created.length} created, ${result.updated.length} updated, ${result.edgesCreated} edges`);
+        const result = importVault({ project, vaultPath, humanStore, codeReader, dryRun: !!opts.dryRun });
+        console.log(`✅ Import: ${result.created.length} created, ${result.updated.length} updated, ${result.unchanged.length} unchanged, ${result.edgesCreated} edges created, ${result.edgesDeleted} edges deleted`);
       } finally {
         humanStore.close();
         codeReader?.close();
@@ -172,43 +202,61 @@ export function registerObsidianCommand(program: Command): void {
 
   obsidian
     .command('report')
-    .description('Print a report of the vault state')
+    .description('Print a report of the vault state (file counts by directory)')
     .option('--project <name>')
-    .option('--vault <path>', 'Vault path', '.codebase-memory-vault')
+    .option('--vault <path>')
     .option('--format <fmt>', 'md | json', 'md')
     .action((opts) => {
-      const vaultPath = resolve(opts.vault);
+      const config = loadConfig();
+      const vaultPath = deriveVault(opts, config);
       const files = walkVault(vaultPath);
-      console.log(`# Vault report — ${opts.project || 'project'}`);
-      console.log('');
-      console.log(`Total .md files: ${files.length}`);
-      console.log('');
       const byDir: Record<string, number> = {};
       for (const f of files) {
         const dir = f.split('/')[0] || 'root';
         byDir[dir] = (byDir[dir] || 0) + 1;
       }
-      console.log('| Dossier | Notes |');
-      console.log('|---|---|');
-      for (const [dir, count] of Object.entries(byDir).sort()) {
-        console.log(`| ${dir} | ${count} |`);
+      const report = {
+        project: opts.project || deriveProjectName(),
+        vaultPath,
+        totalFiles: files.length,
+        byDir,
+        files,
+      };
+      if (opts.format === 'json') {
+        console.log(JSON.stringify(report, null, 2));
+      } else {
+        console.log(`# Vault report — ${report.project}`);
+        console.log('');
+        console.log(`Total .md files: ${report.totalFiles}`);
+        console.log('');
+        console.log('| Directory | Notes |');
+        console.log('|---|---|');
+        for (const [dir, count] of Object.entries(byDir).sort()) {
+          console.log(`| ${dir} | ${count} |`);
+        }
       }
     });
 
   obsidian
     .command('create-adr')
-    .description('Create an ADR note + human_node')
+    .description('Create an ADR note + human_node (run `cbm-v2 obsidian sync --direction export` afterward to materialize the file)')
     .option('--project <name>')
-    .option('--vault <path>', 'Vault path', '.codebase-memory-vault')
+    .option('--vault <path>')
     .option('--title <title>', 'ADR title (required)')
     .option('--module <name>', 'Module to link via DECIDES edge')
-    .option('--status <status>', 'draft | active | deprecated', 'draft')
+    .option('--status <status>', 'draft | active | reviewed | deprecated', 'draft')
     .action((opts) => {
       if (!opts.title) {
         console.error('Error: --title is required');
+        console.error('Usage: cbm-v2 obsidian create-adr --title "ADR-XXX: ..." [--module <name>] [--status draft]');
         process.exit(1);
       }
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      const validStatuses = ['draft', 'active', 'reviewed', 'deprecated'];
+      if (!validStatuses.includes(opts.status)) {
+        console.error(`Error: --status must be one of ${validStatuses.join(', ')} (got "${opts.status}")`);
+        process.exit(1);
+      }
+      const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       let codeReader: CodeGraphReader | undefined;
       try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch {}
@@ -217,29 +265,38 @@ export function registerObsidianCommand(program: Command): void {
         const cbmNodeIds: number[] = [];
         if (opts.module && codeReader) {
           const modules = codeReader.findModulesByName(project, opts.module, 1);
-          if (modules.length > 0) cbmNodeIds.push(modules[0].id);
+          if (modules.length === 0) {
+            console.error(`Error: no module matching "${opts.module}" in project "${project}"`);
+            process.exit(1);
+          }
+          cbmNodeIds.push(modules[0].id);
         }
-        const node = humanStore.createNode({
-          project,
-          label: 'ADR',
-          title: opts.title,
-          body_markdown: '',
-          status: opts.status,
-          source: 'human',
-          cbm_node_ids: cbmNodeIds,
-          tags: ['adr'],
-        });
-        if (cbmNodeIds.length > 0) {
-          humanStore.createEdge({
+        try {
+          const node = humanStore.createNode({
             project,
-            source_human_node_id: node.id,
-            target_kind: 'code',
-            target_cbm_node_id: cbmNodeIds[0],
-            type: 'DECIDES',
+            label: 'ADR',
+            title: opts.title,
+            body_markdown: '',
+            status: opts.status,
+            source: 'human',
+            cbm_node_ids: cbmNodeIds,
+            tags: ['adr'],
           });
+          if (cbmNodeIds.length > 0) {
+            humanStore.createEdge({
+              project,
+              source_human_node_id: node.id,
+              target_kind: 'code',
+              target_cbm_node_id: cbmNodeIds[0],
+              type: 'DECIDES',
+            });
+          }
+          console.log(`✅ ADR created: id=${node.id}, slug=${node.slug}, path=${node.obsidian_path}`);
+          console.log('Run `cbm-v2 obsidian sync --direction export` to materialize the file in the vault.');
+        } catch (e: any) {
+          console.error(`Error creating ADR: ${e.message}`);
+          process.exit(1);
         }
-        console.log(`✅ ADR created: id=${node.id}, slug=${node.slug}, path=${node.obsidian_path}`);
-        console.log('Run `cbm-v2 obsidian sync --direction export` to materialize the file.');
       } finally {
         humanStore.close();
         codeReader?.close();
@@ -256,14 +313,14 @@ export function registerObsidianCommand(program: Command): void {
         console.error('Error: --module is required');
         process.exit(1);
       }
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       let codeReader: CodeGraphReader | undefined;
       try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch {}
 
       try {
         if (!codeReader) {
-          console.error('Error: code graph not available');
+          console.error('Error: code graph not available. Run `cbm index_repository` first.');
           process.exit(1);
         }
         const modules = codeReader.findModulesByName(project, opts.module, 1);
@@ -272,19 +329,24 @@ export function registerObsidianCommand(program: Command): void {
           process.exit(1);
         }
         const m = modules[0];
-        const slug = m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        const slug = require('../../human/schema.js').slugify(m.name);
         const obsidianPath = `Modules/${slug}.md`;
-        const node = humanStore.createNode({
-          project,
-          label: 'ModuleNote',
-          title: `Module: ${m.name}`,
-          body_markdown: '',
-          source: 'human',
-          cbm_node_ids: [m.id],
-          tags: ['module', slug],
-          obsidian_path: obsidianPath,
-        });
-        console.log(`✅ ModuleNote created: id=${node.id}, path=${node.obsidian_path}`);
+        try {
+          const node = humanStore.createNode({
+            project,
+            label: 'ModuleNote',
+            title: `Module: ${m.name}`,
+            body_markdown: '',
+            source: 'human',
+            cbm_node_ids: [m.id],
+            tags: ['module', slug],
+            obsidian_path: obsidianPath,
+          });
+          console.log(`✅ ModuleNote created: id=${node.id}, path=${node.obsidian_path}`);
+        } catch (e: any) {
+          console.error(`Error: ${e.message}`);
+          process.exit(1);
+        }
       } finally {
         humanStore.close();
         codeReader?.close();
@@ -300,16 +362,17 @@ export function registerObsidianCommand(program: Command): void {
     .action((opts) => {
       if (!opts.path) {
         console.error('Error: --path is required');
+        console.error('Usage: cbm-v2 obsidian create-route-note --method POST --path /api/login');
         process.exit(1);
       }
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       let codeReader: CodeGraphReader | undefined;
       try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch {}
 
       try {
         if (!codeReader) {
-          console.error('Error: code graph not available');
+          console.error('Error: code graph not available. Run `cbm index_repository` first.');
           process.exit(1);
         }
         const route = codeReader.findRoute(project, opts.method, opts.path);
@@ -317,19 +380,24 @@ export function registerObsidianCommand(program: Command): void {
           console.error(`Error: route ${opts.method} ${opts.path} not found`);
           process.exit(1);
         }
-        const slug = `${opts.method.toLowerCase()}-${opts.path.replace(/[^a-z0-9]+/gi, '-')}`.toLowerCase();
+        const slug = require('../../human/schema.js').slugify(`${opts.method}-${opts.path}`);
         const obsidianPath = `Routes/${slug}.md`;
-        const node = humanStore.createNode({
-          project,
-          label: 'RouteNote',
-          title: `Route: ${opts.method} ${opts.path}`,
-          body_markdown: '',
-          source: 'human',
-          cbm_node_ids: [route.id],
-          tags: ['route', opts.method.toLowerCase()],
-          obsidian_path: obsidianPath,
-        });
-        console.log(`✅ RouteNote created: id=${node.id}, path=${node.obsidian_path}`);
+        try {
+          const node = humanStore.createNode({
+            project,
+            label: 'RouteNote',
+            title: `Route: ${opts.method} ${opts.path}`,
+            body_markdown: '',
+            source: 'human',
+            cbm_node_ids: [route.id],
+            tags: ['route', opts.method.toLowerCase()],
+            obsidian_path: obsidianPath,
+          });
+          console.log(`✅ RouteNote created: id=${node.id}, path=${node.obsidian_path}`);
+        } catch (e: any) {
+          console.error(`Error: ${e.message}`);
+          process.exit(1);
+        }
       } finally {
         humanStore.close();
         codeReader?.close();

@@ -23,13 +23,13 @@ export class GetUndocumentedHotspotsTool extends BaseTool {
   }
 
   async handle(args: Record<string, unknown>) {
-    const project = this.optionalString(args, 'project') ?? this.project;
-    const labelFilter = this.optionalString(args, 'label');
-    const limit = this.optionalNumber(args, 'limit') ?? 50;
-
     try {
+      const project = this.optionalString(args, 'project') ?? this.project;
+      const labelFilter = this.optionalString(args, 'label');
+      const limit = this.optionalNumber(args, 'limit') ?? 50;
+
       if (!this.codeReader) {
-        return this.error('Code graph reader not configured');
+        return this.error('Code graph reader not configured. Index the project with V1 first.');
       }
       const report = computeUndocumentedReport(project, this.codeReader, this.humanStore);
 

@@ -12,7 +12,7 @@ export interface UndocumentedNode {
   file_path: string;
   degree: number;
   complexity: number;
-  is_critical: boolean;       // high degree or high complexity
+  is_critical: boolean;
 }
 
 export interface UndocumentedReport {
@@ -23,7 +23,7 @@ export interface UndocumentedReport {
   undocumented_nodes: number;
   coverage_pct: number;
   by_label: Record<string, { total: number; documented: number; undocumented: number }>;
-  undocumented_critical: UndocumentedNode[];   // top 50
+  undocumented_critical: UndocumentedNode[];
   undocumented_routes: UndocumentedNode[];
   undocumented_modules: UndocumentedNode[];
 }
@@ -46,13 +46,18 @@ export function computeUndocumentedReport(
   for (const label of labelsToCheck) {
     byLabel[label] = { total: 0, documented: 0, undocumented: 0 };
     const nodes = codeReader.listNodes(project, { label, limit: 5000 });
+
+    // Bulk-fetch degrees for all nodes of this label.
+    const ids = nodes.map((n) => n.id);
+    const degreeMap = codeReader.getBulkNodeDegrees(ids);
+
     for (const node of nodes) {
       byLabel[label].total++;
       totalNodes++;
-      const notes = humanStore.listNodesByCbmNodeId(project, node.id, 1);
-      const degree = codeReader.getNodeDegree(node.id);
+      const degree = degreeMap.get(node.id) ?? 0;
       const props = JSON.parse(node.properties_json || '{}');
       const complexity = props.complexity ?? props.complexity_avg ?? 0;
+      const notes = humanStore.listNodesByCbmNodeId(project, node.id, 1);
 
       if (notes.length > 0) {
         byLabel[label].documented++;
@@ -102,59 +107,62 @@ export function renderUndocumentedReportMarkdown(report: UndocumentedReport): st
   const lines: string[] = [];
   lines.push(`# Undocumented Hotspots Report — ${report.project}`);
   lines.push('');
-  lines.push(`> Généré le ${report.generated_at}`);
+  lines.push(`> Generated on ${report.generated_at}`);
   lines.push('');
-  lines.push('## Couverture documentation');
+  lines.push('## Documentation coverage');
   lines.push('');
-  lines.push('| Métrique | Valeur |');
+  lines.push('| Metric | Value |');
   lines.push('|---|---|');
-  lines.push(`| Nodes totaux | ${report.total_nodes} |`);
-  lines.push(`| Documentés | ${report.documented_nodes} |`);
-  lines.push(`| Non documentés | ${report.undocumented_nodes} |`);
+  lines.push(`| Total nodes | ${report.total_nodes} |`);
+  lines.push(`| Documented | ${report.documented_nodes} |`);
+  lines.push(`| Undocumented | ${report.undocumented_nodes} |`);
   lines.push(`| Coverage | ${report.coverage_pct.toFixed(1)} % |`);
   lines.push('');
-  lines.push('## Par label');
+  lines.push('## By label');
   lines.push('');
-  lines.push('| Label | Total | Documentés | Non documentés | Coverage |');
+  lines.push('| Label | Total | Documented | Undocumented | Coverage |');
   lines.push('|---|---|---|---|---|');
   for (const [label, stats] of Object.entries(report.by_label)) {
     const coverage = stats.total > 0 ? (stats.documented / stats.total) * 100 : 0;
     lines.push(`| ${label} | ${stats.total} | ${stats.documented} | ${stats.undocumented} | ${coverage.toFixed(1)} % |`);
   }
   lines.push('');
-  lines.push('## Modules critiques non documentés');
+  lines.push('## Undocumented critical modules');
   lines.push('');
   if (report.undocumented_modules.length === 0) {
-    lines.push('✅ Tous les modules sont documentés.');
+    lines.push('✅ All modules are documented.');
   } else {
-    lines.push('| Module | Degré | Fichier |');
+    lines.push('| Module | Degree | File |');
     lines.push('|---|---|---|');
+    const esc = (s: string) => String(s).replace(/\|/g, '\\|');
     for (const m of report.undocumented_modules) {
-      lines.push(`| ${m.name} | ${m.degree} | \`${m.file_path}\` |`);
+      lines.push(`| ${esc(m.name)} | ${m.degree} | \`${esc(m.file_path)}\` |`);
     }
   }
   lines.push('');
-  lines.push('## Routes non documentées');
+  lines.push('## Undocumented routes');
   lines.push('');
   if (report.undocumented_routes.length === 0) {
-    lines.push('✅ Toutes les routes sont documentées.');
+    lines.push('✅ All routes are documented.');
   } else {
-    lines.push('| Route | Degré | Fichier |');
+    lines.push('| Route | Degree | File |');
     lines.push('|---|---|---|');
+    const esc = (s: string) => String(s).replace(/\|/g, '\\|');
     for (const r of report.undocumented_routes) {
-      lines.push(`| ${r.name} | ${r.degree} | \`${r.file_path}\` |`);
+      lines.push(`| ${esc(r.name)} | ${r.degree} | \`${esc(r.file_path)}\` |`);
     }
   }
   lines.push('');
-  lines.push('## Top 50 nodes critiques non documentés');
+  lines.push('## Top 50 undocumented critical nodes');
   lines.push('');
   if (report.undocumented_critical.length === 0) {
-    lines.push('✅ Aucun node critique non documenté.');
+    lines.push('✅ No undocumented critical nodes.');
   } else {
-    lines.push('| Label | Name | Degré | Complexité | Fichier |');
+    lines.push('| Label | Name | Degree | Complexity | File |');
     lines.push('|---|---|---|---|---|');
+    const esc = (s: string) => String(s).replace(/\|/g, '\\|');
     for (const n of report.undocumented_critical) {
-      lines.push(`| ${n.label} | ${n.name} | ${n.degree} | ${n.complexity} | \`${n.file_path}\` |`);
+      lines.push(`| ${esc(n.label)} | ${esc(n.name)} | ${n.degree} | ${n.complexity} | \`${esc(n.file_path)}\` |`);
     }
   }
   return lines.join('\n');
