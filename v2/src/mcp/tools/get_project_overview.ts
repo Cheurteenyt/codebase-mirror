@@ -20,9 +20,9 @@ export class GetProjectOverviewTool extends BaseTool {
   }
 
   async handle(args: Record<string, unknown>) {
-    const project = this.optionalString(args, 'project') ?? this.project;
-
     try {
+      const project = this.optionalString(args, 'project') ?? this.project;
+
       const humanStore = this.humanStore;
       const codeReader = this.codeReader;
 
@@ -43,7 +43,7 @@ export class GetProjectOverviewTool extends BaseTool {
           edges_by_type: edgesByType,
         };
       } else {
-        result['code_graph'] = { available: false, reason: 'Code graph reader not configured' };
+        result['code_graph'] = { available: false, reason: 'Code graph reader not configured. Index the project with V1 first.' };
       }
 
       const adrsCount = humanStore.countNodes(project, 'ADR');
@@ -60,23 +60,26 @@ export class GetProjectOverviewTool extends BaseTool {
         human_edges: humanEdgesCount,
       };
 
-      // Compute documentation coverage (approximate, based on critical modules only for speed)
+      // Compute documentation coverage for critical modules only (degree >= 20).
+      // Returns null when there are no critical modules (rather than misleading "100%").
       if (codeReader) {
         const modules = codeReader.listModules(project, 5000);
-        let documentedModules = 0;
-        let criticalModules = 0;
+        const moduleIds = modules.map((m) => m.id);
+        const degreeMap = codeReader.getBulkNodeDegrees(moduleIds);
+        let criticalTotal = 0;
+        let criticalDocumented = 0;
         for (const m of modules) {
-          const degree = codeReader.getNodeDegree(m.id);
-          if (degree >= 20) {
-            criticalModules++;
+          const deg = degreeMap.get(m.id) ?? 0;
+          if (deg >= 20) {
+            criticalTotal++;
             const notes = humanStore.listNodesByCbmNodeId(project, m.id, 1);
-            if (notes.length > 0) documentedModules++;
+            if (notes.length > 0) criticalDocumented++;
           }
         }
         result['documentation_coverage'] = {
-          critical_modules_total: criticalModules,
-          critical_modules_documented: documentedModules,
-          coverage_pct: criticalModules > 0 ? (documentedModules / criticalModules) * 100 : 100,
+          critical_modules_total: criticalTotal,
+          critical_modules_documented: criticalDocumented,
+          coverage_pct: criticalTotal > 0 ? (criticalDocumented / criticalTotal) * 100 : null,
         };
       }
 

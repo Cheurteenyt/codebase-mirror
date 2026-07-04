@@ -14,6 +14,8 @@ import {
   HumanEdgeType,
   HumanNodeStatus,
   HumanNodeSource,
+  HUMAN_NODE_LABELS,
+  HUMAN_EDGE_TYPES,
   isHumanNodeLabel,
   isHumanEdgeType,
   obsidianPathFor,
@@ -86,13 +88,17 @@ export class HumanMemoryStore {
     this.db = new Database(expanded);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
+    // Set busy_timeout to handle concurrent writes from CLI/MCP/import gracefully.
+    this.db.pragma('busy_timeout = 5000');
     runMigrations(this.db);
   }
 
   static openMemory(): HumanMemoryStore {
+    // Construct via the normal path so initialization stays consistent.
+    const store = Object.create(HumanMemoryStore.prototype) as HumanMemoryStore;
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');
-    const store = Object.create(HumanMemoryStore.prototype) as HumanMemoryStore;
+    db.pragma('busy_timeout = 5000');
     (store as any).db = db;
     runMigrations(db);
     return store;
@@ -106,15 +112,67 @@ export class HumanMemoryStore {
 
   createNode(input: CreateHumanNodeInput): HumanNode {
     if (!isHumanNodeLabel(input.label)) {
-      throw new Error(`Invalid human node label: ${input.label}`);
+      throw new Error(
+        `Invalid human node label: "${input.label}". Valid labels: ${HUMAN_NODE_LABELS.join(', ')}`
+      );
     }
+    // Reject empty titles.
+    if (!input.title || !input.title.trim()) {
+      throw new Error('Cannot create a human node with an empty title.');
+    }
+    // Reject titles containing newlines (would break Markdown headings).
+    if (/[\r\n]/.test(input.title)) {
+      throw new Error('Title cannot contain newlines (\\r or \\n).');
+    }
+
     const now = new Date().toISOString();
-    const slug = slugify(input.title);
-    const obsidianPath = input.obsidian_path ?? obsidianPathFor(input.label, slug);
+    let slug = slugify(input.title);
+    // If slug is empty (e.g., title was only special chars or non-Latin), fall back to a stable ID.
+    if (!slug) {
+      slug = `note-${Date.now().toString(36)}`;
+    }
+    // Truncate slug to 200 chars to avoid ENAMETOOLONG on most filesystems.
+    if (slug.length > 200) {
+      slug = slug.substring(0, 200);
+    }
+
+    // Validate obsidian_path for path traversal (the path is later joined to the vault root).
+    let obsidianPath = input.obsidian_path ?? obsidianPathFor(input.label, slug);
+    if (obsidianPath.includes('..') || /[\\]/.test(obsidianPath)) {
+      throw new Error(
+        `Invalid obsidian_path "${obsidianPath}": must not contain ".." or backslashes.`
+      );
+    }
+
     const fm = input.frontmatter ?? {};
     const fmJson = JSON.stringify(fm);
     const cbmIds = JSON.stringify(input.cbm_node_ids ?? []);
     const tags = JSON.stringify(input.tags ?? []);
+
+    // Handle slug collisions: auto-suffix with -2, -3, ... up to -99.
+    let attempt = 0;
+    let finalSlug = slug;
+    while (attempt < 100) {
+      const candidate = attempt === 0 ? slug : `${slug}-${attempt + 1}`;
+      const existing = this.db
+        .prepare('SELECT id FROM human_nodes WHERE project = ? AND slug = ?')
+        .get(input.project, candidate) as any;
+      if (!existing) {
+        finalSlug = candidate;
+        // Recompute obsidianPath if slug changed and user didn't supply an explicit path.
+        if (attempt > 0 && !input.obsidian_path) {
+          obsidianPath = obsidianPathFor(input.label, finalSlug);
+        }
+        break;
+      }
+      attempt++;
+    }
+    if (attempt >= 100) {
+      throw new Error(
+        `Could not find a free slug for "${slug}" in project "${input.project}" after 100 attempts. ` +
+        `Use a different title or delete one of the existing notes.`
+      );
+    }
 
     const result = this.db
       .prepare(
@@ -129,7 +187,7 @@ export class HumanMemoryStore {
         input.project,
         input.label,
         input.title,
-        slug,
+        finalSlug,
         input.body_markdown ?? '',
         fmJson,
         input.status ?? 'active',
@@ -266,29 +324,30 @@ export class HumanMemoryStore {
     return result.changes > 0;
   }
 
-  markSynced(id: number, direction: 'export' | 'import' | 'both'): void {
+  markSynced(id: number, direction: 'export' | 'import' | 'both', vaultContentHash?: string): void {
     const now = new Date().toISOString();
     this.db
       .prepare('UPDATE human_nodes SET last_synced_at = ? WHERE id = ?')
       .run(now, id);
 
-    if (direction !== 'import') {
-      const node = this.getNodeById(id);
-      if (node && node.obsidian_path) {
-        const hash = createHash('sha256')
-          .update(node.body_markdown)
-          .digest('hex');
-        this.db
-          .prepare(
-            `INSERT INTO sync_state (project, obsidian_path, last_synced_hash, last_synced_at, last_direction)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(project, obsidian_path) DO UPDATE SET
-               last_synced_hash = excluded.last_synced_hash,
-               last_synced_at = excluded.last_synced_at,
-               last_direction = excluded.last_direction`
-          )
-          .run(node.project, node.obsidian_path, hash, now, direction);
-      }
+    // Always record sync_state (both for export and import) so conflict detection works.
+    // For export: hash the DB body_markdown + frontmatter_json (the source of truth).
+    // For import: hash the vault file content (passed in by the caller).
+    const node = this.getNodeById(id);
+    if (node && node.obsidian_path) {
+      const hash = vaultContentHash ?? createHash('sha256')
+        .update(node.body_markdown + '\n---\n' + node.frontmatter_json + '\n---\n' + node.cbm_node_ids.join(',') + '\n---\n' + node.tags.join(','))
+        .digest('hex');
+      this.db
+        .prepare(
+          `INSERT INTO sync_state (project, obsidian_path, last_synced_hash, last_synced_at, last_direction)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(project, obsidian_path) DO UPDATE SET
+             last_synced_hash = excluded.last_synced_hash,
+             last_synced_at = excluded.last_synced_at,
+             last_direction = excluded.last_direction`
+        )
+        .run(node.project, node.obsidian_path, hash, now, direction);
     }
   }
 
@@ -296,13 +355,53 @@ export class HumanMemoryStore {
 
   createEdge(input: CreateHumanEdgeInput): HumanEdge {
     if (!isHumanEdgeType(input.type)) {
-      throw new Error(`Invalid human edge type: ${input.type}`);
+      throw new Error(
+        `Invalid human edge type: "${input.type}". Valid types: ${HUMAN_EDGE_TYPES.join(', ')}`
+      );
     }
     if (input.target_kind === 'code' && input.target_cbm_node_id == null) {
-      throw new Error('target_cbm_node_id required when target_kind = "code"');
+      throw new Error(
+        `target_cbm_node_id required when target_kind = "code" (got target_cbm_node_id=${input.target_cbm_node_id}).`
+      );
     }
     if (input.target_kind === 'human' && input.target_human_node_id == null) {
-      throw new Error('target_human_node_id required when target_kind = "human"');
+      throw new Error(
+        `target_human_node_id required when target_kind = "human" (got target_human_node_id=${input.target_human_node_id}).`
+      );
+    }
+
+    // Validate that the source node belongs to input.project (prevents cross-project edge pollution).
+    const srcNode = this.getNodeById(input.source_human_node_id);
+    if (!srcNode) {
+      throw new Error(`Source human node id=${input.source_human_node_id} not found.`);
+    }
+    if (srcNode.project !== input.project) {
+      throw new Error(
+        `Cross-project edge rejected: source node id=${input.source_human_node_id} belongs to project "${srcNode.project}", but input.project is "${input.project}".`
+      );
+    }
+
+    // Dedup: if an identical edge already exists, return it instead of throwing.
+    const existingEdge = this.db
+      .prepare(
+        `SELECT * FROM human_edges
+         WHERE project = ? AND source_human_node_id = ?
+           AND target_kind = ?
+           AND COALESCE(target_cbm_node_id, -1) = COALESCE(?, -1)
+           AND COALESCE(target_human_node_id, -1) = COALESCE(?, -1)
+           AND type = ?
+         LIMIT 1`
+      )
+      .get(
+        input.project,
+        input.source_human_node_id,
+        input.target_kind,
+        input.target_kind === 'code' ? input.target_cbm_node_id! : null,
+        input.target_kind === 'human' ? input.target_human_node_id! : null,
+        input.type
+      ) as any;
+    if (existingEdge) {
+      return deserializeEdge(existingEdge);
     }
 
     const now = new Date().toISOString();
@@ -399,10 +498,44 @@ export class HumanMemoryStore {
     ).c;
   }
 
+  /**
+   * Delete all edges from a source node whose `source_file` matches `sourceFile`
+   * and whose id is NOT in `keepIds`. Used by the importer to clean up stale edges.
+   */
+  deleteStaleEdgesFromNode(sourceHumanNodeId: number, sourceFile: string | null, keepIds: number[]): number {
+    if (keepIds.length === 0) {
+      // Delete all edges from this node with matching source_file.
+      const result = this.db
+        .prepare(
+          `DELETE FROM human_edges WHERE source_human_node_id = ? AND source_file IS ?`
+        )
+        .run(sourceHumanNodeId, sourceFile);
+      return result.changes;
+    }
+    const placeholders = keepIds.map(() => '?').join(',');
+    const result = this.db
+      .prepare(
+        `DELETE FROM human_edges WHERE source_human_node_id = ? AND source_file IS ? AND id NOT IN (${placeholders})`
+      )
+      .run(sourceHumanNodeId, sourceFile, ...keepIds);
+    return result.changes;
+  }
+
   // ── Internal ──────────────────────────────────────────────────────
 
   getRawDb(): Database.Database {
     return this.db;
+  }
+}
+
+function safeJsonParseArray(s: string | null | undefined): any[] {
+  if (!s) return [];
+  try {
+    const v = JSON.parse(s);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    // Corrupt JSON — return empty array rather than crashing all reads.
+    return [];
   }
 }
 
@@ -418,8 +551,8 @@ function deserializeNode(row: any): HumanNode {
     status: row.status,
     source: row.source,
     obsidian_path: row.obsidian_path,
-    cbm_node_ids: JSON.parse(row.cbm_node_ids || '[]'),
-    tags: JSON.parse(row.tags || '[]'),
+    cbm_node_ids: safeJsonParseArray(row.cbm_node_ids).map((x) => Number(x)).filter((n) => !Number.isNaN(n)),
+    tags: safeJsonParseArray(row.tags).map((x) => String(x)),
     provenance: row.provenance,
     confidence: row.confidence,
     source_file: row.source_file,

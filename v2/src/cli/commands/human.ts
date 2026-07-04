@@ -2,7 +2,27 @@
 
 import { Command } from 'commander';
 import { HumanMemoryStore, defaultHumanDbPath } from '../../human/store.js';
-import { HumanNodeLabel, HumanEdgeType, HUMAN_NODE_LABELS, HUMAN_EDGE_TYPES } from '../../human/schema.js';
+import {
+  HumanNodeLabel,
+  HumanEdgeType,
+  HUMAN_NODE_LABELS,
+  HUMAN_EDGE_TYPES,
+  HUMAN_NODE_STATUSES,
+} from '../../human/schema.js';
+import { deriveProjectName } from '../../config.js';
+
+function deriveProject(opts: any): string {
+  return opts.project || deriveProjectName();
+}
+
+function parseIntStrict(s: string, flagName: string): number {
+  const n = parseInt(s, 10);
+  if (!Number.isFinite(n)) {
+    console.error(`Error: ${flagName} must be a number, got "${s}"`);
+    process.exit(1);
+  }
+  return n;
+}
 
 export function registerHumanCommand(program: Command): void {
   const human = program.command('human').description('Manage human memory notes');
@@ -14,7 +34,7 @@ export function registerHumanCommand(program: Command): void {
     .option('--type <label>', `Node label: ${HUMAN_NODE_LABELS.join(' | ')}`)
     .option('--title <title>', 'Title (required)')
     .option('--body <text>', 'Markdown body', '')
-    .option('--status <status>', 'draft | active | reviewed | deprecated', 'active')
+    .option('--status <status>', `${HUMAN_NODE_STATUSES.join(' | ')}`, 'active')
     .option('--tag <tag>', 'Tag (can be repeated)')
     .option('--link-cbm <id>', 'Link to cbm_node_id (can be repeated)')
     .option('--link-edge <type>', `Edge type for the link: ${HUMAN_EDGE_TYPES.join(' | ')}`, 'MENTIONS')
@@ -24,39 +44,55 @@ export function registerHumanCommand(program: Command): void {
         process.exit(1);
       }
       if (!HUMAN_NODE_LABELS.includes(opts.type as HumanNodeLabel)) {
-        console.error(`Error: invalid --type. Valid: ${HUMAN_NODE_LABELS.join(', ')}`);
+        console.error(`Error: invalid --type "${opts.type}". Valid: ${HUMAN_NODE_LABELS.join(', ')}`);
         process.exit(1);
       }
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
-      const tags: string[] = Array.isArray(opts.tag) ? opts.tag : (opts.tag ? [opts.tag] : []);
-      const linkCbm: string[] = Array.isArray(opts.linkCbm) ? opts.linkCbm : (opts.linkCbm ? [opts.linkCbm] : []);
+      if (!HUMAN_NODE_STATUSES.includes(opts.status)) {
+        console.error(`Error: invalid --status "${opts.status}". Valid: ${HUMAN_NODE_STATUSES.join(', ')}`);
+        process.exit(1);
+      }
+      if (!HUMAN_EDGE_TYPES.includes(opts.linkEdge as HumanEdgeType)) {
+        console.error(`Error: invalid --link-edge "${opts.linkEdge}". Valid: ${HUMAN_EDGE_TYPES.join(', ')}`);
+        process.exit(1);
+      }
+      const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
 
       try {
-        const node = humanStore.createNode({
-          project,
-          label: opts.type as HumanNodeLabel,
-          title: opts.title,
-          body_markdown: opts.body,
-          status: opts.status,
-          source: 'human',
-          cbm_node_ids: linkCbm.map((s: string) => parseInt(s, 10)),
-          tags,
-        });
+        const tags: string[] = Array.isArray(opts.tag) ? opts.tag : (opts.tag ? [opts.tag] : []);
+        const linkCbmStrs: string[] = Array.isArray(opts.linkCbm) ? opts.linkCbm : (opts.linkCbm ? [opts.linkCbm] : []);
+        const linkCbm = linkCbmStrs.map((s) => parseIntStrict(s, '--link-cbm'));
 
-        // Create edges for each linked cbm node
-        const edgeType = (opts.linkEdge as HumanEdgeType) || 'MENTIONS';
-        for (const cbmIdStr of linkCbm) {
-          const cbmId = parseInt(cbmIdStr, 10);
-          humanStore.createEdge({
+        try {
+          const node = humanStore.createNode({
             project,
-            source_human_node_id: node.id,
-            target_kind: 'code',
-            target_cbm_node_id: cbmId,
-            type: edgeType,
+            label: opts.type as HumanNodeLabel,
+            title: opts.title,
+            body_markdown: opts.body,
+            status: opts.status,
+            source: 'human',
+            cbm_node_ids: linkCbm,
+            tags,
           });
+
+          const edgeType = (opts.linkEdge as HumanEdgeType) || 'MENTIONS';
+          for (const cbmId of linkCbm) {
+            humanStore.createEdge({
+              project,
+              source_human_node_id: node.id,
+              target_kind: 'code',
+              target_cbm_node_id: cbmId,
+              type: edgeType,
+            });
+          }
+          console.log(`✅ Created: id=${node.id}, slug=${node.slug}, path=${node.obsidian_path}`);
+          if (linkCbm.length > 0) {
+            console.log(`   Linked to ${linkCbm.length} code node(s) via ${edgeType} edges.`);
+          }
+        } catch (e: any) {
+          console.error(`Error: ${e.message}`);
+          process.exit(1);
         }
-        console.log(`✅ Created: id=${node.id}, slug=${node.slug}, path=${node.obsidian_path}`);
       } finally {
         humanStore.close();
       }
@@ -70,7 +106,7 @@ export function registerHumanCommand(program: Command): void {
     .option('--status <status>')
     .option('--limit <n>', '200')
     .action((opts) => {
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       try {
         const nodes = humanStore.listNodes(project, {
@@ -95,12 +131,12 @@ export function registerHumanCommand(program: Command): void {
 
   human
     .command('show')
-    .description('Show a single note')
+    .description('Show a single note (JSON output)')
     .argument('<id>', 'Note ID')
     .option('--project <name>')
     .action((idStr, opts) => {
-      const id = parseInt(idStr, 10);
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      const id = parseIntStrict(idStr, '<id>');
+      const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       try {
         const node = humanStore.getNodeById(id);
@@ -126,19 +162,37 @@ export function registerHumanCommand(program: Command): void {
         console.error('Error: --to-cbm-node is required');
         process.exit(1);
       }
-      const noteId = parseInt(noteIdStr, 10);
-      const cbmId = parseInt(opts.toCbmNode, 10);
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      if (!HUMAN_EDGE_TYPES.includes(opts.edge as HumanEdgeType)) {
+        console.error(`Error: invalid --edge "${opts.edge}". Valid: ${HUMAN_EDGE_TYPES.join(', ')}`);
+        process.exit(1);
+      }
+      const noteId = parseIntStrict(noteIdStr, '<noteId>');
+      const cbmId = parseIntStrict(opts.toCbmNode, '--to-cbm-node');
+      const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       try {
-        const edge = humanStore.createEdge({
-          project,
-          source_human_node_id: noteId,
-          target_kind: 'code',
-          target_cbm_node_id: cbmId,
-          type: opts.edge as HumanEdgeType,
-        });
-        console.log(`✅ Edge created: id=${edge.id}, type=${edge.type}, target=${cbmId}`);
+        const node = humanStore.getNodeById(noteId);
+        if (!node) {
+          console.error(`Error: note ${noteId} not found`);
+          process.exit(1);
+        }
+        if (node.project !== project) {
+          console.error(`Error: note ${noteId} belongs to project "${node.project}", not "${project}"`);
+          process.exit(1);
+        }
+        try {
+          const edge = humanStore.createEdge({
+            project,
+            source_human_node_id: noteId,
+            target_kind: 'code',
+            target_cbm_node_id: cbmId,
+            type: opts.edge as HumanEdgeType,
+          });
+          console.log(`✅ Edge created: id=${edge.id}, type=${edge.type}, target=${cbmId}`);
+        } catch (e: any) {
+          console.error(`Error: ${e.message}`);
+          process.exit(1);
+        }
       } finally {
         humanStore.close();
       }

@@ -37,10 +37,20 @@ export class CodeGraphReader {
 
   constructor(dbPath: string) {
     if (!existsSync(dbPath)) {
-      throw new Error(`Code graph DB not found: ${dbPath}. Run 'cbm index_repository' first.`);
+      throw new Error(
+        `Code graph DB not found at: ${dbPath}\n` +
+        `Possible fixes:\n` +
+        `  1. Run 'cbm index_repository' in the project root to build the code graph\n` +
+        `  2. Pass --project <name> to specify the project (DB is at $XDG_CACHE_HOME/codebase-memory-mcp/<project>.db)\n` +
+        `  3. Verify the project name matches what was indexed (case-sensitive)\n` +
+        `  4. Set XDG_CACHE_HOME to point to a non-default cache directory if configured`
+      );
     }
     this.db = new Database(dbPath, { readonly: true, fileMustExist: true });
-    this.db.pragma('journal_mode = WAL');
+    // Set busy_timeout to handle concurrent writes from V1 engine gracefully.
+    this.db.pragma('busy_timeout = 5000');
+    // NOTE: do NOT set `journal_mode = WAL` on a readonly connection — it's a no-op or error.
+    // V1 sets WAL when it opens the DB for writing; the readonly reader inherits it.
   }
 
   close(): void {
@@ -104,10 +114,18 @@ export class CodeGraphReader {
 
   getNeighbors(nodeId: number, direction: 'in' | 'out' | 'both' = 'both', limit = 100): { edge: CodeEdge; node: CodeNode }[] {
     const results: { edge: CodeEdge; node: CodeNode }[] = [];
+    // CRITICAL: use column aliases — both edges and nodes tables have `id`, `project`, `properties_json`.
+    // Without aliases, better-sqlite3 returns the last column value for duplicate names, corrupting edge.id and edge.properties_json.
+    const EDGE_COLS = `e.id AS edge_id, e.project AS edge_project, e.source_id, e.target_id,
+                       e.type AS edge_type, e.properties_json AS edge_properties`;
+    const NODE_COLS = `n.id AS node_id, n.project AS node_project, n.label, n.name,
+                       n.qualified_name, n.file_path, n.start_line, n.end_line,
+                       n.properties_json AS node_properties`;
+
     if (direction === 'out' || direction === 'both') {
       const rows = this.db
         .prepare(
-          `SELECT e.*, n.* FROM edges e
+          `SELECT ${EDGE_COLS}, ${NODE_COLS} FROM edges e
            JOIN nodes n ON n.id = e.target_id
            WHERE e.source_id = ?
            LIMIT ?`
@@ -116,23 +134,23 @@ export class CodeGraphReader {
       for (const row of rows) {
         results.push({
           edge: {
-            id: row.id,
-            project: row.project,
+            id: row.edge_id,
+            project: row.edge_project,
             source_id: row.source_id,
             target_id: row.target_id,
-            type: row.type,
-            properties_json: row.properties_json,
+            type: row.edge_type,
+            properties_json: row.edge_properties ?? '{}',
           },
           node: deserializeCodeNode({
-            id: row.id,
-            project: row.project,
+            id: row.node_id,
+            project: row.node_project,
             label: row.label,
             name: row.name,
             qualified_name: row.qualified_name,
             file_path: row.file_path,
             start_line: row.start_line,
             end_line: row.end_line,
-            properties_json: row.properties_json,
+            properties_json: row.node_properties,
           }),
         });
       }
@@ -140,7 +158,7 @@ export class CodeGraphReader {
     if (direction === 'in' || direction === 'both') {
       const rows = this.db
         .prepare(
-          `SELECT e.*, n.* FROM edges e
+          `SELECT ${EDGE_COLS}, ${NODE_COLS} FROM edges e
            JOIN nodes n ON n.id = e.source_id
            WHERE e.target_id = ?
            LIMIT ?`
@@ -149,28 +167,73 @@ export class CodeGraphReader {
       for (const row of rows) {
         results.push({
           edge: {
-            id: row.id,
-            project: row.project,
+            id: row.edge_id,
+            project: row.edge_project,
             source_id: row.source_id,
             target_id: row.target_id,
-            type: row.type,
-            properties_json: row.properties_json,
+            type: row.edge_type,
+            properties_json: row.edge_properties ?? '{}',
           },
           node: deserializeCodeNode({
-            id: row.id,
-            project: row.project,
+            id: row.node_id,
+            project: row.node_project,
             label: row.label,
             name: row.name,
             qualified_name: row.qualified_name,
             file_path: row.file_path,
             start_line: row.start_line,
             end_line: row.end_line,
-            properties_json: row.properties_json,
+            properties_json: row.node_properties,
           }),
         });
       }
     }
     return results;
+  }
+
+  /**
+   * Bulk-fetch node degrees (in + out) for many node IDs in two queries.
+   * Returns Map<nodeId, degree>. Much faster than calling getNodeDegree per node.
+   */
+  getBulkNodeDegrees(nodeIds: number[]): Map<number, number> {
+    const result = new Map<number, number>();
+    if (nodeIds.length === 0) return result;
+    for (const id of nodeIds) result.set(id, 0);
+    const placeholders = nodeIds.map(() => '?').join(',');
+    try {
+      const outRows = this.db
+        .prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${placeholders}) GROUP BY source_id`)
+        .all(...nodeIds) as any[];
+      for (const r of outRows) result.set(r.id, (result.get(r.id) ?? 0) + r.c);
+      const inRows = this.db
+        .prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${placeholders}) GROUP BY target_id`)
+        .all(...nodeIds) as any[];
+      for (const r of inRows) result.set(r.id, (result.get(r.id) ?? 0) + r.c);
+    } catch {
+      // ignore — return zeros
+    }
+    return result;
+  }
+
+  /**
+   * Fetch many nodes by ID in one query. Returns Map<id, CodeNode>.
+   */
+  getNodesByIds(ids: number[]): Map<number, CodeNode> {
+    const result = new Map<number, CodeNode>();
+    if (ids.length === 0) return result;
+    const placeholders = ids.map(() => '?').join(',');
+    try {
+      const rows = this.db
+        .prepare(`SELECT * FROM nodes WHERE id IN (${placeholders})`)
+        .all(...ids) as any[];
+      for (const row of rows) {
+        const node = deserializeCodeNode(row);
+        result.set(node.id, node);
+      }
+    } catch {
+      // ignore
+    }
+    return result;
   }
 
   countNodes(project: string): number {
@@ -233,12 +296,16 @@ export class CodeGraphReader {
   }
 
   /**
-   * BM25 search on the code graph (uses V1's FTS5 table).
+   * BM25 search on the code graph (uses V1's FTS5 table if available).
+   * Falls back to LIKE on `name` and `qualified_name` if FTS5 is missing or throws.
    */
   searchCode(project: string, query: string, limit = 50): CodeNode[] {
-    // V1 uses FTS5 with table name 'nodes_fts' (or similar — exact name TBD per V1 schema).
-    // We try the most common name; if it fails, fall back to LIKE.
+    if (!query || typeof query !== 'string' || query.length === 0) return [];
+    // Try FTS5 first.
     try {
+      // Wrap the query in double quotes for a phrase query (safer than raw input).
+      // FTS5 phrase queries don't interpret AND/OR/NEAR.
+      const phraseQuery = '"' + query.replace(/"/g, '""') + '"';
       const rows = this.db
         .prepare(
           `SELECT n.* FROM nodes n
@@ -247,15 +314,15 @@ export class CodeGraphReader {
            ORDER BY rank
            LIMIT ?`
         )
-        .all(project, query, limit) as any[];
-      if (rows.length > 0) {
-        return rows.map(deserializeCodeNode);
-      }
+        .all(project, phraseQuery, limit) as any[];
+      // Trust FTS5 — return whatever it found (including empty).
+      return rows.map(deserializeCodeNode);
     } catch {
-      // Fall through to LIKE fallback
+      // Fall through to LIKE fallback.
     }
-    // LIKE fallback
-    const likePattern = `%${query.replace(/[%_]/g, '\\$&')}%`;
+    // LIKE fallback — escape backslash, %, _ correctly.
+    const escaped = query.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
+    const likePattern = `%${escaped}%`;
     const rows = this.db
       .prepare(
         `SELECT * FROM nodes
@@ -286,31 +353,62 @@ export class CodeGraphReader {
    * Find routes by HTTP method + path.
    */
   findRoute(project: string, method: string, path: string): CodeNode | null {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM nodes WHERE project = ? AND label = 'Route' LIMIT 500`
-      )
-      .all(project) as any[];
-    for (const row of rows) {
-      const props = JSON.parse(row.properties_json || '{}');
-      if (
-        (props.route_method === method || props.route_method === method.toUpperCase()) &&
-        props.route_path === path
-      ) {
-        return deserializeCodeNode(row);
+    // Use json_extract (SQLite 3.38+) for an indexed-style exact lookup.
+    // Fall back to JS-side filtering if json_extract is unavailable.
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT * FROM nodes
+           WHERE project = ? AND label = 'Route'
+             AND json_extract(properties_json, '$.route_method') = ?
+             AND json_extract(properties_json, '$.route_path') = ?
+           LIMIT 1`
+        )
+        .get(project, method.toUpperCase(), path) as any;
+      return row ? deserializeCodeNode(row) : null;
+    } catch {
+      // Fallback: scan up to 10000 routes (was 500, which missed routes beyond 500).
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM nodes WHERE project = ? AND label = 'Route' LIMIT 10000`
+        )
+        .all(project) as any[];
+      const methodUpper = method.toUpperCase();
+      for (const row of rows) {
+        const props = JSON.parse(row.properties_json || '{}');
+        if (
+          (props.route_method === methodUpper ||
+            (typeof props.route_method === 'string' && props.route_method.toUpperCase() === methodUpper)) &&
+          props.route_path === path
+        ) {
+          return deserializeCodeNode(row);
+        }
       }
+      return null;
     }
-    return null;
   }
 
   /**
    * List projects that have a code graph.
    */
   listProjects(): string[] {
-    const rows = this.db
-      .prepare('SELECT DISTINCT name FROM projects')
-      .all() as any[];
-    return rows.map((r) => r.name as string);
+    // Try the `projects` table first; fall back to DISTINCT project from nodes.
+    try {
+      const rows = this.db
+        .prepare('SELECT DISTINCT name FROM projects')
+        .all() as any[];
+      if (rows.length > 0) return rows.map((r) => r.name as string);
+    } catch {
+      // Table may not exist in some V1 schema versions.
+    }
+    try {
+      const rows = this.db
+        .prepare('SELECT DISTINCT project FROM nodes')
+        .all() as any[];
+      return rows.map((r) => r.project as string);
+    } catch {
+      return [];
+    }
   }
 }
 

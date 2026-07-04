@@ -1,9 +1,33 @@
 // v2/src/obsidian/vault.ts
 // Vault filesystem helpers — walk, ensure dirs, read/write notes.
+// All path-taking functions validate against path traversal.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, renameSync } from 'node:fs';
-import { join, dirname, relative, extname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
+import { join, dirname, relative, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
+
+const MAX_VAULT_DEPTH = 32;
+const MAX_BACKUPS_PER_FILE = 5;
+const SKIP_DIRS = new Set(['.obsidian', '.git', '.trash', 'node_modules', '.cache', '.DS_Store']);
+
+/**
+ * Validate that a relative path stays inside the vault. Rejects path traversal.
+ */
+function assertPathInsideVault(vaultPath: string, relPath: string): void {
+  if (relPath.includes('..')) {
+    throw new Error(`Path traversal rejected: "${relPath}" contains "..".`);
+  }
+  if (/[\\]/.test(relPath)) {
+    throw new Error(`Path traversal rejected: "${relPath}" contains backslashes.`);
+  }
+  const absVault = resolve(vaultPath);
+  const absPath = resolve(join(absVault, relPath));
+  if (absPath !== absVault && !absPath.startsWith(absVault + sep)) {
+    throw new Error(
+      `Path traversal rejected: "${relPath}" resolves outside the vault root "${absVault}".`
+    );
+  }
+}
 
 export const VAULT_DIRS = [
   'Architecture',
@@ -31,17 +55,23 @@ export function ensureVaultDirs(vaultPath: string): void {
 }
 
 export function readNote(vaultPath: string, relPath: string): string | null {
+  assertPathInsideVault(vaultPath, relPath);
   const absPath = join(vaultPath, relPath);
   if (!existsSync(absPath)) return null;
   return readFileSync(absPath, 'utf-8');
 }
 
+/**
+ * Write a note. If `backupBeforeWrite` is true, creates a `.bak.<timestamp>` file
+ * before overwriting, then prunes old backups beyond MAX_BACKUPS_PER_FILE.
+ */
 export function writeNote(
   vaultPath: string,
   relPath: string,
   content: string,
   opts: { backupBeforeWrite?: boolean } = {}
 ): { written: boolean; backupPath: string | null } {
+  assertPathInsideVault(vaultPath, relPath);
   const absPath = join(vaultPath, relPath);
   let backupPath: string | null = null;
 
@@ -53,6 +83,7 @@ export function writeNote(
     if (opts.backupBeforeWrite) {
       backupPath = `${absPath}.bak.${Date.now()}`;
       copyFileSync(absPath, backupPath);
+      pruneBackups(absPath);
     }
   }
 
@@ -61,26 +92,83 @@ export function writeNote(
   return { written: true, backupPath };
 }
 
+/**
+ * Keep only the N most recent `.bak.<ts>` files for a given note path.
+ */
+function pruneBackups(absNotePath: string): void {
+  try {
+    const dir = dirname(absNotePath);
+    const base = absNotePath;
+    const entries = readdirSync(dir);
+    const backups = entries
+      .filter((e) => e.startsWith(base.split(sep).pop()! + '.bak.'))
+      .map((e) => ({ name: e, path: join(dir, e), ts: parseInt(e.split('.bak.').pop() || '0', 10) || 0 }))
+      .sort((a, b) => b.ts - a.ts);
+    for (const b of backups.slice(MAX_BACKUPS_PER_FILE)) {
+      try { unlinkSync(b.path); } catch { /* ignore */ }
+    }
+  } catch {
+    // ignore — backup pruning is best-effort
+  }
+}
+
+/**
+ * Walk the vault and return all `.md` files as relative paths.
+ * Skips well-known directories (.obsidian, .git, .trash, node_modules, .cache).
+ * Uses an iterative walk with a depth limit (MAX_VAULT_DEPTH) and symlink detection
+ * to prevent stack overflow and infinite loops.
+ */
 export function walkVault(vaultPath: string): string[] {
   const results: string[] = [];
   if (!existsSync(vaultPath)) return results;
 
-  function walk(dir: string) {
-    const entries = readdirSync(dir);
+  // Iterative walk to avoid stack overflow on deep directories.
+  const stack: { dir: string; depth: number }[] = [{ dir: vaultPath, depth: 0 }];
+  const visitedInodes = new Set<number>(); // protects against symlink loops
+
+  while (stack.length > 0) {
+    const { dir, depth } = stack.pop()!;
+    if (depth > MAX_VAULT_DEPTH) continue;
+
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+
     for (const entry of entries) {
       const full = join(dir, entry);
-      const stat = statSync(full);
+      let stat;
+      try {
+        // Use statSync (follows symlinks) — if it's a symlink to a dir, we descend.
+        stat = statSync(full, { throwIfNoEntry: false });
+      } catch {
+        continue;
+      }
+      if (!stat) continue;
+
       if (stat.isDirectory()) {
-        // Skip .obsidian, .git, node_modules
-        if (entry.startsWith('.') || entry === 'node_modules') continue;
-        walk(full);
-      } else if (extname(entry).toLowerCase() === '.md') {
+        // Skip well-known non-vault directories. Allow other dotfiles (e.g., .attachments).
+        if (SKIP_DIRS.has(entry)) continue;
+        // Detect symlink loops via inode.
+        try {
+          const realStat = statSync(full);
+          const inodeKey = realStat.ino ? `${realStat.dev}:${realStat.ino}` : full;
+          if (visitedInodes.has(inodeKey as unknown as number)) continue;
+          visitedInodes.add(inodeKey as unknown as number);
+        } catch {
+          // ignore
+        }
+        stack.push({ dir: full, depth: depth + 1 });
+      } else if (stat.isFile() && extname(entry).toLowerCase() === '.md') {
+        // Skip backup files and deleted files.
+        if (entry.includes('.bak.') || entry.includes('.deleted.') || entry.includes('.conflict.')) continue;
         results.push(relative(vaultPath, full));
       }
     }
   }
 
-  walk(vaultPath);
   return results.sort();
 }
 
@@ -89,9 +177,10 @@ export function hashContent(content: string): string {
 }
 
 export function deleteNote(vaultPath: string, relPath: string): boolean {
+  assertPathInsideVault(vaultPath, relPath);
   const absPath = join(vaultPath, relPath);
   if (!existsSync(absPath)) return false;
-  // Soft delete: rename to .deleted
+  // Soft delete: rename to .deleted.<ts>
   const deletedPath = `${absPath}.deleted.${Date.now()}`;
   renameSync(absPath, deletedPath);
   return true;
@@ -111,81 +200,88 @@ export function renderVaultIndex(opts: {
     notesTotal: number;
   };
 }): string {
+  const today = new Date().toISOString().split('T')[0];
   return `---
 type: index
 project: ${opts.projectName}
-last_generated: ${new Date().toISOString().split('T')[0]}
+last_generated: ${today}
 ---
 
 # ${opts.projectName} — Codebase Memory Vault
 
-> Vault généré et synchronisé par **Codebase Memory V2**.
-> Éditable dans Obsidian, VS Code (Foam), ou tout éditeur Markdown.
+> Vault generated and synced by **Codebase Memory V2**.
+> Editable in Obsidian, VS Code (Foam), or any Markdown editor.
 
-## Statistiques
+## Statistics
 
-| Métrique | Valeur |
+| Metric | Value |
 |---|---|
 | Modules | ${opts.stats.modulesCount} |
 | Routes | ${opts.stats.routesCount} |
 | ADRs | ${opts.stats.adrsCount} |
-| Bugs connus | ${opts.stats.bugsCount} |
+| Known bugs | ${opts.stats.bugsCount} |
 | Refactors | ${opts.stats.refactorsCount} |
-| Notes totales | ${opts.stats.notesTotal} |
+| Total notes | ${opts.stats.notesTotal} |
 
-## Structure du vault
+## Vault structure
 
-- [[Architecture/overview|Architecture]] — vue d'ensemble, hotspots, risk map
+- [[Architecture/overview|Architecture]] — overview, hotspots, risk map
 - [[ADR/]] — Architecture Decision Records
-- [[Modules/]] — une note par module
-- [[Routes/]] — une note par route HTTP
-- [[Refactor/]] — plans de refactor
-- [[Bugs/]] — bugs connus
-- [[Legacy/]] — zones legacy
-- [[Conventions/]] — conventions projet
-- [[Prompts/]] — prompts utiles pour agents IA
-- [[Journal/]] — journal d'activité
+- [[Modules/]] — one note per module
+- [[Routes/]] — one note per HTTP route
+- [[Refactor/]] — refactor plans
+- [[Bugs/]] — known bugs
+- [[Legacy/]] — legacy zones
+- [[Conventions/]] — project conventions
+- [[Prompts/]] — useful prompts for AI agents
+- [[Journal/]] — activity journal
 
-## Comment utiliser ce vault
+## How to use this vault
 
-### Pour un développeur
+### For developers
 
-1. Ouvrir le vault dans Obsidian
-2. Naviguer via les backlinks et wikilinks
-3. **Éditer uniquement la section \`## HUMAN NOTES\`** de chaque note
-4. La section \`## AUTO-GENERATED\` est régénérée par V2 au prochain sync
+1. Open the vault folder in Obsidian
+2. Navigate via backlinks and wikilinks
+3. **Edit only the \`## HUMAN NOTES\` section** of each note
+4. The \`## AUTO-GENERATED\` section is regenerated by V2 on the next sync
 
-### Pour un agent IA
+### For AI agents
 
-Utiliser les tools MCP V2 :
+Use the V2 MCP tools:
 
-- \`get_project_overview\` — vue exécutive
-- \`get_module_context\` — contexte riche d'un module (code + humain)
-- \`get_undocumented_hotspots\` — modules critiques sans note
-- \`create_human_note\` — créer une ADR, BugNote, etc.
-- \`link_note_to_code_node\` — lier une note à un code node
-- \`search_code_and_memory\` — recherche unifiée
+- \`get_project_overview\` — executive view
+- \`get_module_context\` — rich module context (code + human)
+- \`get_undocumented_hotspots\` — critical modules without notes
+- \`create_human_note\` — create an ADR, BugNote, etc.
+- \`link_note_to_code_node\` — link a note to a code node
+- \`search_code_and_memory\` — unified search
 
 ## Sync
 
 \`\`\`bash
-# Sync双向 (DB ↔ vault)
+# Bidirectional sync (DB ↔ vault)
 cbm-v2 obsidian sync
 
-# Preview sans write
+# Preview without writing
 cbm-v2 obsidian sync --dry-run
 
-# Export uniquement (DB → vault)
+# Export only (DB → vault)
 cbm-v2 obsidian export
 \`\`\`
 `;
 }
 
-export const ADR_TEMPLATE = `---
+/**
+ * Return the ADR template content. Computed on each call so the date is fresh
+ * (the previous module-load-time constant froze the date for long-running processes).
+ */
+export function getAdrTemplate(): string {
+  const today = new Date().toISOString().split('T')[0];
+  return `---
 type: adr
 status: draft
 source: human
-last_generated: ${new Date().toISOString().split('T')[0]}
+last_generated: ${today}
 tags:
   - adr
 ---
@@ -194,34 +290,35 @@ tags:
 
 ## AUTO-GENERATED
 
-> Cette section est contrôlée par Codebase Memory V2 et peut être régénérée.
+> This section is controlled by Codebase Memory V2 and may be regenerated.
 
-### Métadonnées
+### Metadata
 
 - **Status** : draft
-- **Date** : ${new Date().toISOString().split('T')[0]}
-- **Lié à** : (aucun code node lié pour l'instant)
+- **Date** : ${today}
+- **Linked to** : (no code node linked yet)
 
 ---
 
 ## HUMAN NOTES
 
-### Contexte
+### Context
 
-<Décrire le problème ou la contrainte qui motive cette décision>
+<Describe the problem or constraint that motivates this decision>
 
-### Décision
+### Decision
 
-<Décrire la décision prise>
+<Describe the decision made>
 
-### Conséquences
+### Consequences
 
-- <Conséquence positive 1>
-- <Conséquence positive 2>
-- <Conséquence négative 1>
+- <Positive consequence 1>
+- <Positive consequence 2>
+- <Negative consequence 1>
 
-### Alternatives considérées
+### Alternatives considered
 
-- <Alternative 1> — <raison du rejet>
-- <Alternative 2> — <raison du rejet>
+- <Alternative 1> — <reason for rejection>
+- <Alternative 2> — <reason for rejection>
 `;
+}

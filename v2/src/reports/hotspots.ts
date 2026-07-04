@@ -1,8 +1,9 @@
 // v2/src/reports/hotspots.ts
-// Report: modules critiques (high degree + high complexity).
+// Report: critical modules (high degree + high complexity).
 
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
+import { computeRiskScore } from './risk.js';
 
 export interface Hotspot {
   cbm_node_id: number;
@@ -14,18 +15,18 @@ export interface Hotspot {
   complexity_avg: number;
   notes_count: number;
   is_documented: boolean;
-  risk_score: number;        // 0.0-1.0, computed
+  risk_score: number;        // 0.0-1.0
 }
 
 export interface HotspotsReport {
   project: string;
   generated_at: string;
-  total_modules: number;
+  total_modules: number;       // exact count from countNodesByLabel
   hotspots: Hotspot[];
   summary: {
-    critical: number;        // degree >= 50
-    high: number;            // degree 30-49
-    medium: number;          // degree 20-29
+    critical: number;          // degree >= 50
+    high: number;              // degree 30-49
+    medium: number;            // degree 20-29
     documented: number;
     undocumented: number;
   };
@@ -41,21 +42,25 @@ export function computeHotspotsReport(
   const limit = opts.limit ?? 100;
 
   const modules = codeReader.listModules(project, 5000);
+
+  // Bulk-fetch degrees to avoid N+1.
+  const moduleIds = modules.map((m) => m.id);
+  const degreeMap = codeReader.getBulkNodeDegrees(moduleIds);
+
+  // Get exact total module count (don't rely on `modules.length` which caps at 5000).
+  const labelCounts = codeReader.countNodesByLabel(project);
+  const totalModulesExact = labelCounts['Module'] ?? modules.length;
+
   const hotspots: Hotspot[] = [];
 
   for (const module of modules) {
-    const degree = codeReader.getNodeDegree(module.id);
+    const degree = degreeMap.get(module.id) ?? 0;
     if (degree < minDegree) continue;
 
     const props = JSON.parse(module.properties_json || '{}');
     const complexityAvg = props.complexity_avg ?? props.complexity ?? 0;
     const notesCount = humanStore.listNodesByCbmNodeId(project, module.id).length;
-
-    // Risk score: weighted combination
-    const degreeScore = Math.min(degree / 100, 1.0);
-    const complexityScore = Math.min(complexityAvg / 20, 1.0);
-    const documentationPenalty = notesCount > 0 ? 0 : 0.2;
-    const riskScore = Math.min(degreeScore * 0.5 + complexityScore * 0.3 + documentationPenalty, 1.0);
+    const riskScore = computeRiskScore(degree, complexityAvg, notesCount);
 
     hotspots.push({
       cbm_node_id: module.id,
@@ -85,7 +90,7 @@ export function computeHotspotsReport(
   return {
     project,
     generated_at: new Date().toISOString(),
-    total_modules: modules.length,
+    total_modules: totalModulesExact,
     hotspots: top,
     summary,
   };
@@ -95,26 +100,27 @@ export function renderHotspotsReportMarkdown(report: HotspotsReport): string {
   const lines: string[] = [];
   lines.push(`# Hotspots Report — ${report.project}`);
   lines.push('');
-  lines.push(`> Généré le ${report.generated_at}`);
+  lines.push(`> Generated on ${report.generated_at}`);
   lines.push('');
-  lines.push('## Synthèse');
+  lines.push('## Summary');
   lines.push('');
-  lines.push('| Catégorie | Nombre |');
+  lines.push('| Category | Count |');
   lines.push('|---|---|');
-  lines.push(`| Modules totaux | ${report.total_modules} |`);
-  lines.push(`| Critiques (degré ≥ 50) | ${report.summary.critical} |`);
-  lines.push(`| Hauts (degré 30-49) | ${report.summary.high} |`);
-  lines.push(`| Moyens (degré 20-29) | ${report.summary.medium} |`);
-  lines.push(`| Documentés | ${report.summary.documented} |`);
-  lines.push(`| Non documentés ⚠️ | ${report.summary.undocumented} |`);
+  lines.push(`| Total modules | ${report.total_modules} |`);
+  lines.push(`| Critical (degree >= 50) | ${report.summary.critical} |`);
+  lines.push(`| High (degree 30-49) | ${report.summary.high} |`);
+  lines.push(`| Medium (degree 20-29) | ${report.summary.medium} |`);
+  lines.push(`| Documented | ${report.summary.documented} |`);
+  lines.push(`| Undocumented ⚠️ | ${report.summary.undocumented} |`);
   lines.push('');
   lines.push('## Top hotspots');
   lines.push('');
-  lines.push('| Module | Degré | Complexité | Notes | Risk | Documenté |');
+  lines.push('| Module | Degree | Complexity | Notes | Risk | Documented |');
   lines.push('|---|---|---|---|---|---|');
+  const esc = (s: string) => String(s).replace(/\|/g, '\\|');
   for (const h of report.hotspots) {
     lines.push(
-      `| ${h.name} | ${h.degree} | ${h.complexity_avg.toFixed(1)} | ${h.notes_count} | ${(h.risk_score * 100).toFixed(0)}% | ${h.is_documented ? '✅' : '❌'} |`
+      `| ${esc(h.name)} | ${h.degree} | ${h.complexity_avg.toFixed(1)} | ${h.notes_count} | ${(h.risk_score * 100).toFixed(0)}% | ${h.is_documented ? '✅' : '❌'} |`
     );
   }
   return lines.join('\n');

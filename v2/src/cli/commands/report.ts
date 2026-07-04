@@ -6,6 +6,7 @@ import { CodeGraphReader, defaultCodeDbPath } from '../../bridge/sqlite-ro.js';
 import { computeHotspotsReport, renderHotspotsReportMarkdown } from '../../reports/hotspots.js';
 import { computeUndocumentedReport, renderUndocumentedReportMarkdown } from '../../reports/undocumented.js';
 import { computeRiskReport, renderRiskReportMarkdown } from '../../reports/risk.js';
+import { deriveProjectName } from '../../config.js';
 
 export function registerReportCommand(program: Command): void {
   const report = program.command('report').description('Generate reports about code + human memory');
@@ -18,10 +19,12 @@ export function registerReportCommand(program: Command): void {
     .option('--limit <n>', '100')
     .option('--format <fmt>', 'md | json', 'md')
     .action((opts) => {
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      const project = opts.project || deriveProjectName();
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       let codeReader: CodeGraphReader | undefined;
-      try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch (e: any) {
+      try {
+        codeReader = new CodeGraphReader(defaultCodeDbPath(project));
+      } catch (e: any) {
         console.error(`Error: code graph not available — ${e.message}`);
         process.exit(1);
       }
@@ -37,7 +40,7 @@ export function registerReportCommand(program: Command): void {
         }
       } finally {
         humanStore.close();
-        codeReader!.close();
+        codeReader?.close();
       }
     });
 
@@ -47,10 +50,12 @@ export function registerReportCommand(program: Command): void {
     .option('--project <name>')
     .option('--format <fmt>', 'md | json', 'md')
     .action((opts) => {
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      const project = opts.project || deriveProjectName();
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       let codeReader: CodeGraphReader | undefined;
-      try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch (e: any) {
+      try {
+        codeReader = new CodeGraphReader(defaultCodeDbPath(project));
+      } catch (e: any) {
         console.error(`Error: code graph not available — ${e.message}`);
         process.exit(1);
       }
@@ -63,7 +68,7 @@ export function registerReportCommand(program: Command): void {
         }
       } finally {
         humanStore.close();
-        codeReader!.close();
+        codeReader?.close();
       }
     });
 
@@ -74,10 +79,12 @@ export function registerReportCommand(program: Command): void {
     .option('--limit <n>', '200')
     .option('--format <fmt>', 'md | json', 'md')
     .action((opts) => {
-      const project = opts.project || process.cwd().split(/[\\/]/).pop() || 'default';
+      const project = opts.project || deriveProjectName();
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
       let codeReader: CodeGraphReader | undefined;
-      try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch (e: any) {
+      try {
+        codeReader = new CodeGraphReader(defaultCodeDbPath(project));
+      } catch (e: any) {
         console.error(`Error: code graph not available — ${e.message}`);
         process.exit(1);
       }
@@ -92,7 +99,7 @@ export function registerReportCommand(program: Command): void {
         }
       } finally {
         humanStore.close();
-        codeReader!.close();
+        codeReader?.close();
       }
     });
 }

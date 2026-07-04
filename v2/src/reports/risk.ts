@@ -1,5 +1,6 @@
 // v2/src/reports/risk.ts
-// Report: high coupling, dead code, fragile interfaces.
+// Report: high coupling, dead code, fragile interfaces, central functions.
+// Also exports the shared computeRiskScore function used by other modules.
 
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
@@ -17,10 +18,29 @@ export interface RiskItem {
 export interface RiskReport {
   project: string;
   generated_at: string;
-  total_items: number;
+  total_items_found: number;       // total before slicing
+  total_items_returned: number;    // after slicing to `limit`
   by_severity: Record<string, number>;
   by_issue: Record<string, number>;
   items: RiskItem[];
+}
+
+/**
+ * Compute a risk score in [0, 1] from degree, complexity, and documentation status.
+ * Shared formula — used by reports/hotspots.ts, mcp/tools/get_module_context.ts,
+ * mcp/tools/get_project_overview.ts.
+ *
+ * Formula:
+ *   degreeScore = min(degree / 100, 1.0)         // high coupling → high risk
+ *   complexityScore = min(complexity / 20, 1.0)  // high complexity → high risk
+ *   documentationPenalty = notesCount > 0 ? 0 : 0.2  // undocumented → +0.2
+ *   riskScore = min(degreeScore * 0.5 + complexityScore * 0.3 + documentationPenalty, 1.0)
+ */
+export function computeRiskScore(degree: number, complexity: number, notesCount: number): number {
+  const degreeScore = Math.min(degree / 100, 1.0);
+  const complexityScore = Math.min(complexity / 20, 1.0);
+  const documentationPenalty = notesCount > 0 ? 0 : 0.2;
+  return Math.min(degreeScore * 0.5 + complexityScore * 0.3 + documentationPenalty, 1.0);
 }
 
 export function computeRiskReport(
@@ -32,10 +52,18 @@ export function computeRiskReport(
   const limit = opts.limit ?? 200;
   const items: RiskItem[] = [];
 
-  // 1. High coupling — modules with degree >= 40
+  // Fetch all modules, functions, interfaces in bulk.
   const modules = codeReader.listModules(project, 5000);
+  const functions = codeReader.listNodes(project, { label: 'Function', limit: 5000 });
+  const interfaces = codeReader.listNodes(project, { label: 'Interface', limit: 5000 });
+
+  // Bulk-fetch degrees to avoid N+1.
+  const allIds = [...modules, ...functions, ...interfaces].map((n) => n.id);
+  const degreeMap = codeReader.getBulkNodeDegrees(allIds);
+
+  // 1. High coupling — modules with degree >= 40.
   for (const m of modules) {
-    const degree = codeReader.getNodeDegree(m.id);
+    const degree = degreeMap.get(m.id) ?? 0;
     if (degree >= 40) {
       const severity = degree >= 80 ? 'critical' : degree >= 60 ? 'high' : 'medium';
       items.push({
@@ -44,20 +72,19 @@ export function computeRiskReport(
         name: m.name,
         file_path: m.file_path,
         issue: 'high_coupling',
-        details: `Module has degree ${degree} (≥40 = high coupling threshold)`,
+        details: `Module has degree ${degree} (>= 40 = high coupling threshold)`,
         severity,
       });
     }
   }
 
-  // 2. Dead code candidates — functions with degree = 0 (no callers)
-  const functions = codeReader.listNodes(project, { label: 'Function', limit: 5000 });
+  // 2. Dead code candidates — functions with degree = 0 (no callers).
   for (const f of functions) {
-    const degree = codeReader.getNodeDegree(f.id);
+    const degree = degreeMap.get(f.id) ?? 0;
     if (degree === 0) {
       const props = JSON.parse(f.properties_json || '{}');
-      if (props.is_exported) continue; // exported functions are likely API surface
-      if (props.is_test) continue;     // tests are called by test runner
+      if (props.is_exported) continue;
+      if (props.is_test) continue;
       items.push({
         cbm_node_id: f.id,
         label: f.label,
@@ -70,10 +97,9 @@ export function computeRiskReport(
     }
   }
 
-  // 3. Fragile interfaces — interfaces used by many implementations
-  const interfaces = codeReader.listNodes(project, { label: 'Interface', limit: 5000 });
+  // 3. Fragile interfaces — interfaces used by many implementations.
   for (const i of interfaces) {
-    const degree = codeReader.getNodeDegree(i.id);
+    const degree = degreeMap.get(i.id) ?? 0;
     if (degree >= 10) {
       const severity = degree >= 30 ? 'high' : 'medium';
       items.push({
@@ -88,9 +114,9 @@ export function computeRiskReport(
     }
   }
 
-  // 4. Central functions — functions with degree >= 20
+  // 4. Central functions — functions with degree >= 20.
   for (const f of functions) {
-    const degree = codeReader.getNodeDegree(f.id);
+    const degree = degreeMap.get(f.id) ?? 0;
     if (degree >= 20) {
       const severity = degree >= 50 ? 'critical' : degree >= 30 ? 'high' : 'medium';
       items.push({
@@ -105,9 +131,9 @@ export function computeRiskReport(
     }
   }
 
-  // 5. Critical nodes without documentation
+  // 5. Critical modules without documentation.
   for (const m of modules) {
-    const degree = codeReader.getNodeDegree(m.id);
+    const degree = degreeMap.get(m.id) ?? 0;
     if (degree >= 30) {
       const notes = humanStore.listNodesByCbmNodeId(project, m.id, 1);
       if (notes.length === 0) {
@@ -124,7 +150,7 @@ export function computeRiskReport(
     }
   }
 
-  // Sort by severity
+  // Sort by severity.
   const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   items.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
   const top = items.slice(0, limit);
@@ -139,7 +165,8 @@ export function computeRiskReport(
   return {
     project,
     generated_at: new Date().toISOString(),
-    total_items: top.length,
+    total_items_found: items.length,
+    total_items_returned: top.length,
     by_severity: bySeverity,
     by_issue: byIssue,
     items: top,
@@ -150,33 +177,36 @@ export function renderRiskReportMarkdown(report: RiskReport): string {
   const lines: string[] = [];
   lines.push(`# Risk Report — ${report.project}`);
   lines.push('');
-  lines.push(`> Généré le ${report.generated_at}`);
+  lines.push(`> Generated on ${report.generated_at}`);
   lines.push('');
-  lines.push('## Synthèse');
+  lines.push('## Summary');
   lines.push('');
-  lines.push('| Métrique | Valeur |');
+  lines.push('| Metric | Value |');
   lines.push('|---|---|');
-  lines.push(`| Total items | ${report.total_items} |`);
-  lines.push(`| Critique | ${report.by_severity.critical} |`);
-  lines.push(`| Haut | ${report.by_severity.high} |`);
-  lines.push(`| Moyen | ${report.by_severity.medium} |`);
-  lines.push(`| Bas | ${report.by_severity.low} |`);
+  lines.push(`| Total items found | ${report.total_items_found} |`);
+  lines.push(`| Total items returned | ${report.total_items_returned} |`);
+  lines.push(`| Critical | ${report.by_severity.critical} |`);
+  lines.push(`| High | ${report.by_severity.high} |`);
+  lines.push(`| Medium | ${report.by_severity.medium} |`);
+  lines.push(`| Low | ${report.by_severity.low} |`);
   lines.push('');
-  lines.push('## Par type d\'issue');
+  lines.push('## By issue type');
   lines.push('');
-  lines.push('| Issue | Nombre |');
+  lines.push('| Issue | Count |');
   lines.push('|---|---|');
   for (const [issue, count] of Object.entries(report.by_issue)) {
     lines.push(`| ${issue} | ${count} |`);
   }
   lines.push('');
-  lines.push('## Items (top 200)');
+  lines.push(`## Items (top ${report.total_items_returned})`);
   lines.push('');
-  lines.push('| Sévérité | Issue | Label | Name | Fichier | Détails |');
+  lines.push('| Severity | Issue | Label | Name | File | Details |');
   lines.push('|---|---|---|---|---|---|');
   for (const item of report.items) {
+    // Escape pipe characters in fields to keep the table valid.
+    const esc = (s: string) => String(s).replace(/\|/g, '\\|');
     lines.push(
-      `| ${item.severity} | ${item.issue} | ${item.label} | ${item.name} | \`${item.file_path}\` | ${item.details} |`
+      `| ${item.severity} | ${esc(item.issue)} | ${esc(item.label)} | ${esc(item.name)} | \`${esc(item.file_path)}\` | ${esc(item.details)} |`
     );
   }
   return lines.join('\n');
