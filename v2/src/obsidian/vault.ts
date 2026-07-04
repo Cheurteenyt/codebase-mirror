@@ -43,14 +43,10 @@ export const VAULT_DIRS = [
 ];
 
 export function ensureVaultDirs(vaultPath: string): void {
-  if (!existsSync(vaultPath)) {
-    mkdirSync(vaultPath, { recursive: true });
-  }
+  mkdirSync(vaultPath, { recursive: true });
   for (const dir of VAULT_DIRS) {
     const p = join(vaultPath, dir);
-    if (!existsSync(p)) {
-      mkdirSync(p, { recursive: true });
-    }
+    mkdirSync(p, { recursive: true });
   }
 }
 
@@ -124,7 +120,7 @@ export function walkVault(vaultPath: string): string[] {
 
   // Iterative walk to avoid stack overflow on deep directories.
   const stack: { dir: string; depth: number }[] = [{ dir: vaultPath, depth: 0 }];
-  const visitedInodes = new Set<number>(); // protects against symlink loops
+  const visitedInodes = new Set<string>(); // protects against symlink loops
 
   while (stack.length > 0) {
     const { dir, depth } = stack.pop()!;
@@ -155,8 +151,8 @@ export function walkVault(vaultPath: string): string[] {
         try {
           const realStat = statSync(full);
           const inodeKey = realStat.ino ? `${realStat.dev}:${realStat.ino}` : full;
-          if (visitedInodes.has(inodeKey as unknown as number)) continue;
-          visitedInodes.add(inodeKey as unknown as number);
+          if (visitedInodes.has(inodeKey)) continue;
+          visitedInodes.add(inodeKey);
         } catch {
           // ignore
         }

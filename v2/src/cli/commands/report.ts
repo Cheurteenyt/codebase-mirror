@@ -26,7 +26,8 @@ export function registerReportCommand(program: Command): void {
         codeReader = new CodeGraphReader(defaultCodeDbPath(project));
       } catch (e: any) {
         console.error(`Error: code graph not available — ${e.message}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       try {
         const rep = computeHotspotsReport(project, codeReader, humanStore, {
@@ -57,7 +58,8 @@ export function registerReportCommand(program: Command): void {
         codeReader = new CodeGraphReader(defaultCodeDbPath(project));
       } catch (e: any) {
         console.error(`Error: code graph not available — ${e.message}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       try {
         const rep = computeUndocumentedReport(project, codeReader, humanStore);
@@ -86,7 +88,8 @@ export function registerReportCommand(program: Command): void {
         codeReader = new CodeGraphReader(defaultCodeDbPath(project));
       } catch (e: any) {
         console.error(`Error: code graph not available — ${e.message}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       try {
         const rep = computeRiskReport(project, codeReader, humanStore, {

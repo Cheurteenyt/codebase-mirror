@@ -18,8 +18,7 @@ function deriveProject(opts: any): string {
 function parseIntStrict(s: string, flagName: string): number {
   const n = parseInt(s, 10);
   if (!Number.isFinite(n)) {
-    console.error(`Error: ${flagName} must be a number, got "${s}"`);
-    process.exit(1);
+    throw new Error(`${flagName} must be a number, got "${s}"`);
   }
   return n;
 }
@@ -41,19 +40,23 @@ export function registerHumanCommand(program: Command): void {
     .action((opts) => {
       if (!opts.title || !opts.type) {
         console.error('Error: --title and --type are required');
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       if (!HUMAN_NODE_LABELS.includes(opts.type as HumanNodeLabel)) {
         console.error(`Error: invalid --type "${opts.type}". Valid: ${HUMAN_NODE_LABELS.join(', ')}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       if (!HUMAN_NODE_STATUSES.includes(opts.status)) {
         console.error(`Error: invalid --status "${opts.status}". Valid: ${HUMAN_NODE_STATUSES.join(', ')}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       if (!HUMAN_EDGE_TYPES.includes(opts.linkEdge as HumanEdgeType)) {
         console.error(`Error: invalid --link-edge "${opts.linkEdge}". Valid: ${HUMAN_EDGE_TYPES.join(', ')}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
@@ -91,7 +94,8 @@ export function registerHumanCommand(program: Command): void {
           }
         } catch (e: any) {
           console.error(`Error: ${e.message}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       } finally {
         humanStore.close();
@@ -142,7 +146,8 @@ export function registerHumanCommand(program: Command): void {
         const node = humanStore.getNodeById(id);
         if (!node) {
           console.error(`Note ${id} not found`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         console.log(JSON.stringify(node, null, 2));
       } finally {
@@ -160,11 +165,13 @@ export function registerHumanCommand(program: Command): void {
     .action((noteIdStr, opts) => {
       if (!opts.toCbmNode) {
         console.error('Error: --to-cbm-node is required');
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       if (!HUMAN_EDGE_TYPES.includes(opts.edge as HumanEdgeType)) {
         console.error(`Error: invalid --edge "${opts.edge}". Valid: ${HUMAN_EDGE_TYPES.join(', ')}`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const noteId = parseIntStrict(noteIdStr, '<noteId>');
       const cbmId = parseIntStrict(opts.toCbmNode, '--to-cbm-node');
@@ -174,11 +181,13 @@ export function registerHumanCommand(program: Command): void {
         const node = humanStore.getNodeById(noteId);
         if (!node) {
           console.error(`Error: note ${noteId} not found`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         if (node.project !== project) {
           console.error(`Error: note ${noteId} belongs to project "${node.project}", not "${project}"`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         try {
           const edge = humanStore.createEdge({
@@ -191,7 +200,8 @@ export function registerHumanCommand(program: Command): void {
           console.log(`✅ Edge created: id=${edge.id}, type=${edge.type}, target=${cbmId}`);
         } catch (e: any) {
           console.error(`Error: ${e.message}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       } finally {
         humanStore.close();

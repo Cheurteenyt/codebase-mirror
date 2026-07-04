@@ -12,7 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { loadConfig, DEFAULT_CONFIG, deriveProjectName } from '../config.js';
 
 // Read version from package.json at build time would be ideal; for now hardcode.
-const VERSION = '0.2.1';
+const VERSION = '0.2.2';
 
 const program = new Command();
 
@@ -143,7 +143,7 @@ program
       console.log('✅ All checks passed.');
     } else {
       console.log('⚠️  Some checks failed. See above.');
-      process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -154,7 +154,8 @@ async function main() {
 
 main().catch((e) => {
   console.error('Fatal:', e);
-  process.exit(1);
+  process.exitCode = 1;
+  return;
 });
 
 // Deep-merge helper (kept local to avoid circular import).

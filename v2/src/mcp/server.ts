@@ -35,10 +35,10 @@ const JSONRPC_ERROR_CODES = {
   INTERNAL_ERROR: -32603,
 } as const;
 
-const MAX_LINE_LENGTH = 10 * 1024 * 1024; // 10 MB per line — protects against OOM.
+const MAX_LINE_LENGTH = 10 * 1024 * 1024; // 10M UTF-16 code units (~20-40MB UTF-8) — protects against OOM.
 
 // Read package.json version lazily (avoids JSON import assertions complexity).
-let SERVER_VERSION = '0.2.1';
+let SERVER_VERSION = '0.2.2';
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const fs = await import('node:fs');

@@ -3,7 +3,7 @@
 
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -82,9 +82,7 @@ export class HumanMemoryStore {
   constructor(dbPath: string) {
     const expanded = expandTilde(dbPath);
     const dir = dirname(expanded);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+    mkdirSync(dir, { recursive: true });
     this.db = new Database(expanded);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
@@ -111,6 +109,13 @@ export class HumanMemoryStore {
   // ── Human nodes CRUD ──────────────────────────────────────────────
 
   createNode(input: CreateHumanNodeInput): HumanNode {
+    // Wrap the entire slug-collision + INSERT in a transaction to prevent TOCTOU races
+    // between concurrent createNode calls (e.g., MCP server + CLI sync running in parallel).
+    const tx = this.db.transaction(() => this._createNodeInner(input));
+    return tx();
+  }
+
+  private _createNodeInner(input: CreateHumanNodeInput): HumanNode {
     if (!isHumanNodeLabel(input.label)) {
       throw new Error(
         `Invalid human node label: "${input.label}". Valid labels: ${HUMAN_NODE_LABELS.join(', ')}`
@@ -299,8 +304,20 @@ export class HumanMemoryStore {
       params.push(JSON.stringify(input.tags));
     }
     if (input.obsidian_path !== undefined) {
-      sets.push('obsidian_path = ?');
-      params.push(input.obsidian_path);
+      // Validate against path traversal (same check as createNode).
+      const obsPath = input.obsidian_path;
+      if (obsPath == null) {
+        sets.push('obsidian_path = ?');
+        params.push(null);
+      } else {
+        if (obsPath.includes('..') || /[\\]/.test(obsPath)) {
+          throw new Error(
+            `Invalid obsidian_path "${obsPath}": must not contain ".." or backslashes.`
+          );
+        }
+        sets.push('obsidian_path = ?');
+        params.push(obsPath);
+      }
     }
     if (input.author !== undefined) {
       sets.push('author = ?');

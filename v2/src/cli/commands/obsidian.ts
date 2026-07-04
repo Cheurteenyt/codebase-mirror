@@ -15,8 +15,7 @@ type Direction = (typeof VALID_DIRECTIONS)[number];
 
 function parseDirection(v: string): Direction {
   if (!VALID_DIRECTIONS.includes(v as Direction)) {
-    console.error(`Error: --direction must be one of: ${VALID_DIRECTIONS.join(', ')} (got "${v}")`);
-    process.exit(1);
+    throw new Error(`--direction must be one of: ${VALID_DIRECTIONS.join(', ')} (got "${v}")`);
   }
   return v as Direction;
 }
@@ -251,12 +250,14 @@ export function registerObsidianCommand(program: Command): void {
       if (!opts.title) {
         console.error('Error: --title is required');
         console.error('Usage: cbm-v2 obsidian create-adr --title "ADR-XXX: ..." [--module <name>] [--status draft]');
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const validStatuses = ['draft', 'active', 'reviewed', 'deprecated'];
       if (!validStatuses.includes(opts.status)) {
         console.error(`Error: --status must be one of ${validStatuses.join(', ')} (got "${opts.status}")`);
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
@@ -269,7 +270,8 @@ export function registerObsidianCommand(program: Command): void {
           const modules = codeReader.findModulesByName(project, opts.module, 1);
           if (modules.length === 0) {
             console.error(`Error: no module matching "${opts.module}" in project "${project}"`);
-            process.exit(1);
+            process.exitCode = 1;
+            return;
           }
           cbmNodeIds.push(modules[0].id);
         }
@@ -297,7 +299,8 @@ export function registerObsidianCommand(program: Command): void {
           console.log('Run `cbm-v2 obsidian sync --direction export` to materialize the file in the vault.');
         } catch (e: any) {
           console.error(`Error creating ADR: ${e.message}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       } finally {
         humanStore.close();
@@ -313,7 +316,8 @@ export function registerObsidianCommand(program: Command): void {
     .action((opts) => {
       if (!opts.module) {
         console.error('Error: --module is required');
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
@@ -323,12 +327,14 @@ export function registerObsidianCommand(program: Command): void {
       try {
         if (!codeReader) {
           console.error('Error: code graph not available. Run `cbm index_repository` first.');
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         const modules = codeReader.findModulesByName(project, opts.module, 1);
         if (modules.length === 0) {
           console.error(`Error: no module matching "${opts.module}"`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         const m = modules[0];
         const slug = slugify(m.name);
@@ -347,7 +353,8 @@ export function registerObsidianCommand(program: Command): void {
           console.log(`✅ ModuleNote created: id=${node.id}, path=${node.obsidian_path}`);
         } catch (e: any) {
           console.error(`Error: ${e.message}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       } finally {
         humanStore.close();
@@ -365,7 +372,8 @@ export function registerObsidianCommand(program: Command): void {
       if (!opts.path) {
         console.error('Error: --path is required');
         console.error('Usage: cbm-v2 obsidian create-route-note --method POST --path /api/login');
-        process.exit(1);
+        process.exitCode = 1;
+        return;
       }
       const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
@@ -375,12 +383,14 @@ export function registerObsidianCommand(program: Command): void {
       try {
         if (!codeReader) {
           console.error('Error: code graph not available. Run `cbm index_repository` first.');
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         const route = codeReader.findRoute(project, opts.method, opts.path);
         if (!route) {
           console.error(`Error: route ${opts.method} ${opts.path} not found`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
         const slug = slugify(`${opts.method}-${opts.path}`);
         const obsidianPath = `Routes/${slug}.md`;
@@ -398,7 +408,8 @@ export function registerObsidianCommand(program: Command): void {
           console.log(`✅ RouteNote created: id=${node.id}, path=${node.obsidian_path}`);
         } catch (e: any) {
           console.error(`Error: ${e.message}`);
-          process.exit(1);
+          process.exitCode = 1;
+          return;
         }
       } finally {
         humanStore.close();

@@ -128,6 +128,7 @@ export class CodeGraphReader {
           `SELECT ${EDGE_COLS}, ${NODE_COLS} FROM edges e
            JOIN nodes n ON n.id = e.target_id
            WHERE e.source_id = ?
+           ORDER BY e.id ASC
            LIMIT ?`
         )
         .all(nodeId, limit) as any[];
@@ -161,6 +162,7 @@ export class CodeGraphReader {
           `SELECT ${EDGE_COLS}, ${NODE_COLS} FROM edges e
            JOIN nodes n ON n.id = e.source_id
            WHERE e.target_id = ?
+           ORDER BY e.id ASC
            LIMIT ?`
         )
         .all(nodeId, limit) as any[];
@@ -375,7 +377,12 @@ export class CodeGraphReader {
         .all(project) as any[];
       const methodUpper = method.toUpperCase();
       for (const row of rows) {
-        const props = JSON.parse(row.properties_json || '{}');
+        let props: Record<string, unknown>;
+        try {
+          props = JSON.parse(row.properties_json || '{}');
+        } catch {
+          continue; // Skip corrupted row
+        }
         if (
           (props.route_method === methodUpper ||
             (typeof props.route_method === 'string' && props.route_method.toUpperCase() === methodUpper)) &&
