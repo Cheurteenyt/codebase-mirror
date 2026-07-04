@@ -10,6 +10,7 @@ import { registerStatsCommand } from './commands/stats.js';
 import { registerBackupCommand } from './commands/backup.js';
 import { registerDemoCommand } from './commands/demo.js';
 import { McpServer } from '../mcp/server.js';
+import { UiServer } from '../ui/server.js';
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
 import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -55,6 +56,27 @@ program
       humanStore.close();
       codeReader?.close();
     }
+  });
+
+program
+  .command('ui')
+  .description('Start the graph UI web server (http://127.0.0.1:9749)')
+  .option('--project <name>', 'Project name')
+  .option('--port <n>', 'Port number (default: 9749)', '9749')
+  .option('--graph-ui-path <path>', 'Path to graph-ui/dist directory')
+  .action((opts) => {
+    const config = loadConfig();
+    const project = opts.project || config.projectName || deriveProjectName();
+    const port = parseInt(opts.port, 10) || 9749;
+    const graphUiPath = opts.graphUiPath;
+
+    console.log(`Starting Graph UI for project "${project}" on port ${port}...`);
+    const ui = new UiServer({ project, port, graphUiPath });
+    ui.start();
+
+    // Graceful shutdown
+    process.on('SIGINT', () => { ui.stop(); process.exit(0); });
+    process.on('SIGTERM', () => { ui.stop(); process.exit(0); });
   });
 
 program
