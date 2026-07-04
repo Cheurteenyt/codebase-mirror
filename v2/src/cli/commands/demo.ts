@@ -2,7 +2,7 @@
 // Demo command — creates a sample project with ADRs, bugs, modules, runs sync, shows the vault.
 
 import { Command } from 'commander';
-import { HumanMemoryStore, defaultHumanDbPath } from '../../human/store.js';
+import { HumanMemoryStore } from '../../human/store.js';
 import { generateVault } from '../../obsidian/generator.js';
 import { ensureVaultDirs } from '../../obsidian/vault.js';
 import { resolve } from 'node:path';
@@ -32,8 +32,9 @@ export function registerDemoCommand(program: Command): void {
       console.log(`  Keep:    ${keep}`);
       console.log('');
 
-      // Create a fresh human DB for the demo
-      const dbPath = defaultHumanDbPath(project);
+      // Create a fresh human DB in a temp directory (never use the real cache path).
+      const tmpDbDir = mkdtempSync(resolve(tmpdir(), 'cbm-v2-demo-db-'));
+      const dbPath = resolve(tmpDbDir, 'demo.human.db');
       const humanStore = new HumanMemoryStore(dbPath);
 
       try {
@@ -196,10 +197,7 @@ export function registerDemoCommand(program: Command): void {
         try {
           rmSync(vaultPath, { recursive: true, force: true });
           // Also clean the demo DB
-          const dbFile = defaultHumanDbPath(project);
-          rmSync(dbFile, { force: true });
-          rmSync(dbFile + '-wal', { force: true });
-          rmSync(dbFile + '-shm', { force: true });
+          rmSync(tmpDbDir, { recursive: true, force: true });
         } catch {
           // ignore
         }

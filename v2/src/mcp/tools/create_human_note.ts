@@ -53,7 +53,7 @@ export class CreateHumanNoteTool extends BaseTool {
       const title = this.requireString(args, 'title');
       const bodyMarkdown = this.optionalString(args, 'body_markdown') ?? '';
       const status = args.status ? this.requireEnum(args, 'status', HUMAN_NODE_STATUSES) : 'active';
-      const tags = (this.optionalArray(args, 'tags') ?? []) as string[];
+      const tags = (this.optionalArray(args, 'tags') ?? []).filter((t): t is string => typeof t === 'string' && t.length > 0);
       const links = (this.optionalArray(args, 'links') ?? []) as Array<{ cbm_node_id: number; edge_type: any }>;
       const author = this.optionalString(args, 'author');
 
