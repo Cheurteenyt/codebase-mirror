@@ -230,17 +230,19 @@ export class McpServer {
   }
 
   private sendResult(id: string | number | null | undefined, result: any): void {
-    if (id == null) return; // notifications get no response
+    if (id === undefined) return; // only true notifications (absent id) get no response
     const resp: JsonRpcResponse = { jsonrpc: '2.0', id, result };
     process.stdout.write(JSON.stringify(resp) + '\n');
   }
 
   private sendError(id: string | number | null | undefined, code: number, message: string): void {
-    if (id == null) {
-      // For notifications, log to stderr instead.
-      process.stderr.write(`[cbm-v2 mcp] error (code ${code}): ${message}\n`);
+    // Per JSON-RPC 2.0: only ABSENT id (undefined = notification) gets no response.
+    // id: null is a VALID request identifier and MUST get a response (e.g., parse errors).
+    if (id === undefined) {
+      process.stderr.write(`[cbm-v2 mcp] notification error (code ${code}): ${message}\n`);
       return;
     }
+    // id can be string | number | null — all get a response on stdout.
     const resp: JsonRpcResponse = {
       jsonrpc: '2.0',
       id,

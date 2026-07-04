@@ -593,7 +593,7 @@ function deserializeNode(row: any): HumanNode {
     status: row.status,
     source: row.source,
     obsidian_path: row.obsidian_path,
-    cbm_node_ids: safeJsonParseArray(row.cbm_node_ids).map((x) => Number(x)).filter((n) => !Number.isNaN(n)),
+    cbm_node_ids: safeJsonParseArray(row.cbm_node_ids).filter((x) => typeof x === "number" && Number.isFinite(x) && x > 0),
     tags: safeJsonParseArray(row.tags).map((x) => String(x)),
     provenance: row.provenance,
     confidence: row.confidence,

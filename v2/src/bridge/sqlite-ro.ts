@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { BULK_CHUNK_SIZE } from '../constants.js';
 
 export interface CodeNode {
   id: number;
@@ -201,18 +202,22 @@ export class CodeGraphReader {
     const result = new Map<number, number>();
     if (nodeIds.length === 0) return result;
     for (const id of nodeIds) result.set(id, 0);
-    const placeholders = nodeIds.map(() => '?').join(',');
-    try {
-      const outRows = this.db
-        .prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${placeholders}) GROUP BY source_id`)
-        .all(...nodeIds) as any[];
-      for (const r of outRows) result.set(r.id, (result.get(r.id) ?? 0) + r.c);
-      const inRows = this.db
-        .prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${placeholders}) GROUP BY target_id`)
-        .all(...nodeIds) as any[];
-      for (const r of inRows) result.set(r.id, (result.get(r.id) ?? 0) + r.c);
-    } catch {
-      // ignore — return zeros
+    // Chunk to respect SQLite's variable limit (999). BULK_CHUNK_SIZE = 500.
+    for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
+      const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        const outRows = this.db
+          .prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${placeholders}) GROUP BY source_id`)
+          .all(...chunk) as any[];
+        for (const r of outRows) result.set(r.id, (result.get(r.id) ?? 0) + r.c);
+        const inRows = this.db
+          .prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${placeholders}) GROUP BY target_id`)
+          .all(...chunk) as any[];
+        for (const r of inRows) result.set(r.id, (result.get(r.id) ?? 0) + r.c);
+      } catch {
+        // ignore — return zeros for this chunk
+      }
     }
     return result;
   }
@@ -223,17 +228,21 @@ export class CodeGraphReader {
   getNodesByIds(ids: number[]): Map<number, CodeNode> {
     const result = new Map<number, CodeNode>();
     if (ids.length === 0) return result;
-    const placeholders = ids.map(() => '?').join(',');
-    try {
-      const rows = this.db
-        .prepare(`SELECT * FROM nodes WHERE id IN (${placeholders})`)
-        .all(...ids) as any[];
-      for (const row of rows) {
-        const node = deserializeCodeNode(row);
-        result.set(node.id, node);
+    // Chunk to respect SQLite's variable limit (999).
+    for (let i = 0; i < ids.length; i += BULK_CHUNK_SIZE) {
+      const chunk = ids.slice(i, i + BULK_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        const rows = this.db
+          .prepare(`SELECT * FROM nodes WHERE id IN (${placeholders})`)
+          .all(...chunk) as any[];
+        for (const row of rows) {
+          const node = deserializeCodeNode(row);
+          result.set(node.id, node);
+        }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
     return result;
   }
