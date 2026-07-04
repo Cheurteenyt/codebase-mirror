@@ -6,9 +6,10 @@
 
 import { BaseTool } from './base.js';
 import { ToolDefinition } from './index.js';
-import { safeJsonParse, MAX_NODES_PER_LABEL } from '../../constants.js';
+import { safeJsonParse } from '../../constants.js';
 import { computeRiskScore } from '../../reports/risk.js';
 import { getGraphStatus, getFreshnessScore, freshnessLabel } from '../../intelligence/graph-status.js';
+import { CodeGraphReader } from '../../bridge/sqlite-ro.js';
 
 export class PrepareEditContextTool extends BaseTool {
   get definition(): ToolDefinition {
@@ -56,13 +57,9 @@ export class PrepareEditContextTool extends BaseTool {
       // Step 1: Find code nodes matching the file_path or symbol_name.
       let matchingNodes: any[] = [];
       if (filePath) {
-        // Search by file_path substring.
-        matchingNodes = codeReader.listNodes(project, { limit: MAX_NODES_PER_LABEL });
-        matchingNodes = matchingNodes.filter((n) =>
-          n.file_path.toLowerCase().includes(filePath.toLowerCase())
-        );
+        // Search by file_path substring using SQL LIKE (not loading all 5000 nodes).
+        matchingNodes = codeReader.searchCode(project, filePath, 50);
       } else if (symbolName) {
-        // Search by name.
         matchingNodes = codeReader.searchCode(project, symbolName, 50);
       }
 
@@ -81,6 +78,10 @@ export class PrepareEditContextTool extends BaseTool {
       // Step 2: For each matching node, gather context.
       const nodesWithContext = [];
       const allBlastRadiusNodes = new Set<number>();
+      const seenBugIds = new Set<number>();
+      const seenAdrIds = new Set<number>();
+      const seenRefactorIds = new Set<number>();
+      const seenConventionIds = new Set<number>();
       let maxRiskScore = 0;
       let highestRiskNode: any = null;
       const allBugs: any[] = [];
@@ -88,26 +89,25 @@ export class PrepareEditContextTool extends BaseTool {
       const allRefactors: any[] = [];
       const allConventions: any[] = [];
 
-      for (const node of matchingNodes.slice(0, 20)) { // limit to 20 nodes
-        // Get neighbors (callers and callees).
+      for (const node of matchingNodes.slice(0, 20)) {
         const neighbors = codeReader.getNeighbors(node.id, 'both', 50);
         const outNeighbors = neighbors.filter((n) => n.edge.source_id === node.id);
         const inNeighbors = neighbors.filter((n) => n.edge.target_id === node.id);
 
-        // Blast radius: count unique nodes that depend on this node (in-edges).
+        // Blast radius: collect unique node IDs that depend on this node (in-edges).
         inNeighbors.forEach((n) => allBlastRadiusNodes.add(n.node.id));
 
-        // Get human notes linked to this node.
         const humanNotes = this.humanStore.listNodesByCbmNodeId(project, node.id);
         const bugs = humanNotes.filter((n) => n.label === 'BugNote' && n.status === 'active');
         const adrs = humanNotes.filter((n) => n.label === 'ADR' && n.status === 'active');
         const refactors = humanNotes.filter((n) => n.label === 'RefactorPlan' && n.status === 'active');
         const conventions = humanNotes.filter((n) => n.label === 'Convention' && n.status === 'active');
 
-        allBugs.push(...bugs);
-        allAdrs.push(...adrs);
-        allRefactors.push(...refactors);
-        allConventions.push(...conventions);
+        // Deduplicate by ID (same note can be linked to multiple nodes in the same file).
+        for (const b of bugs) { if (!seenBugIds.has(b.id)) { seenBugIds.add(b.id); allBugs.push(b); } }
+        for (const a of adrs) { if (!seenAdrIds.has(a.id)) { seenAdrIds.add(a.id); allAdrs.push(a); } }
+        for (const r of refactors) { if (!seenRefactorIds.has(r.id)) { seenRefactorIds.add(r.id); allRefactors.push(r); } }
+        for (const c of conventions) { if (!seenConventionIds.has(c.id)) { seenConventionIds.add(c.id); allConventions.push(c); } }
 
         // Risk score.
         const props = safeJsonParse(node.properties_json, {} as Record<string, any>);
@@ -159,12 +159,13 @@ export class PrepareEditContextTool extends BaseTool {
         });
       }
 
-      // Step 3: Build blast radius summary.
+      // Step 3: Build blast radius summary from actual dependent nodes.
       const blastRadius = {
         total_dependent_nodes: allBlastRadiusNodes.size,
-        affected_modules: this.countByLabel(matchingNodes, 'Module', codeReader, project),
-        affected_routes: this.countByLabel(matchingNodes, 'Route', codeReader, project),
-        affected_functions: this.countByLabel(matchingNodes, 'Function', codeReader, project),
+        // Count by label from the actual blast-radius nodes, not from matchingNodes.
+        affected_modules: this.countBlastRadiusByLabel(allBlastRadiusNodes, 'Module', codeReader),
+        affected_routes: this.countBlastRadiusByLabel(allBlastRadiusNodes, 'Route', codeReader),
+        affected_functions: this.countBlastRadiusByLabel(allBlastRadiusNodes, 'Function', codeReader),
       };
 
       // Step 4: Build recommendation.
@@ -223,7 +224,7 @@ export class PrepareEditContextTool extends BaseTool {
     }
   }
 
-  private getGraphFreshness(project: string, codeReader: any): any {
+  private getGraphFreshness(project: string, codeReader: CodeGraphReader): any {
     try {
       const status = getGraphStatus(project, codeReader, process.cwd());
       const score = getFreshnessScore(status);
@@ -247,9 +248,17 @@ export class PrepareEditContextTool extends BaseTool {
     }
   }
 
-  private countByLabel(matchingNodes: any[], _label: string, _codeReader: any, _project: string): number {
-    // Count unique modules/routes/functions in the blast radius.
-    // This is a simplified version — a full implementation would traverse the graph.
-    return matchingNodes.filter((n) => n.label === _label).length;
+  /**
+   * Count blast-radius nodes by label. Fetches node info for the given IDs
+   * and counts how many have the specified label.
+   */
+  private countBlastRadiusByLabel(nodeIds: Set<number>, label: string, codeReader: CodeGraphReader): number {
+    if (nodeIds.size === 0) return 0;
+    const nodesMap = codeReader.getNodesByIds([...nodeIds]);
+    let count = 0;
+    for (const node of nodesMap.values()) {
+      if (node.label === label) count++;
+    }
+    return count;
   }
 }
