@@ -98,7 +98,9 @@ export function importVault(opts: ImportOptions): ImportResult {
 
       // Extract HUMAN NOTES section content.
       const sections = splitSections(parsed.body);
-      const humanBody = sections.humanNotes;
+      // Strip the known placeholder text — it's not real human content.
+      const PLACEHOLDER = '> ✏️ This section belongs to the user. It will **never** be overwritten by Codebase Memory V2.';
+      const humanBody = sections.humanNotes === PLACEHOLDER ? '' : sections.humanNotes;
 
       // Check if human_node already exists (by obsidian_path or slug).
       const existingByPath = opts.humanStore.getNodeByObsidianPath(opts.project, relPath);

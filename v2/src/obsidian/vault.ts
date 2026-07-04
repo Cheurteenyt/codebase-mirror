@@ -5,9 +5,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname, relative, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
+import { MAX_VAULT_DEPTH, MAX_BACKUPS_PER_FILE } from '../constants.js';
 
-const MAX_VAULT_DEPTH = 32;
-const MAX_BACKUPS_PER_FILE = 5;
+
+
 const SKIP_DIRS = new Set(['.obsidian', '.git', '.trash', 'node_modules', '.cache', '.DS_Store']);
 
 /**

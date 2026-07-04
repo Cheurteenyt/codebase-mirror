@@ -222,7 +222,7 @@ export function registerObsidianCommand(program: Command): void {
       const files = walkVault(vaultPath);
       const byDir: Record<string, number> = {};
       for (const f of files) {
-        const dir = f.split('/')[0] || 'root';
+        const dir = f.includes('/') ? f.split('/')[0] : 'root';
         byDir[dir] = (byDir[dir] || 0) + 1;
       }
       const report = {

@@ -89,9 +89,11 @@ export class GetModuleContextTool extends BaseTool {
         };
       }
 
+      // Always fetch notesCount for risk score (independent of include_human flag).
+      const notesForRisk = this.humanStore.listNodesByCbmNodeId(project, module.id);
       let humanNotes: any[] = [];
       if (includeHuman) {
-        humanNotes = this.humanStore.listNodesByCbmNodeId(project, module.id);
+        humanNotes = notesForRisk;
         result['human_notes'] = humanNotes.map((n) => ({
           id: n.id,
           label: n.label,
@@ -136,7 +138,7 @@ export class GetModuleContextTool extends BaseTool {
       }
 
       // Compute risk score using the shared formula.
-      const notesCount = humanNotes.length;
+      const notesCount = notesForRisk.length;
       const complexityAvg = props.complexity_avg ?? props.complexity ?? 0;
       const riskScore = computeRiskScore(degree, complexityAvg, notesCount);
 
