@@ -3,6 +3,7 @@
 
 import { Command } from 'commander';
 import { HumanMemoryStore, defaultHumanDbPath } from '../../human/store.js';
+import { safeJsonParse } from '../../constants.js';
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { deriveProjectName } from '../../config.js';
@@ -92,7 +93,14 @@ export function registerBackupCommand(program: Command): void {
 
       try {
         const raw = readFileSync(filePath, 'utf-8');
-        const backup = JSON.parse(raw);
+        let backup: any;
+        try {
+          backup = JSON.parse(raw);
+        } catch {
+          console.error('Error: invalid JSON in backup file');
+          process.exitCode = 1;
+          return;
+        }
 
         if (!backup.notes || !Array.isArray(backup.notes)) {
           console.error('Error: invalid backup file (missing "notes" array)');
@@ -130,7 +138,7 @@ export function registerBackupCommand(program: Command): void {
                 label: note.label,
                 title: note.title,
                 body_markdown: note.body_markdown || '',
-                frontmatter: note.frontmatter_json ? JSON.parse(note.frontmatter_json) : {},
+                frontmatter: safeJsonParse(note.frontmatter_json, {}),
                 status: note.status || 'active',
                 source: note.source || 'human',
                 cbm_node_ids: note.cbm_node_ids || [],
@@ -146,24 +154,36 @@ export function registerBackupCommand(program: Command): void {
 
           // Import edges
           if (backup.edges && Array.isArray(backup.edges)) {
+            // Build a map of old note IDs → new note IDs (by slug lookup)
+            const oldToNewNoteId = new Map<number, number>();
+            for (const oldNote of backup.notes) {
+              const newNode = humanStore.getNodeBySlug(project, oldNote.slug);
+              if (newNode) {
+                oldToNewNoteId.set(oldNote.id, newNode.id);
+              }
+            }
+
             for (const edge of backup.edges) {
               try {
-                // Resolve source_human_node_id by slug (IDs may differ)
-                const sourceNote = backup.notes.find(
-                  (n: any) => n.id === edge.source_human_node_id
-                );
-                if (!sourceNote) continue;
-                const sourceNode = humanStore.getNodeBySlug(project, sourceNote.slug);
-                if (!sourceNode) continue;
+                // Remap source_human_node_id from old → new ID
+                const sourceNewId = oldToNewNoteId.get(edge.source_human_node_id);
+                if (!sourceNewId) continue; // source note doesn't exist
+
+                // Remap target_human_node_id if it's a human-target edge
+                let targetHumanNewId: number | null = null;
+                if (edge.target_kind === 'human' && edge.target_human_node_id != null) {
+                  targetHumanNewId = oldToNewNoteId.get(edge.target_human_node_id) ?? null;
+                  if (!targetHumanNewId) continue; // target note doesn't exist
+                }
 
                 humanStore.createEdge({
                   project,
-                  source_human_node_id: sourceNode.id,
+                  source_human_node_id: sourceNewId,
                   target_kind: edge.target_kind,
-                  target_cbm_node_id: edge.target_cbm_node_id,
-                  target_human_node_id: edge.target_human_node_id,
+                  target_cbm_node_id: edge.target_kind === 'code' ? edge.target_cbm_node_id : null,
+                  target_human_node_id: edge.target_kind === 'human' ? targetHumanNewId : null,
                   type: edge.type,
-                  properties: edge.properties_json ? JSON.parse(edge.properties_json) : {},
+                  properties: safeJsonParse(edge.properties_json, {}),
                 });
                 importedEdges++;
               } catch {

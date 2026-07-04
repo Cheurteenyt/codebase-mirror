@@ -3,7 +3,7 @@
 
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
-import { safeJsonParse } from '../constants.js';
+import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
 
 export interface UndocumentedNode {
   cbm_node_id: number;
@@ -46,7 +46,7 @@ export function computeUndocumentedReport(
 
   for (const label of labelsToCheck) {
     byLabel[label] = { total: 0, documented: 0, undocumented: 0 };
-    const nodes = codeReader.listNodes(project, { label, limit: 5000 });
+    const nodes = codeReader.listNodes(project, { label, limit: MAX_NODES_PER_LABEL });
 
     // Bulk-fetch degrees for all nodes of this label.
     const ids = nodes.map((n) => n.id);

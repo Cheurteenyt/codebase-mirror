@@ -2,6 +2,7 @@
 
 import { BaseTool } from './base.js';
 import { ToolDefinition } from './index.js';
+import { MAX_NODES_PER_LABEL } from '../../constants.js';
 
 export class GetProjectOverviewTool extends BaseTool {
   get definition(): ToolDefinition {
@@ -63,7 +64,7 @@ export class GetProjectOverviewTool extends BaseTool {
       // Compute documentation coverage for critical modules only (degree >= 20).
       // Returns null when there are no critical modules (rather than misleading "100%").
       if (codeReader) {
-        const modules = codeReader.listModules(project, 5000);
+        const modules = codeReader.listModules(project, MAX_NODES_PER_LABEL);
         const moduleIds = modules.map((m) => m.id);
         const degreeMap = codeReader.getBulkNodeDegrees(moduleIds);
         let criticalTotal = 0;

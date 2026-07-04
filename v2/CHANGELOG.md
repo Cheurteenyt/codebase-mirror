@@ -1,6 +1,40 @@
 # Changelog — Codebase Memory V2
 
-## 0.2.3 — Round 4 Precision & Quality Release (2026-07-04)
+## 0.3.0 — Project Identity Release (2026-07-04)
+
+Major release adding project identity features and developer experience
+improvements.
+
+### New features
+
+- **cbm-v2 demo**: Creates a sample project with 7 notes (2 ADRs, 2 bugs,
+  1 refactor plan, 1 convention, 1 legacy note), generates an Obsidian vault,
+  and shows next steps.
+- **cbm-v2 stats**: Pretty ASCII dashboard showing human memory stats
+  and code graph stats.
+- **cbm-v2 backup export/import**: Export all human notes + edges to a
+  portable JSON file. Import with slug-based dedup and ID remapping.
+
+### Project identity
+
+- LICENSE (MIT)
+- CONTRIBUTING.md (complete contributor guide)
+- .gitlab-ci.yml (3-stage CI: typecheck → build → test)
+- Dockerfile (multi-stage build)
+- README.md rewritten in English with all CLI commands
+- Shebang in cli/index.ts
+
+### Round 5 stability fixes (in this release)
+
+- constants.ts: MAX_NODES_PER_LABEL now actually used (replaces 10 hardcoded 5000s)
+- backup.ts: 3 unguarded JSON.parse → safeJsonParse
+- backup.ts: edge resolution fixed (target_human_node_id now remapped, not passed as stale ID)
+- demo.ts: added try/catch (errors no longer show "Fatal:" prefix)
+- stats.ts: added catch handler
+- server.ts: import moved to top (ESM best practice)
+- Root README.md: replaced French with English version
+
+## 0.2.3 — Round 4 Precision & Quality Release (2026-07-04) — Round 4 Precision & Quality Release (2026-07-04)
 
 Fourth audit pass found 78 additional issues (7 CRITICAL, 16 HIGH, 28 MEDIUM,
 27 LOW). All CRITICAL regressions from previous fix rounds are corrected.

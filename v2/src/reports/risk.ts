@@ -4,7 +4,7 @@
 
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
-import { safeJsonParse } from '../constants.js';
+import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
 
 export interface RiskItem {
   cbm_node_id: number;
@@ -54,9 +54,9 @@ export function computeRiskReport(
   const items: RiskItem[] = [];
 
   // Fetch all modules, functions, interfaces in bulk.
-  const modules = codeReader.listModules(project, 5000);
-  const functions = codeReader.listNodes(project, { label: 'Function', limit: 5000 });
-  const interfaces = codeReader.listNodes(project, { label: 'Interface', limit: 5000 });
+  const modules = codeReader.listModules(project, MAX_NODES_PER_LABEL);
+  const functions = codeReader.listNodes(project, { label: 'Function', limit: MAX_NODES_PER_LABEL });
+  const interfaces = codeReader.listNodes(project, { label: 'Interface', limit: MAX_NODES_PER_LABEL });
 
   // Bulk-fetch degrees to avoid N+1.
   const allIds = [...modules, ...functions, ...interfaces].map((n) => n.id);

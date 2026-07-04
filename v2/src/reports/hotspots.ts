@@ -4,7 +4,7 @@
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
 import { computeRiskScore } from './risk.js';
-import { safeJsonParse } from '../constants.js';
+import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
 
 export interface Hotspot {
   cbm_node_id: number;
@@ -42,13 +42,13 @@ export function computeHotspotsReport(
   const minDegree = opts.minDegree ?? 20;
   const limit = opts.limit ?? 100;
 
-  const modules = codeReader.listModules(project, 5000);
+  const modules = codeReader.listModules(project, MAX_NODES_PER_LABEL);
 
   // Bulk-fetch degrees to avoid N+1.
   const moduleIds = modules.map((m) => m.id);
   const degreeMap = codeReader.getBulkNodeDegrees(moduleIds);
 
-  // Get exact total module count (don't rely on `modules.length` which caps at 5000).
+  // Get exact total module count (don't rely on `modules.length` which caps at MAX_NODES_PER_LABEL).
   const labelCounts = codeReader.countNodesByLabel(project);
   const totalModulesExact = labelCounts['Module'] ?? modules.length;
 

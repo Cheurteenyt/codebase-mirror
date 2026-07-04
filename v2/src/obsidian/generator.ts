@@ -3,7 +3,7 @@
 // CRITICAL: preserve ## HUMAN NOTES section when regenerating.
 
 import { HumanMemoryStore } from '../human/store.js';
-import { safeJsonParse } from '../constants.js';
+import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
 import { HumanNode } from '../human/schema.js';
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import {
@@ -116,7 +116,7 @@ export function generateVault(opts: GenerateOptions): GenerateResult {
   // 2. Auto-generate module notes for high-degree modules.
   if (opts.autoGenerateModuleNotes && opts.codeReader) {
     const minDegree = opts.minDegreeForModuleNote ?? 20;
-    const modules = opts.codeReader.listModules(opts.project, 5000);
+    const modules = opts.codeReader.listModules(opts.project, MAX_NODES_PER_LABEL);
     // Bulk-fetch degrees to avoid N+1.
     const moduleIds = modules.map((m) => m.id);
     const degreeMap = opts.codeReader.getBulkNodeDegrees(moduleIds);
@@ -179,7 +179,7 @@ export function generateVault(opts: GenerateOptions): GenerateResult {
 
   // 3. Auto-generate route notes.
   if (opts.autoGenerateRouteNotes && opts.codeReader) {
-    const routes = opts.codeReader.listRoutes(opts.project, 5000);
+    const routes = opts.codeReader.listRoutes(opts.project, MAX_NODES_PER_LABEL);
     for (const route of routes) {
       const props = safeJsonParse(route.properties_json, {} as Record<string, any>);
       const method = props.route_method || 'GET';

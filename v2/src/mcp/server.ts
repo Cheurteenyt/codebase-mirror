@@ -3,6 +3,7 @@
 // We don't depend on @modelcontextprotocol/sdk to keep deps minimal.
 
 import { createInterface, Interface } from 'node:readline';
+import { readFileSync } from 'node:fs';
 import { HumanMemoryStore } from '../human/store.js';
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { ToolHandler, ALL_TOOLS, TOOL_CLASSES } from './tools/index.js';
@@ -38,7 +39,6 @@ const JSONRPC_ERROR_CODES = {
 const MAX_LINE_LENGTH = 10 * 1024 * 1024; // 10M UTF-16 code units (~20-40MB UTF-8) — protects against OOM.
 
 // Read version from package.json at runtime for single source of truth.
-import { readFileSync } from 'node:fs';
 let SERVER_VERSION: string;
 try {
   const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'));

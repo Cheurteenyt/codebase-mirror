@@ -64,6 +64,9 @@ export function registerStatsCommand(program: Command): void {
         } else {
           printPrettyStats(stats);
         }
+      } catch (e: any) {
+        console.error('Error: ' + e.message);
+        process.exitCode = 1;
       } finally {
         humanStore.close();
         codeReader?.close();
