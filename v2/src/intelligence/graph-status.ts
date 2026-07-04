@@ -2,11 +2,16 @@
 // Graph freshness detection — knows if the code graph is stale, how stale,
 // and what files changed since the last index.
 
-import { CodeGraphReader } from '../bridge/sqlite-ro.js';
+import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { existsSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+
+// File extensions that are NOT code (excluded from stale file detection).
+const NON_CODE_EXTENSIONS = new Set([
+  'md', 'json', 'lock', 'yml', 'yaml', 'txt', 'gitignore', 'toml',
+  'map', 'd.ts', 'license', 'env', 'dockerignore', 'editorconfig',
+]);
 
 export interface GraphStatus {
   available: boolean;
@@ -48,13 +53,14 @@ export function getGraphStatus(
 
   status.available = true;
 
-  // DB file mtime as proxy for last_indexed.
-  const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
-  const dbPath = join(cacheDir, 'codebase-memory-mcp', `${project}.db`);
+  // Use the SAME path construction as CodeGraphReader to avoid divergence.
+  const dbPath = defaultCodeDbPath(project);
+  let dbMtime: Date | null = null;
   if (existsSync(dbPath)) {
     const stat = statSync(dbPath);
-    status.last_indexed = stat.mtime.toISOString();
-    status.age_seconds = Math.floor((Date.now() - stat.mtime.getTime()) / 1000);
+    dbMtime = stat.mtime;
+    status.last_indexed = dbMtime.toISOString();
+    status.age_seconds = Math.floor((Date.now() - dbMtime.getTime()) / 1000);
   }
 
   // Graph stats.
@@ -63,45 +69,42 @@ export function getGraphStatus(
     status.total_edges = codeReader.countEdges(project);
     status.nodes_by_label = codeReader.countNodesByLabel(project);
   } catch {
-    // ignore
+    // ignore — graph may be empty or corrupt
   }
 
-  // Detect stale files via git.
-  if (status.last_indexed && existsSync(join(projectRoot, '.git'))) {
+  // Detect stale files via git (uses Unix timestamp for cross-platform compat).
+  if (dbMtime && existsSync(join(projectRoot, '.git'))) {
     try {
-      const dbMtime = statSync(dbPath).mtime;
-      const dbMtimeIso = dbMtime.toISOString();
+      const unixTs = Math.floor(dbMtime.getTime() / 1000);
       const gitResult = execSync(
-        `git log --name-only --pretty=format: --since="${dbMtimeIso}" --diff-filter=ACMRTUXB 2>/dev/null | sort -u | grep -v '^$' | head -100`,
+        `git log --name-only --pretty=format: --since="@${unixTs}" --diff-filter=ACMRTUXB 2>/dev/null | sort -u | grep -v '^$' | head -100`,
         { cwd: projectRoot, encoding: 'utf-8', timeout: 5000 }
       ).trim();
 
       if (gitResult) {
         const changedFiles = gitResult.split('\n').filter((f) => f.length > 0);
         const codeFiles = changedFiles.filter((f) => {
-          const ext = f.split('.').pop()?.toLowerCase();
-          return ext && !['md', 'json', 'lock', 'yml', 'yaml', 'txt', 'gitignore', 'toml'].includes(ext);
+          // Skip dotfiles (no real extension) and known non-code extensions.
+          const lastDot = f.lastIndexOf('.');
+          if (lastDot === -1 || lastDot === 0) return false; // no extension or dotfile
+          const ext = f.substring(lastDot + 1).toLowerCase();
+          return !NON_CODE_EXTENSIONS.has(ext);
         });
         status.stale_files_count = codeFiles.length;
         status.stale_files_sample = codeFiles.slice(0, 10);
       }
     } catch {
-      if (status.age_seconds !== null && status.age_seconds > 3600) {
-        status.stale = true;
-        status.stale_reason = `Code graph is ${Math.floor(status.age_seconds / 3600)}h old`;
-      }
+      // git not available or not a git repo — fall back to age-only check below.
     }
   }
 
-  // Determine staleness.
-  if (!status.stale) {
-    if (status.stale_files_count > 0) {
-      status.stale = true;
-      status.stale_reason = `${status.stale_files_count} source file(s) modified since last index`;
-    } else if (status.age_seconds !== null && status.age_seconds > 3600) {
-      status.stale = true;
-      status.stale_reason = `Code graph is ${Math.floor(status.age_seconds / 3600)}h old`;
-    }
+  // Determine staleness (either git-detected files or age-based).
+  if (status.stale_files_count > 0) {
+    status.stale = true;
+    status.stale_reason = `${status.stale_files_count} source file(s) modified since last index`;
+  } else if (status.age_seconds !== null && status.age_seconds > 3600) {
+    status.stale = true;
+    status.stale_reason = `Code graph is ${Math.floor(status.age_seconds / 3600)}h old`;
   }
 
   // Recommendation.
