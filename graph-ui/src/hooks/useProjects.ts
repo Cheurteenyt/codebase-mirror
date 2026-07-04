@@ -2,7 +2,7 @@
 // Fetches project list from the V2 API.
 
 import { useEffect, useState } from "react";
-import type { Project, ProjectHealth } from "../lib/types";
+
 import { api } from "../api/client";
 
 interface UseProjectsResult {

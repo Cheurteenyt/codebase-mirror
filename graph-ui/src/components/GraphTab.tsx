@@ -12,7 +12,7 @@ import { NodeTooltip } from "./NodeTooltip";
 import { ResizeHandle } from "./ResizeHandle";
 import { ErrorBoundary } from "./ErrorBoundary";
 import type { GraphNode, GraphData } from "../lib/types";
-import { colorForStatus } from "../lib/colors";
+
 
 function loadWidth(key: string, fallback: number): number {
   try {

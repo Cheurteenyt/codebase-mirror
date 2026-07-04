@@ -261,6 +261,7 @@ export class HumanMemoryStore {
       .prepare(
         `SELECT n.* FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
          WHERE n.project = ? AND je.value = ?
+         ORDER BY n.updated_at DESC, n.id ASC
          LIMIT ?`
       )
       .all(project, cbmNodeId, limit) as any[];
@@ -365,7 +366,7 @@ export class HumanMemoryStore {
     const node = this.getNodeById(id);
     if (node && node.obsidian_path) {
       const hash = vaultContentHash ?? createHash('sha256')
-        .update(node.body_markdown + '\n---\n' + node.frontmatter_json + '\n---\n' + node.cbm_node_ids.join(',') + '\n---\n' + node.tags.join(','))
+        .update(node.body_markdown + '\n---\n' + node.frontmatter_json + '\n---\n' + [...node.cbm_node_ids].sort((a,b)=>a-b).join(',') + '\n---\n' + [...node.tags].sort().join(','))
         .digest('hex');
       this.db
         .prepare(

@@ -22,6 +22,10 @@ const MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
 };
 
 const DEFAULT_PORT = 9749;
@@ -56,6 +60,14 @@ export class UiServer {
   }
 
   start(): void {
+    this.server.on('error', (e: NodeJS.ErrnoException) => {
+      if (e.code === 'EADDRINUSE') {
+        console.error(`Port ${this.port} is already in use. Use --port to specify a different port.`);
+      } else {
+        console.error('Server error:', e.message);
+      }
+      process.exit(1);
+    });
     this.server.listen(this.port, '127.0.0.1', () => {
       console.log(`[cbm-v2 ui] Graph UI server running at http://127.0.0.1:${this.port}`);
     });
@@ -127,7 +139,7 @@ export class UiServer {
         const degree = degreeMap.get(n.id) ?? 0;
         const props = safeJsonParse(n.properties_json, {} as Record<string, any>);
         const complexity = props.complexity_avg ?? props.complexity ?? 0;
-        const notesCount = this.humanStore.listNodesByCbmNodeId(project, n.id, 1).length;
+        const notesCount = this.humanStore.listNodesByCbmNodeId(project, n.id, 200).length;
         const riskScore = computeRiskScore(degree, complexity, notesCount);
 
         return {

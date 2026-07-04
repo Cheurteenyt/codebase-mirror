@@ -58,7 +58,7 @@ export class PrepareEditContextTool extends BaseTool {
       let matchingNodes: any[] = [];
       if (filePath) {
         // Search by file_path substring using SQL LIKE (not loading all 5000 nodes).
-        matchingNodes = codeReader.searchCode(project, filePath, 50);
+        matchingNodes = codeReader.findNodesByFilePath(project, filePath, 50);
       } else if (symbolName) {
         matchingNodes = codeReader.searchCode(project, symbolName, 50);
       }

@@ -46,7 +46,7 @@ export function GraphCanvas({
   const transformRef = useRef({ x: 0, y: 0, k: 1 });
   const nodesRef = useRef<SimNode[]>([]);
   const edgesRef = useRef<SimEdge[]>([]);
-  const drawRef = useRef(draw);
+  const drawRef = useRef<(() => void) | null>(null);
   useEffect(() => { drawRef.current = draw; }, [draw]);
   const dragRef = useRef<{ node: SimNode | null; startX: number; startY: number }>({
     node: null,
@@ -87,13 +87,14 @@ export function GraphCanvas({
     return () => {
       sim.on("tick", null);
       sim.stop();
+      simRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
   // Redraw when highlights or dead-code view changes
   useEffect(() => {
-    draw();
+    drawRef.current?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightedIds, deadCodeView]);
 
@@ -170,7 +171,7 @@ export function GraphCanvas({
       if (!parent) return;
       canvas.width = parent.clientWidth;
       canvas.height = parent.clientHeight;
-      draw();
+      drawRef.current?.();
     };
 
     resize();
@@ -229,7 +230,7 @@ export function GraphCanvas({
       } else if (isPanning) {
         transformRef.current.x = e.clientX - panStart.x;
         transformRef.current.y = e.clientY - panStart.y;
-        draw();
+        drawRef.current?.();
       } else {
         // Hover detection
         const pos = getMousePos(e);
@@ -258,7 +259,7 @@ export function GraphCanvas({
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
       const newK = Math.max(0.1, Math.min(10, transformRef.current.k * delta));
       transformRef.current.k = newK;
-      draw();
+      drawRef.current?.();
     };
 
     canvas.addEventListener("mousedown", onMouseDown);

@@ -247,6 +247,25 @@ export class CodeGraphReader {
     return result;
   }
 
+
+  /**
+   * Find nodes by file path substring (used by prepare_edit_context).
+   */
+  findNodesByFilePath(project: string, filePathSubstr: string, limit = 50): CodeNode[] {
+    const escaped = filePathSubstr.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
+    const likePattern = `%${escaped}%`;
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM nodes
+           WHERE project = ? AND file_path LIKE ? ESCAPE '\\'
+           ORDER BY id ASC
+           LIMIT ?`
+        )
+        .all(project, likePattern, limit) as any[]
+    ).map(deserializeCodeNode);
+  }
+
   countNodes(project: string): number {
     return (
       this.db

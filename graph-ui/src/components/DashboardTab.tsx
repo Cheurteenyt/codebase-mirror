@@ -4,8 +4,8 @@
 
 import { useEffect, useState } from "react";
 import { useDashboard } from "../hooks/useDashboard";
-import { colorForFreshness, colorForLabel } from "../lib/colors";
-import { formatNumber, formatAge, cn } from "../lib/utils";
+import { colorForFreshness } from "../lib/colors";
+import { formatNumber, formatAge } from "../lib/utils";
 import type { DashboardData } from "../lib/types";
 
 interface DashboardTabProps {
@@ -172,6 +172,3 @@ function KpiCard({
   );
 }
 
-;
-  return colors[label] ?? "#7dd3fc";
-}
