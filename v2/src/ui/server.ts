@@ -5,7 +5,7 @@
 
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, extname, resolve } from "node:path";
+import { join, extname, resolve, sep } from "node:path";
 import { homedir } from 'node:os';
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
 import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
@@ -147,13 +147,16 @@ export class UiServer {
         };
       });
 
-      // Fetch edges (limited)
+      const nodeIdSet = new Set(nodes.map((n) => n.id));
+
+      // Fetch edges (limited, filtered to in-set nodes only)
       const edges: Array<{ source: number; target: number; type: string }> = [];
       const seenEdges = new Set<string>();
       for (const node of nodes.slice(0, maxNodes)) {
         const neighbors = this.codeReader.getNeighbors(node.id, 'both', 20);
         for (const { edge } of neighbors) {
           const key = `${edge.source_id}-${edge.target_id}-${edge.type}`;
+          if (!nodeIdSet.has(edge.source_id) || !nodeIdSet.has(edge.target_id)) continue;
           if (!seenEdges.has(key)) {
             seenEdges.add(key);
             edges.push({ source: edge.source_id, target: edge.target_id, type: edge.type });
@@ -303,7 +306,12 @@ export class UiServer {
       const cbmNodeId = url.searchParams.get('cbm_node_id');
       let notes;
       if (cbmNodeId) {
-        notes = this.humanStore.listNodesByCbmNodeId(project, parseInt(cbmNodeId, 10));
+        const n = parseInt(cbmNodeId, 10);
+        if (!Number.isFinite(n)) {
+          this.sendJson(res, 400, { error: "invalid cbm_node_id" });
+          return;
+        }
+        notes = this.humanStore.listNodesByCbmNodeId(project, n);
       } else {
         notes = this.humanStore.listNodes(project, { limit: 100 });
       }
@@ -313,7 +321,7 @@ export class UiServer {
           label: n.label,
           title: n.title,
           status: n.status,
-          body_excerpt: n.body_markdown.slice(0, 200),
+          body_excerpt: (n.body_markdown ?? "").slice(0, 200),
           obsidian_path: n.obsidian_path,
           updated_at: n.updated_at,
         })),
@@ -338,7 +346,12 @@ export class UiServer {
   }
 
   private serveStatic(path: string, res: ServerResponse): void {
-    const filePath = join(this.graphUiPath, path === '/' ? 'index.html' : path);
+    const filePath = resolve(this.graphUiPath, path === '/' ? 'index.html' : path);
+    // Defense-in-depth: verify the resolved path stays within the graphUiPath.
+    if (!filePath.startsWith(resolve(this.graphUiPath) + sep)) {
+      this.sendJson(res, 403, { error: "Forbidden" });
+      return;
+    }
     if (!existsSync(filePath)) {
       this.sendJson(res, 404, { error: 'File not found' });
       return;

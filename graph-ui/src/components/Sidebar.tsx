@@ -21,7 +21,7 @@ function buildFileTree(nodes: GraphNode[]): DirNode {
   const root: DirNode = { name: "/", fullPath: "", children: new Map(), nodeIds: new Set(), directNodes: [] };
   for (const node of nodes) {
     if (!node.file_path) continue;
-    const parts = node.file_path.split("/");
+    const parts = node.file_path.split(/[\\/]/);
     let cur = root;
     for (let i = 0; i < parts.length - 1; i++) {
       if (!parts[i]) continue;
