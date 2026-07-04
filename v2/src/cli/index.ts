@@ -12,7 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { loadConfig, DEFAULT_CONFIG, deriveProjectName } from '../config.js';
 
 // Read version from package.json at build time would be ideal; for now hardcode.
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 
 const program = new Command();
 

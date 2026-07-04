@@ -6,6 +6,7 @@ import { CodeGraphReader, defaultCodeDbPath } from '../../bridge/sqlite-ro.js';
 import { generateVault } from '../../obsidian/generator.js';
 import { importVault } from '../../obsidian/importer.js';
 import { ensureVaultDirs, walkVault } from '../../obsidian/vault.js';
+import { slugify } from '../../human/schema.js';
 import { resolve } from 'node:path';
 import { loadConfig, deriveProjectName } from '../../config.js';
 
@@ -70,7 +71,8 @@ export function registerObsidianCommand(program: Command): void {
       const backup = opts.backup !== false && config.v2.obsidian.backupBeforeWrite;
       const autoModules = opts.autoModules !== false && config.v2.obsidian.autoGenerateModuleNotes;
       const autoRoutes = opts.autoRoutes !== false && config.v2.obsidian.autoGenerateRouteNotes;
-      const minDegree = opts.minDegree ? parseInt(opts.minDegree, 10) : config.v2.obsidian.minDegreeForModuleNote;
+      const minDegreeParsed = opts.minDegree ? parseInt(opts.minDegree, 10) : NaN;
+      const minDegree = Number.isFinite(minDegreeParsed) ? minDegreeParsed : config.v2.obsidian.minDegreeForModuleNote;
 
       console.log(`Syncing project "${project}" — direction: ${direction}${dryRun ? ' (dry-run)' : ''}`);
 
@@ -329,7 +331,7 @@ export function registerObsidianCommand(program: Command): void {
           process.exit(1);
         }
         const m = modules[0];
-        const slug = require('../../human/schema.js').slugify(m.name);
+        const slug = slugify(m.name);
         const obsidianPath = `Modules/${slug}.md`;
         try {
           const node = humanStore.createNode({
@@ -380,7 +382,7 @@ export function registerObsidianCommand(program: Command): void {
           console.error(`Error: route ${opts.method} ${opts.path} not found`);
           process.exit(1);
         }
-        const slug = require('../../human/schema.js').slugify(`${opts.method}-${opts.path}`);
+        const slug = slugify(`${opts.method}-${opts.path}`);
         const obsidianPath = `Routes/${slug}.md`;
         try {
           const node = humanStore.createNode({

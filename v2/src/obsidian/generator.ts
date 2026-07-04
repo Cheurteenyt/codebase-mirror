@@ -141,7 +141,7 @@ export function generateVault(opts: GenerateOptions): GenerateResult {
       const fm = {
         type: 'module',
         source: 'generated',
-        status: 'generated',
+        status: 'active',
         cbm_node_id: module.id,
         cbm_node_type: 'Module',
         last_generated: new Date().toISOString().split('T')[0],
@@ -200,7 +200,7 @@ export function generateVault(opts: GenerateOptions): GenerateResult {
       const fm = {
         type: 'route',
         source: 'generated',
-        status: 'generated',
+        status: 'active',
         cbm_node_id: route.id,
         cbm_node_type: 'Route',
         last_generated: new Date().toISOString().split('T')[0],
