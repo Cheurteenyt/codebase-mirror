@@ -96,7 +96,7 @@ export class CodeGraphReader {
     }
     const limit = opts.limit ?? 200;
     const offset = opts.offset ?? 0;
-    const sql = `SELECT * FROM nodes WHERE ${conditions.join(' AND ')} LIMIT ? OFFSET ?`;
+    const sql = `SELECT * FROM nodes WHERE ${conditions.join(" AND ")} ORDER BY id ASC LIMIT ? OFFSET ?`;
     return (this.db.prepare(sql).all(...params, limit, offset) as any[]).map(deserializeCodeNode);
   }
 
