@@ -94,7 +94,11 @@ export class GetModuleContextTool extends BaseTool {
       let humanNotes: any[] = [];
       if (includeHuman) {
         humanNotes = notesForRisk;
-        result['human_notes'] = humanNotes.map((n) => ({
+        // Only show 'other' notes in human_notes — ADRs/bugs/refactors have their own arrays.
+        const otherNotes = humanNotes.filter((n) =>
+          n.label !== 'ADR' && n.label !== 'BugNote' && n.label !== 'RefactorPlan'
+        );
+        result['human_notes'] = otherNotes.map((n) => ({
           id: n.id,
           label: n.label,
           title: n.title,
@@ -104,37 +108,38 @@ export class GetModuleContextTool extends BaseTool {
           obsidian_path: n.obsidian_path,
           body_excerpt: n.body_markdown.slice(0, 500),
         }));
+      }
 
-        if (includeAdrs) {
-          const adrs = humanNotes.filter((n) => n.label === 'ADR');
-          result['adrs'] = adrs.map((n) => ({
-            id: n.id,
-            title: n.title,
-            status: n.status,
-            updated_at: n.updated_at,
-            body_excerpt: n.body_markdown.slice(0, 500),
-          }));
-        }
+      // ADRs, bugs, refactors are independent of include_human — they use notesForRisk.
+      if (includeAdrs) {
+        const adrs = notesForRisk.filter((n) => n.label === 'ADR');
+        result['adrs'] = adrs.map((n) => ({
+          id: n.id,
+          title: n.title,
+          status: n.status,
+          updated_at: n.updated_at,
+          body_excerpt: n.body_markdown.slice(0, 500),
+        }));
+      }
 
-        if (includeBugs) {
-          const bugs = humanNotes.filter((n) => n.label === 'BugNote');
-          result['bugs'] = bugs.map((n) => ({
-            id: n.id,
-            title: n.title,
-            status: n.status,
-            body_excerpt: n.body_markdown.slice(0, 500),
-          }));
-        }
+      if (includeBugs) {
+        const bugs = notesForRisk.filter((n) => n.label === 'BugNote');
+        result['bugs'] = bugs.map((n) => ({
+          id: n.id,
+          title: n.title,
+          status: n.status,
+          body_excerpt: n.body_markdown.slice(0, 500),
+        }));
+      }
 
-        if (includeRefactors) {
-          const refactors = humanNotes.filter((n) => n.label === 'RefactorPlan');
-          result['refactors'] = refactors.map((n) => ({
-            id: n.id,
-            title: n.title,
-            status: n.status,
-            body_excerpt: n.body_markdown.slice(0, 500),
-          }));
-        }
+      if (includeRefactors) {
+        const refactors = notesForRisk.filter((n) => n.label === 'RefactorPlan');
+        result['refactors'] = refactors.map((n) => ({
+          id: n.id,
+          title: n.title,
+          status: n.status,
+          body_excerpt: n.body_markdown.slice(0, 500),
+        }));
       }
 
       // Compute risk score using the shared formula.

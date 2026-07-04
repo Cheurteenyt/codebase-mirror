@@ -100,7 +100,10 @@ export function importVault(opts: ImportOptions): ImportResult {
       const sections = splitSections(parsed.body);
       // Strip the known placeholder text — it's not real human content.
       const PLACEHOLDER = '> ✏️ This section belongs to the user. It will **never** be overwritten by Codebase Memory V2.';
-      const humanBody = sections.humanNotes === PLACEHOLDER ? '' : sections.humanNotes;
+      // Strip placeholder from the START of humanNotes (user may have added content after it).
+        const humanBody = sections.humanNotes.startsWith(PLACEHOLDER)
+          ? sections.humanNotes.substring(PLACEHOLDER.length).trim()
+          : sections.humanNotes;
 
       // Check if human_node already exists (by obsidian_path or slug).
       const existingByPath = opts.humanStore.getNodeByObsidianPath(opts.project, relPath);
@@ -171,14 +174,16 @@ export function importVault(opts: ImportOptions): ImportResult {
       // Parse wikilinks and create/refresh edges.
       const sourceNode = existing ?? opts.humanStore.getNodeByObsidianPath(opts.project, relPath);
       if (sourceNode && !opts.dryRun) {
-        const wikilinks = parseWikilinks(parsed.body);
+        // Parse wikilinks only from HUMAN NOTES section — AUTO-GENERATED wikilinks are
+        // machine-generated and should not create edges (they would duplicate existing edges).
+        const wikilinks = parseWikilinks(humanBody);
         const seenEdgeIds: number[] = [];
         for (const wl of wikilinks) {
           const kind = classifyWikilinkTarget(wl.target);
           if (kind === 'code') {
             const cbmId = parseCodeNodeId(wl.target);
             if (cbmId == null) continue;
-            const edgeType = inferEdgeTypeFromContext(parsed.body, wl);
+            const edgeType = inferEdgeTypeFromContext(humanBody, wl);
             // createEdge is idempotent (returns existing edge if dup).
             const edge = opts.humanStore.createEdge({
               project: opts.project,

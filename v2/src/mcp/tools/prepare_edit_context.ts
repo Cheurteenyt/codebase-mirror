@@ -94,6 +94,9 @@ export class PrepareEditContextTool extends BaseTool {
         const outNeighbors = neighbors.filter((n) => n.edge.source_id === node.id);
         const inNeighbors = neighbors.filter((n) => n.edge.target_id === node.id);
 
+        // Use uncapped getNodeDegree for accurate risk score and blast radius.
+        const actualDegree = codeReader.getNodeDegree(node.id);
+
         // Blast radius: collect unique node IDs that depend on this node (in-edges).
         inNeighbors.forEach((n) => allBlastRadiusNodes.add(n.node.id));
 
@@ -109,10 +112,10 @@ export class PrepareEditContextTool extends BaseTool {
         for (const r of refactors) { if (!seenRefactorIds.has(r.id)) { seenRefactorIds.add(r.id); allRefactors.push(r); } }
         for (const c of conventions) { if (!seenConventionIds.has(c.id)) { seenConventionIds.add(c.id); allConventions.push(c); } }
 
-        // Risk score.
+        // Risk score — use uncapped degree for accuracy.
         const props = safeJsonParse(node.properties_json, {} as Record<string, any>);
         const complexity = props.complexity_avg ?? props.complexity ?? 0;
-        const riskScore = computeRiskScore(inNeighbors.length + outNeighbors.length, complexity, humanNotes.length);
+        const riskScore = computeRiskScore(actualDegree, complexity, humanNotes.length);
         if (riskScore > maxRiskScore) {
           maxRiskScore = riskScore;
           highestRiskNode = node;
@@ -141,6 +144,7 @@ export class PrepareEditContextTool extends BaseTool {
             })),
             callers_count: inNeighbors.length,
             callees_count: outNeighbors.length,
+            actual_degree: actualDegree,
           },
           human_notes: {
             bugs: bugs.map((b) => ({ id: b.id, title: b.title, status: b.status, body_excerpt: b.body_markdown.slice(0, 200) })),
@@ -153,7 +157,7 @@ export class PrepareEditContextTool extends BaseTool {
             score: riskScore,
             level: riskScore >= 0.7 ? 'HIGH' : riskScore >= 0.4 ? 'MEDIUM' : 'LOW',
             complexity,
-            degree: inNeighbors.length + outNeighbors.length,
+            degree: actualDegree,
             documented: humanNotes.length > 0,
           },
         });
@@ -203,6 +207,7 @@ export class PrepareEditContextTool extends BaseTool {
         symbol_name: symbolName,
         found: true,
         nodes_analyzed: nodesWithContext.length,
+        nodes_found: matchingNodes.length,
         nodes: nodesWithContext,
         blast_radius: blastRadius,
         human_memory_summary: {

@@ -352,7 +352,9 @@ export class CodeGraphReader {
    * Find modules by name (case-insensitive substring).
    */
   findModulesByName(project: string, namePattern: string, limit = 50): CodeNode[] {
-    const likePattern = `%${namePattern.replace(/[%_]/g, '\\$&')}%`;
+    // Escape backslash first (it's the ESCAPE char), then % and _.
+    const escaped = namePattern.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
+    const likePattern = `%${escaped}%`;
     return (
       this.db
         .prepare(
