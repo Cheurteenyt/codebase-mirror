@@ -78,6 +78,9 @@ export function defaultHumanDbPath(project: string): string {
 
 export class HumanMemoryStore {
   private db: Database.Database;
+  // R25: optional notification hub for real-time UI updates.
+  private notifyHub: { notify: (project: string, type: string, data?: Record<string, unknown>) => void } | null = null;
+  private projectName: string | null = null;
 
   constructor(dbPath: string) {
     const expanded = expandTilde(dbPath);
@@ -94,6 +97,32 @@ export class HumanMemoryStore {
     this.db.pragma('temp_store = MEMORY');
     this.db.pragma('cache_size = -65536');
     runMigrations(this.db);
+  }
+
+  /**
+   * R25: Attach a notification hub. After each mutation (createNode, updateNode,
+   * deleteNode, createEdge), the store will call hub.notify(project, type)
+   * so connected WebSocket clients receive real-time updates.
+   *
+   * The hub parameter uses a structural type (duck typing) so the store
+   * doesn't need to import the NotifyHub class directly — it just needs
+   * a notify() method. This avoids a circular dependency.
+   *
+   * The 'type' parameter is typed as `string` (not NotificationEvent) to
+   * avoid importing the NotifyHub types here. The hub validates internally.
+   */
+  attachNotifyHub(hub: { notify: (project: string, type: string, data?: Record<string, unknown>) => void }, project: string): void {
+    this.notifyHub = hub;
+    this.projectName = project;
+  }
+
+  /**
+   * R25: Emit a notification event (if a hub is attached).
+   */
+  private emitNotification(type: string, data?: Record<string, unknown>): void {
+    if (this.notifyHub && this.projectName) {
+      this.notifyHub.notify(this.projectName, type, data);
+    }
   }
 
   static openMemory(): HumanMemoryStore {
@@ -217,6 +246,9 @@ export class HumanMemoryStore {
     // R21: write junction table rows for each cbm_node_id.
     const newId = Number(result.lastInsertRowid);
     this.syncCbmLinks(newId, input.cbm_node_ids ?? []);
+
+    // R25: notify WebSocket clients that human_nodes changed.
+    this.emitNotification('human_nodes_changed', { node_id: newId, action: 'create' });
 
     return this.getNodeById(newId)!;
   }
@@ -435,6 +467,9 @@ export class HumanMemoryStore {
       this.syncCbmLinks(id, input.cbm_node_ids);
     }
 
+    // R25: notify WebSocket clients that human_nodes changed.
+    this.emitNotification('human_nodes_changed', { node_id: id, action: 'update' });
+
     return this.getNodeById(id);
   }
 
@@ -445,6 +480,10 @@ export class HumanMemoryStore {
     if (result.changes > 0 && node && node.obsidian_path) {
       this.db.prepare('DELETE FROM sync_state WHERE project = ? AND obsidian_path = ?')
         .run(node.project, node.obsidian_path);
+    }
+    // R25: notify WebSocket clients that human_nodes changed (only if something was deleted).
+    if (result.changes > 0) {
+      this.emitNotification('human_nodes_changed', { node_id: id, action: 'delete' });
     }
     return result.changes > 0;
   }
@@ -612,6 +651,9 @@ export class HumanMemoryStore {
         }
       }
     }
+
+    // R25: notify WebSocket clients that human_edges changed.
+    this.emitNotification('human_edges_changed', { edge_id: Number(result.lastInsertRowid), action: 'create' });
 
     return this.getEdgeById(Number(result.lastInsertRowid))!;
   }

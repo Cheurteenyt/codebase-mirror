@@ -2,8 +2,9 @@
 // V2: Architecture dashboard — KPIs, graph freshness, recommendations, top modules.
 // This is the DEFAULT view when a project is selected (replaces V1's graph-first approach).
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useDashboard } from "../hooks/useDashboard";
+import { useWebSocket } from "../hooks/useWebSocket";
 import { colorForFreshness, colorForLabel } from "../lib/colors";
 import { formatNumber, formatAge } from "../lib/utils";
 
@@ -15,6 +16,18 @@ interface DashboardTabProps {
 export function DashboardTab({ project, onNavigateToGraph }: DashboardTabProps) {
   const { data, loading, error, fetch } = useDashboard();
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // R25: WebSocket for real-time updates. When human_nodes or human_edges
+  // change (via CLI, MCP, or sync), the dashboard re-fetches automatically.
+  const handleNotification = useCallback(() => {
+    // Re-fetch the dashboard data when any notification arrives.
+    // The hub debounces, so we won't get flooded.
+    fetch(project);
+  }, [fetch, project]);
+
+  const { connected } = useWebSocket(project, handleNotification);
+  // R25: 'connected' is used to show a live indicator in the header.
+  void connected; // referenced for future UI indicator
 
   useEffect(() => {
     fetch(project);

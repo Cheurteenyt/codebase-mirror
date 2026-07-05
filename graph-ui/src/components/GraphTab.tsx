@@ -4,6 +4,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useGraphData } from "../hooks/useGraphData";
+import { useWebSocket } from "../hooks/useWebSocket";
 import { GraphCanvas } from "./GraphCanvas";
 import { FilterPanel } from "./FilterPanel";
 import { Sidebar } from "./Sidebar";
@@ -86,6 +87,13 @@ export function GraphTab({ project }: GraphTabProps) {
       setSelectedNode(null);
     }
   }, [project, fetchOverview]);
+
+  // R25: WebSocket for real-time graph updates. When human_nodes change
+  // (notes created/updated/deleted via CLI/MCP/sync), re-fetch the layout.
+  const handleGraphNotification = useCallback(() => {
+    if (project) fetchOverview(project);
+  }, [project, fetchOverview]);
+  useWebSocket(project, handleGraphNotification);
 
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
