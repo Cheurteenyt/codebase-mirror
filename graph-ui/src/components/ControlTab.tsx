@@ -1,8 +1,9 @@
 // graph-ui/src/components/ControlTab.tsx
 // V2 ControlTab — system info, processes, logs.
 // R17: now uses /api/processes, /api/logs, /api/index-status endpoints.
+// R24: fixed setState-on-unmounted via cancelled flag + abort stale refresh.
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "../api/client";
 import type { ProcessInfo } from "../lib/types";
 import { formatBytes } from "../lib/utils";
@@ -14,6 +15,8 @@ export function ControlTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [killError, setKillError] = useState<string | null>(null);
+  // R24: track mounted state to prevent setState on unmounted components.
+  const mountedRef = useRef(true);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -24,21 +27,28 @@ export function ControlTab() {
         api.getLogs(50),
         api.getIndexStatus(),
       ]);
+      // R24: only update state if still mounted.
+      if (!mountedRef.current) return;
       setProcesses(procRes.processes ?? []);
       setLogs(logRes.lines ?? []);
       setJobs(jobRes.jobs ?? []);
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(e instanceof Error ? e.message : "Failed to fetch control data");
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     refresh();
     // Auto-refresh every 10 seconds.
     const interval = setInterval(refresh, 10000);
-    return () => clearInterval(interval);
+    return () => {
+      mountedRef.current = false;
+      clearInterval(interval);
+    };
   }, [refresh]);
 
   const handleKill = async (pid: number) => {

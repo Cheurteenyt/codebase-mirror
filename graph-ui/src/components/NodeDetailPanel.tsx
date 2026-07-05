@@ -65,7 +65,10 @@ export function NodeDetailPanel({
     setCodeLoading(false);
   }, [node.id]);
 
-  const canFetchCode = Boolean(project && node.qualified_name);
+  // R24: canFetchCode is always false in V2 because the RPC endpoint
+  // (get_code_snippet) is not implemented. Hiding the button avoids
+  // showing a "Show code" button that always fails with an error.
+  const canFetchCode = false; // Boolean(project && node.qualified_name);
   const ghUrl = githubUrl(node, repoInfo);
 
   const loadCode = async () => {
