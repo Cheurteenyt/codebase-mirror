@@ -54,7 +54,11 @@ export function registerHumanCommand(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      if (!HUMAN_EDGE_TYPES.includes(opts.linkEdge as HumanEdgeType)) {
+      // R15: always validate --link-edge, even if no --link-cbm is provided.
+      // Previously the user could pass --link-edge INVALID without --link-cbm
+      // and the invalid value was silently accepted (no edges created, no error).
+      // This was misleading — the user might think the edge type would be used.
+      if (opts.linkEdge && !HUMAN_EDGE_TYPES.includes(opts.linkEdge as HumanEdgeType)) {
         console.error(`Error: invalid --link-edge "${opts.linkEdge}". Valid: ${HUMAN_EDGE_TYPES.join(', ')}`);
         process.exitCode = 1;
         return;
@@ -149,7 +153,7 @@ export function registerHumanCommand(program: Command): void {
 
   human
     .command('show')
-    .description('Show a single note (JSON output)')
+    .description('Show a single note (JSON output, includes edges)')
     .argument('<id>', 'Note ID')
     .option('--project <name>')
     .action((idStr, opts) => {
@@ -163,7 +167,20 @@ export function registerHumanCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
-        console.log(JSON.stringify(node, null, 2));
+        // R15: include edges so the user can see what the note is linked to.
+        const edges = humanStore.listEdgesFromNode(id, 1000);
+        const output = {
+          ...node,
+          edges: edges.map((e) => ({
+            id: e.id,
+            type: e.type,
+            target_kind: e.target_kind,
+            target_cbm_node_id: e.target_cbm_node_id,
+            target_human_node_id: e.target_human_node_id,
+            created_at: e.created_at,
+          })),
+        };
+        console.log(JSON.stringify(output, null, 2));
       } catch (e: any) {
         console.error(`Error: ${e.message}`);
         process.exitCode = 1;

@@ -90,7 +90,10 @@ export class GetModuleContextTool extends BaseTool {
       }
 
       // Always fetch notesCount for risk score (independent of include_human flag).
-      const notesForRisk = this.humanStore.listNodesByCbmNodeId(project, module.id);
+      // R15: use bulk fetch with a single-element array for consistency with other
+      // call sites. The bulk method uses JSON_EACH which is the indexed path.
+      const notesForRisk = this.humanStore.getBulkNotesByCbmNodeIds(project, [module.id], 200)
+        .get(module.id) ?? [];
       let humanNotes: any[] = [];
       if (includeHuman) {
         humanNotes = notesForRisk;

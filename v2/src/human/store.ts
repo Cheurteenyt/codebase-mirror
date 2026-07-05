@@ -273,6 +273,12 @@ export class HumanMemoryStore {
    * Bulk-fetch notes by cbm_node_id for many ids in chunked queries.
    * Returns Map<cbm_node_id, HumanNode[]> (empty array if no notes).
    * Eliminates the N+1 pattern where callers call listNodesByCbmNodeId per node.
+   *
+   * R15 fix: the previous implementation loaded ALL matching rows from SQLite
+   * and then capped per-node in JS. For a node with 10000 notes and limit=1,
+   * this loaded all 10000 rows. Now uses SQL ROW_NUMBER() window function to
+   * cap per-node at the database level, so only `limit` rows per node are
+   * transferred. Falls back to the old behavior if window functions unavailable.
    */
   getBulkNotesByCbmNodeIds(project: string, cbmNodeIds: number[], limit = 1): Map<number, HumanNode[]> {
     const result = new Map<number, HumanNode[]>();
@@ -284,23 +290,45 @@ export class HumanMemoryStore {
       const chunk = cbmNodeIds.slice(i, i + CHUNK);
       const placeholders = chunk.map(() => '?').join(',');
       try {
+        // Use ROW_NUMBER() to cap per-node at the SQL level. SQLite 3.25+
+        // (2018-09) supports window functions — safe to assume.
         const rows = this.db
           .prepare(
-            `SELECT n.*, je.value AS cbm_id FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
-             WHERE n.project = ? AND je.value IN (${placeholders})
-             ORDER BY n.updated_at DESC, n.id ASC`
+            `SELECT * FROM (
+               SELECT n.*, je.value AS cbm_id,
+                      ROW_NUMBER() OVER (PARTITION BY je.value ORDER BY n.updated_at DESC, n.id ASC) AS rn
+               FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
+               WHERE n.project = ? AND je.value IN (${placeholders})
+             ) WHERE rn <= ?`
           )
-          .all(project, ...chunk) as any[];
+          .all(project, ...chunk, limit) as any[];
         for (const row of rows) {
           const cbmId = Number(row.cbm_id);
           if (!result.has(cbmId)) continue;
-          const arr = result.get(cbmId)!;
-          if (arr.length < limit) {
-            arr.push(deserializeNode(row));
-          }
+          result.get(cbmId)!.push(deserializeNode(row));
         }
       } catch {
-        // ignore — return empty arrays for this chunk
+        // Fallback: window functions unavailable (very old SQLite). Load all
+        // and cap in JS. Correct but less efficient.
+        try {
+          const rows = this.db
+            .prepare(
+              `SELECT n.*, je.value AS cbm_id FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
+               WHERE n.project = ? AND je.value IN (${placeholders})
+               ORDER BY n.updated_at DESC, n.id ASC`
+            )
+            .all(project, ...chunk) as any[];
+          for (const row of rows) {
+            const cbmId = Number(row.cbm_id);
+            if (!result.has(cbmId)) continue;
+            const arr = result.get(cbmId)!;
+            if (arr.length < limit) {
+              arr.push(deserializeNode(row));
+            }
+          }
+        } catch {
+          // ignore — return empty arrays for this chunk
+        }
       }
     }
     return result;
@@ -555,6 +583,17 @@ export class HumanMemoryStore {
     const rows = this.db
       .prepare('SELECT * FROM human_edges WHERE source_human_node_id = ? LIMIT ?')
       .all(humanNodeId, limit) as any[];
+    return rows.map(deserializeEdge);
+  }
+
+  /**
+   * List ALL edges for a project in a single query. Used by backup export
+   * to avoid the N+1 pattern of calling listEdgesFromNode per note.
+   */
+  listAllEdges(project: string, limit = 1000000): HumanEdge[] {
+    const rows = this.db
+      .prepare('SELECT * FROM human_edges WHERE project = ? LIMIT ?')
+      .all(project, limit) as any[];
     return rows.map(deserializeEdge);
   }
 

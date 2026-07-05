@@ -186,9 +186,17 @@ export class UiServer {
       return;
     }
 
-    // GET /api/projects — list indexed projects
+    // GET /api/projects — list indexed projects with health info
     if (path === '/api/projects' && req.method === 'GET') {
-      const projects: Array<{ name: string; root_path: string; indexed_at: string }> = [];
+      const projects: Array<{
+        name: string;
+        root_path: string;
+        indexed_at: string;
+        node_count?: number;
+        edge_count?: number;
+        size_bytes?: number;
+        status?: string;
+      }> = [];
       const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
       const cbmDir = join(cacheDir, 'codebase-memory-mcp');
       if (existsSync(cbmDir)) {
@@ -197,11 +205,30 @@ export class UiServer {
         for (const f of files) {
           if (f.endsWith('.db') && !f.endsWith('.human.db') && !f.startsWith('_')) {
             const name = f.replace(/\.db$/, '');
-            const stat = statSync(join(cbmDir, f));
+            const dbPath = join(cbmDir, f);
+            const stat = statSync(dbPath);
+            // R15: open each DB read-only to get node/edge counts for the
+            // ProjectCard. Previously the card always showed "Loading schema..."
+            // because no counts were provided.
+            let nodeCount: number | undefined;
+            let edgeCount: number | undefined;
+            let status = 'healthy';
+            try {
+              const reader = new CodeGraphReader(dbPath);
+              nodeCount = reader.countNodes(name);
+              edgeCount = reader.countEdges(name);
+              reader.close();
+            } catch {
+              status = 'corrupt';
+            }
             projects.push({
               name,
               root_path: '',
               indexed_at: stat.mtime.toISOString(),
+              node_count: nodeCount,
+              edge_count: edgeCount,
+              size_bytes: stat.size,
+              status,
             });
           }
         }

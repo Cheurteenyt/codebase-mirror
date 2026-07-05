@@ -57,7 +57,6 @@ export function StatsTab({ onSelectProject }: StatsTabProps) {
             <ProjectCard
               key={p.name}
               project={p}
-              schema={null}
               onSelect={() => onSelectProject(p.name)}
             />
           ))}

@@ -55,6 +55,8 @@ export interface Project {
   indexed_at: string;
   node_count?: number;
   edge_count?: number;
+  size_bytes?: number;
+  status?: string;
 }
 
 export interface ProjectHealth {

@@ -68,13 +68,16 @@ export class GetProjectOverviewTool extends BaseTool {
         const modules = codeReader.listModules(project, MAX_NODES_PER_LABEL);
         const moduleIds = modules.map((m) => m.id);
         const degreeMap = codeReader.getBulkNodeDegrees(moduleIds);
+        // R15: bulk-fetch notes for ALL modules once, then filter by criticality.
+        // Previously called listNodesByCbmNodeId per critical module — N+1 pattern.
+        const notesByNode = humanStore.getBulkNotesByCbmNodeIds(project, moduleIds, 1);
         let criticalTotal = 0;
         let criticalDocumented = 0;
         for (const m of modules) {
           const deg = degreeMap.get(m.id) ?? 0;
           if (deg >= 20) {
             criticalTotal++;
-            const notes = humanStore.listNodesByCbmNodeId(project, m.id, 1);
+            const notes = notesByNode.get(m.id) ?? [];
             if (notes.length > 0) criticalDocumented++;
           }
         }

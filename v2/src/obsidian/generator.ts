@@ -425,5 +425,12 @@ function mergeFrontmatter(
       result[k] = v;
     }
   }
+  // R15: remove stale `last_generated` from existing vault files.
+  // R14 removed this field from buildFrontmatter, but old vault files still
+  // have it. If we don't delete it here, it persists forever and confuses
+  // users (the date never updates). Delete only if fresh didn't include it.
+  if (!('last_generated' in fresh) && 'last_generated' in result) {
+    delete result['last_generated'];
+  }
   return result;
 }

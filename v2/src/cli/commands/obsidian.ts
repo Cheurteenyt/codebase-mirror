@@ -348,6 +348,16 @@ export function registerObsidianCommand(program: Command): void {
         const m = modules[0];
         const slug = slugify(m.name);
         const obsidianPath = `Modules/${slug}.md`;
+        // R15: check for existing node by obsidian_path BEFORE creating.
+        // createNode would succeed (auto-suffixing the slug) but produce a
+        // node with a different obsidian_path than expected, causing confusion.
+        const existing = humanStore.getNodeByObsidianPath(project, obsidianPath);
+        if (existing) {
+          console.error(`Error: a ModuleNote already exists for this module (id=${existing.id}, path=${obsidianPath}).`);
+          console.error('       Use `cbm-v2 human show ' + existing.id + '` to view it.');
+          process.exitCode = 1;
+          return;
+        }
         try {
           const node = humanStore.createNode({
             project,
@@ -403,6 +413,14 @@ export function registerObsidianCommand(program: Command): void {
         }
         const slug = slugify(`${opts.method}-${opts.path}`);
         const obsidianPath = `Routes/${slug}.md`;
+        // R15: check for existing node by obsidian_path BEFORE creating.
+        const existing = humanStore.getNodeByObsidianPath(project, obsidianPath);
+        if (existing) {
+          console.error(`Error: a RouteNote already exists for this route (id=${existing.id}, path=${obsidianPath}).`);
+          console.error('       Use `cbm-v2 human show ' + existing.id + '` to view it.');
+          process.exitCode = 1;
+          return;
+        }
         try {
           const node = humanStore.createNode({
             project,

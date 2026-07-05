@@ -4,7 +4,6 @@
 import { Command } from 'commander';
 import { HumanMemoryStore, defaultHumanDbPath } from '../../human/store.js';
 import { CodeGraphReader, defaultCodeDbPath } from '../../bridge/sqlite-ro.js';
-import { HUMAN_NODE_LABELS } from '../../human/schema.js';
 import { deriveProjectName } from '../../config.js';
 
 export function registerStatsCommand(program: Command): void {
@@ -30,11 +29,18 @@ export function registerStatsCommand(program: Command): void {
           generated_at: new Date().toISOString(),
         };
 
-        // Human memory stats
+        // Human memory stats — only include labels with count > 0 to keep output clean.
+        // R15: use a single SQL query with GROUP BY instead of N queries (one per label).
         const humanStats: Record<string, number> = {};
-        for (const label of HUMAN_NODE_LABELS) {
-          const count = humanStore.countNodes(project, label);
-          if (count > 0) humanStats[label] = count;
+        try {
+          const labelRows = humanStore.getRawDb()
+            .prepare('SELECT label, COUNT(*) AS c FROM human_nodes WHERE project = ? GROUP BY label ORDER BY c DESC')
+            .all(project) as any[];
+          for (const row of labelRows) {
+            humanStats[row.label] = row.c;
+          }
+        } catch {
+          // ignore — fall back to empty stats
         }
         const totalNotes = humanStore.countNodes(project);
         const totalEdges = humanStore.countEdges(project);

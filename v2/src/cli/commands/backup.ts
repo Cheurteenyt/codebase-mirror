@@ -22,14 +22,20 @@ export function registerBackupCommand(program: Command): void {
 
       try {
         const notes = humanStore.listNodes(project, { limit: 100000 });
+        // R15: fetch ALL edges in ONE query instead of N+1 per-note queries.
+        // For 1000 notes this replaces 1000 queries with 1.
+        const allEdges = humanStore.listAllEdges(project, 1000000);
         const edges: any[] = [];
-        for (const note of notes) {
-          const noteEdges = humanStore.listEdgesFromNode(note.id, 1000);
-          edges.push(...noteEdges);
+        const noteIdSet = new Set(notes.map((n) => n.id));
+        // Only include edges whose source note exists in our notes list (defensive).
+        for (const edge of allEdges) {
+          if (noteIdSet.has(edge.source_human_node_id)) {
+            edges.push(edge);
+          }
         }
 
         const backup = {
-          version: '0.4.2',
+          version: '0.5.4',
           exported_at: new Date().toISOString(),
           project,
           notes: notes.map((n) => ({
@@ -44,9 +50,13 @@ export function registerBackupCommand(program: Command): void {
             obsidian_path: n.obsidian_path,
             cbm_node_ids: n.cbm_node_ids,
             tags: n.tags,
+            provenance: n.provenance,
+            confidence: n.confidence,
+            source_file: n.source_file,
             author: n.author,
             created_at: n.created_at,
             updated_at: n.updated_at,
+            last_synced_at: n.last_synced_at,
           })),
           edges: edges.map((e) => ({
             id: e.id,
@@ -56,6 +66,9 @@ export function registerBackupCommand(program: Command): void {
             target_human_node_id: e.target_human_node_id,
             type: e.type,
             properties_json: e.properties_json,
+            provenance: e.provenance,
+            confidence: e.confidence,
+            source_file: e.source_file,
             created_at: e.created_at,
           })),
         };
@@ -130,8 +143,24 @@ export function registerBackupCommand(program: Command): void {
             try {
               const existing = humanStore.getNodeBySlug(project, note.slug);
               if (existing) {
+                // R15: log WHY the note was skipped (previously silent).
+                // Also check if obsidian_path collides — two backups with the
+                // same slug but different obsidian_paths would both be skipped
+                // here, which is correct but confusing without a message.
+                console.warn(`  Skip: note "${note.slug}" already exists (id=${existing.id})`);
                 skippedNotes++;
                 continue;
+              }
+              // R15: also check obsidian_path collision — if a note with the
+              // same path exists under a different slug, createNode would
+              // auto-suffix the slug, producing an unexpected path.
+              if (note.obsidian_path) {
+                const existingByPath = humanStore.getNodeByObsidianPath(project, note.obsidian_path);
+                if (existingByPath) {
+                  console.warn(`  Skip: note with path "${note.obsidian_path}" already exists (id=${existingByPath.id})`);
+                  skippedNotes++;
+                  continue;
+                }
               }
               humanStore.createNode({
                 project,
