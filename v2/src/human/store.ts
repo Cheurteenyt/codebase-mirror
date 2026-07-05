@@ -722,6 +722,27 @@ export class HumanMemoryStore {
     ).c;
   }
 
+  /**
+   * R38: Count nodes grouped by label in a single query.
+   * Returns a map of label -> count for the given project.
+   * Replaces N separate countNodes() calls with 1 query (N queries -> 1).
+   */
+  countNodesByLabel(project: string): Record<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT label, COUNT(*) AS c FROM human_nodes WHERE project = ? GROUP BY label`
+      )
+      .all(project) as any[];
+    const result: Record<string, number> = {};
+    let total = 0;
+    for (const row of rows) {
+      result[row.label] = row.c;
+      total += row.c;
+    }
+    result['_total'] = total;
+    return result;
+  }
+
   countEdges(project: string, type?: HumanEdgeType): number {
     if (type) {
       return (

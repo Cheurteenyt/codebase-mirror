@@ -465,11 +465,13 @@ export class UiServer {
       const graphStatus = getGraphStatus(project, this.codeReader, process.cwd());
       const freshnessScore = getFreshnessScore(graphStatus);
 
-      const adrs = this.humanStore.countNodes(project, 'ADR');
-      const bugs = this.humanStore.countNodes(project, 'BugNote');
-      const refactors = this.humanStore.countNodes(project, 'RefactorPlan');
-      const conventions = this.humanStore.countNodes(project, 'Convention');
-      const totalNotes = this.humanStore.countNodes(project);
+      // R38: single GROUP BY query instead of 5 separate COUNT queries.
+      const labelCounts = this.humanStore.countNodesByLabel(project);
+      const adrs = labelCounts['ADR'] ?? 0;
+      const bugs = labelCounts['BugNote'] ?? 0;
+      const refactors = labelCounts['RefactorPlan'] ?? 0;
+      const conventions = labelCounts['Convention'] ?? 0;
+      const totalNotes = labelCounts['_total'] ?? 0;
 
       let criticalTotal = 0;
       let criticalDocumented = 0;
