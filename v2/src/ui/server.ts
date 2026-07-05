@@ -2,8 +2,10 @@
 // V2 HTTP server for the graph UI.
 // Replaces V1's C-based http_server.c with a clean Node.js implementation.
 // Serves static assets + API endpoints that read from the V2 stores.
+// R25: WebSocket server for real-time push notifications.
 
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import { WebSocketServer, WebSocket } from "ws";
 import { existsSync, readFileSync, statSync, readdirSync } from "node:fs";
 import { join, extname, resolve, sep, dirname } from "node:path";
 import { homedir } from 'node:os';
@@ -12,6 +14,7 @@ import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { getGraphStatus, getFreshnessScore, freshnessLabel } from '../intelligence/graph-status.js';
 import { computeRiskScore } from '../reports/risk.js';
 import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
+import { getNotifyHub } from './notify-hub.js';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -38,17 +41,21 @@ export interface UiServerOptions {
 
 export class UiServer {
   private server: ReturnType<typeof createServer>;
+  private wss: WebSocketServer | null = null;
   private port: number;
   private project: string;
   private graphUiPath: string;
   private humanStore: HumanMemoryStore;
   private codeReader: CodeGraphReader | undefined;
   // R17: in-memory index job tracking. Keyed by job ID (string).
-  // Jobs are created by POST /api/index and polled via GET /api/index-status.
   private indexJobs: Map<string, { id: string; status: string; error?: string; started_at: string; project: string }> = new Map();
   // R17: in-memory log buffer (ring buffer, max 500 lines).
   private logBuffer: string[] = [];
   private static readonly LOG_BUFFER_MAX = 500;
+  // R25: set of connected WebSocket clients (for cleanup on stop).
+  private wsClients: Set<WebSocket> = new Set();
+  // R25: unsubscribe function for the notification hub.
+  private hubUnsubscribe: (() => void) | null = null;
 
   constructor(opts: UiServerOptions) {
     this.port = opts.port ?? DEFAULT_PORT;
@@ -56,6 +63,9 @@ export class UiServer {
     this.graphUiPath = opts.graphUiPath ?? resolve(process.cwd(), '..', 'graph-ui', 'dist');
 
     this.humanStore = new HumanMemoryStore(defaultHumanDbPath(this.project));
+    // R25: attach the notification hub so store mutations push events.
+    this.humanStore.attachNotifyHub(getNotifyHub(), this.project);
+
     try {
       this.codeReader = new CodeGraphReader(defaultCodeDbPath(this.project));
     } catch {
@@ -144,12 +154,117 @@ export class UiServer {
     this.server.listen(this.port, '127.0.0.1', () => {
       console.log(`[cbm-v2 ui] Graph UI server running at http://127.0.0.1:${this.port}`);
     });
+
+    // R25: WebSocket server — shares the same HTTP port via upgrade.
+    this.wss = new WebSocketServer({ server: this.server });
+    this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+      this.handleWsConnection(ws, req);
+    });
+
+    // R25: subscribe to the notification hub. When the store mutates,
+    // broadcast to all connected WebSocket clients.
+    this.hubUnsubscribe = getNotifyHub().subscribe((event) => {
+      this.broadcastToWsClients(event);
+    });
   }
 
   stop(): void {
+    // R25: unsubscribe from the hub and close all WebSocket clients.
+    if (this.hubUnsubscribe) {
+      this.hubUnsubscribe();
+      this.hubUnsubscribe = null;
+    }
+    for (const ws of this.wsClients) {
+      try { ws.close(1001, 'server shutting down'); } catch { /* ignore */ }
+    }
+    this.wsClients.clear();
+    this.wss?.close();
     this.server.close();
     this.humanStore.close();
     this.codeReader?.close();
+  }
+
+  /**
+   * R25: Handle a new WebSocket connection.
+   * Clients send a subscribe message with their project, then receive
+   * push notifications for that project.
+   */
+  private handleWsConnection(ws: WebSocket, _req: IncomingMessage): void {
+    this.wsClients.add(ws);
+
+    // Send a welcome message so the client knows the connection is live.
+    this.sendWsMessage(ws, {
+      type: 'connected',
+      project: this.project,
+      timestamp: new Date().toISOString(),
+    });
+
+    ws.on('message', (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        // R25: support 'ping' keepalive (client → server).
+        if (msg.type === 'ping') {
+          this.sendWsMessage(ws, { type: 'pong', timestamp: new Date().toISOString() });
+        }
+        // R25: support 'subscribe' to filter by project.
+        if (msg.type === 'subscribe' && typeof msg.project === 'string') {
+          // Store the project filter on the WebSocket instance.
+          (ws as any)._projectFilter = msg.project;
+        }
+      } catch {
+        // ignore malformed messages
+      }
+    });
+
+    ws.on('close', () => {
+      this.wsClients.delete(ws);
+    });
+
+    ws.on('error', () => {
+      this.wsClients.delete(ws);
+    });
+  }
+
+  /**
+   * R25: Broadcast a notification event to all connected WebSocket clients.
+   * Only sends to clients whose project filter matches the event's project
+   * (or clients that haven't set a filter — they get everything).
+   */
+  private broadcastToWsClients(event: { project: string; type: string; timestamp: string; data?: Record<string, unknown> }): void {
+    const message = {
+      type: 'notification',
+      event: event.type,
+      project: event.project,
+      timestamp: event.timestamp,
+      data: event.data,
+    };
+    const payload = JSON.stringify(message);
+
+    for (const ws of this.wsClients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      // Check project filter — only send if it matches or is not set.
+      const filter = (ws as any)._projectFilter;
+      if (filter && filter !== event.project) continue;
+      try {
+        ws.send(payload);
+      } catch {
+        // send failed — remove the client
+        this.wsClients.delete(ws);
+      }
+    }
+  }
+
+  /**
+   * R25: Send a JSON message to a single WebSocket client.
+   */
+  private sendWsMessage(ws: WebSocket, message: Record<string, unknown>): void {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(message));
+      } catch {
+        // ignore
+      }
+    }
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
