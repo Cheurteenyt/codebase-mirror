@@ -149,6 +149,11 @@ export class UiServer {
       } else {
         console.error('Server error:', e.message);
       }
+      // R34: close DB handles before exiting (same fix as R26 Bug #6 for MCP server).
+      try {
+        this.humanStore.close();
+        this.codeReader?.close();
+      } catch { /* ignore close errors during shutdown */ }
       process.exit(1);
     });
     this.server.listen(this.port, '127.0.0.1', () => {

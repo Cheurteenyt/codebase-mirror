@@ -121,7 +121,6 @@ export function registerWatchCommand(program: Command): void {
        */
       function runSync(): void {
         try {
-
           if (direction === 'import' || direction === 'both') {
             const result = importVault({
               project,

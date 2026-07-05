@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.9.4.
+> Updated 2026-07-05 for version 0.9.5.
 
-## Current State (0.9.4)
+## Current State (0.9.5)
 
 ### ✅ Completed
 
@@ -42,6 +42,7 @@
 | Round 31 Claude Sonnet 5 R2 | 0.9.2 | 8 fixes: B1 double-export guard, B2 rename, B3 auto-generate flags, C1 HiDPI DPR, C2 stale filter, D1 v2/README tool count, D2 version, D3 bug count |
 | Round 32 Claude Sonnet 5 R3 | 0.9.3 | 5 fixes: C-new-1 CRITICAL guard timing (timestamp), B-new-1 zoom HiDPI, B-new-2 filter reset, D-new-1 version, D-new-2 bug count |
 | Round 33 regression tests | 0.9.4 | 11 regression tests for R32 fixes: filter persistence, timestamp guard, zoom-to-cursor math |
+| Round 34 UI server shutdown fix | 0.9.5 | UI server EADDRINUSE handler now closes DB handles before process.exit (same class as R26 Bug #6) |
 
 ### 📊 Metrics
 
@@ -50,7 +51,7 @@
 | Source files (v2) | 36 |
 | Test files | 26 |
 | Tests | 258 (all passing) |
-| Bugs fixed (33 rounds) | 424+ |
+| Bugs fixed (34 rounds) | 425+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -71,7 +72,7 @@
 | ✅ Storage optimization (indexes + PRAGMAs) | Done | Medium | Completed in 0.6.3 |
 | ✅ Junction table (complex storage) | Done | High | Completed in 0.7.0 |
 | ✅ WebSocket real-time | Done | High | Completed in 0.8.0 |
-| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.9.4 |
+| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.9.5 |
 | Tests for reports (hotspots, undocumented, risk) | High | Medium | Planned |
 | ESLint + Prettier configuration | Medium | Low | Planned |
 | `noUncheckedIndexedAccess` in tsconfig | Medium | Low | Planned |
@@ -90,7 +91,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.9.4)
+### Phase 3: V1 Complete (0.9.5)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -149,7 +150,8 @@
 | R31 (Claude Sonnet 5 R2) | 0.9.2 | 5 | 5 | 247 |
 | R32 (Claude Sonnet 5 R3) | 0.9.3 | 5 | 5 | 247 |
 | R33 (regression tests) | 0.9.4 | — (tests) | — | 258 |
-| **Total** | | **424+** | **424+** | **258** |
+| R34 (UI server shutdown) | 0.9.5 | 1 | 1 | 258 |
+| **Total** | | **425+** | **425+** | **258** |
 
 ## Performance Milestones
 
@@ -169,7 +171,7 @@
 | R20 | SQLite temp_store | disk I/O for sorting | MEMORY | -90% sort latency |
 | R21 | `getBulkNotesByCbmNodeIds` (5000 modules) | ~2.5M JSON_EACH ops | ~5000 B-tree lookups | -80% to -95% |
 
-## API Endpoints (0.9.4)
+## API Endpoints (0.9.5)
 
 | Endpoint | Method | Description |
 |---|---|---|
