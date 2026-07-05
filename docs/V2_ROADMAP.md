@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.8.1.
+> Updated 2026-07-05 for version 0.9.0.
 
-## Current State (0.8.1)
+## Current State (0.9.0)
 
 ### ✅ Completed
 
@@ -35,18 +35,20 @@
 | Round 24 UI bugs | 0.7.3 | ControlTab setState-on-unmounted, NodeDetailPanel dead Show code button, useProjects stale responses |
 | Round 25 WebSocket temps réel | 0.8.0 | Push notifications bidirectionnel, NotifyHub debounce 200ms, reconnexion auto (backoff), keepalive ping/pong |
 | Round 26 rapport Claude Sonnet 5 | 0.8.1 | 6 bugs: CRITICAL frontmatter revert (import avant export), HIGH atomicité create_human_note, HIGH no-op frontmatter, MEDIUM Vite WS proxy, LOW vaultHash vestigial, LOW MCP shutdown DB close |
-| Round 27 Bug #8 rename | 0.8.1 | Stale edges on rename: resolveExistingNode match par slug même si obsidian_path existe (vérifie old file supprimé), no-op check compare obsidian_path, processWikilinks nettoie old source_file |
+| Round 27 Bug #8 rename | 0.8.1 | Stale edges on rename: resolveExistingNode match by slug even if obsidian_path exists (checks old file deleted), no-op check compares obsidian_path, processWikilinks cleans old source_file |
+| Round 28 docs sync | 0.8.2 | 6 docs updated, audit of 5 potential bugs (none required fixes) |
+| Round 29 watch daemon | 0.9.0 | `cbm-v2 watch` daemon with fs.watch recursive, debounce 500ms, NotifyHub integration, incremental import+export |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
-| Source files (v2) | 35 |
-| Test files | 24 |
-| Tests | 241 (all passing) |
-| Bugs fixed (27 rounds) | 403+ |
+| Source files (v2) | 36 |
+| Test files | 25 |
+| Tests | 247 (all passing) |
+| Bugs fixed (29 rounds) | 403+ |
 | MCP tools | 7 |
-| CLI commands | 15+ |
+| CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
 | Graph UI components | 13 |
 | SQLite migrations | 3 (initial_schema, optimize_indexes, cbm_links_junction_table) |
@@ -55,7 +57,7 @@
 
 ## Roadmap
 
-### Phase 1: Stability & Developer Experience (0.6.x)
+### Phase 1: Stability & Developer Experience (0.6.x-0.9.x)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -64,7 +66,8 @@
 | ✅ Refactor God functions | Done | Medium | Completed in 0.6.1 |
 | ✅ Storage optimization (indexes + PRAGMAs) | Done | Medium | Completed in 0.6.3 |
 | ✅ Junction table (complex storage) | Done | High | Completed in 0.7.0 |
-| `cbm-v2 watch` daemon | High | Medium | Planned |
+| ✅ WebSocket real-time | Done | High | Completed in 0.8.0 |
+| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.9.0 |
 | Tests for reports (hotspots, undocumented, risk) | High | Medium | Planned |
 | ESLint + Prettier configuration | Medium | Low | Planned |
 | `noUncheckedIndexedAccess` in tsconfig | Medium | Low | Planned |
@@ -136,7 +139,9 @@
 | R25 (WebSocket temps réel) | 0.8.0 | — (feature) | — | 239 |
 | R26 (rapport Claude Sonnet 5) | 0.8.1 | 6 | 6 | 239 |
 | R27 (Bug #8 rename) | 0.8.1 | 1 | 1 | 241 |
-| **Total** | | **403+** | **403+** | **241** |
+| R28 (docs sync) | 0.8.2 | — (docs) | — | 241 |
+| R29 (watch daemon) | 0.9.0 | — (feature) | — | 247 |
+| **Total** | | **403+** | **403+** | **247** |
 
 ## Performance Milestones
 
@@ -156,7 +161,7 @@
 | R20 | SQLite temp_store | disk I/O for sorting | MEMORY | -90% sort latency |
 | R21 | `getBulkNotesByCbmNodeIds` (5000 modules) | ~2.5M JSON_EACH ops | ~5000 B-tree lookups | -80% to -95% |
 
-## API Endpoints (0.8.2)
+## API Endpoints (0.9.0)
 
 | Endpoint | Method | Description |
 |---|---|---|

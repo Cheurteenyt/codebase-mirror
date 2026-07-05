@@ -1,6 +1,6 @@
 # CLI Reference — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.8.2.
+> Updated 2026-07-05 for version 0.9.0.
 
 All commands are available via `cbm-v2` (or `node dist/cli/index.js` before global install).
 
@@ -61,6 +61,28 @@ The UI has 4 tabs:
 - **Graph**: 2D force-directed canvas with filters, sidebar, node detail panel
 - **Projects**: Project list with node/edge counts and health status
 - **Control**: System info
+
+### `cbm-v2 watch`
+Watch the Obsidian vault for file changes and auto-sync (daemon mode).
+
+```bash
+cbm-v2 watch --project my-app                              # default: direction=both
+cbm-v2 watch --project my-app --direction import           # vault -> DB only
+cbm-v2 watch --project my-app --direction export           # DB -> vault only
+cbm-v2 watch --project my-app --debounce 1000             # 1s debounce (default: 500ms)
+cbm-v2 watch --project my-app --no-backup --no-auto-modules
+```
+
+The watch daemon uses Node.js `fs.watch` (recursive, Node 18+) to monitor the vault directory. When a `.md` file is created, modified, or deleted:
+
+1. **Debounce**: waits 500ms (configurable) for the file system to settle
+2. **Import**: runs `importVault` to pull vault changes into the DB
+3. **Export**: runs `generateVault` to regenerate AUTO-GENERATED sections
+4. **Notify**: pushes WebSocket notifications to connected UI clients
+
+The daemon also subscribes to the `NotifyHub` so that DB-side mutations (from MCP tools or API endpoints running in the same process) trigger an automatic export.
+
+Press `Ctrl+C` to stop the daemon.
 
 ## Human Memory Commands
 
