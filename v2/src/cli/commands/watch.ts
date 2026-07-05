@@ -28,7 +28,6 @@ import { HumanMemoryStore, defaultHumanDbPath } from '../../human/store.js';
 import { CodeGraphReader, defaultCodeDbPath } from '../../bridge/sqlite-ro.js';
 import { importVault } from '../../obsidian/importer.js';
 import { generateVault } from '../../obsidian/generator.js';
-import { walkVault } from '../../obsidian/vault.js';
 import { getNotifyHub } from '../../ui/notify-hub.js';
 import { loadConfig, deriveProjectName } from '../../config.js';
 import { resolve } from 'node:path';
@@ -95,61 +94,58 @@ export function registerWatchCommand(program: Command): void {
       const hub = getNotifyHub();
       humanStore.attachNotifyHub(hub, project);
 
-      // Track the last known file set for diff detection.
-      let lastKnownFiles = new Set(walkVault(vaultPath));
+      // R30: removed lastKnownFiles tracking — the import uses no-op detection
+      // (idempotent via field comparison), so a full import on every file change
+      // is safe and simpler than diffing the file set.
       let importTimer: ReturnType<typeof setTimeout> | null = null;
       let exportTimer: ReturnType<typeof setTimeout> | null = null;
 
       /**
        * Run an incremental import: only process files that changed since
        * the last scan. Uses walkVault to get the current file set, diffs
-       * against lastKnownFiles, and calls importVault (which is idempotent
-       * via no-op detection).
+       * Calls importVault (which is idempotent via no-op detection).
+       *
+       * R30: wrapped in try/catch to prevent the daemon from crashing
+       * silently if importVault or generateVault throws (DB locked, disk
+       * full, etc.). Errors are logged but the daemon keeps running.
        */
       function runIncrementalImport(): void {
-        const currentFiles = new Set(walkVault(vaultPath));
-        const newFiles = [...currentFiles].filter((f) => !lastKnownFiles.has(f));
-        const deletedFiles = [...lastKnownFiles].filter((f) => !currentFiles.has(f));
-        lastKnownFiles = currentFiles;
-
-        if (newFiles.length === 0 && deletedFiles.length === 0) {
-          // No file changes — but the content of existing files might have changed.
-          // Run a full import (idempotent via no-op detection).
-        }
-
-        if (direction === 'import' || direction === 'both') {
-          const result = importVault({
-            project,
-            vaultPath,
-            humanStore,
-            codeReader,
-          });
-          if (result.created.length > 0 || result.updated.length > 0 || result.edgesCreated > 0) {
-            console.log(`[cbm-v2 watch] Import: ${result.created.length} created, ${result.updated.length} updated, ${result.edgesCreated} edges`);
-            // Notify WebSocket clients that the DB changed.
-            hub.notify(project, 'human_nodes_changed', { source: 'watch-import' });
-            hub.notify(project, 'human_edges_changed', { source: 'watch-import' });
+        try {
+          if (direction === 'import' || direction === 'both') {
+            const result = importVault({
+              project,
+              vaultPath,
+              humanStore,
+              codeReader,
+            });
+            if (result.created.length > 0 || result.updated.length > 0 || result.edgesCreated > 0) {
+              console.log(`[cbm-v2 watch] Import: ${result.created.length} created, ${result.updated.length} updated, ${result.edgesCreated} edges`);
+              // Notify WebSocket clients that the DB changed.
+              hub.notify(project, 'human_nodes_changed', { source: 'watch-import' });
+              hub.notify(project, 'human_edges_changed', { source: 'watch-import' });
+            }
           }
-        }
 
-        if (direction === 'export' || direction === 'both') {
-          // After import, re-export to update the AUTO-GENERATED sections
-          // with the latest DB state.
-          const result = generateVault({
-            project,
-            vaultPath,
-            humanStore,
-            codeReader,
-            backupBeforeWrite: backup,
-            autoGenerateModuleNotes: autoModules,
-            autoGenerateRouteNotes: autoRoutes,
-            minDegreeForModuleNote: minDegree,
-          });
-          if (result.created.length > 0 || result.updated.length > 0) {
-            console.log(`[cbm-v2 watch] Export: ${result.created.length} created, ${result.updated.length} updated`);
+          if (direction === 'export' || direction === 'both') {
+            // After import, re-export to update the AUTO-GENERATED sections
+            // with the latest DB state.
+            const result = generateVault({
+              project,
+              vaultPath,
+              humanStore,
+              codeReader,
+              backupBeforeWrite: backup,
+              autoGenerateModuleNotes: autoModules,
+              autoGenerateRouteNotes: autoRoutes,
+              minDegreeForModuleNote: minDegree,
+            });
+            if (result.created.length > 0 || result.updated.length > 0) {
+              console.log(`[cbm-v2 watch] Export: ${result.created.length} created, ${result.updated.length} updated`);
+            }
           }
-          // Update lastKnownFiles after export (export may have created new files).
-          lastKnownFiles = new Set(walkVault(vaultPath));
+        } catch (e: any) {
+          console.error(`[cbm-v2 watch] Error during sync: ${e.message}`);
+          // Don't crash — the daemon keeps watching for the next change.
         }
       }
 
@@ -159,19 +155,22 @@ export function registerWatchCommand(program: Command): void {
        */
       function runIncrementalExport(): void {
         if (direction !== 'export' && direction !== 'both') return;
-        const result = generateVault({
-          project,
-          vaultPath,
-          humanStore,
-          codeReader,
-          backupBeforeWrite: backup,
-          autoGenerateModuleNotes: false, // Don't auto-generate on every DB change
-          autoGenerateRouteNotes: false,
-          minDegreeForModuleNote: minDegree,
-        });
-        if (result.created.length > 0 || result.updated.length > 0) {
-          console.log(`[cbm-v2 watch] Export (DB change): ${result.created.length} created, ${result.updated.length} updated`);
-          lastKnownFiles = new Set(walkVault(vaultPath));
+        try {
+          const result = generateVault({
+            project,
+            vaultPath,
+            humanStore,
+            codeReader,
+            backupBeforeWrite: backup,
+            autoGenerateModuleNotes: false, // Don't auto-generate on every DB change
+            autoGenerateRouteNotes: false,
+            minDegreeForModuleNote: minDegree,
+          });
+          if (result.created.length > 0 || result.updated.length > 0) {
+            console.log(`[cbm-v2 watch] Export (DB change): ${result.created.length} created, ${result.updated.length} updated`);
+          }
+        } catch (e: any) {
+          console.error(`[cbm-v2 watch] Error during export: ${e.message}`);
         }
       }
 

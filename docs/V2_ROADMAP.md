@@ -30,11 +30,11 @@
 | Round 19 bug fixes | 0.6.2 | createEdge cbm_node_ids sync (CRITICAL), --force flag honored (HIGH) |
 | Round 20 storage optimization | 0.6.3 | Migration V2: drop useless index, composite indexes, PRAGMA temp_store + cache_size. maxNodes DoS fix |
 | Round 21 junction table | 0.7.0 | Migration V3: human_node_cbm_links junction table replacing JSON_EACH. Indexed reverse lookup, FK CASCADE, WITHOUT ROWID |
-| Round 22 docs + bug fixes | 0.7.1 | 6 docs updated, human link validation, commentaire obsolète, junction table consistency |
+| Round 22 docs + bug fixes | 0.7.1 | 6 docs updated, human link validation, obsolete comment, junction table consistency |
 | Round 23 bug fixes | 0.7.2 | pruneBackups cross-file deletion (basename fix), parseJsonBody 30s timeout, backup version |
 | Round 24 UI bugs | 0.7.3 | ControlTab setState-on-unmounted, NodeDetailPanel dead Show code button, useProjects stale responses |
-| Round 25 WebSocket temps réel | 0.8.0 | Push notifications bidirectionnel, NotifyHub debounce 200ms, reconnexion auto (backoff), keepalive ping/pong |
-| Round 26 rapport Claude Sonnet 5 | 0.8.1 | 6 bugs: CRITICAL frontmatter revert (import avant export), HIGH atomicité create_human_note, HIGH no-op frontmatter, MEDIUM Vite WS proxy, LOW vaultHash vestigial, LOW MCP shutdown DB close |
+| Round 25 WebSocket real-time | 0.8.0 | Bidirectional push notifications, NotifyHub debounce 200ms, auto-reconnect (backoff), keepalive ping/pong |
+| Round 26 Claude Sonnet 5 report | 0.8.1 | 6 bugs: CRITICAL frontmatter revert (import before export), HIGH create_human_note atomicity, HIGH no-op frontmatter, MEDIUM Vite WS proxy, LOW vaultHash vestigial, LOW MCP shutdown DB close |
 | Round 27 Bug #8 rename | 0.8.1 | Stale edges on rename: resolveExistingNode match by slug even if obsidian_path exists (checks old file deleted), no-op check compares obsidian_path, processWikilinks cleans old source_file |
 | Round 28 docs sync | 0.8.2 | 6 docs updated, audit of 5 potential bugs (none required fixes) |
 | Round 29 watch daemon | 0.9.0 | `cbm-v2 watch` daemon with fs.watch recursive, debounce 500ms, NotifyHub integration, incremental import+export |
@@ -136,8 +136,8 @@
 | R22 (docs + bug fixes) | 0.7.1 | 3 | 3 | 223 |
 | R23 (bug fixes) | 0.7.2 | 3 | 3 | 227 |
 | R24 (UI bugs) | 0.7.3 | 3 | 3 | 227 |
-| R25 (WebSocket temps réel) | 0.8.0 | — (feature) | — | 239 |
-| R26 (rapport Claude Sonnet 5) | 0.8.1 | 6 | 6 | 239 |
+| R25 (WebSocket real-time) | 0.8.0 | — (feature) | — | 239 |
+| R26 (Claude Sonnet 5 report) | 0.8.1 | 6 | 6 | 239 |
 | R27 (Bug #8 rename) | 0.8.1 | 1 | 1 | 241 |
 | R28 (docs sync) | 0.8.2 | — (docs) | — | 241 |
 | R29 (watch daemon) | 0.9.0 | — (feature) | — | 247 |
