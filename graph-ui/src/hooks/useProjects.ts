@@ -1,4 +1,5 @@
 // graph-ui/src/hooks/useProjects.ts
+import type { Project } from "../lib/types";
 // Fetches project list from the V2 API.
 
 import { useEffect, useState } from "react";

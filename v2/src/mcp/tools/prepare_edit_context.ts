@@ -89,18 +89,23 @@ export class PrepareEditContextTool extends BaseTool {
       const allRefactors: any[] = [];
       const allConventions: any[] = [];
 
+      // Bulk-fetch degrees and notes for all matching nodes (eliminates N+1).
+      const nodeIds = matchingNodes.slice(0, 20).map(n => n.id);
+      const degreeMap = codeReader.getBulkNodeDegrees(nodeIds);
+      const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, nodeIds);
+
       for (const node of matchingNodes.slice(0, 20)) {
         const neighbors = codeReader.getNeighbors(node.id, 'both', 50);
         const outNeighbors = neighbors.filter((n) => n.edge.source_id === node.id);
         const inNeighbors = neighbors.filter((n) => n.edge.target_id === node.id);
 
         // Use uncapped getNodeDegree for accurate risk score and blast radius.
-        const actualDegree = codeReader.getNodeDegree(node.id);
+        const actualDegree = degreeMap.get(node.id) ?? 0;
 
         // Blast radius: collect unique node IDs that depend on this node (in-edges).
         inNeighbors.forEach((n) => allBlastRadiusNodes.add(n.node.id));
 
-        const humanNotes = this.humanStore.listNodesByCbmNodeId(project, node.id);
+        const humanNotes = notesByNode.get(node.id) ?? [];
         const bugs = humanNotes.filter((n) => n.label === 'BugNote' && n.status === 'active');
         const adrs = humanNotes.filter((n) => n.label === 'ADR' && n.status === 'active');
         const refactors = humanNotes.filter((n) => n.label === 'RefactorPlan' && n.status === 'active');
