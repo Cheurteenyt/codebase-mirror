@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useDashboard } from "../hooks/useDashboard";
-import { colorForFreshness } from "../lib/colors";
+import { colorForFreshness, colorForLabel } from "../lib/colors";
 import { formatNumber, formatAge } from "../lib/utils";
 import type { DashboardData } from "../lib/types";
 

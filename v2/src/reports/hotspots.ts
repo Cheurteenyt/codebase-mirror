@@ -47,6 +47,7 @@ export function computeHotspotsReport(
   // Bulk-fetch degrees to avoid N+1.
   const moduleIds = modules.map((m) => m.id);
   const degreeMap = codeReader.getBulkNodeDegrees(moduleIds);
+  const notesMap = humanStore.getBulkNotesByCbmNodeIds(project, moduleIds, 1);
 
   // Get exact total module count (don't rely on `modules.length` which caps at MAX_NODES_PER_LABEL).
   const labelCounts = codeReader.countNodesByLabel(project);
@@ -60,7 +61,7 @@ export function computeHotspotsReport(
 
     const props = safeJsonParse(module.properties_json, {} as Record<string, any>);
     const complexityAvg = props.complexity_avg ?? props.complexity ?? 0;
-    const notesCount = humanStore.listNodesByCbmNodeId(project, module.id).length;
+    const notesCount = notesMap.get(module.id)?.length ?? 0;
     const riskScore = computeRiskScore(degree, complexityAvg, notesCount);
 
     hotspots.push({

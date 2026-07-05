@@ -61,6 +61,7 @@ export function computeRiskReport(
   // Bulk-fetch degrees to avoid N+1.
   const allIds = [...modules, ...functions, ...interfaces].map((n) => n.id);
   const degreeMap = codeReader.getBulkNodeDegrees(allIds);
+  const notesMap = humanStore.getBulkNotesByCbmNodeIds(project, allIds, 1);
 
   // 1. High coupling — modules with degree >= 40.
   for (const m of modules) {
@@ -136,7 +137,7 @@ export function computeRiskReport(
   for (const m of modules) {
     const degree = degreeMap.get(m.id) ?? 0;
     if (degree >= 30) {
-      const notes = humanStore.listNodesByCbmNodeId(project, m.id, 1);
+      const notes = notesMap.get(m.id) ?? [];
       if (notes.length === 0) {
         items.push({
           cbm_node_id: m.id,

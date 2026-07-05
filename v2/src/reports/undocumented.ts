@@ -48,9 +48,10 @@ export function computeUndocumentedReport(
     byLabel[label] = { total: 0, documented: 0, undocumented: 0 };
     const nodes = codeReader.listNodes(project, { label, limit: MAX_NODES_PER_LABEL });
 
-    // Bulk-fetch degrees for all nodes of this label.
+    // Bulk-fetch degrees and notes for all nodes of this label.
     const ids = nodes.map((n) => n.id);
     const degreeMap = codeReader.getBulkNodeDegrees(ids);
+    const notesMap = humanStore.getBulkNotesByCbmNodeIds(project, ids, 1);
 
     for (const node of nodes) {
       byLabel[label].total++;
@@ -58,7 +59,7 @@ export function computeUndocumentedReport(
       const degree = degreeMap.get(node.id) ?? 0;
       const props = safeJsonParse(node.properties_json, {} as Record<string, any>);
       const complexity = props.complexity ?? props.complexity_avg ?? 0;
-      const notes = humanStore.listNodesByCbmNodeId(project, node.id, 1);
+      const notes = notesMap.get(node.id) ?? [];
 
       if (notes.length > 0) {
         byLabel[label].documented++;

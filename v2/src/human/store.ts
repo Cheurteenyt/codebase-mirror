@@ -268,6 +268,44 @@ export class HumanMemoryStore {
     return rows.map(deserializeNode);
   }
 
+
+  /**
+   * Bulk-fetch notes by cbm_node_id for many ids in chunked queries.
+   * Returns Map<cbm_node_id, HumanNode[]> (empty array if no notes).
+   * Eliminates the N+1 pattern where callers call listNodesByCbmNodeId per node.
+   */
+  getBulkNotesByCbmNodeIds(project: string, cbmNodeIds: number[], limit = 1): Map<number, HumanNode[]> {
+    const result = new Map<number, HumanNode[]>();
+    if (cbmNodeIds.length === 0) return result;
+    for (const id of cbmNodeIds) result.set(id, []);
+
+    const CHUNK = 500;
+    for (let i = 0; i < cbmNodeIds.length; i += CHUNK) {
+      const chunk = cbmNodeIds.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        const rows = this.db
+          .prepare(
+            `SELECT n.*, je.value AS cbm_id FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
+             WHERE n.project = ? AND je.value IN (${placeholders})
+             ORDER BY n.updated_at DESC, n.id ASC`
+          )
+          .all(project, ...chunk) as any[];
+        for (const row of rows) {
+          const cbmId = Number(row.cbm_id);
+          if (!result.has(cbmId)) continue;
+          const arr = result.get(cbmId)!;
+          if (arr.length < limit) {
+            arr.push(deserializeNode(row));
+          }
+        }
+      } catch {
+        // ignore — return empty arrays for this chunk
+      }
+    }
+    return result;
+  }
+
   updateNode(id: number, input: UpdateHumanNodeInput): HumanNode | null {
     const existing = this.getNodeById(id);
     if (!existing) return null;

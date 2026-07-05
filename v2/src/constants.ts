@@ -61,7 +61,12 @@ export type CodeNodeLabel = (typeof CODE_NODE_LABELS)[number];
 export function safeJsonParse<T>(s: string | null | undefined, defaultValue: T): T {
   if (!s) return defaultValue;
   try {
-    return JSON.parse(s) as T;
+    const v = JSON.parse(s);
+    // Validate: if defaultValue is an object, reject non-object JSON (null, numbers, booleans, arrays).
+    if (typeof defaultValue === 'object' && defaultValue !== null && !Array.isArray(defaultValue)) {
+      if (v === null || typeof v !== 'object' || Array.isArray(v)) return defaultValue;
+    }
+    return v as T;
   } catch {
     return defaultValue;
   }

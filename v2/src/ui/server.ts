@@ -133,13 +133,14 @@ export class UiServer {
       const degreeMap = this.codeReader.getBulkNodeDegrees(nodeIds);
 
       // Assign simple layout positions (ring layout, will be refined by d3-force in browser)
+      const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, nodeIds, 1);
       const layoutNodes = nodes.map((n, i) => {
         const angle = (i / nodes.length) * Math.PI * 2;
         const radius = 200 + (n.id % 100);
         const degree = degreeMap.get(n.id) ?? 0;
         const props = safeJsonParse(n.properties_json, {} as Record<string, any>);
         const complexity = props.complexity_avg ?? props.complexity ?? 0;
-        const notesCount = this.humanStore.listNodesByCbmNodeId(project, n.id, 200).length;
+        const notesCount = notesByNode.get(n.id)?.length ?? 0;
         const riskScore = computeRiskScore(degree, complexity, notesCount);
 
         return {
@@ -252,15 +253,15 @@ export class UiServer {
         const modules = this.codeReader.listModules(project, MAX_NODES_PER_LABEL);
         const moduleIds = modules.map((m) => m.id);
         const degreeMap = this.codeReader.getBulkNodeDegrees(moduleIds);
-        let notesMap = new Map<number, any[]>();
-        for (const m of modules) {
-          notesMap.set(m.id, this.humanStore.listNodesByCbmNodeId(project, m.id, 1));
-        }
+        const criticalIds = modules.filter(m => (degreeMap.get(m.id) ?? 0) >= 20).map(m => m.id);
+        const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, criticalIds, 1);
         for (const m of modules) {
           if ((degreeMap.get(m.id) ?? 0) >= 20) {
             criticalTotal++;
-            if ((notesMap.get(m.id)?.length ?? 0) > 0) criticalDocumented++;
           }
+        }
+        for (const id of criticalIds) {
+          if ((notesByNode.get(id)?.length ?? 0) > 0) criticalDocumented++;
         }
       }
 
