@@ -47,9 +47,17 @@ interface HubEvent {
  * event type fires multiple times within DEBOUNCE_MS for the same project,
  * only the last one is emitted.
  */
+/** R35: stores the timer AND the event metadata so flush() can preserve data. */
+interface PendingEvent {
+  timer: NodeJS.Timeout;
+  project: string;
+  type: NotificationEvent;
+  data?: Record<string, unknown>;
+}
+
 export class NotifyHub {
   private emitter = new EventEmitter();
-  private debounceTimers = new Map<string, NodeJS.Timeout>();
+  private debounceTimers = new Map<string, PendingEvent>();
   private static readonly DEBOUNCE_MS = 200;
 
   constructor() {
@@ -69,10 +77,19 @@ export class NotifyHub {
     const key = `${project}:${type}`;
     // Clear any pending debounce for this key.
     const existing = this.debounceTimers.get(key);
-    if (existing) clearTimeout(existing);
+    if (existing) clearTimeout(existing.timer);
+
+    // R35: store the event metadata alongside the timer so flush() can
+    // preserve the data payload without parsing the key.
+    const pendingEvent: PendingEvent = {
+      project,
+      type: type as NotificationEvent,
+      data,
+      timer: undefined as any, // will be set below
+    };
 
     // Schedule the emission after DEBOUNCE_MS.
-    const timer = setTimeout(() => {
+    pendingEvent.timer = setTimeout(() => {
       this.debounceTimers.delete(key);
       const event: HubEvent = {
         project,
@@ -83,7 +100,7 @@ export class NotifyHub {
       this.emitter.emit('notification', event);
     }, NotifyHub.DEBOUNCE_MS);
 
-    this.debounceTimers.set(key, timer);
+    this.debounceTimers.set(key, pendingEvent);
   }
 
   /**
@@ -100,17 +117,21 @@ export class NotifyHub {
   /**
    * Flush all pending debounced events immediately. Used on shutdown
    * to ensure no events are lost.
+   *
+   * R35: preserve the original `data` by storing it alongside the timer.
+   * Previously, flush() parsed the key to reconstruct project+type but
+   * lost the data payload. It also used split(':', 2) which would break
+   * if the project name contained a colon (unlikely but fragile).
    */
   flush(): void {
-    for (const [key, timer] of this.debounceTimers) {
-      clearTimeout(timer);
+    for (const [key, entry] of this.debounceTimers) {
+      clearTimeout(entry.timer);
       this.debounceTimers.delete(key);
-      // Emit immediately by parsing the key.
-      const [project, type] = key.split(':', 2) as [string, NotificationEvent];
       const event: HubEvent = {
-        project,
-        type,
+        project: entry.project,
+        type: entry.type,
         timestamp: new Date().toISOString(),
+        data: entry.data,
       };
       this.emitter.emit('notification', event);
     }
