@@ -3,7 +3,7 @@
 // All path-taking functions validate against path traversal.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
-import { join, dirname, relative, extname, resolve, sep } from 'node:path';
+import { join, dirname, basename, relative, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { MAX_VAULT_DEPTH, MAX_BACKUPS_PER_FILE } from '../constants.js';
 
@@ -95,10 +95,14 @@ export function writeNote(
 function pruneBackups(absNotePath: string): void {
   try {
     const dir = dirname(absNotePath);
-    const base = absNotePath;
+    // R23: use basename() instead of split(sep).pop() — split produces an empty
+    // string when the path ends with a separator, which would match ALL .bak.
+    // files in the directory (startsWith('' + '.bak.') matches everything).
+    const baseName = basename(absNotePath);
+    if (!baseName) return; // defensive: shouldn't happen but guards against edge cases
     const entries = readdirSync(dir);
     const backups = entries
-      .filter((e) => e.startsWith(base.split(sep).pop()! + '.bak.'))
+      .filter((e) => e.startsWith(baseName + '.bak.'))
       .map((e) => ({ name: e, path: join(dir, e), ts: parseInt(e.split('.bak.').pop() || '0', 10) || 0 }))
       .sort((a, b) => b.ts - a.ts);
     for (const b of backups.slice(MAX_BACKUPS_PER_FILE)) {

@@ -78,40 +78,57 @@ export class UiServer {
 
   /**
    * Parse a JSON body from an IncomingMessage. Returns null on parse error
-   * or missing body. Caps at 1MB to prevent abuse.
+   * or missing body. Caps at 1MB to prevent abuse. R23: added 30s timeout
+   * to prevent pending-forever on suspended connections.
    */
   private async parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
     return new Promise((resolve) => {
       const chunks: Buffer[] = [];
       let totalSize = 0;
+      let resolved = false;
       const MAX_BODY = 1024 * 1024; // 1MB
+      const TIMEOUT_MS = 30000; // 30 seconds
+
+      const finish = (value: Record<string, unknown> | null) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+
+      // R23: timeout to prevent pending-forever on suspended connections.
+      const timer = setTimeout(() => {
+        req.destroy();
+        finish(null);
+      }, TIMEOUT_MS);
+
       req.on('data', (chunk: Buffer) => {
         totalSize += chunk.length;
         if (totalSize > MAX_BODY) {
           // Too large — destroy the stream and resolve null.
           req.destroy();
-          resolve(null);
+          finish(null);
           return;
         }
         chunks.push(chunk);
       });
       req.on('end', () => {
         if (chunks.length === 0) {
-          resolve(null);
+          finish(null);
           return;
         }
         try {
           const body = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
           if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-            resolve(null);
+            finish(null);
             return;
           }
-          resolve(body as Record<string, unknown>);
+          finish(body as Record<string, unknown>);
         } catch {
-          resolve(null);
+          finish(null);
         }
       });
-      req.on('error', () => resolve(null));
+      req.on('error', () => finish(null));
     });
   }
 
