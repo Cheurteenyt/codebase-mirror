@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.10.0.
+> Updated 2026-07-05 for version 0.10.1.
 
-## Current State (0.10.0)
+## Current State (0.10.1)
 
 ### ✅ Completed
 
@@ -45,14 +45,15 @@
 | Round 34 UI server shutdown fix | 0.9.5 | UI server EADDRINUSE handler now closes DB handles before process.exit (same class as R26 Bug #6) |
 | Round 35 NotifyHub flush + backup version | 0.9.6 | NotifyHub flush() preserves data payload via PendingEvent struct; backup export version updated to 0.9.6 |
 | Round 36 architecture perf | 0.10.0 | TTL cache (30s) for getGraphStatus, batch transaction in importer (10-100x faster), generator-based walkVaultIter for memory efficiency |
+| Round 37 SWR cache | 0.10.1 | Stale-While-Revalidate cache with adaptive TTL, memory-aware eviction, background refresh — replaces TtlCache for getGraphStatus |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
-| Source files (v2) | 37 |
-| Test files | 27 |
-| Tests | 272 (all passing) |
+| Source files (v2) | 38 |
+| Test files | 28 |
+| Tests | 292 (all passing) |
 | Bugs fixed (35 rounds) | 427+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
@@ -74,7 +75,7 @@
 | ✅ Storage optimization (indexes + PRAGMAs) | Done | Medium | Completed in 0.6.3 |
 | ✅ Junction table (complex storage) | Done | High | Completed in 0.7.0 |
 | ✅ WebSocket real-time | Done | High | Completed in 0.8.0 |
-| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.10.0 |
+| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.10.1 |
 | Tests for reports (hotspots, undocumented, risk) | High | Medium | Planned |
 | ESLint + Prettier configuration | Medium | Low | Planned |
 | `noUncheckedIndexedAccess` in tsconfig | Medium | Low | Planned |
@@ -93,7 +94,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.10.0)
+### Phase 3: V1 Complete (0.10.1)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -155,7 +156,8 @@
 | R34 (UI server shutdown) | 0.9.5 | 1 | 1 | 258 |
 | R35 (NotifyHub flush + backup version) | 0.9.6 | 2 | 2 | 258 |
 | R36 (architecture perf) | 0.10.0 | — (perf) | — | 272 |
-| **Total** | | **427+** | **427+** | **272** |
+| R37 (SWR cache) | 0.10.1 | — (perf) | — | 292 |
+| **Total** | | **427+** | **427+** | **292** |
 
 ## Performance Milestones
 
@@ -177,8 +179,10 @@
 | R36 | `getGraphStatus` (repeated calls) | execSync('git log') every call (50-200ms) | TTL cache hit (0ms) | -100% within 30s window |
 | R36 | `importVault` (500 files) | 500+ individual transactions | 1 batch transaction | -90% to -99% WAL overhead |
 | R36 | `walkVault` (1000 files) | Array of 1000 strings in memory | Generator yields one at a time | -90% peak memory |
+| R37 | `getGraphStatus` (stale reads) | 50-200ms blocking on every TTL expiry | 0ms stale return + background refresh | -100% latency on stale reads |
+| R37 | `getGraphStatus` (adaptive TTL) | Fixed 30s TTL for all entries | 30s→120s for frequently accessed | -50% to -75% refresh frequency |
 
-## API Endpoints (0.10.0)
+## API Endpoints (0.10.1)
 
 | Endpoint | Method | Description |
 |---|---|---|

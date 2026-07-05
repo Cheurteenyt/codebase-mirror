@@ -11,15 +11,25 @@ import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { existsSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
-import { TtlCache } from './ttl-cache.js';
+import { SwrCache } from './swr-cache.js';
 
-// R36: global cache for graph status results. Keyed by `${project}:${projectRoot}`.
-// TTL is 30s — balances freshness with performance. The cache is invalidated
-// explicitly when a mutation notification arrives (see invalidateGraphStatusCache).
-const graphStatusCache = new TtlCache<string, GraphStatus>({ ttlMs: 30000, maxEntries: 50 });
+// R37: replaced TtlCache with SwrCache (Stale-While-Revalidate).
+// Fresh TTL: 30s (value is served immediately).
+// Stale window: 30s (stale value served + background refresh triggered).
+// Total cache lifetime: 60s.
+// Adaptive TTL: entries accessed 3+ times get 60s fresh TTL; 10+ times get 120s.
+// Memory budget: 2MB (graph status objects are ~500 bytes each).
+const graphStatusCache = new SwrCache<string, GraphStatus>({
+  ttlMs: 30000,
+  staleMs: 30000,
+  maxTtlMs: 120000,
+  maxBytes: 2_000_000,
+  maxEntries: 50,
+  sizeFn: (v) => JSON.stringify(v).length,
+});
 
 /**
- * R36: Invalidate the cached graph status for a specific project.
+ * R36/R37: Invalidate the cached graph status for a specific project.
  * Call this when the code graph DB is known to have changed (e.g., after
  * a re-index or when a NotifyHub 'graph_reindexed' event arrives).
  */
@@ -28,7 +38,8 @@ export function invalidateGraphStatusCache(project: string): void {
 }
 
 /**
- * R36: Get the cache statistics for diagnostics.
+ * R36/R37: Get the cache statistics for diagnostics.
+ * Now includes SWR-specific stats: freshHits, staleHits, backgroundRefreshes.
  */
 export function getGraphStatusCacheStats() {
   return graphStatusCache.getStats();

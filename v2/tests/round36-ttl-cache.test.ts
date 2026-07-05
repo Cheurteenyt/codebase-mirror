@@ -129,11 +129,17 @@ describe('R36: getGraphStatus cache integration', () => {
     expect(() => invalidateGraphStatusCache('test-project')).not.toThrow();
   });
 
-  it('getGraphStatusCacheStats returns stats object', () => {
+  it('getGraphStatusCacheStats returns stats object with SWR fields', () => {
     const stats = getGraphStatusCacheStats();
     expect(stats).toBeDefined();
-    expect(typeof stats.hits).toBe('number');
+    // R37: SwrCache uses freshHits/staleHits instead of hits.
+    expect(typeof stats.freshHits).toBe('number');
+    expect(typeof stats.staleHits).toBe('number');
     expect(typeof stats.misses).toBe('number');
+    expect(typeof stats.backgroundRefreshes).toBe('number');
     expect(typeof stats.size).toBe('number');
+    expect(typeof stats.bytesUsed).toBe('number');
+    expect(typeof stats.hitRate).toBe('number');
+    expect(typeof stats.staleRate).toBe('number');
   });
 });
