@@ -1,6 +1,6 @@
 # MCP Tools Reference — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.7.0.
+> Updated 2026-07-05 for version 0.8.2.
 
 V2 exposes **7 MCP tools** via JSON-RPC 2.0 over stdio. This document describes each tool's input, output, and usage.
 
@@ -120,6 +120,8 @@ The server implements:
 ### 4. `create_human_note`
 
 **Purpose**: Create an ADR, BugNote, RefactorPlan, etc. + optionally link to code nodes in a single call.
+
+**R26**: Node creation and edge creation are now wrapped in a single `db.transaction()` — either everything commits or nothing does.
 
 **Input**:
 ```json
