@@ -123,12 +123,14 @@ CREATE TABLE IF NOT EXISTS human_nodes (
     UNIQUE(project, slug)
 );
 
-CREATE INDEX IF NOT EXISTS idx_human_nodes_project ON human_nodes(project);
-CREATE INDEX IF NOT EXISTS idx_human_nodes_label ON human_nodes(label);
-CREATE INDEX IF NOT EXISTS idx_human_nodes_status ON human_nodes(status);
+-- R20: composite indexes replace single-column ones for better query plans.
+-- All queries filter by project first, so (project, X) is strictly better than (X).
+CREATE INDEX IF NOT EXISTS idx_human_nodes_project_label ON human_nodes(project, label);
+CREATE INDEX IF NOT EXISTS idx_human_nodes_project_status ON human_nodes(project, status);
 CREATE INDEX IF NOT EXISTS idx_human_nodes_obsidian_path ON human_nodes(obsidian_path);
 CREATE INDEX IF NOT EXISTS idx_human_nodes_updated_at ON human_nodes(updated_at);
-CREATE INDEX IF NOT EXISTS idx_human_nodes_cbm_node_ids ON human_nodes(project, cbm_node_ids);
+-- R20: dropped idx_human_nodes_cbm_node_ids — it indexed a JSON TEXT column
+-- which JSON_EACH cannot use. It wasted space and slowed down writes.
 
 CREATE TABLE IF NOT EXISTS human_edges (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,10 +182,6 @@ CREATE INDEX IF NOT EXISTS idx_human_metrics_doc ON human_metrics(project, docum
 CREATE INDEX IF NOT EXISTS idx_human_metrics_risk ON human_metrics(project, risk_score);
 
 -- sync_state: tracks the last sync hash for each vault file.
--- Currently write-only (populated by markSynced on every export/import).
--- Future: read this table before sync to detect conflicts (when both DB
--- and vault file changed since last sync). The canonical hash is computed
--- from body_markdown + sorted(cbm_node_ids) + sorted(tags).
 CREATE TABLE IF NOT EXISTS sync_state (
     project             TEXT NOT NULL,
     obsidian_path       TEXT NOT NULL,
@@ -200,6 +198,34 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 `;
 
+/**
+ * R20 Migration V2: optimize indexes for storage + query performance.
+ *
+ * Changes:
+ * 1. Drop the useless idx_human_nodes_cbm_node_ids index (indexed a JSON TEXT
+ *    column, unusable by JSON_EACH queries — wasted space + slower writes).
+ * 2. Drop single-column idx_human_nodes_label and idx_human_nodes_status
+ *    (replaced by composite (project, label) and (project, status) in V1 schema
+ *    for new DBs; this migration adds the composites for existing DBs and drops
+ *    the old single-column ones).
+ * 3. Drop the old idx_human_nodes_project (redundant — the composite indexes
+ *    cover project-prefixed queries).
+ *
+ * These changes are safe: no data is lost, only index structures change.
+ * Existing DBs get the same indexes as new DBs after this migration.
+ */
+const SCHEMA_V2 = `
+-- Drop old indexes that are suboptimal or useless.
+DROP INDEX IF EXISTS idx_human_nodes_cbm_node_ids;
+DROP INDEX IF EXISTS idx_human_nodes_label;
+DROP INDEX IF EXISTS idx_human_nodes_status;
+DROP INDEX IF EXISTS idx_human_nodes_project;
+
+-- Add composite indexes (IF NOT EXISTS so new DBs that already have them from V1 are unaffected).
+CREATE INDEX IF NOT EXISTS idx_human_nodes_project_label ON human_nodes(project, label);
+CREATE INDEX IF NOT EXISTS idx_human_nodes_project_status ON human_nodes(project, status);
+`;
+
 interface Migration {
   version: number;
   name: string;
@@ -208,6 +234,7 @@ interface Migration {
 
 const MIGRATIONS: Migration[] = [
   { version: 1, name: 'initial_schema', sql: SCHEMA_V1 },
+  { version: 2, name: 'optimize_indexes', sql: SCHEMA_V2 },
 ];
 
 export function runMigrations(db: Database): void {

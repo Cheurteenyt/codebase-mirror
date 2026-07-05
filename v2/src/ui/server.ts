@@ -196,7 +196,10 @@ export class UiServer {
         this.sendJson(res, 404, { error: 'Code graph not available' });
         return;
       }
-      const maxNodes = parseInt(url.searchParams.get('max_nodes') ?? '2000', 10);
+      // R20: clamp maxNodes to [1, 10000] to prevent DoS via negative limit
+      // (SQLite treats LIMIT -1 as "no limit", which could return millions of rows).
+      const rawMaxNodes = parseInt(url.searchParams.get('max_nodes') ?? '2000', 10);
+      const maxNodes = Math.max(1, Math.min(10000, Number.isFinite(rawMaxNodes) ? rawMaxNodes : 2000));
       const nodes = this.codeReader.listNodes(project, { limit: maxNodes });
       const nodeIds = nodes.map((n) => n.id);
       const degreeMap = this.codeReader.getBulkNodeDegrees(nodeIds);

@@ -88,6 +88,11 @@ export class HumanMemoryStore {
     this.db.pragma('foreign_keys = ON');
     // Set busy_timeout to handle concurrent writes from CLI/MCP/import gracefully.
     this.db.pragma('busy_timeout = 5000');
+    // R20: performance PRAGMAs — temp_store=MEMORY avoids disk I/O for sorting
+    // and grouping; cache_size=-65536 gives 64MB page cache (default 2MB is too
+    // small for bulk operations like getBulkNotesByCbmNodeIds).
+    this.db.pragma('temp_store = MEMORY');
+    this.db.pragma('cache_size = -65536');
     runMigrations(this.db);
   }
 
@@ -97,6 +102,7 @@ export class HumanMemoryStore {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
+    db.pragma('temp_store = MEMORY');
     (store as any).db = db;
     runMigrations(db);
     return store;

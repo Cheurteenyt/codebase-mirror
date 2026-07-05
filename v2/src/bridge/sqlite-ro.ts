@@ -50,6 +50,12 @@ export class CodeGraphReader {
     this.db = new Database(dbPath, { readonly: true, fileMustExist: true });
     // Set busy_timeout to handle concurrent writes from V1 engine gracefully.
     this.db.pragma('busy_timeout = 5000');
+    // R20: performance PRAGMAs for the read-only code graph connection.
+    // temp_store=MEMORY avoids disk I/O for sorting/grouping in bulk queries.
+    // cache_size=-65536 gives 64MB page cache (default 2MB is too small for
+    // getBulkEdges/getBulkNodeDegrees on large graphs).
+    this.db.pragma('temp_store = MEMORY');
+    this.db.pragma('cache_size = -65536');
     // NOTE: do NOT set `journal_mode = WAL` on a readonly connection — it's a no-op or error.
     // V1 sets WAL when it opens the DB for writing; the readonly reader inherits it.
   }
