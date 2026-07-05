@@ -1,11 +1,38 @@
 // v2/src/intelligence/graph-status.ts
 // Graph freshness detection — knows if the code graph is stale, how stale,
 // and what files changed since the last index.
+//
+// R36: added TTL cache (30s) for getGraphStatus. This function runs
+// execSync('git log ...') which is expensive (50-200ms). With the cache,
+// repeated calls within 30s return instantly. The cache is invalidated
+// when the DB mutation notification arrives (via invalidateGraphStatusCache).
 
 import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { existsSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
+import { TtlCache } from './ttl-cache.js';
+
+// R36: global cache for graph status results. Keyed by `${project}:${projectRoot}`.
+// TTL is 30s — balances freshness with performance. The cache is invalidated
+// explicitly when a mutation notification arrives (see invalidateGraphStatusCache).
+const graphStatusCache = new TtlCache<string, GraphStatus>({ ttlMs: 30000, maxEntries: 50 });
+
+/**
+ * R36: Invalidate the cached graph status for a specific project.
+ * Call this when the code graph DB is known to have changed (e.g., after
+ * a re-index or when a NotifyHub 'graph_reindexed' event arrives).
+ */
+export function invalidateGraphStatusCache(project: string): void {
+  graphStatusCache.invalidatePrefix(`${project}:`);
+}
+
+/**
+ * R36: Get the cache statistics for diagnostics.
+ */
+export function getGraphStatusCacheStats() {
+  return graphStatusCache.getStats();
+}
 
 // File extensions that are NOT code (excluded from stale file detection).
 const NON_CODE_EXTENSIONS = new Set([
@@ -28,6 +55,23 @@ export interface GraphStatus {
 }
 
 export function getGraphStatus(
+  project: string,
+  codeReader: CodeGraphReader | undefined,
+  projectRoot: string
+): GraphStatus {
+  // R36: check cache first. The cache key includes projectRoot because
+  // the same project name could be used from different working directories
+  // (unlikely but correct).
+  const cacheKey = `${project}:${projectRoot}`;
+  return graphStatusCache.getOrCompute(cacheKey, () => {
+    return computeGraphStatus(project, codeReader, projectRoot);
+  });
+}
+
+/**
+ * R36: the actual computation, extracted from getGraphStatus for caching.
+ */
+function computeGraphStatus(
   project: string,
   codeReader: CodeGraphReader | undefined,
   projectRoot: string

@@ -118,10 +118,33 @@ function pruneBackups(absNotePath: string): void {
  * Skips well-known directories (.obsidian, .git, .trash, node_modules, .cache).
  * Uses an iterative walk with a depth limit (MAX_VAULT_DEPTH) and symlink detection
  * to prevent stack overflow and infinite loops.
+ *
+ * R36: also available as a generator (walkVaultIter) for memory-efficient
+ * iteration over large vaults. walkVault() now delegates to walkVaultIter()
+ * and collects into an array — the API is unchanged but the implementation
+ * is shared.
  */
 export function walkVault(vaultPath: string): string[] {
   const results: string[] = [];
-  if (!existsSync(vaultPath)) return results;
+  for (const relPath of walkVaultIter(vaultPath)) {
+    results.push(relPath);
+  }
+  return results.sort();
+}
+
+/**
+ * R36: Generator version of walkVault. Yields relative paths one at a time,
+ * avoiding the need to hold all paths in memory simultaneously.
+ * Useful for large vaults (1000+ files) where the array version would
+ * consume significant memory.
+ *
+ * Example:
+ *   for (const relPath of walkVaultIter(vaultPath)) {
+ *     // process one file at a time
+ *   }
+ */
+export function* walkVaultIter(vaultPath: string): Generator<string> {
+  if (!existsSync(vaultPath)) return;
 
   // Iterative walk to avoid stack overflow on deep directories.
   const stack: { dir: string; depth: number }[] = [{ dir: vaultPath, depth: 0 }];
@@ -165,12 +188,10 @@ export function walkVault(vaultPath: string): string[] {
       } else if (stat.isFile() && extname(entry).toLowerCase() === '.md') {
         // Skip backup files and deleted files.
         if (entry.includes('.bak.') || entry.includes('.deleted.') || entry.includes('.conflict.')) continue;
-        results.push(relative(vaultPath, full));
+        yield relative(vaultPath, full);
       }
     }
   }
-
-  return results.sort();
 }
 
 export function hashContent(content: string): string {

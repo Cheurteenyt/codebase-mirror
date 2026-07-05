@@ -35,7 +35,7 @@ export function registerBackupCommand(program: Command): void {
         }
 
         const backup = {
-          version: '0.9.6',
+          version: '0.10.0',
           exported_at: new Date().toISOString(),
           project,
           notes: notes.map((n) => ({

@@ -79,7 +79,7 @@ describe('R23: backup export version', () => {
       path.join(__dirname, '..', 'src', 'cli', 'commands', 'backup.ts'),
       'utf-8'
     );
-    // The version should be 0.9.6 (or higher — update this test when bumping).
-    expect(backupSource).toContain("version: '0.9.6'");
+    // The version should be 0.10.0 (or higher — update this test when bumping).
+    expect(backupSource).toContain("version: '0.10.0'");
   });
 });

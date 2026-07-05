@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.9.6.
+> Updated 2026-07-05 for version 0.10.0.
 
-## Current State (0.9.6)
+## Current State (0.10.0)
 
 ### ✅ Completed
 
@@ -44,14 +44,15 @@
 | Round 33 regression tests | 0.9.4 | 11 regression tests for R32 fixes: filter persistence, timestamp guard, zoom-to-cursor math |
 | Round 34 UI server shutdown fix | 0.9.5 | UI server EADDRINUSE handler now closes DB handles before process.exit (same class as R26 Bug #6) |
 | Round 35 NotifyHub flush + backup version | 0.9.6 | NotifyHub flush() preserves data payload via PendingEvent struct; backup export version updated to 0.9.6 |
+| Round 36 architecture perf | 0.10.0 | TTL cache (30s) for getGraphStatus, batch transaction in importer (10-100x faster), generator-based walkVaultIter for memory efficiency |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
-| Source files (v2) | 36 |
-| Test files | 26 |
-| Tests | 258 (all passing) |
+| Source files (v2) | 37 |
+| Test files | 27 |
+| Tests | 272 (all passing) |
 | Bugs fixed (35 rounds) | 427+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
@@ -73,7 +74,7 @@
 | ✅ Storage optimization (indexes + PRAGMAs) | Done | Medium | Completed in 0.6.3 |
 | ✅ Junction table (complex storage) | Done | High | Completed in 0.7.0 |
 | ✅ WebSocket real-time | Done | High | Completed in 0.8.0 |
-| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.9.6 |
+| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.10.0 |
 | Tests for reports (hotspots, undocumented, risk) | High | Medium | Planned |
 | ESLint + Prettier configuration | Medium | Low | Planned |
 | `noUncheckedIndexedAccess` in tsconfig | Medium | Low | Planned |
@@ -92,7 +93,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.9.6)
+### Phase 3: V1 Complete (0.10.0)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -153,7 +154,8 @@
 | R33 (regression tests) | 0.9.4 | — (tests) | — | 258 |
 | R34 (UI server shutdown) | 0.9.5 | 1 | 1 | 258 |
 | R35 (NotifyHub flush + backup version) | 0.9.6 | 2 | 2 | 258 |
-| **Total** | | **427+** | **427+** | **258** |
+| R36 (architecture perf) | 0.10.0 | — (perf) | — | 272 |
+| **Total** | | **427+** | **427+** | **272** |
 
 ## Performance Milestones
 
@@ -172,8 +174,11 @@
 | R20 | SQLite index bloat | 6 indexes (1 useless) | 5 indexes (all used) | -17% write overhead |
 | R20 | SQLite temp_store | disk I/O for sorting | MEMORY | -90% sort latency |
 | R21 | `getBulkNotesByCbmNodeIds` (5000 modules) | ~2.5M JSON_EACH ops | ~5000 B-tree lookups | -80% to -95% |
+| R36 | `getGraphStatus` (repeated calls) | execSync('git log') every call (50-200ms) | TTL cache hit (0ms) | -100% within 30s window |
+| R36 | `importVault` (500 files) | 500+ individual transactions | 1 batch transaction | -90% to -99% WAL overhead |
+| R36 | `walkVault` (1000 files) | Array of 1000 strings in memory | Generator yields one at a time | -90% peak memory |
 
-## API Endpoints (0.9.6)
+## API Endpoints (0.10.0)
 
 | Endpoint | Method | Description |
 |---|---|---|

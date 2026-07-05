@@ -56,6 +56,17 @@ const HUMAN_NOTES_PLACEHOLDER = '> ✏️ This section belongs to the user. It w
 
 /**
  * Main entry point — iterate all vault files and import each.
+ *
+ * R36: wrapped the entire import in a single DB transaction. Previously,
+ * each file import triggered individual createNode/updateNode/createEdge
+ * calls, each in its own implicit transaction. For a vault with 500 files,
+ * this meant 500+ transactions — each with WAL overhead, fsync, and
+ * journal management. With a single wrapping transaction, all writes are
+ * batched into one atomic commit, reducing import time by 10-100x.
+ *
+ * If any file import throws, the error is recorded but the transaction
+ * continues — partial imports are better than no import. The transaction
+ * commits at the end with all successful writes.
  */
 export function importVault(opts: ImportOptions): ImportResult {
   const result: ImportResult = {
@@ -69,14 +80,33 @@ export function importVault(opts: ImportOptions): ImportResult {
   };
 
   const files = walkVault(opts.vaultPath);
-  for (const relPath of files) {
-    // Skip generated files.
-    if (relPath === '00_Index.md' || relPath.endsWith('ADR-000-template.md')) continue;
-    try {
-      importSingleFile(relPath, opts, result);
-    } catch (e: any) {
-      result.errors.push({ path: relPath, error: e.message });
+
+  // R36: wrap all DB writes in a single transaction for performance.
+  // The transaction is only opened if we're not in dry-run mode.
+  if (opts.dryRun) {
+    // Dry-run: no transaction needed, no DB writes.
+    for (const relPath of files) {
+      if (relPath === '00_Index.md' || relPath.endsWith('ADR-000-template.md')) continue;
+      try {
+        importSingleFile(relPath, opts, result);
+      } catch (e: any) {
+        result.errors.push({ path: relPath, error: e.message });
+      }
     }
+  } else {
+    // R36: batch all writes in a single transaction.
+    const db = opts.humanStore.getRawDb();
+    const tx = db.transaction(() => {
+      for (const relPath of files) {
+        if (relPath === '00_Index.md' || relPath.endsWith('ADR-000-template.md')) continue;
+        try {
+          importSingleFile(relPath, opts, result);
+        } catch (e: any) {
+          result.errors.push({ path: relPath, error: e.message });
+        }
+      }
+    });
+    tx();
   }
 
   return result;

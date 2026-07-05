@@ -1,6 +1,6 @@
 # MCP Tools Reference — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.9.6.
+> Updated 2026-07-05 for version 0.10.0.
 
 V2 exposes **7 MCP tools** via JSON-RPC 2.0 over stdio. This document describes each tool's input, output, and usage.
 
