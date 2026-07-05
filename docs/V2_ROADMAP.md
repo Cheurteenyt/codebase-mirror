@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.9.3.
+> Updated 2026-07-05 for version 0.9.4.
 
-## Current State (0.9.3)
+## Current State (0.9.4)
 
 ### ✅ Completed
 
@@ -37,16 +37,20 @@
 | Round 26 Claude Sonnet 5 report | 0.8.1 | 6 bugs: CRITICAL frontmatter revert (import before export), HIGH create_human_note atomicity, HIGH no-op frontmatter, MEDIUM Vite WS proxy, LOW vaultHash vestigial, LOW MCP shutdown DB close |
 | Round 27 Bug #8 rename | 0.8.1 | Stale edges on rename: resolveExistingNode match by slug even if obsidian_path exists (checks old file deleted), no-op check compares obsidian_path, processWikilinks cleans old source_file |
 | Round 28 docs sync | 0.8.2 | 6 docs updated, audit of 5 potential bugs (none required fixes) |
-| Round 29 watch daemon | 0.9.3 | `cbm-v2 watch` daemon with fs.watch recursive, debounce 500ms, NotifyHub integration, incremental import+export |
+| Round 29 watch daemon | 0.9.0 | `cbm-v2 watch` daemon with fs.watch recursive, debounce 500ms, NotifyHub integration, incremental import+export |
+| Round 30 watch hardening | 0.9.1 | Watch daemon try/catch error handling, dead code removal, French to English in docs |
+| Round 31 Claude Sonnet 5 R2 | 0.9.2 | 8 fixes: B1 double-export guard, B2 rename, B3 auto-generate flags, C1 HiDPI DPR, C2 stale filter, D1 v2/README tool count, D2 version, D3 bug count |
+| Round 32 Claude Sonnet 5 R3 | 0.9.3 | 5 fixes: C-new-1 CRITICAL guard timing (timestamp), B-new-1 zoom HiDPI, B-new-2 filter reset, D-new-1 version, D-new-2 bug count |
+| Round 33 regression tests | 0.9.4 | 11 regression tests for R32 fixes: filter persistence, timestamp guard, zoom-to-cursor math |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
 | Source files (v2) | 36 |
-| Test files | 25 |
-| Tests | 247 (all passing) |
-| Bugs fixed (29 rounds) | 419+ |
+| Test files | 26 |
+| Tests | 258 (all passing) |
+| Bugs fixed (33 rounds) | 424+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -67,7 +71,7 @@
 | ✅ Storage optimization (indexes + PRAGMAs) | Done | Medium | Completed in 0.6.3 |
 | ✅ Junction table (complex storage) | Done | High | Completed in 0.7.0 |
 | ✅ WebSocket real-time | Done | High | Completed in 0.8.0 |
-| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.9.3 |
+| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.9.4 |
 | Tests for reports (hotspots, undocumented, risk) | High | Medium | Planned |
 | ESLint + Prettier configuration | Medium | Low | Planned |
 | `noUncheckedIndexedAccess` in tsconfig | Medium | Low | Planned |
@@ -86,7 +90,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.9.3)
+### Phase 3: V1 Complete (0.9.4)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -140,8 +144,12 @@
 | R26 (Claude Sonnet 5 report) | 0.8.1 | 6 | 6 | 239 |
 | R27 (Bug #8 rename) | 0.8.1 | 1 | 1 | 241 |
 | R28 (docs sync) | 0.8.2 | — (docs) | — | 241 |
-| R29 (watch daemon) | 0.9.3 | — (feature) | — | 247 |
-| **Total** | | **419+** | **419+** | **247** |
+| R29 (watch daemon) | 0.9.0 | — (feature) | — | 247 |
+| R30 (watch hardening) | 0.9.1 | 0 (cleanup) | 0 | 247 |
+| R31 (Claude Sonnet 5 R2) | 0.9.2 | 5 | 5 | 247 |
+| R32 (Claude Sonnet 5 R3) | 0.9.3 | 5 | 5 | 247 |
+| R33 (regression tests) | 0.9.4 | — (tests) | — | 258 |
+| **Total** | | **424+** | **424+** | **258** |
 
 ## Performance Milestones
 
@@ -161,7 +169,7 @@
 | R20 | SQLite temp_store | disk I/O for sorting | MEMORY | -90% sort latency |
 | R21 | `getBulkNotesByCbmNodeIds` (5000 modules) | ~2.5M JSON_EACH ops | ~5000 B-tree lookups | -80% to -95% |
 
-## API Endpoints (0.9.3)
+## API Endpoints (0.9.4)
 
 | Endpoint | Method | Description |
 |---|---|---|
