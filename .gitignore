@@ -4,6 +4,12 @@ node_modules/
 # Build artifacts
 dist/
 *.tsbuildinfo
+# TypeScript-compiled .js files in graph-ui/src (source is .tsx/.ts; Vite handles bundling)
+graph-ui/src/**/*.js
+graph-ui/src/**/*.js.map
+
+# Lockfiles (we use npm install, not npm ci, to avoid platform-specific lockfiles)
+package-lock.json
 
 # Test artifacts
 coverage/

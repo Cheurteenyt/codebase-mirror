@@ -170,6 +170,13 @@ export function mergeSections(
 
 /**
  * Standard frontmatter fields for a human node.
+ *
+ * NOTE: `last_generated` is intentionally omitted from the frontmatter. Previously,
+ * it was set to `node.updated_at.split('T')[0]`, which changed whenever updateNode
+ * bumped updated_at — even for no-op updates. This caused the exporter's diff check
+ * to detect a "change" and re-write the file on every sync, leading to backup
+ * accumulation and sync churn. The `updated_at` field in the DB is the source of
+ * truth for "last modified"; the vault file doesn't need a redundant date.
  */
 export function buildFrontmatter(node: {
   label: string;
@@ -193,8 +200,9 @@ export function buildFrontmatter(node: {
     type: mapLabelToType(node.label),
     source: node.source,
     status: node.status,
-    last_generated: node.updated_at.split('T')[0],
   };
+  // last_synced is stripped by the exporter's normalizeForDiff before comparison,
+  // so it's safe to include. It helps humans see when the file was last synced.
   if (node.last_synced_at) {
     fm.last_synced = node.last_synced_at;
   }

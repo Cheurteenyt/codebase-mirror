@@ -98,16 +98,28 @@ export function importVault(opts: ImportOptions): ImportResult {
 
       // Extract HUMAN NOTES section content.
       const sections = splitSections(parsed.body);
-      // Strip the known placeholder text — it's not real human content.
+      // Strip ALL occurrences of the placeholder text — it's not real human content.
+      // The placeholder may appear at the start (default export), or mixed in with
+      // user content if the user pasted it. Remove every instance to keep the DB clean.
       const PLACEHOLDER = '> ✏️ This section belongs to the user. It will **never** be overwritten by Codebase Memory V2.';
-      // Strip placeholder from the START of humanNotes (user may have added content after it).
-        const humanBody = sections.humanNotes.startsWith(PLACEHOLDER)
-          ? sections.humanNotes.substring(PLACEHOLDER.length).trim()
-          : sections.humanNotes;
+      const humanBody = sections.humanNotes.split(PLACEHOLDER).join('').trim();
 
-      // Check if human_node already exists (by obsidian_path or slug).
+      // Check if human_node already exists. Match by obsidian_path FIRST (authoritative).
+      // Slug-only matching is dangerous: two files with titles that slugify to the same
+      // string (e.g. "Hello!" and "Hello?") would collide, and the importer would "move"
+      // the first file's content to the second file's path. We only fall back to slug
+      // matching if the slug uniquely identifies a node that has NO obsidian_path (i.e.,
+      // a node created programmatically without a vault file).
       const existingByPath = opts.humanStore.getNodeByObsidianPath(opts.project, relPath);
-      const existingBySlug = slug ? opts.humanStore.getNodeBySlug(opts.project, slug) : null;
+      let existingBySlug = null;
+      if (!existingByPath && slug) {
+        const slugMatch = opts.humanStore.getNodeBySlug(opts.project, slug);
+        // Only use slug match if the matched node has no obsidian_path (orphan node).
+        // This prevents hijacking a node that belongs to a different vault file.
+        if (slugMatch && !slugMatch.obsidian_path) {
+          existingBySlug = slugMatch;
+        }
+      }
 
       // Detect slug-collision conflict: both exist but differ.
       if (existingByPath && existingBySlug && existingByPath.id !== existingBySlug.id) {

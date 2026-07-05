@@ -223,6 +223,41 @@ export class CodeGraphReader {
   }
 
   /**
+   * Bulk-fetch in-degree and out-degree SEPARATELY for many node IDs.
+   * Returns Map<nodeId, {in: number, out: number}>. Used by prepare_edit_context
+   * to report accurate callers_count and callees_count without the per-direction
+   * cap imposed by getNeighbors (which limits results to 50 per direction).
+   */
+  getBulkNodeDegreesSplit(nodeIds: number[]): Map<number, { in: number; out: number }> {
+    const result = new Map<number, { in: number; out: number }>();
+    if (nodeIds.length === 0) return result;
+    for (const id of nodeIds) result.set(id, { in: 0, out: 0 });
+    for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
+      const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        const outRows = this.db
+          .prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${placeholders}) GROUP BY source_id`)
+          .all(...chunk) as any[];
+        for (const r of outRows) {
+          const entry = result.get(r.id);
+          if (entry) entry.out = r.c;
+        }
+        const inRows = this.db
+          .prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${placeholders}) GROUP BY target_id`)
+          .all(...chunk) as any[];
+        for (const r of inRows) {
+          const entry = result.get(r.id);
+          if (entry) entry.in = r.c;
+        }
+      } catch {
+        // ignore — return zeros for this chunk
+      }
+    }
+    return result;
+  }
+
+  /**
    * Fetch many nodes by ID in one query. Returns Map<id, CodeNode>.
    */
   getNodesByIds(ids: number[]): Map<number, CodeNode> {
@@ -247,6 +282,71 @@ export class CodeGraphReader {
     return result;
   }
 
+  /**
+   * Bulk-fetch ALL edges for a set of node IDs (both directions) in at most
+   * 2 chunked queries. Returns deduplicated edges with source/target IDs.
+   * Used by /api/layout to eliminate the N+1 pattern of calling getNeighbors
+   * per node (2000 nodes × 1 query = 2000 queries → 2 queries).
+   *
+   * @param nodeIds  the visible node set (edges to nodes outside this set are filtered)
+   * @param limitPerNode  cap on edges per node per direction (0 = unlimited)
+   */
+  getBulkEdges(
+    nodeIds: number[],
+    limitPerNode = 0,
+  ): Array<{ source: number; target: number; type: string }> {
+    if (nodeIds.length === 0) return [];
+    const nodeIdSet = new Set(nodeIds);
+    const seenEdgeKeys = new Set<string>();
+    const result: Array<{ source: number; target: number; type: string }> = [];
+
+    for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
+      const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        // Out-edges: chunk nodes are sources.
+        const outRows = this.db
+          .prepare(
+            `SELECT source_id, target_id, type FROM edges WHERE source_id IN (${placeholders}) ORDER BY id ASC`,
+          )
+          .all(...chunk) as any[];
+        // In-edges: chunk nodes are targets.
+        const inRows = this.db
+          .prepare(
+            `SELECT source_id, target_id, type FROM edges WHERE target_id IN (${placeholders}) ORDER BY id ASC`,
+          )
+          .all(...chunk) as any[];
+
+        // Merge and dedup. If limitPerNode > 0, cap per (node, direction).
+        const perNodeOutCount = new Map<number, number>();
+        const perNodeInCount = new Map<number, number>();
+
+        const tryPush = (row: any, nodeSide: 'source' | 'target') => {
+          const s = row.source_id;
+          const t = row.target_id;
+          // Only keep edges where BOTH endpoints are in the visible set.
+          if (!nodeIdSet.has(s) || !nodeIdSet.has(t)) return;
+          const key = `${s}-${t}-${row.type}`;
+          if (seenEdgeKeys.has(key)) return;
+          if (limitPerNode > 0) {
+            const cap = nodeSide === 'source' ? perNodeOutCount : perNodeInCount;
+            const node = nodeSide === 'source' ? s : t;
+            const cur = cap.get(node) ?? 0;
+            if (cur >= limitPerNode) return;
+            cap.set(node, cur + 1);
+          }
+          seenEdgeKeys.add(key);
+          result.push({ source: s, target: t, type: row.type });
+        };
+
+        for (const row of outRows) tryPush(row, 'source');
+        for (const row of inRows) tryPush(row, 'target');
+      } catch {
+        // ignore — return partial results for this chunk
+      }
+    }
+    return result;
+  }
 
   /**
    * Find nodes by file path substring (used by prepare_edit_context).

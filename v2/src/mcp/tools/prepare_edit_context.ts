@@ -89,9 +89,9 @@ export class PrepareEditContextTool extends BaseTool {
       const allRefactors: any[] = [];
       const allConventions: any[] = [];
 
-      // Bulk-fetch degrees and notes for all matching nodes (eliminates N+1).
+      // Bulk-fetch degrees (split in/out) and notes for all matching nodes (eliminates N+1).
       const nodeIds = matchingNodes.slice(0, 20).map(n => n.id);
-      const degreeMap = codeReader.getBulkNodeDegrees(nodeIds);
+      const degreeSplitMap = codeReader.getBulkNodeDegreesSplit(nodeIds);
       const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, nodeIds);
 
       for (const node of matchingNodes.slice(0, 20)) {
@@ -99,8 +99,12 @@ export class PrepareEditContextTool extends BaseTool {
         const outNeighbors = neighbors.filter((n) => n.edge.source_id === node.id);
         const inNeighbors = neighbors.filter((n) => n.edge.target_id === node.id);
 
-        // Use uncapped getNodeDegree for accurate risk score and blast radius.
-        const actualDegree = degreeMap.get(node.id) ?? 0;
+        // Use split degrees for ACCURATE callers/callees counts (uncapped, unlike
+        // the 50-cap from getNeighbors). actualDegree = in + out for risk scoring.
+        const splitDegree = degreeSplitMap.get(node.id) ?? { in: 0, out: 0 };
+        const actualDegree = splitDegree.in + splitDegree.out;
+        const actualCallersCount = splitDegree.in;
+        const actualCalleesCount = splitDegree.out;
 
         // Blast radius: collect unique node IDs that depend on this node (in-edges).
         inNeighbors.forEach((n) => allBlastRadiusNodes.add(n.node.id));
@@ -117,10 +121,12 @@ export class PrepareEditContextTool extends BaseTool {
         for (const r of refactors) { if (!seenRefactorIds.has(r.id)) { seenRefactorIds.add(r.id); allRefactors.push(r); } }
         for (const c of conventions) { if (!seenConventionIds.has(c.id)) { seenConventionIds.add(c.id); allConventions.push(c); } }
 
-        // Risk score — use uncapped degree for accuracy.
+        // Risk score — use uncapped degree for accuracy. Use bugs+refactors count
+        // (not total notes) since conventions and ADRs don't increase edit risk.
+        const riskRelevantNotesCount = bugs.length + refactors.length;
         const props = safeJsonParse(node.properties_json, {} as Record<string, any>);
         const complexity = props.complexity_avg ?? props.complexity ?? 0;
-        const riskScore = computeRiskScore(actualDegree, complexity, humanNotes.length);
+        const riskScore = computeRiskScore(actualDegree, complexity, riskRelevantNotesCount);
         if (riskScore > maxRiskScore) {
           maxRiskScore = riskScore;
           highestRiskNode = node;
@@ -147,8 +153,9 @@ export class PrepareEditContextTool extends BaseTool {
               source: `${n.node.label}:${n.node.name}`,
               source_id: n.node.id,
             })),
-            callers_count: inNeighbors.length,
-            callees_count: outNeighbors.length,
+            // ACCURATE counts from bulk degree query (not capped at 50).
+            callers_count: actualCallersCount,
+            callees_count: actualCalleesCount,
             actual_degree: actualDegree,
           },
           human_notes: {
@@ -169,12 +176,24 @@ export class PrepareEditContextTool extends BaseTool {
       }
 
       // Step 3: Build blast radius summary from actual dependent nodes.
+      // Fetch all blast-radius nodes in ONE bulk query, then count by label.
+      // (Previously called getNodesByIds 3 times — once per label — which was wasteful.)
+      const blastRadiusNodes = allBlastRadiusNodes.size > 0
+        ? codeReader.getNodesByIds([...allBlastRadiusNodes])
+        : new Map();
+      let affectedModules = 0;
+      let affectedRoutes = 0;
+      let affectedFunctions = 0;
+      for (const node of blastRadiusNodes.values()) {
+        if (node.label === 'Module') affectedModules++;
+        else if (node.label === 'Route') affectedRoutes++;
+        else if (node.label === 'Function') affectedFunctions++;
+      }
       const blastRadius = {
         total_dependent_nodes: allBlastRadiusNodes.size,
-        // Count by label from the actual blast-radius nodes, not from matchingNodes.
-        affected_modules: this.countBlastRadiusByLabel(allBlastRadiusNodes, 'Module', codeReader),
-        affected_routes: this.countBlastRadiusByLabel(allBlastRadiusNodes, 'Route', codeReader),
-        affected_functions: this.countBlastRadiusByLabel(allBlastRadiusNodes, 'Function', codeReader),
+        affected_modules: affectedModules,
+        affected_routes: affectedRoutes,
+        affected_functions: affectedFunctions,
       };
 
       // Step 4: Build recommendation.
@@ -256,19 +275,5 @@ export class PrepareEditContextTool extends BaseTool {
     } catch {
       return { score: 0, label: 'UNKNOWN', status: { available: false } };
     }
-  }
-
-  /**
-   * Count blast-radius nodes by label. Fetches node info for the given IDs
-   * and counts how many have the specified label.
-   */
-  private countBlastRadiusByLabel(nodeIds: Set<number>, label: string, codeReader: CodeGraphReader): number {
-    if (nodeIds.size === 0) return 0;
-    const nodesMap = codeReader.getNodesByIds([...nodeIds]);
-    let count = 0;
-    for (const node of nodesMap.values()) {
-      if (node.label === label) count++;
-    }
-    return count;
   }
 }

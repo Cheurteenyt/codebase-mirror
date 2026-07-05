@@ -6,7 +6,6 @@ import { useEffect, useState } from "react";
 import { useDashboard } from "../hooks/useDashboard";
 import { colorForFreshness, colorForLabel } from "../lib/colors";
 import { formatNumber, formatAge } from "../lib/utils";
-import type { DashboardData } from "../lib/types";
 
 interface DashboardTabProps {
   project: string;

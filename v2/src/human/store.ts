@@ -373,6 +373,13 @@ export class HumanMemoryStore {
       params.push(input.confidence);
     }
 
+    // If no fields were provided, return the existing node WITHOUT bumping updated_at.
+    // Bumping updated_at on a no-op would trigger unnecessary sync re-exports and
+    // mislead callers into thinking the node was modified.
+    if (sets.length === 0) {
+      return existing;
+    }
+
     sets.push('updated_at = ?');
     params.push(new Date().toISOString());
     params.push(id);
@@ -392,20 +399,45 @@ export class HumanMemoryStore {
     return result.changes > 0;
   }
 
-  markSynced(id: number, direction: 'export' | 'import' | 'both', vaultContentHash?: string): void {
+  markSynced(id: number, direction: 'export' | 'import' | 'both', _vaultContentHash?: string): void {
     const now = new Date().toISOString();
-    this.db
-      .prepare('UPDATE human_nodes SET last_synced_at = ? WHERE id = ?')
-      .run(now, id);
-
-    // Always record sync_state (both for export and import) so conflict detection works.
-    // For export: hash the DB body_markdown + frontmatter_json (the source of truth).
-    // For import: hash the vault file content (passed in by the caller).
     const node = this.getNodeById(id);
-    if (node && node.obsidian_path) {
-      const hash = vaultContentHash ?? createHash('sha256')
-        .update(node.body_markdown + '\n---\n' + node.frontmatter_json + '\n---\n' + [...node.cbm_node_ids].sort((a,b)=>a-b).join(',') + '\n---\n' + [...node.tags].sort().join(','))
+    if (!node) return;
+
+    // Wrap both writes in a transaction so last_synced_at and sync_state stay
+    // consistent even if the process crashes between them.
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare('UPDATE human_nodes SET last_synced_at = ? WHERE id = ?')
+        .run(now, id);
+
+      if (!node.obsidian_path) return;
+
+      // CRITICAL: the hash must be computed from the SAME representation for both
+      // export and import directions. Otherwise the importer's hash never matches
+      // the exporter's hash, and conflict detection is permanently broken.
+      //
+      // We always hash the DB representation (body + frontmatter + cbm_ids + tags).
+      // When the caller passes a vaultContentHash (import path), we IGNORE it for
+      // storage purposes — it was computed from the vault FILE, which is a different
+      // representation. The vaultContentHash parameter is kept for API compatibility
+      // but no longer affects the stored hash.
+      //
+      // This ensures: after export, sync_state.hash = H(DB). After import (which
+      // updates the DB to match the file), sync_state.hash = H(DB) = H(file content
+      // as represented in DB). The next export detects "DB changed" iff the DB
+      // representation changed, and the next import detects "file changed" via
+      // field-by-field comparison (not via hash).
+      const hash = createHash('sha256')
+        .update(node.body_markdown)
+        .update('\x00')
+        .update(node.frontmatter_json)
+        .update('\x00')
+        .update([...node.cbm_node_ids].sort((a, b) => a - b).join(','))
+        .update('\x00')
+        .update([...node.tags].sort().join(','))
         .digest('hex');
+
       this.db
         .prepare(
           `INSERT INTO sync_state (project, obsidian_path, last_synced_hash, last_synced_at, last_direction)
@@ -416,7 +448,8 @@ export class HumanMemoryStore {
              last_direction = excluded.last_direction`
         )
         .run(node.project, node.obsidian_path, hash, now, direction);
-    }
+    });
+    tx();
   }
 
   // ── Human edges CRUD ──────────────────────────────────────────────

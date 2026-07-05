@@ -34,13 +34,15 @@ export interface RiskReport {
  * Formula:
  *   degreeScore = min(degree / 100, 1.0)         // high coupling → high risk
  *   complexityScore = min(complexity / 20, 1.0)  // high complexity → high risk
- *   documentationPenalty = notesCount > 0 ? 0 : 0.2  // undocumented → +0.2
+ *   documentationPenalty = (degree > 0 AND notesCount == 0) ? 0.2 : 0
+ *     // undocumented AND actually used → +0.2. Dead code (degree=0) is NOT penalized
+ *     // for missing docs — documentation is irrelevant if nothing calls it.
  *   riskScore = min(degreeScore * 0.5 + complexityScore * 0.3 + documentationPenalty, 1.0)
  */
 export function computeRiskScore(degree: number, complexity: number, notesCount: number): number {
   const degreeScore = Math.min(degree / 100, 1.0);
   const complexityScore = Math.min(complexity / 20, 1.0);
-  const documentationPenalty = notesCount > 0 ? 0 : 0.2;
+  const documentationPenalty = degree > 0 && notesCount === 0 ? 0.2 : 0;
   return Math.min(degreeScore * 0.5 + complexityScore * 0.3 + documentationPenalty, 1.0);
 }
 

@@ -88,6 +88,11 @@ export function getGraphStatus(
           const lastDot = f.lastIndexOf('.');
           if (lastDot === -1 || lastDot === 0) return false; // no extension or dotfile
           const ext = f.substring(lastDot + 1).toLowerCase();
+          // CRITICAL: also skip .d.ts files (TypeScript declaration files).
+          // The simple last-extension check would see "ts" and treat them as code,
+          // but .d.ts files are generated/declaration files that don't affect the
+          // code graph's structural accuracy.
+          if (ext === 'ts' && f.endsWith('.d.ts')) return false;
           return !NON_CODE_EXTENSIONS.has(ext);
         });
         status.stale_files_count = codeFiles.length;

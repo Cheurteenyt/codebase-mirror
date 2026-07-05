@@ -1,4 +1,4 @@
-# graph-ui/tsconfig.json
+// graph-ui/tsconfig.json
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -15,11 +15,12 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./@/*"]
+      "@/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*", "@/**/*"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
