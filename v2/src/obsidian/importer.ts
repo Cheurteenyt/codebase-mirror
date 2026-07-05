@@ -2,6 +2,14 @@
 // Import Obsidian vault notes → human memory DB.
 // Handles: new notes, updates (with no-op detection), wikilink → edges,
 // stale edge cleanup, status/source validation, path-target wikilinks.
+//
+// R18 refactor: importVault was a 200-line monolith. Split into focused
+// sub-functions:
+//   - parseVaultFile (parse + validate frontmatter, extract fields)
+//   - resolveExistingNode (find existing node by path or slug)
+//   - upsertNode (create or update, with no-op detection)
+//   - processWikilinks (parse + create edges + cleanup stale)
+//   - inferLabelFromFrontmatter / extractTitle (helpers)
 
 import { HumanMemoryStore } from '../human/store.js';
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
@@ -11,6 +19,7 @@ import {
   classifyWikilinkTarget,
   parseCodeNodeId,
   inferEdgeTypeFromContext,
+  Wikilink,
 } from './wikilinks.js';
 import { walkVault, readNote, hashContent } from './vault.js';
 import {
@@ -41,6 +50,12 @@ export interface ImportResult {
   errors: { path: string; error: string }[];
 }
 
+/** Placeholder text stripped from HUMAN NOTES before storing in DB. */
+const HUMAN_NOTES_PLACEHOLDER = '> ✏️ This section belongs to the user. It will **never** be overwritten by Codebase Memory V2.';
+
+/**
+ * Main entry point — iterate all vault files and import each.
+ */
 export function importVault(opts: ImportOptions): ImportResult {
   const result: ImportResult = {
     created: [],
@@ -57,191 +72,7 @@ export function importVault(opts: ImportOptions): ImportResult {
     // Skip generated files.
     if (relPath === '00_Index.md' || relPath.endsWith('ADR-000-template.md')) continue;
     try {
-      const content = readNote(opts.vaultPath, relPath);
-      if (!content) continue;
-
-      const parsed = parseNote(content);
-      const fm = parsed.frontmatter;
-
-      // Determine label from frontmatter 'type' or path.
-      const label = inferLabelFromFrontmatter(fm, relPath);
-      if (!label) {
-        result.errors.push({ path: relPath, error: 'cannot infer label (set frontmatter `type` or move to a known dir)' });
-        continue;
-      }
-
-      const title = extractTitle(parsed.body, relPath) ?? relPath.replace(/\.md$/i, "");
-      const slug = slugify(title);
-      const cbmNodeIds = parseCbmNodeIds(fm);
-      const tags = parseTags(fm);
-
-      // Validate status and source against enums.
-      const rawStatus = (fm.status as string) ?? 'active';
-      if (!(HUMAN_NODE_STATUSES as readonly string[]).includes(rawStatus)) {
-        result.errors.push({
-          path: relPath,
-          error: `invalid status "${rawStatus}". Valid: ${HUMAN_NODE_STATUSES.join(', ')}`,
-        });
-        continue;
-      }
-      const status = rawStatus as HumanNodeStatus;
-
-      const rawSource = (fm.source as string) ?? 'human';
-      if (!(HUMAN_NODE_SOURCES as readonly string[]).includes(rawSource)) {
-        result.errors.push({
-          path: relPath,
-          error: `invalid source "${rawSource}". Valid: ${HUMAN_NODE_SOURCES.join(', ')}`,
-        });
-        continue;
-      }
-      const source = rawSource as HumanNodeSource;
-
-      // Extract HUMAN NOTES section content.
-      const sections = splitSections(parsed.body);
-      // Strip ALL occurrences of the placeholder text — it's not real human content.
-      // The placeholder may appear at the start (default export), or mixed in with
-      // user content if the user pasted it. Remove every instance to keep the DB clean.
-      const PLACEHOLDER = '> ✏️ This section belongs to the user. It will **never** be overwritten by Codebase Memory V2.';
-      const humanBody = sections.humanNotes.split(PLACEHOLDER).join('').trim();
-
-      // Check if human_node already exists. Match by obsidian_path FIRST (authoritative).
-      // Slug-only matching is dangerous: two files with titles that slugify to the same
-      // string (e.g. "Hello!" and "Hello?") would collide, and the importer would "move"
-      // the first file's content to the second file's path. We only fall back to slug
-      // matching if the slug uniquely identifies a node that has NO obsidian_path (i.e.,
-      // a node created programmatically without a vault file).
-      const existingByPath = opts.humanStore.getNodeByObsidianPath(opts.project, relPath);
-      let existingBySlug = null;
-      if (!existingByPath && slug) {
-        const slugMatch = opts.humanStore.getNodeBySlug(opts.project, slug);
-        // Only use slug match if the matched node has no obsidian_path (orphan node).
-        // This prevents hijacking a node that belongs to a different vault file.
-        if (slugMatch && !slugMatch.obsidian_path) {
-          existingBySlug = slugMatch;
-        }
-      }
-
-      // Detect slug-collision conflict: both exist but differ.
-      if (existingByPath && existingBySlug && existingByPath.id !== existingBySlug.id) {
-        result.errors.push({
-          path: relPath,
-          error: `slug collision: path-match node id=${existingByPath.id} and slug-match node id=${existingBySlug.id} are different. Skipping — resolve manually.`,
-        });
-        continue;
-      }
-
-      const existing = existingByPath ?? existingBySlug;
-      const vaultHash = hashContent(content);
-
-      if (existing) {
-        // No-op detection: compare key fields.
-        const sameContent = existing.body_markdown === humanBody;
-        const sameTitle = existing.title === title;
-        const sameCbmIds = JSON.stringify(existing.cbm_node_ids.slice().sort()) === JSON.stringify(cbmNodeIds.slice().sort());
-        const sameTags = JSON.stringify(existing.tags.slice().sort()) === JSON.stringify(tags.slice().sort());
-        const sameStatus = existing.status === status;
-        if (sameContent && sameTitle && sameCbmIds && sameTags && sameStatus) {
-          result.unchanged.push(relPath);
-          // Still process wikilinks for edges.
-        } else {
-          if (!opts.dryRun) {
-            opts.humanStore.updateNode(existing.id, {
-              title,
-              body_markdown: humanBody,
-              frontmatter: fm,
-              status,
-              source,
-              cbm_node_ids: cbmNodeIds,
-              tags,
-              obsidian_path: relPath,
-            });
-            opts.humanStore.markSynced(existing.id, 'import', vaultHash);
-          }
-          result.updated.push(relPath);
-        }
-      } else {
-        if (!opts.dryRun) {
-          const node = opts.humanStore.createNode({
-            project: opts.project,
-            label,
-            title,
-            body_markdown: humanBody,
-            frontmatter: fm,
-            status,
-            source,
-            cbm_node_ids: cbmNodeIds,
-            tags,
-            obsidian_path: relPath,
-            source_file: relPath,
-          });
-          opts.humanStore.markSynced(node.id, 'import', vaultHash);
-        }
-        result.created.push(relPath);
-      }
-
-      if (cbmNodeIds.length === 0) {
-        result.orphanNotes.push(relPath);
-      }
-
-      // Parse wikilinks and create/refresh edges.
-      const sourceNode = existing ?? opts.humanStore.getNodeByObsidianPath(opts.project, relPath);
-      if (sourceNode && !opts.dryRun) {
-        // Parse wikilinks only from HUMAN NOTES section — AUTO-GENERATED wikilinks are
-        // machine-generated and should not create edges (they would duplicate existing edges).
-        const wikilinks = parseWikilinks(humanBody);
-        const seenEdgeIds: number[] = [];
-        for (const wl of wikilinks) {
-          const kind = classifyWikilinkTarget(wl.target);
-          if (kind === 'code') {
-            const cbmId = parseCodeNodeId(wl.target);
-            if (cbmId == null) continue;
-            const edgeType = inferEdgeTypeFromContext(humanBody, wl);
-            // createEdge is idempotent (returns existing edge if dup).
-            const edge = opts.humanStore.createEdge({
-              project: opts.project,
-              source_human_node_id: sourceNode.id,
-              target_kind: 'code',
-              target_cbm_node_id: cbmId,
-              type: edgeType,
-              properties: { alias: wl.alias, inferred: true },
-              source_file: relPath,
-            });
-            seenEdgeIds.push(edge.id);
-          } else if (kind === 'human') {
-            const targetNode = opts.humanStore.getNodeBySlug(opts.project, wl.target);
-            if (!targetNode) continue;
-            const edge = opts.humanStore.createEdge({
-              project: opts.project,
-              source_human_node_id: sourceNode.id,
-              target_kind: 'human',
-              target_human_node_id: targetNode.id,
-              type: 'MENTIONS', // explicit type, included in dedup
-              properties: { alias: wl.alias },
-              source_file: relPath,
-            });
-            seenEdgeIds.push(edge.id);
-          } else if (kind === 'path') {
-            // Resolve path-style wikilink to a human node via obsidian_path.
-            const targetPath = wl.target.endsWith('.md') ? wl.target : wl.target + '.md';
-            const targetNode = opts.humanStore.getNodeByObsidianPath(opts.project, targetPath);
-            if (!targetNode) continue;
-            const edge = opts.humanStore.createEdge({
-              project: opts.project,
-              source_human_node_id: sourceNode.id,
-              target_kind: 'human',
-              target_human_node_id: targetNode.id,
-              type: 'MENTIONS',
-              properties: { alias: wl.alias, via: 'path' },
-              source_file: relPath,
-            });
-            seenEdgeIds.push(edge.id);
-          }
-        }
-        // Clean up stale edges that were created from this file but no longer exist in the note.
-        const deleted = opts.humanStore.deleteStaleEdgesFromNode(sourceNode.id, relPath, seenEdgeIds);
-        result.edgesDeleted += deleted;
-        result.edgesCreated += seenEdgeIds.length;
-      }
+      importSingleFile(relPath, opts, result);
     } catch (e: any) {
       result.errors.push({ path: relPath, error: e.message });
     }
@@ -249,6 +80,293 @@ export function importVault(opts: ImportOptions): ImportResult {
 
   return result;
 }
+
+/**
+ * Import a single vault file: parse, validate, upsert node, process wikilinks.
+ */
+function importSingleFile(relPath: string, opts: ImportOptions, result: ImportResult): void {
+  const content = readNote(opts.vaultPath, relPath);
+  if (!content) return;
+
+  // Parse and validate frontmatter.
+  const parsed = parseNote(content);
+  const fm = parsed.frontmatter;
+  const label = inferLabelFromFrontmatter(fm, relPath);
+  if (!label) {
+    result.errors.push({ path: relPath, error: 'cannot infer label (set frontmatter `type` or move to a known dir)' });
+    return;
+  }
+
+  const title = extractTitle(parsed.body, relPath) ?? relPath.replace(/\.md$/i, "");
+  const slug = slugify(title);
+  const cbmNodeIds = parseCbmNodeIds(fm);
+  const tags = parseTags(fm);
+
+  // Validate status and source against enums.
+  const statusValidation = validateEnum(fm.status as string, HUMAN_NODE_STATUSES, 'status', 'active', relPath);
+  if (statusValidation.error) {
+    result.errors.push(statusValidation.error);
+    return;
+  }
+  const sourceValidation = validateEnum(fm.source as string, HUMAN_NODE_SOURCES, 'source', 'human', relPath);
+  if (sourceValidation.error) {
+    result.errors.push(sourceValidation.error);
+    return;
+  }
+  const status = statusValidation.value as HumanNodeStatus;
+  const source = sourceValidation.value as HumanNodeSource;
+
+  // Extract HUMAN NOTES section, stripping placeholder text.
+  const sections = splitSections(parsed.body);
+  const humanBody = sections.humanNotes.split(HUMAN_NOTES_PLACEHOLDER).join('').trim();
+
+  // Find existing node (by obsidian_path first, then slug for orphans only).
+  const existing = resolveExistingNode(opts, relPath, slug, result);
+  if (existing === 'CONFLICT') return; // error already pushed
+
+  const vaultHash = hashContent(content);
+
+  // Upsert the node (create or update, with no-op detection).
+  const sourceNodeId = upsertNode(existing, opts, result, {
+    relPath, label, title, humanBody, fm, status, source, cbmNodeIds, tags, vaultHash,
+  });
+
+  if (cbmNodeIds.length === 0) {
+    result.orphanNotes.push(relPath);
+  }
+
+  // Process wikilinks → edges.
+  if (sourceNodeId !== null) {
+    const edgeCount = processWikilinks(sourceNodeId, humanBody, relPath, opts, result);
+    if (edgeCount !== null && !opts.dryRun) {
+      result.edgesCreated += edgeCount.created;
+      result.edgesDeleted += edgeCount.deleted;
+    }
+  }
+}
+
+/**
+ * Validate a frontmatter field against an enum. Returns the validated value
+ * or an error message.
+ */
+function validateEnum(
+  rawValue: string | undefined,
+  allowed: readonly string[],
+  fieldName: string,
+  defaultValue: string,
+  relPath: string
+): { value: string; error?: { path: string; error: string } } {
+  const value = rawValue ?? defaultValue;
+  if (!(allowed as readonly string[]).includes(value)) {
+    return {
+      value: defaultValue,
+      error: { path: relPath, error: `invalid ${fieldName} "${value}". Valid: ${allowed.join(', ')}` },
+    };
+  }
+  return { value };
+}
+
+/**
+ * Find an existing human_node for this vault file.
+ * Match by obsidian_path first (authoritative). Fall back to slug ONLY if
+ * the matched node has no obsidian_path (orphan node created programmatically).
+ *
+ * Returns the node, null if no match, or 'CONFLICT' if there's a slug collision.
+ */
+function resolveExistingNode(
+  opts: ImportOptions,
+  relPath: string,
+  slug: string,
+  result: ImportResult
+): HumanNode | null | 'CONFLICT' {
+  const existingByPath = opts.humanStore.getNodeByObsidianPath(opts.project, relPath);
+  let existingBySlug = null;
+  if (!existingByPath && slug) {
+    const slugMatch = opts.humanStore.getNodeBySlug(opts.project, slug);
+    // Only use slug match if the matched node has no obsidian_path (orphan).
+    if (slugMatch && !slugMatch.obsidian_path) {
+      existingBySlug = slugMatch;
+    }
+  }
+
+  // Detect slug-collision conflict: both exist but differ.
+  if (existingByPath && existingBySlug && existingByPath.id !== existingBySlug.id) {
+    result.errors.push({
+      path: relPath,
+      error: `slug collision: path-match node id=${existingByPath.id} and slug-match node id=${existingBySlug.id} are different. Skipping — resolve manually.`,
+    });
+    return 'CONFLICT';
+  }
+
+  return existingByPath ?? existingBySlug;
+}
+
+interface UpsertSpec {
+  relPath: string;
+  label: HumanNodeLabel;
+  title: string;
+  humanBody: string;
+  fm: Record<string, unknown>;
+  status: HumanNodeStatus;
+  source: HumanNodeSource;
+  cbmNodeIds: number[];
+  tags: string[];
+  vaultHash: string;
+}
+
+/**
+ * Create or update a human_node. Returns the node ID (or null on dry-run/no match).
+ * Detects no-ops by comparing key fields.
+ */
+function upsertNode(
+  existing: HumanNode | null,
+  opts: ImportOptions,
+  result: ImportResult,
+  spec: UpsertSpec
+): number | null {
+  if (existing) {
+    // No-op detection: compare key fields.
+    const sameContent = existing.body_markdown === spec.humanBody;
+    const sameTitle = existing.title === spec.title;
+    const sameCbmIds = JSON.stringify(existing.cbm_node_ids.slice().sort()) === JSON.stringify(spec.cbmNodeIds.slice().sort());
+    const sameTags = JSON.stringify(existing.tags.slice().sort()) === JSON.stringify(spec.tags.slice().sort());
+    const sameStatus = existing.status === spec.status;
+    if (sameContent && sameTitle && sameCbmIds && sameTags && sameStatus) {
+      result.unchanged.push(spec.relPath);
+      return existing.id;
+    }
+    if (!opts.dryRun) {
+      opts.humanStore.updateNode(existing.id, {
+        title: spec.title,
+        body_markdown: spec.humanBody,
+        frontmatter: spec.fm,
+        status: spec.status,
+        source: spec.source,
+        cbm_node_ids: spec.cbmNodeIds,
+        tags: spec.tags,
+        obsidian_path: spec.relPath,
+      });
+      opts.humanStore.markSynced(existing.id, 'import', spec.vaultHash);
+    }
+    result.updated.push(spec.relPath);
+    return existing.id;
+  }
+
+  // Create new node.
+  if (!opts.dryRun) {
+    const node = opts.humanStore.createNode({
+      project: opts.project,
+      label: spec.label,
+      title: spec.title,
+      body_markdown: spec.humanBody,
+      frontmatter: spec.fm,
+      status: spec.status,
+      source: spec.source,
+      cbm_node_ids: spec.cbmNodeIds,
+      tags: spec.tags,
+      obsidian_path: spec.relPath,
+      source_file: spec.relPath,
+    });
+    opts.humanStore.markSynced(node.id, 'import', spec.vaultHash);
+    result.created.push(spec.relPath);
+    return node.id;
+  }
+  result.created.push(spec.relPath);
+  return null;
+}
+
+/**
+ * Parse wikilinks from HUMAN NOTES, create edges, and clean up stale edges.
+ * Returns {created, deleted} counts, or null if dry-run.
+ */
+function processWikilinks(
+  sourceNodeId: number,
+  humanBody: string,
+  relPath: string,
+  opts: ImportOptions,
+  _result: ImportResult
+): { created: number; deleted: number } | null {
+  if (opts.dryRun) return null;
+
+  const wikilinks = parseWikilinks(humanBody);
+  const seenEdgeIds: number[] = [];
+
+  for (const wl of wikilinks) {
+    const edgeId = createEdgeFromWikilink(wl, sourceNodeId, humanBody, relPath, opts);
+    if (edgeId !== null) {
+      seenEdgeIds.push(edgeId);
+    }
+  }
+
+  // Clean up stale edges that were created from this file but no longer exist.
+  const deleted = opts.humanStore.deleteStaleEdgesFromNode(sourceNodeId, relPath, seenEdgeIds);
+  return { created: seenEdgeIds.length, deleted };
+}
+
+/**
+ * Create a single edge from a wikilink. Returns the edge ID, or null if the
+ * wikilink couldn't be resolved.
+ */
+function createEdgeFromWikilink(
+  wl: Wikilink,
+  sourceNodeId: number,
+  humanBody: string,
+  relPath: string,
+  opts: ImportOptions
+): number | null {
+  const kind = classifyWikilinkTarget(wl.target);
+
+  if (kind === 'code') {
+    const cbmId = parseCodeNodeId(wl.target);
+    if (cbmId == null) return null;
+    const edgeType = inferEdgeTypeFromContext(humanBody, wl);
+    const edge = opts.humanStore.createEdge({
+      project: opts.project,
+      source_human_node_id: sourceNodeId,
+      target_kind: 'code',
+      target_cbm_node_id: cbmId,
+      type: edgeType,
+      properties: { alias: wl.alias, inferred: true },
+      source_file: relPath,
+    });
+    return edge.id;
+  }
+
+  if (kind === 'human') {
+    const targetNode = opts.humanStore.getNodeBySlug(opts.project, wl.target);
+    if (!targetNode) return null;
+    const edge = opts.humanStore.createEdge({
+      project: opts.project,
+      source_human_node_id: sourceNodeId,
+      target_kind: 'human',
+      target_human_node_id: targetNode.id,
+      type: 'MENTIONS',
+      properties: { alias: wl.alias },
+      source_file: relPath,
+    });
+    return edge.id;
+  }
+
+  if (kind === 'path') {
+    const targetPath = wl.target.endsWith('.md') ? wl.target : wl.target + '.md';
+    const targetNode = opts.humanStore.getNodeByObsidianPath(opts.project, targetPath);
+    if (!targetNode) return null;
+    const edge = opts.humanStore.createEdge({
+      project: opts.project,
+      source_human_node_id: sourceNodeId,
+      target_kind: 'human',
+      target_human_node_id: targetNode.id,
+      type: 'MENTIONS',
+      properties: { alias: wl.alias, via: 'path' },
+      source_file: relPath,
+    });
+    return edge.id;
+  }
+
+  return null;
+}
+
+// ── Helpers (unchanged from pre-R18) ───────────────────────────────
 
 function inferLabelFromFrontmatter(
   fm: Record<string, unknown>,
@@ -301,3 +419,5 @@ function extractTitle(body: string, relPath?: string): string | null {
   return null;
 }
 
+// Import HumanNode type for resolveExistingNode return type.
+import type { HumanNode } from '../human/schema.js';
