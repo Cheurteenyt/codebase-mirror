@@ -156,7 +156,7 @@
 | R20 | SQLite temp_store | disk I/O for sorting | MEMORY | -90% sort latency |
 | R21 | `getBulkNotesByCbmNodeIds` (5000 modules) | ~2.5M JSON_EACH ops | ~5000 B-tree lookups | -80% to -95% |
 
-## API Endpoints (0.7.0)
+## API Endpoints (0.8.2)
 
 | Endpoint | Method | Description |
 |---|---|---|
