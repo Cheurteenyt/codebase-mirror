@@ -99,18 +99,26 @@ export function registerWatchCommand(program: Command): void {
       // is safe and simpler than diffing the file set.
       let importTimer: ReturnType<typeof setTimeout> | null = null;
       let exportTimer: ReturnType<typeof setTimeout> | null = null;
+      // R31 (B1 fix): guard flag to prevent double-export. When runSync() is
+      // running, it sets this flag so the NotifyHub subscriber skips the
+      // redundant export. Only DB mutations from OUTSIDE the sync cycle
+      // (e.g., MCP tools) should trigger a hub-based export.
+      let isSyncing = false;
 
       /**
-       * Run an incremental import: only process files that changed since
-       * the last scan. Uses walkVault to get the current file set, diffs
-       * Calls importVault (which is idempotent via no-op detection).
+       * R31 (B2 fix): renamed from runIncrementalImport to runSync.
+       * The function does a full vault scan (not incremental), so the old
+       * name was misleading. The import uses no-op detection (idempotent
+       * via field comparison) to keep DB writes cheap.
        *
-       * R30: wrapped in try/catch to prevent the daemon from crashing
-       * silently if importVault or generateVault throws (DB locked, disk
-       * full, etc.). Errors are logged but the daemon keeps running.
+       * R30: wrapped in try/catch to prevent the daemon from crashing.
+       * R31 (B1 fix): sets isSyncing flag to suppress redundant hub-triggered export.
+       * R31 (B3 fix): uses consistent auto-generate flags for both paths.
        */
-      function runIncrementalImport(): void {
+      function runSync(): void {
         try {
+          isSyncing = true;
+
           if (direction === 'import' || direction === 'both') {
             const result = importVault({
               project,
@@ -146,15 +154,24 @@ export function registerWatchCommand(program: Command): void {
         } catch (e: any) {
           console.error(`[cbm-v2 watch] Error during sync: ${e.message}`);
           // Don't crash — the daemon keeps watching for the next change.
+        } finally {
+          isSyncing = false;
         }
       }
 
       /**
-       * Run an incremental export (DB -> vault). Triggered when the DB
-       * changes via MCP tools or API endpoints (detected via NotifyHub).
+       * Run an export (DB -> vault). Triggered when the DB changes via MCP
+       * tools or API endpoints (detected via NotifyHub).
+       *
+       * R31 (B1 fix): skips if isSyncing is true (the sync cycle already
+       * runs its own export, so this would be redundant).
+       * R31 (B3 fix): uses the same auto-generate flags as runSync for
+       * consistency. Both paths now respect the user's --auto-modules /
+       * --auto-routes settings.
        */
       function runIncrementalExport(): void {
         if (direction !== 'export' && direction !== 'both') return;
+        if (isSyncing) return; // R31 (B1): skip redundant export during sync cycle
         try {
           const result = generateVault({
             project,
@@ -162,8 +179,8 @@ export function registerWatchCommand(program: Command): void {
             humanStore,
             codeReader,
             backupBeforeWrite: backup,
-            autoGenerateModuleNotes: false, // Don't auto-generate on every DB change
-            autoGenerateRouteNotes: false,
+            autoGenerateModuleNotes: autoModules, // R31 (B3): consistent with runSync
+            autoGenerateRouteNotes: autoRoutes,
             minDegreeForModuleNote: minDegree,
           });
           if (result.created.length > 0 || result.updated.length > 0) {
@@ -177,6 +194,8 @@ export function registerWatchCommand(program: Command): void {
       // Subscribe to NotifyHub for DB-side changes (MCP tools, API endpoints).
       // This triggers an export when the DB changes, closing the loop:
       // MCP tool creates note -> NotifyHub -> export -> vault file updated.
+      // R31 (B1): the isSyncing guard in runIncrementalExport prevents
+      // redundant exports when the change originated from runSync's own import.
       const hubUnsubscribe = hub.subscribe((event) => {
         if (event.project !== project) return;
         // Debounce export on DB changes.
@@ -202,7 +221,7 @@ export function registerWatchCommand(program: Command): void {
           if (importTimer) clearTimeout(importTimer);
           importTimer = setTimeout(() => {
             importTimer = null;
-            runIncrementalImport();
+            runSync();
           }, debounceMs);
         });
       } catch (e: any) {
@@ -233,7 +252,7 @@ export function registerWatchCommand(program: Command): void {
 
       // Do an initial sync on startup.
       console.log('[cbm-v2 watch] Initial sync...');
-      runIncrementalImport();
+      runSync();
       console.log('[cbm-v2 watch] Watching for changes...');
     });
 }

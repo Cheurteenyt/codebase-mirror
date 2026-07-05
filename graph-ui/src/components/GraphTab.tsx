@@ -50,12 +50,39 @@ export function GraphTab({ project }: GraphTabProps) {
   const [hideTests, setHideTests] = useState(false);
 
   useEffect(() => {
-    if (!data || !firstLoad.current) return;
-    firstLoad.current = false;
+    if (!data) return;
     const labels = new Set(data.nodes.map((n) => n.label));
     const types = new Set(data.edges.map((e) => e.type));
-    setEnabledLabels(labels);
-    setEnabledEdgeTypes(types);
+    if (firstLoad.current) {
+      // First load: initialize all labels and edge types as enabled.
+      firstLoad.current = false;
+      setEnabledLabels(labels);
+      setEnabledEdgeTypes(types);
+    } else {
+      // R31 (C2 fix): on subsequent data updates (e.g., WebSocket refresh),
+      // auto-enable any NEW labels/edge types that didn't exist before.
+      // Previously, new labels were silently hidden because enabledLabels
+      // was never updated after the first load.
+      setEnabledLabels((prev) => {
+        const next = new Set(prev);
+        for (const label of labels) {
+          if (!prev.has(label)) {
+            // New label — auto-enable it.
+            next.add(label);
+          }
+        }
+        return next;
+      });
+      setEnabledEdgeTypes((prev) => {
+        const next = new Set(prev);
+        for (const type of types) {
+          if (!prev.has(type)) {
+            next.add(type);
+          }
+        }
+        return next;
+      });
+    }
   }, [data]);
 
   const filteredData: GraphData | null = useMemo(() => {

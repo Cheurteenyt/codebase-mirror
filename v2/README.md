@@ -92,9 +92,9 @@ node dist/cli/index.js doctor --project my-app
 | `cbm-v2 backup import backup.json` | Import from JSON backup |
 | `cbm-v2 backup import backup.json --dry-run` | Preview import |
 
-## MCP tools (6)
+## MCP tools (7)
 
-The `cbm-v2 mcp` command exposes 6 tools via JSON-RPC 2.0 over stdio:
+The `cbm-v2 mcp` command exposes 7 tools via JSON-RPC 2.0 over stdio:
 
 | Tool | Type | Description |
 |---|---|---|
@@ -104,6 +104,7 @@ The `cbm-v2 mcp` command exposes 6 tools via JSON-RPC 2.0 over stdio:
 | `create_human_note` | write | Create ADR/BugNote/etc. + link to code nodes |
 | `link_note_to_code_node` | write | Link existing note to a code node |
 | `search_code_and_memory` | read | Unified search across code graph + human memory |
+| `prepare_edit_context` | read | **Flagship** — call BEFORE editing any file. Returns code structure, dependencies, human notes, blast radius, risk score |
 
 ### Connecting an AI agent
 
@@ -131,7 +132,7 @@ Add to your MCP client config (Claude Desktop, Cursor, Zed, etc.):
 │   │  C Engine (V1)      │    │  TS Sidecar (V2)         │   │
 │   │  tree-sitter 158    │    │  Human Memory DB         │   │
 │   │  SQLite code graph  │◄───┤  Obsidian vault sync     │   │
-│   │  14 MCP tools (V1)  │    │  6 MCP tools (V2)        │   │
+│   │  14 MCP tools (V1)  │    │  7 MCP tools (V2)        │   │
 │   └─────────────────────┘    └──────────────────────────┘   │
 │                                                              │
 │   Storage:                                                   │

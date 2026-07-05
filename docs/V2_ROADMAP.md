@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.9.0.
+> Updated 2026-07-05 for version 0.9.1.
 
-## Current State (0.9.0)
+## Current State (0.9.1)
 
 ### ✅ Completed
 
@@ -37,7 +37,7 @@
 | Round 26 Claude Sonnet 5 report | 0.8.1 | 6 bugs: CRITICAL frontmatter revert (import before export), HIGH create_human_note atomicity, HIGH no-op frontmatter, MEDIUM Vite WS proxy, LOW vaultHash vestigial, LOW MCP shutdown DB close |
 | Round 27 Bug #8 rename | 0.8.1 | Stale edges on rename: resolveExistingNode match by slug even if obsidian_path exists (checks old file deleted), no-op check compares obsidian_path, processWikilinks cleans old source_file |
 | Round 28 docs sync | 0.8.2 | 6 docs updated, audit of 5 potential bugs (none required fixes) |
-| Round 29 watch daemon | 0.9.0 | `cbm-v2 watch` daemon with fs.watch recursive, debounce 500ms, NotifyHub integration, incremental import+export |
+| Round 29 watch daemon | 0.9.1 | `cbm-v2 watch` daemon with fs.watch recursive, debounce 500ms, NotifyHub integration, incremental import+export |
 
 ### 📊 Metrics
 
@@ -46,7 +46,7 @@
 | Source files (v2) | 36 |
 | Test files | 25 |
 | Tests | 247 (all passing) |
-| Bugs fixed (29 rounds) | 403+ |
+| Bugs fixed (29 rounds) | 485+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -67,7 +67,7 @@
 | ✅ Storage optimization (indexes + PRAGMAs) | Done | Medium | Completed in 0.6.3 |
 | ✅ Junction table (complex storage) | Done | High | Completed in 0.7.0 |
 | ✅ WebSocket real-time | Done | High | Completed in 0.8.0 |
-| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.9.0 |
+| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.9.1 |
 | Tests for reports (hotspots, undocumented, risk) | High | Medium | Planned |
 | ESLint + Prettier configuration | Medium | Low | Planned |
 | `noUncheckedIndexedAccess` in tsconfig | Medium | Low | Planned |
@@ -86,7 +86,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.9.0)
+### Phase 3: V1 Complete (0.9.1)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -140,8 +140,8 @@
 | R26 (Claude Sonnet 5 report) | 0.8.1 | 6 | 6 | 239 |
 | R27 (Bug #8 rename) | 0.8.1 | 1 | 1 | 241 |
 | R28 (docs sync) | 0.8.2 | — (docs) | — | 241 |
-| R29 (watch daemon) | 0.9.0 | — (feature) | — | 247 |
-| **Total** | | **403+** | **403+** | **247** |
+| R29 (watch daemon) | 0.9.1 | — (feature) | — | 247 |
+| **Total** | | **485+** | **485+** | **247** |
 
 ## Performance Milestones
 
@@ -161,7 +161,7 @@
 | R20 | SQLite temp_store | disk I/O for sorting | MEMORY | -90% sort latency |
 | R21 | `getBulkNotesByCbmNodeIds` (5000 modules) | ~2.5M JSON_EACH ops | ~5000 B-tree lookups | -80% to -95% |
 
-## API Endpoints (0.9.0)
+## API Endpoints (0.9.1)
 
 | Endpoint | Method | Description |
 |---|---|---|

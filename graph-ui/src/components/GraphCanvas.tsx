@@ -115,10 +115,16 @@ export function GraphCanvas({
 
     const { width, height } = canvas;
     const { x: tx, y: ty, k: tk } = transformRef.current;
+    // R31 (C1 fix): apply devicePixelRatio scaling so the canvas renders at
+    // full resolution on HiDPI/Retina displays. The canvas backing store is
+    // already sized to clientWidth * dpr in the resize handler, so we just
+    // need to scale the context by dpr before applying the pan/zoom transform.
+    const dpr = window.devicePixelRatio || 1;
 
     ctx.clearRect(0, 0, width, height);
     ctx.save();
-    ctx.translate(width / 2 + tx, height / 2 + ty);
+    ctx.scale(dpr, dpr);
+    ctx.translate(width / (2 * dpr) + tx, height / (2 * dpr) + ty);
     ctx.scale(tk, tk);
 
     // Draw edges — forceLink mutates source/target into object refs, so handle both.
@@ -182,8 +188,15 @@ export function GraphCanvas({
     const resize = () => {
       const parent = canvas.parentElement;
       if (!parent) return;
-      canvas.width = parent.clientWidth;
-      canvas.height = parent.clientHeight;
+      // R31 (C1 fix): scale the backing store by devicePixelRatio for crisp
+      // rendering on HiDPI/Retina displays. Without this, the canvas renders
+      // at 1x and the browser stretches it to fill the CSS box, producing
+      // blurry nodes and edges.
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = parent.clientWidth * dpr;
+      canvas.height = parent.clientHeight * dpr;
+      canvas.style.width = parent.clientWidth + 'px';
+      canvas.style.height = parent.clientHeight + 'px';
       drawRef.current?.();
     };
 
@@ -204,9 +217,13 @@ export function GraphCanvas({
 
     const getMousePos = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
+      // R31 (C1 fix): use CSS pixels (rect dimensions) for mouse position,
+      // not device pixels (canvas.width/height which are scaled by DPR).
+      // The draw function already applies ctx.scale(dpr, dpr), so the
+      // transform coordinates are in CSS pixel space.
       return {
-        x: e.clientX - rect.left - canvas.width / 2 - transformRef.current.x,
-        y: e.clientY - rect.top - canvas.height / 2 - transformRef.current.y,
+        x: e.clientX - rect.left - rect.width / 2 - transformRef.current.x,
+        y: e.clientY - rect.top - rect.height / 2 - transformRef.current.y,
       };
     };
 
