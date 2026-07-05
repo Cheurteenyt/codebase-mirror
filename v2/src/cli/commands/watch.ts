@@ -99,11 +99,14 @@ export function registerWatchCommand(program: Command): void {
       // is safe and simpler than diffing the file set.
       let importTimer: ReturnType<typeof setTimeout> | null = null;
       let exportTimer: ReturnType<typeof setTimeout> | null = null;
-      // R31 (B1 fix): guard flag to prevent double-export. When runSync() is
-      // running, it sets this flag so the NotifyHub subscriber skips the
-      // redundant export. Only DB mutations from OUTSIDE the sync cycle
-      // (e.g., MCP tools) should trigger a hub-based export.
-      let isSyncing = false;
+      // R32 (C-new-1 fix): replaced the broken isSyncing boolean with a
+      // timestamp-based guard. The boolean was always false by the time
+      // runIncrementalExport actually ran (NotifyHub debounces 200ms +
+      // watch.ts debounces 500ms = ~700ms, but runSync completes in
+      // single-digit ms). The timestamp records when the last sync finished;
+      // runIncrementalExport skips if it's within the combined debounce window.
+      let lastSyncFinishedAt = 0;
+      const SYNC_GUARD_WINDOW_MS = 1500; // covers 200ms hub + 500ms watch + margin
 
       /**
        * R31 (B2 fix): renamed from runIncrementalImport to runSync.
@@ -112,12 +115,12 @@ export function registerWatchCommand(program: Command): void {
        * via field comparison) to keep DB writes cheap.
        *
        * R30: wrapped in try/catch to prevent the daemon from crashing.
-       * R31 (B1 fix): sets isSyncing flag to suppress redundant hub-triggered export.
+       * R32 (C-new-1 fix): records lastSyncFinishedAt timestamp to suppress
+       * redundant hub-triggered export within the debounce window.
        * R31 (B3 fix): uses consistent auto-generate flags for both paths.
        */
       function runSync(): void {
         try {
-          isSyncing = true;
 
           if (direction === 'import' || direction === 'both') {
             const result = importVault({
@@ -153,9 +156,10 @@ export function registerWatchCommand(program: Command): void {
           }
         } catch (e: any) {
           console.error(`[cbm-v2 watch] Error during sync: ${e.message}`);
-          // Don't crash — the daemon keeps watching for the next change.
         } finally {
-          isSyncing = false;
+          // R32 (C-new-1 fix): record when the sync finished. The hub-triggered
+          // export checks this timestamp and skips if within SYNC_GUARD_WINDOW_MS.
+          lastSyncFinishedAt = Date.now();
         }
       }
 
@@ -163,15 +167,21 @@ export function registerWatchCommand(program: Command): void {
        * Run an export (DB -> vault). Triggered when the DB changes via MCP
        * tools or API endpoints (detected via NotifyHub).
        *
-       * R31 (B1 fix): skips if isSyncing is true (the sync cycle already
-       * runs its own export, so this would be redundant).
+       * R32 (C-new-1 fix): skips if the last sync finished within
+       * SYNC_GUARD_WINDOW_MS (the sync cycle already ran its own export,
+       * so this would be redundant). The previous isSyncing boolean was
+       * always false by the time this function ran due to debounce delays.
        * R31 (B3 fix): uses the same auto-generate flags as runSync for
        * consistency. Both paths now respect the user's --auto-modules /
        * --auto-routes settings.
        */
       function runIncrementalExport(): void {
         if (direction !== 'export' && direction !== 'both') return;
-        if (isSyncing) return; // R31 (B1): skip redundant export during sync cycle
+        // R32 (C-new-1 fix): timestamp-based guard. Skip if the last sync
+        // finished within the guard window — the sync already ran export.
+        if (lastSyncFinishedAt > 0 && Date.now() - lastSyncFinishedAt < SYNC_GUARD_WINDOW_MS) {
+          return;
+        }
         try {
           const result = generateVault({
             project,

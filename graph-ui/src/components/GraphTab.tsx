@@ -44,6 +44,13 @@ export function GraphTab({ project }: GraphTabProps) {
 
   const [enabledLabels, setEnabledLabels] = useState<Set<string>>(new Set());
   const [enabledEdgeTypes, setEnabledEdgeTypes] = useState<Set<string>>(new Set());
+  // R32 (B-new-2 fix): track ALL labels/edge-types ever seen, separately from
+  // the currently-enabled set. This lets us detect genuinely new labels (to
+  // auto-enable them) without re-adding labels the user manually disabled.
+  // Previously, the C2 fix compared against enabledLabels, which meant any
+  // manually-disabled label was treated as "new" and silently re-enabled.
+  const knownLabelsRef = useRef<Set<string>>(new Set());
+  const knownEdgeTypesRef = useRef<Set<string>>(new Set());
   const [deadCodeView, setDeadCodeView] = useState(false);
   const [showOnlyDead, setShowOnlyDead] = useState(false);
   const [hideEntryPoints, setHideEntryPoints] = useState(false);
@@ -58,30 +65,48 @@ export function GraphTab({ project }: GraphTabProps) {
       firstLoad.current = false;
       setEnabledLabels(labels);
       setEnabledEdgeTypes(types);
+      // R32 (B-new-2 fix): also initialize the known-sets.
+      knownLabelsRef.current = new Set(labels);
+      knownEdgeTypesRef.current = new Set(types);
     } else {
-      // R31 (C2 fix): on subsequent data updates (e.g., WebSocket refresh),
-      // auto-enable any NEW labels/edge types that didn't exist before.
-      // Previously, new labels were silently hidden because enabledLabels
-      // was never updated after the first load.
-      setEnabledLabels((prev) => {
-        const next = new Set(prev);
-        for (const label of labels) {
-          if (!prev.has(label)) {
-            // New label — auto-enable it.
+      // R32 (B-new-2 fix): on subsequent data updates, auto-enable ONLY labels
+      // that are genuinely new (never seen before). Compare against knownLabelsRef
+      // (all labels ever seen), NOT against enabledLabels (currently enabled).
+      // This preserves user filter choices: a manually-disabled label is still
+      // in knownLabelsRef, so it won't be re-added.
+      const genuinelyNewLabels: string[] = [];
+      for (const label of labels) {
+        if (!knownLabelsRef.current.has(label)) {
+          genuinelyNewLabels.push(label);
+          knownLabelsRef.current.add(label);
+        }
+      }
+      if (genuinelyNewLabels.length > 0) {
+        setEnabledLabels((prev) => {
+          const next = new Set(prev);
+          for (const label of genuinelyNewLabels) {
             next.add(label);
           }
+          return next;
+        });
+      }
+
+      const genuinelyNewEdgeTypes: string[] = [];
+      for (const type of types) {
+        if (!knownEdgeTypesRef.current.has(type)) {
+          genuinelyNewEdgeTypes.push(type);
+          knownEdgeTypesRef.current.add(type);
         }
-        return next;
-      });
-      setEnabledEdgeTypes((prev) => {
-        const next = new Set(prev);
-        for (const type of types) {
-          if (!prev.has(type)) {
+      }
+      if (genuinelyNewEdgeTypes.length > 0) {
+        setEnabledEdgeTypes((prev) => {
+          const next = new Set(prev);
+          for (const type of genuinelyNewEdgeTypes) {
             next.add(type);
           }
-        }
-        return next;
-      });
+          return next;
+        });
+      }
     }
   }, [data]);
 
@@ -108,6 +133,10 @@ export function GraphTab({ project }: GraphTabProps) {
   useEffect(() => {
     if (project) {
       firstLoad.current = true;
+      // R32 (B-new-2 fix): reset the known-sets on project change so the
+      // next data load re-initializes everything from scratch.
+      knownLabelsRef.current = new Set();
+      knownEdgeTypesRef.current = new Set();
       fetchOverview(project);
       setHighlightedIds(null);
       setSelectedPath(null);

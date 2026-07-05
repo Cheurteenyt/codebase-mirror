@@ -299,12 +299,11 @@ export function GraphCanvas({
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-      // World point under the mouse BEFORE zoom:
-      //   worldX = (mouseX - width/2 - tx) / oldK
-      // After zoom, we want:  mouseX - width/2 = worldX * newK + tx_new
-      // Solving for tx_new:   tx_new = mouseX - width/2 - worldX * newK
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
+      // R32 (B-new-1 fix): use rect.width/height (CSS pixels) instead of
+      // canvas.width/height (device pixels = CSS * dpr). On HiDPI/Retina,
+      // canvas.width is dpr× too large, throwing off the zoom-to-cursor math.
+      const cx = rect.width / 2;
+      const cy = rect.height / 2;
       const worldX = (mouseX - cx - transformRef.current.x) / oldK;
       const worldY = (mouseY - cy - transformRef.current.y) / oldK;
       transformRef.current.k = newK;

@@ -21,13 +21,13 @@ Codebase Memory V2 adds the **human context**:
 
 It syncs everything to an **Obsidian-compatible Markdown vault** so you can read and edit notes in your favorite editor, with backlinks and tags.
 
-## Current version: 0.9.1
+## Current version: 0.9.3
 
 - **247 tests** (all passing)
 - **7 MCP tools** (including the flagship `prepare_edit_context`)
 - **16+ CLI commands** across 7 command groups (including `watch` daemon)
 - **15 API endpoints** (6 original + 9 R17)
-- **485+ bugs fixed** across 29 audit rounds
+- **419+ bugs fixed** across 29 audit rounds
 - **Graph UI** with 2D d3-force canvas, dashboard, filters, **real-time WebSocket**
 - **Watch daemon** — auto-sync when vault files change (fs.watch recursive)
 - **Optimized SQLite storage** (junction table, composite indexes, PRAGMAs)
