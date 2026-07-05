@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.7.0.
+> Updated 2026-07-05 for version 0.8.1.
 
-## Current State (0.7.0)
+## Current State (0.8.1)
 
 ### ✅ Completed
 
@@ -30,22 +30,28 @@
 | Round 19 bug fixes | 0.6.2 | createEdge cbm_node_ids sync (CRITICAL), --force flag honored (HIGH) |
 | Round 20 storage optimization | 0.6.3 | Migration V2: drop useless index, composite indexes, PRAGMA temp_store + cache_size. maxNodes DoS fix |
 | Round 21 junction table | 0.7.0 | Migration V3: human_node_cbm_links junction table replacing JSON_EACH. Indexed reverse lookup, FK CASCADE, WITHOUT ROWID |
+| Round 22 docs + bug fixes | 0.7.1 | 6 docs updated, human link validation, commentaire obsolète, junction table consistency |
+| Round 23 bug fixes | 0.7.2 | pruneBackups cross-file deletion (basename fix), parseJsonBody 30s timeout, backup version |
+| Round 24 UI bugs | 0.7.3 | ControlTab setState-on-unmounted, NodeDetailPanel dead Show code button, useProjects stale responses |
+| Round 25 WebSocket temps réel | 0.8.0 | Push notifications bidirectionnel, NotifyHub debounce 200ms, reconnexion auto (backoff), keepalive ping/pong |
+| Round 26 rapport Claude Sonnet 5 | 0.8.1 | 6 bugs: CRITICAL frontmatter revert (import avant export), HIGH atomicité create_human_note, HIGH no-op frontmatter, MEDIUM Vite WS proxy, LOW vaultHash vestigial, LOW MCP shutdown DB close |
+| Round 27 Bug #8 rename | 0.8.1 | Stale edges on rename: resolveExistingNode match par slug même si obsidian_path existe (vérifie old file supprimé), no-op check compare obsidian_path, processWikilinks nettoie old source_file |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
-| Source files (v2) | 33 |
-| Test files | 20 |
-| Tests | 221 (all passing) |
-| Bugs fixed (21 rounds) | 403+ |
+| Source files (v2) | 35 |
+| Test files | 24 |
+| Tests | 241 (all passing) |
+| Bugs fixed (27 rounds) | 403+ |
 | MCP tools | 7 |
 | CLI commands | 15+ |
 | API endpoints | 15 (6 existing + 9 new) |
 | Graph UI components | 13 |
 | SQLite migrations | 3 (initial_schema, optimize_indexes, cbm_links_junction_table) |
 | CI pipeline stages | 3 (typecheck → build → test) |
-| Production dependencies | 3 |
+| Production dependencies | 4 (better-sqlite3, commander, yaml, ws) |
 
 ## Roadmap
 
@@ -124,7 +130,13 @@
 | R19 (bug fixes) | 0.6.2 | 2 | 2 | 200 |
 | R20 (storage optimization) | 0.6.3 | 1 (DoS) | 1 | 207 |
 | R21 (junction table) | 0.7.0 | — (feature) | — | 221 |
-| **Total** | | **403+** | **403+** | **221** |
+| R22 (docs + bug fixes) | 0.7.1 | 3 | 3 | 223 |
+| R23 (bug fixes) | 0.7.2 | 3 | 3 | 227 |
+| R24 (UI bugs) | 0.7.3 | 3 | 3 | 227 |
+| R25 (WebSocket temps réel) | 0.8.0 | — (feature) | — | 239 |
+| R26 (rapport Claude Sonnet 5) | 0.8.1 | 6 | 6 | 239 |
+| R27 (Bug #8 rename) | 0.8.1 | 1 | 1 | 241 |
+| **Total** | | **403+** | **403+** | **241** |
 
 ## Performance Milestones
 
