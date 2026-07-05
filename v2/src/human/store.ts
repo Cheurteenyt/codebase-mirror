@@ -569,6 +569,25 @@ export class HumanMemoryStore {
         now
       );
 
+    // R19: keep the denormalized cbm_node_ids on the source node in sync.
+    // When a code-target edge is created, the source node's cbm_node_ids
+    // must include the target_cbm_node_id — otherwise getBulkNotesByCbmNodeIds
+    // (which queries cbm_node_ids via JSON_EACH) won't find this note, making
+    // it invisible to prepare_edit_context, get_module_context, /api/layout
+    // notes_count, and the Obsidian "Links to code" rendering.
+    if (input.target_kind === 'code' && input.target_cbm_node_id != null) {
+      const sourceNode = this.getNodeById(input.source_human_node_id);
+      if (sourceNode) {
+        const cbmId = input.target_cbm_node_id;
+        if (!sourceNode.cbm_node_ids.includes(cbmId)) {
+          const updatedIds = [...sourceNode.cbm_node_ids, cbmId];
+          this.db
+            .prepare('UPDATE human_nodes SET cbm_node_ids = ? WHERE id = ?')
+            .run(JSON.stringify(updatedIds), sourceNode.id);
+        }
+      }
+    }
+
     return this.getEdgeById(Number(result.lastInsertRowid))!;
   }
 
