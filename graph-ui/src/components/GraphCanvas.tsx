@@ -13,7 +13,7 @@ interface GraphCanvasProps {
   highlightedIds: Set<number> | null;
   deadCodeView: boolean;
   onNodeClick: (node: GraphNode) => void;
-  onNodeHover: (node: GraphNode | null) => void;
+  onNodeHover: (node: GraphNode | null, pos?: { x: number; y: number }) => void;
 }
 
 interface SimNode extends GraphNode {
@@ -47,7 +47,16 @@ export function GraphCanvas({
   const nodesRef = useRef<SimNode[]>([]);
   const edgesRef = useRef<SimEdge[]>([]);
   const drawRef = useRef<(() => void) | null>(null);
-  useEffect(() => { drawRef.current = draw; }, [draw]);
+
+  // Stable refs for callbacks so the mouse-interaction useEffect doesn't re-bind
+  // listeners on every render. Without this, toggling filters recreates all
+  // event listeners (mousedown/mousemove/mouseup/wheel) — wasteful and can
+  // cause missed events during the rebind window.
+  const onNodeClickRef = useRef(onNodeClick);
+  const onNodeHoverRef = useRef(onNodeHover);
+  useEffect(() => { onNodeClickRef.current = onNodeClick; }, [onNodeClick]);
+  useEffect(() => { onNodeHoverRef.current = onNodeHover; }, [onNodeHover]);
+
   const dragRef = useRef<{ node: SimNode | null; startX: number; startY: number }>({
     node: null,
     startX: 0,
@@ -79,10 +88,10 @@ export function GraphCanvas({
       .alphaDecay(0.02);
 
     sim.on("tick", () => {
-      drawRef.current();
+      drawRef.current?.();
     });
 
-    simRef.current = sim;
+    simRef.current = sim as any;
 
     return () => {
       sim.on("tick", null);
@@ -161,6 +170,10 @@ export function GraphCanvas({
     ctx.restore();
   }, [highlightedIds, deadCodeView]);
 
+  // Sync drawRef AFTER draw is declared (avoids TDZ — draw is a block-scoped
+  // const that can't be referenced before its declaration line).
+  useEffect(() => { drawRef.current = draw; }, [draw]);
+
   // Canvas resize observer
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -232,10 +245,13 @@ export function GraphCanvas({
         transformRef.current.y = e.clientY - panStart.y;
         drawRef.current?.();
       } else {
-        // Hover detection
+        // Hover detection — pass the mouse position (relative to canvas) to the
+        // parent so the tooltip can follow the cursor instead of being stuck at (12,12).
+        const rect = canvas.getBoundingClientRect();
+        const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
         const pos = getMousePos(e);
         const node = findNodeAt(pos.x, pos.y);
-        onNodeHover(node ?? null);
+        onNodeHoverRef.current(node ?? null, screenPos);
         canvas.style.cursor = node ? "pointer" : "default";
       }
     };
@@ -244,7 +260,7 @@ export function GraphCanvas({
       if (dragRef.current.node) {
         const moved = Math.abs(e.clientX - dragRef.current.startX) + Math.abs(e.clientY - dragRef.current.startY);
         if (moved < 3 && dragRef.current.node) {
-          onNodeClick(dragRef.current.node as GraphNode);
+          onNodeClickRef.current(dragRef.current.node as GraphNode);
         }
         dragRef.current.node.fx = null;
         dragRef.current.node.fy = null;
@@ -257,8 +273,26 @@ export function GraphCanvas({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      const newK = Math.max(0.1, Math.min(10, transformRef.current.k * delta));
+      const oldK = transformRef.current.k;
+      const newK = Math.max(0.1, Math.min(10, oldK * delta));
+      if (newK === oldK) return;
+
+      // Zoom toward the mouse position so the point under the cursor stays fixed.
+      // Without this, zooming is centered on the origin (0,0) which feels unnatural.
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      // World point under the mouse BEFORE zoom:
+      //   worldX = (mouseX - width/2 - tx) / oldK
+      // After zoom, we want:  mouseX - width/2 = worldX * newK + tx_new
+      // Solving for tx_new:   tx_new = mouseX - width/2 - worldX * newK
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      const worldX = (mouseX - cx - transformRef.current.x) / oldK;
+      const worldY = (mouseY - cy - transformRef.current.y) / oldK;
       transformRef.current.k = newK;
+      transformRef.current.x = mouseX - cx - worldX * newK;
+      transformRef.current.y = mouseY - cy - worldY * newK;
       drawRef.current?.();
     };
 
@@ -273,7 +307,8 @@ export function GraphCanvas({
       canvas.removeEventListener("mouseup", onMouseUp);
       canvas.removeEventListener("wheel", onWheel);
     };
-  }, [draw, onNodeClick, onNodeHover]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // stable — callbacks accessed via refs, no re-binding needed
 
   return (
     <canvas

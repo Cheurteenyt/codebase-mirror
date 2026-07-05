@@ -35,6 +35,7 @@ export function GraphTab({ project }: GraphTabProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const firstLoad = useRef(true);
   const [showLabels, setShowLabels] = useState(true);
   const [leftWidth, setLeftWidth] = useState(() => loadWidth("cbm-left-w", 260));
@@ -234,7 +235,10 @@ export function GraphTab({ project }: GraphTabProps) {
                 highlightedIds={highlightedIds}
                 deadCodeView={deadCodeView}
                 onNodeClick={handleNodeClick}
-                onNodeHover={setHoveredNode}
+                onNodeHover={(node, pos) => {
+                  setHoveredNode(node);
+                  if (pos) setTooltipPos(pos);
+                }}
               />
             </ErrorBoundary>
 
@@ -271,7 +275,7 @@ export function GraphTab({ project }: GraphTabProps) {
               </button>
             </div>
 
-            {hoveredNode && <NodeTooltip node={hoveredNode} />}
+            {hoveredNode && <NodeTooltip node={hoveredNode} x={tooltipPos.x} y={tooltipPos.y} />}
           </>
         )}
       </div>

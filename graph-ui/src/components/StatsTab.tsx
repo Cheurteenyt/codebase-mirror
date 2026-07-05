@@ -2,10 +2,8 @@
 // V2: Project list with health dots, ADR button, and create-index modal.
 // Adapted from V1 to use V2 API client.
 
-
-
-
 import { useProjects } from "../hooks/useProjects";
+import { ProjectCard } from "./ProjectCard";
 
 
 

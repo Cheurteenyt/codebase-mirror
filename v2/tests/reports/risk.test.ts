@@ -5,14 +5,22 @@ import { describe, it, expect } from 'vitest';
 import { computeRiskScore } from '../../src/reports/risk.js';
 
 describe('computeRiskScore', () => {
-  it('returns 0.2 for zero degree, zero complexity, no notes (only documentation penalty)', () => {
+  it('returns 0.0 for zero degree, zero complexity, no notes (dead code — no doc penalty)', () => {
+    // R14 fix: dead code (degree=0) is NOT penalized for missing docs.
+    // Documentation is irrelevant if nothing calls it.
     const score = computeRiskScore(0, 0, 0);
-    expect(score).toBeCloseTo(0.2, 5);
+    expect(score).toBeCloseTo(0.0, 5);
   });
 
   it('returns 0.0 for zero degree, zero complexity, with notes', () => {
     const score = computeRiskScore(0, 0, 1);
     expect(score).toBeCloseTo(0.0, 5);
+  });
+
+  it('returns 0.2 for degree=1, zero complexity, no notes (live code, undocumented)', () => {
+    // R14 fix: documentation penalty only applies when degree > 0.
+    const score = computeRiskScore(1, 0, 0);
+    expect(score).toBeCloseTo(0.205, 5); // 0.005 (degree) + 0.2 (doc penalty)
   });
 
   it('returns max 0.5 for degree=100, complexity=0, with notes', () => {

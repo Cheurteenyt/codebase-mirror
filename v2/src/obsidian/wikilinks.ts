@@ -66,22 +66,59 @@ export function pathToSlug(path: string): string {
  * - Inside "### Bugs connus" + BugNote target → AFFECTS
  * - Inside "## À faire" or "### À faire" + RefactorPlan target → TODO_FOR
  * - Default → MENTIONS
+ *
+ * CRITICAL: fenced code blocks (``` or ~~~) are tracked so that `#` characters
+ * inside code (e.g., shell comments, Python comments) are NOT mistaken for
+ * Markdown headings. Without this, a wikilink after a code block containing
+ * `# some comment` would be classified under that fake heading.
  */
 export function inferEdgeTypeFromContext(
   markdown: string,
   wikilink: Wikilink
 ): 'DECIDES' | 'AFFECTS' | 'TODO_FOR' | 'MENTIONS' | 'EXPLAINS' {
-  // Find the closest preceding heading. O(n) single scan via regex.
   const before = markdown.substring(0, wikilink.startIndex);
-  const headingMatches = [...before.matchAll(/^(#{1,6})\s+(.+)$/gm)];
-  if (headingMatches.length === 0) return 'MENTIONS';
+  const lines = before.split('\n');
 
-  const lastHeading = headingMatches[headingMatches.length - 1][2].toLowerCase().trim();
+  // Walk backwards to find the most recent heading OUTSIDE a code fence.
+  // First, scan forward to determine the fence state at each line.
+  // We need to know whether the fence is open when we encounter a heading.
+  const fenceStateAtLine: boolean[] = new Array(lines.length).fill(false);
+  let currentlyInFence = false;
+  let currentFenceChar = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!currentlyInFence) {
+      const fenceMatch = line.match(/^(`{3,}|~{3,})/);
+      if (fenceMatch) {
+        currentlyInFence = true;
+        currentFenceChar = fenceMatch[1][0];
+        fenceStateAtLine[i] = true; // the fence delimiter line itself is "inside"
+      } else {
+        fenceStateAtLine[i] = false;
+      }
+    } else {
+      fenceStateAtLine[i] = true;
+      const closeMatch = line.match(new RegExp('^' + currentFenceChar + '{3,}'));
+      if (closeMatch) {
+        currentlyInFence = false;
+        currentFenceChar = '';
+      }
+    }
+  }
 
-  if (lastHeading.includes('décision') || lastHeading.includes('decision')) return 'DECIDES';
-  if (lastHeading.includes('bug')) return 'AFFECTS';
-  if (lastHeading.includes('à faire') || lastHeading.includes('todo') || lastHeading.includes('refactor')) return 'TODO_FOR';
-  if (lastHeading.includes('explication') || lastHeading.includes('explique') || lastHeading.includes('explications') || lastHeading.includes('contexte')) return 'EXPLAINS';
+  // Walk backwards to find the last heading that was NOT inside a fence.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (fenceStateAtLine[i]) continue;
+    const headingMatch = lines[i].match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      const lastHeading = headingMatch[2].toLowerCase().trim();
+      if (lastHeading.includes('décision') || lastHeading.includes('decision')) return 'DECIDES';
+      if (lastHeading.includes('bug')) return 'AFFECTS';
+      if (lastHeading.includes('à faire') || lastHeading.includes('todo') || lastHeading.includes('refactor')) return 'TODO_FOR';
+      if (lastHeading.includes('explication') || lastHeading.includes('explique') || lastHeading.includes('explications') || lastHeading.includes('contexte')) return 'EXPLAINS';
+      return 'MENTIONS';
+    }
+  }
 
   return 'MENTIONS';
 }

@@ -93,6 +93,14 @@ export class UiServer {
       return;
     }
 
+    // Track whether a response has been sent. If handleApi/serveStatic already
+    // sent a response and THEN throws, we must NOT attempt to send a 500 —
+    // calling res.writeHead() after headers are sent throws ERR_STREAM_WRITE_AFTER_END.
+    let responseSent = false;
+    const markSent = () => { responseSent = true; };
+    res.on('finish', markSent);
+    res.on('close', markSent);
+
     try {
       // API routes
       if (path.startsWith('/api/')) {
@@ -109,6 +117,11 @@ export class UiServer {
       // Try to serve static asset
       this.serveStatic(path, res);
     } catch (e: any) {
+      if (responseSent || res.writableEnded) {
+        // Response already sent — log the error but don't try to write again.
+        process.stderr.write(`[cbm-v2 ui] post-response error: ${e.message}\n`);
+        return;
+      }
       this.sendJson(res, 500, { error: e.message });
     }
   }
@@ -160,22 +173,10 @@ export class UiServer {
         };
       });
 
-      const nodeIdSet = new Set(nodes.map((n) => n.id));
-
-      // Fetch edges (limited, filtered to in-set nodes only)
-      const edges: Array<{ source: number; target: number; type: string }> = [];
-      const seenEdges = new Set<string>();
-      for (const node of nodes.slice(0, maxNodes)) {
-        const neighbors = this.codeReader.getNeighbors(node.id, 'both', 20);
-        for (const { edge } of neighbors) {
-          const key = `${edge.source_id}-${edge.target_id}-${edge.type}`;
-          if (!nodeIdSet.has(edge.source_id) || !nodeIdSet.has(edge.target_id)) continue;
-          if (!seenEdges.has(key)) {
-            seenEdges.add(key);
-            edges.push({ source: edge.source_id, target: edge.target_id, type: edge.type });
-          }
-        }
-      }
+      // Fetch edges in BULK (2 chunked queries) instead of N+1 getNeighbors calls.
+      // For 2000 nodes, this replaces ~2000 queries with ~4 queries (-99.8%).
+      // limitPerNode=20 matches the previous per-node cap from getNeighbors.
+      const edges = this.codeReader.getBulkEdges(nodeIds, 20);
 
       this.sendJson(res, 200, {
         nodes: layoutNodes,

@@ -62,10 +62,16 @@ export function safeJsonParse<T>(s: string | null | undefined, defaultValue: T):
   if (!s) return defaultValue;
   try {
     const v = JSON.parse(s);
-    // Validate: if defaultValue is an object, reject non-object JSON (null, numbers, booleans, arrays).
-    if (typeof defaultValue === 'object' && defaultValue !== null && !Array.isArray(defaultValue)) {
+    // Validate parsed value matches the expected type of defaultValue.
+    if (Array.isArray(defaultValue)) {
+      // Array default — reject non-array parsed values (null, objects, primitives).
+      if (!Array.isArray(v)) return defaultValue;
+    } else if (typeof defaultValue === 'object' && defaultValue !== null) {
+      // Object default — reject null, non-objects, and arrays.
       if (v === null || typeof v !== 'object' || Array.isArray(v)) return defaultValue;
     }
+    // For primitive defaults (string, number, boolean), no type coercion is enforced —
+    // callers that need strict typing should validate the result themselves.
     return v as T;
   } catch {
     return defaultValue;

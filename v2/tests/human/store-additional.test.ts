@@ -225,7 +225,12 @@ describe('HumanMemoryStore — additional bug-regression tests', () => {
       expect(rows[0].last_synced_hash).toBeTruthy();
     });
 
-    it('records sync_state on import with provided vault hash', () => {
+    it('records sync_state on import with DB-derived hash (ignores vaultContentHash param)', () => {
+      // R14 fix: markSynced now ALWAYS computes the hash from the DB representation
+      // (body + frontmatter + cbm_ids + tags), regardless of direction. The
+      // vaultContentHash parameter is accepted for API compatibility but ignored.
+      // This ensures export and import produce the SAME hash for the same DB state,
+      // making conflict detection actually work.
       const node = store.createNode({
         project: 'test',
         label: 'ADR',
@@ -238,7 +243,20 @@ describe('HumanMemoryStore — additional bug-regression tests', () => {
         .all('test', node.obsidian_path) as any[];
       expect(rows.length).toBe(1);
       expect(rows[0].last_direction).toBe('import');
-      expect(rows[0].last_synced_hash).toBe(vaultHash);
+      // The stored hash should NOT be the vault hash — it should be the DB-derived hash.
+      expect(rows[0].last_synced_hash).not.toBe(vaultHash);
+      expect(rows[0].last_synced_hash).toBeTruthy();
+      // Verify the hash matches what we'd compute from the DB node.
+      const expectedHash = createHash('sha256')
+        .update(node.body_markdown)
+        .update('\x00')
+        .update(node.frontmatter_json)
+        .update('\x00')
+        .update([...node.cbm_node_ids].sort((a, b) => a - b).join(','))
+        .update('\x00')
+        .update([...node.tags].sort().join(','))
+        .digest('hex');
+      expect(rows[0].last_synced_hash).toBe(expectedHash);
     });
   });
 

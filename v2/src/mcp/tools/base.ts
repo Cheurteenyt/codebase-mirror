@@ -61,18 +61,25 @@ export abstract class BaseTool implements ToolHandler {
   /**
    * Returns a valid number or undefined. Returns undefined for missing/invalid values
    * (instead of NaN). Throws for explicit-but-non-numeric values to give clear feedback.
+   *
+   * IMPORTANT: whitespace-only strings like " " are treated as missing (return undefined),
+   * NOT as 0. This is because Number(" ") === 0 in JavaScript, which is almost never what
+   * the caller intends — it would silently default a missing optional limit to 0 and
+   * produce empty results.
    */
   protected optionalNumber(args: Record<string, unknown>, key: string): number | undefined {
     const v = args[key];
-    if (v == null || v === '') return undefined;
-    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+    if (v == null) return undefined;
     if (typeof v === 'string') {
-      const n = Number(v);
+      const trimmed = v.trim();
+      if (trimmed === '') return undefined;
+      const n = Number(trimmed);
       if (!Number.isFinite(n)) {
         throw new Error(`Argument ${key} must be a number, got string "${v}"`);
       }
       return n;
     }
+    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
     throw new Error(`Argument ${key} must be a number, got ${typeof v}`);
   }
 
@@ -83,12 +90,19 @@ export abstract class BaseTool implements ToolHandler {
 
   /**
    * Require a number argument; throws if missing or not a finite number.
+   * Whitespace-only strings are rejected (not treated as 0).
    */
   protected requireNumber(args: Record<string, unknown>, key: string): number {
     const v = args[key];
     if (typeof v === 'number' && Number.isFinite(v)) return v;
     if (typeof v === 'string') {
-      const n = Number(v);
+      const trimmed = v.trim();
+      if (trimmed === '') {
+        throw new Error(
+          `Missing or invalid argument: ${key} (number required, got empty/whitespace string)`
+        );
+      }
+      const n = Number(trimmed);
       if (Number.isFinite(n)) return n;
     }
     throw new Error(
