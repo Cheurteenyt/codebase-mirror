@@ -1,6 +1,6 @@
 # CLI Reference — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.5.5.
+> Updated 2026-07-05 for version 0.7.0.
 
 All commands are available via `cbm-v2` (or `node dist/cli/index.js` before global install).
 
@@ -103,6 +103,8 @@ Link a note to a code node.
 ```bash
 cbm-v2 human link 42 --project my-app --to-cbm-node 1234 --edge DECIDES
 ```
+
+**R22**: Now validates that the `cbm_node_id` exists in the code graph (if a code reader is available), like the `create_human_note` MCP tool. Previously, linking to a non-existent code node silently succeeded.
 
 ## Obsidian Commands
 

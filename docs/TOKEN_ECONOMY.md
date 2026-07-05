@@ -1,6 +1,6 @@
 # Token Economy — How V2 Saves API Tokens
 
-> Updated 2026-07-05 for version 0.5.5.
+> Updated 2026-07-05 for version 0.7.0.
 
 V2 is designed to **minimize the number of API calls and tokens** an AI agent needs to understand and modify a codebase.
 
@@ -96,6 +96,10 @@ Rounds 13-15 systematically eliminated N+1 query patterns. A single MCP call now
 ### SQL-level limit via ROW_NUMBER() (R15)
 
 `getBulkNotesByCbmNodeIds(project, ids, limit)` previously loaded ALL matching rows from SQLite then capped per-node in JavaScript. For a node with 10000 notes and `limit=1`, this loaded all 10000 rows. R15 uses `ROW_NUMBER() OVER (PARTITION BY ...)` to cap at the database level — only `limit` rows per node are transferred. Falls back to the old behavior if window functions are unavailable (SQLite < 3.25, pre-2018).
+
+### Junction table (R21)
+
+R21 replaced the `JSON_EACH(cbm_node_ids)` pattern with a normalized junction table `human_node_cbm_links`. The old pattern scanned every row's JSON array; the new pattern uses an indexed B-tree JOIN for O(log n) reverse lookups. For a project with 5000 modules, `getBulkNotesByCbmNodeIds` went from ~2.5M operations to ~5000 index lookups (-80% to -95%).
 
 ## Estimated Monthly Savings
 

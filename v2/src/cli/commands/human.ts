@@ -2,6 +2,7 @@
 
 import { Command } from 'commander';
 import { HumanMemoryStore, defaultHumanDbPath } from '../../human/store.js';
+import { CodeGraphReader, defaultCodeDbPath } from '../../bridge/sqlite-ro.js';
 import {
   HumanNodeLabel,
   HumanEdgeType,
@@ -209,6 +210,10 @@ export function registerHumanCommand(program: Command): void {
       }
       const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
+      // R22: open a code reader to validate the cbm_node_id (like create_human_note MCP tool).
+      let codeReader: CodeGraphReader | undefined;
+      try { codeReader = new CodeGraphReader(defaultCodeDbPath(project)); } catch { /* code graph not available */ }
+
       try {
         const noteId = parseIntStrict(noteIdStr, '<noteId>');
         const cbmId = parseIntStrict(opts.toCbmNode, '--to-cbm-node');
@@ -222,6 +227,16 @@ export function registerHumanCommand(program: Command): void {
           console.error(`Error: note ${noteId} belongs to project "${node.project}", not "${project}"`);
           process.exitCode = 1;
           return;
+        }
+        // R22: validate that the cbm_node_id exists in the code graph (if reader available).
+        if (codeReader) {
+          const codeNode = codeReader.getNodeById(cbmId);
+          if (!codeNode) {
+            console.error(`Error: code node ${cbmId} not found in project "${project}".`);
+            console.error('       Verify the ID with: cbm-v2 search_code_and_memory --query "..."');
+            process.exitCode = 1;
+            return;
+          }
         }
         try {
           const edge = humanStore.createEdge({
@@ -242,6 +257,7 @@ export function registerHumanCommand(program: Command): void {
         process.exitCode = 1;
       } finally {
         humanStore.close();
+        codeReader?.close();
       }
     });
 }

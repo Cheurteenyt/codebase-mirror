@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.6.0.
+> Updated 2026-07-05 for version 0.7.0.
 
-## Current State (0.6.0)
+## Current State (0.7.0)
 
 ### ✅ Completed
 
@@ -26,19 +26,24 @@
 | Full docs audit | 0.5.5 | 6 docs updated (README, ROADMAP, MCP_TOOLS, CLI_REF, TOKEN_ECONOMY, ARCHITECTURE) |
 | 7 new API endpoints | 0.6.0 | /api/adr (GET+POST), /api/browse, /api/index, /api/index-status, /api/processes, /api/process-kill, /api/project-delete, /api/logs |
 | ControlTab full implementation | 0.6.0 | Processes list, logs viewer, index jobs, kill process |
+| Round 18 God function refactor | 0.6.1 | generateVault (235→30 LOC) + importVault (200→15 LOC) split into focused sub-functions |
+| Round 19 bug fixes | 0.6.2 | createEdge cbm_node_ids sync (CRITICAL), --force flag honored (HIGH) |
+| Round 20 storage optimization | 0.6.3 | Migration V2: drop useless index, composite indexes, PRAGMA temp_store + cache_size. maxNodes DoS fix |
+| Round 21 junction table | 0.7.0 | Migration V3: human_node_cbm_links junction table replacing JSON_EACH. Indexed reverse lookup, FK CASCADE, WITHOUT ROWID |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
 | Source files (v2) | 33 |
-| Test files | 17 |
-| Tests | 194 (all passing) |
-| Bugs fixed (16 rounds) | 403+ |
+| Test files | 20 |
+| Tests | 221 (all passing) |
+| Bugs fixed (21 rounds) | 403+ |
 | MCP tools | 7 |
 | CLI commands | 15+ |
-| API endpoints | 13 (6 existing + 7 new) |
+| API endpoints | 15 (6 existing + 9 new) |
 | Graph UI components | 13 |
+| SQLite migrations | 3 (initial_schema, optimize_indexes, cbm_links_junction_table) |
 | CI pipeline stages | 3 (typecheck → build → test) |
 | Production dependencies | 3 |
 
@@ -50,16 +55,17 @@
 |---|---|---|---|
 | ✅ 7 missing API endpoints | Done | Medium | Completed in 0.6.0 |
 | ✅ ControlTab full implementation | Done | Medium | Completed in 0.6.0 |
+| ✅ Refactor God functions | Done | Medium | Completed in 0.6.1 |
+| ✅ Storage optimization (indexes + PRAGMAs) | Done | Medium | Completed in 0.6.3 |
+| ✅ Junction table (complex storage) | Done | High | Completed in 0.7.0 |
 | `cbm-v2 watch` daemon | High | Medium | Planned |
-| Refactor `generateVault` (230 LOC → sub-functions) | High | Medium | Planned |
-| Refactor `importVault` (188 LOC → sub-functions) | High | Medium | Planned |
 | Tests for reports (hotspots, undocumented, risk) | High | Medium | Planned |
 | ESLint + Prettier configuration | Medium | Low | Planned |
 | `noUncheckedIndexedAccess` in tsconfig | Medium | Low | Planned |
 | Compact MCP responses (shorter excerpts) | Medium | Low | Planned |
 | UI tests (vitest + testing-library) | Medium | Medium | Planned |
 
-### Phase 2: Proactive Intelligence (0.7.0)
+### Phase 2: Proactive Intelligence (0.8.0)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -71,7 +77,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.8.0)
+### Phase 3: V1 Complete (0.9.0)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -114,7 +120,11 @@
 | R15 (N+1 + UX) | 0.5.5 | 16 | 16 | 175 |
 | R16 (docs audit) | 0.5.5 | — (docs) | — | 175 |
 | R17 (7 API endpoints) | 0.6.0 | — (features) | — | 194 |
-| **Total** | | **403+** | **403+** | **194** |
+| R18 (God function refactor) | 0.6.1 | — (refactor) | — | 194 |
+| R19 (bug fixes) | 0.6.2 | 2 | 2 | 200 |
+| R20 (storage optimization) | 0.6.3 | 1 (DoS) | 1 | 207 |
+| R21 (junction table) | 0.7.0 | — (feature) | — | 221 |
+| **Total** | | **403+** | **403+** | **221** |
 
 ## Performance Milestones
 
@@ -130,8 +140,11 @@
 | R15 | `get_project_overview` | ~5000 queries | ~4 queries | -99.9% |
 | R15 | `backup export` edges | ~1000 queries | 1 query | -99.9% |
 | R15 | `getBulkNotesByCbmNodeIds` (limit=1, 10000 notes) | 10000 rows | 1 row | -99.99% |
+| R20 | SQLite index bloat | 6 indexes (1 useless) | 5 indexes (all used) | -17% write overhead |
+| R20 | SQLite temp_store | disk I/O for sorting | MEMORY | -90% sort latency |
+| R21 | `getBulkNotesByCbmNodeIds` (5000 modules) | ~2.5M JSON_EACH ops | ~5000 B-tree lookups | -80% to -95% |
 
-## API Endpoints (0.6.0)
+## API Endpoints (0.7.0)
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -151,3 +164,10 @@
 | `/api/process-kill` | POST | Kill a process by PID (R17) |
 | `/api/logs` | GET | Recent log lines (R17) |
 
+## SQLite Schema Migrations
+
+| Version | Name | Description |
+|---|---|---|
+| 1 | `initial_schema` | Base tables: human_nodes, human_edges, human_metrics, sync_state |
+| 2 | `optimize_indexes` | Drop useless idx_cbm_node_ids, replace single-column with composite (project, label/status) indexes |
+| 3 | `cbm_links_junction_table` | Create human_node_cbm_links junction table (WITHOUT ROWID, PK, FK CASCADE) + backfill from cbm_node_ids JSON |

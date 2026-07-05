@@ -1,6 +1,6 @@
 # MCP Tools Reference — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.5.5.
+> Updated 2026-07-05 for version 0.7.0.
 
 V2 exposes **7 MCP tools** via JSON-RPC 2.0 over stdio. This document describes each tool's input, output, and usage.
 
@@ -76,7 +76,7 @@ The server implements:
 }
 ```
 
-**Performance**: Uses bulk fetches — `getBulkNodeDegrees` + `getBulkNotesByCbmNodeIds` (1 query for all modules, not N+1).
+**Performance**: Uses bulk fetches — `getBulkNodeDegrees` + `getBulkNotesByCbmNodeIds` (1 query for all modules, not N+1). R21: `getBulkNotesByCbmNodeIds` uses the `human_node_cbm_links` junction table with an indexed JOIN instead of `JSON_EACH`.
 
 ### 2. `get_module_context`
 
