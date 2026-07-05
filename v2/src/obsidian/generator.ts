@@ -39,6 +39,8 @@ export interface GenerateOptions {
   autoGenerateModuleNotes?: boolean;
   autoGenerateRouteNotes?: boolean;
   minDegreeForModuleNote?: number;
+  /** R19: if true, re-write all notes even if content hasn't changed. */
+  force?: boolean;
 }
 
 export interface GenerateResult {
@@ -143,7 +145,9 @@ function syncSingleNode(node: HumanNode, opts: GenerateOptions, result: Generate
     const fullContent = rebuildNoteContent(existingContent, node, opts.codeReader);
     // Compare ignoring last_synced (changes on every export → infinite re-writes).
     const normalizeForDiff = (s: string) => s.replace(/^last_synced:[^\n]*\n?/gm, '');
-    if (normalizeForDiff(fullContent) !== normalizeForDiff(existingContent)) {
+    // R19: --force bypasses the diff check and re-writes all notes.
+    const hasChanged = normalizeForDiff(fullContent) !== normalizeForDiff(existingContent);
+    if (hasChanged || opts.force) {
       if (!opts.dryRun) {
         const writeResult = writeNote(opts.vaultPath, relPath, fullContent, { backupBeforeWrite: backupEnabled });
         if (writeResult.backupPath) result.backups.push(writeResult.backupPath);

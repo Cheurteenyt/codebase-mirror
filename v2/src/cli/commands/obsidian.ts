@@ -179,6 +179,7 @@ export function registerObsidianCommand(program: Command): void {
           autoGenerateModuleNotes: config.v2.obsidian.autoGenerateModuleNotes,
           autoGenerateRouteNotes: config.v2.obsidian.autoGenerateRouteNotes,
           minDegreeForModuleNote: config.v2.obsidian.minDegreeForModuleNote,
+          force: !!opts.force,
         });
         console.log(`✅ Export: ${result.created.length} created, ${result.updated.length} updated, ${result.unchanged.length} unchanged`);
       } finally {
