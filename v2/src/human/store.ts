@@ -214,7 +214,11 @@ export class HumanMemoryStore {
         now
       );
 
-    return this.getNodeById(Number(result.lastInsertRowid))!;
+    // R21: write junction table rows for each cbm_node_id.
+    const newId = Number(result.lastInsertRowid);
+    this.syncCbmLinks(newId, input.cbm_node_ids ?? []);
+
+    return this.getNodeById(newId)!;
   }
 
   getNodeById(id: number): HumanNode | null {
@@ -262,11 +266,13 @@ export class HumanMemoryStore {
   }
 
   listNodesByCbmNodeId(project: string, cbmNodeId: number, limit = 200): HumanNode[] {
-    // cbm_node_ids is a JSON array; use JSON_EACH for indexed lookup
+    // R21: use the junction table (indexed) instead of JSON_EACH.
+    // The JOIN on human_node_cbm_links uses idx_cbm_links_cbm_id for O(log n) lookup.
     const rows = this.db
       .prepare(
-        `SELECT n.* FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
-         WHERE n.project = ? AND je.value = ?
+        `SELECT n.* FROM human_nodes n
+         JOIN human_node_cbm_links l ON l.human_node_id = n.id
+         WHERE n.project = ? AND l.cbm_node_id = ?
          ORDER BY n.updated_at DESC, n.id ASC
          LIMIT ?`
       )
@@ -296,15 +302,17 @@ export class HumanMemoryStore {
       const chunk = cbmNodeIds.slice(i, i + CHUNK);
       const placeholders = chunk.map(() => '?').join(',');
       try {
-        // Use ROW_NUMBER() to cap per-node at the SQL level. SQLite 3.25+
-        // (2018-09) supports window functions — safe to assume.
+        // R21: use the junction table instead of JSON_EACH.
+        // The JOIN uses idx_cbm_links_cbm_id for indexed lookup.
+        // ROW_NUMBER() caps per-node at the SQL level (SQLite 3.25+).
         const rows = this.db
           .prepare(
             `SELECT * FROM (
-               SELECT n.*, je.value AS cbm_id,
-                      ROW_NUMBER() OVER (PARTITION BY je.value ORDER BY n.updated_at DESC, n.id ASC) AS rn
-               FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
-               WHERE n.project = ? AND je.value IN (${placeholders})
+               SELECT n.*, l.cbm_node_id AS cbm_id,
+                      ROW_NUMBER() OVER (PARTITION BY l.cbm_node_id ORDER BY n.updated_at DESC, n.id ASC) AS rn
+               FROM human_nodes n
+               JOIN human_node_cbm_links l ON l.human_node_id = n.id
+               WHERE n.project = ? AND l.cbm_node_id IN (${placeholders})
              ) WHERE rn <= ?`
           )
           .all(project, ...chunk, limit) as any[];
@@ -319,8 +327,10 @@ export class HumanMemoryStore {
         try {
           const rows = this.db
             .prepare(
-              `SELECT n.*, je.value AS cbm_id FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
-               WHERE n.project = ? AND je.value IN (${placeholders})
+              `SELECT n.*, l.cbm_node_id AS cbm_id
+               FROM human_nodes n
+               JOIN human_node_cbm_links l ON l.human_node_id = n.id
+               WHERE n.project = ? AND l.cbm_node_id IN (${placeholders})
                ORDER BY n.updated_at DESC, n.id ASC`
             )
             .all(project, ...chunk) as any[];
@@ -419,6 +429,12 @@ export class HumanMemoryStore {
     params.push(id);
 
     this.db.prepare(`UPDATE human_nodes SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+
+    // R21: if cbm_node_ids changed, sync the junction table.
+    if (input.cbm_node_ids !== undefined) {
+      this.syncCbmLinks(id, input.cbm_node_ids);
+    }
+
     return this.getNodeById(id);
   }
 
@@ -575,16 +591,19 @@ export class HumanMemoryStore {
         now
       );
 
-    // R19: keep the denormalized cbm_node_ids on the source node in sync.
-    // When a code-target edge is created, the source node's cbm_node_ids
-    // must include the target_cbm_node_id — otherwise getBulkNotesByCbmNodeIds
-    // (which queries cbm_node_ids via JSON_EACH) won't find this note, making
-    // it invisible to prepare_edit_context, get_module_context, /api/layout
-    // notes_count, and the Obsidian "Links to code" rendering.
+    // R19+R21: keep the denormalized cbm_node_ids JSON cache AND the junction
+    // table in sync. When a code-target edge is created, the source node's
+    // cbm_node_ids must include the target_cbm_node_id — otherwise queries
+    // won't find this note.
     if (input.target_kind === 'code' && input.target_cbm_node_id != null) {
       const sourceNode = this.getNodeById(input.source_human_node_id);
       if (sourceNode) {
         const cbmId = input.target_cbm_node_id;
+        // R21: write to junction table (idempotent via INSERT OR IGNORE).
+        this.db
+          .prepare('INSERT OR IGNORE INTO human_node_cbm_links (human_node_id, cbm_node_id) VALUES (?, ?)')
+          .run(sourceNode.id, cbmId);
+        // R19: update the JSON cache (only if not already present).
         if (!sourceNode.cbm_node_ids.includes(cbmId)) {
           const updatedIds = [...sourceNode.cbm_node_ids, cbmId];
           this.db
@@ -703,6 +722,47 @@ export class HumanMemoryStore {
 
   getRawDb(): Database.Database {
     return this.db;
+  }
+
+  /**
+   * R21: Synchronize the junction table `human_node_cbm_links` for a given
+   * human node. This is the source of truth for code-node ↔ human-node links.
+   *
+   * Strategy: DELETE all existing links for this node, then INSERT the new
+   * set. This is simpler and safer than diffing, and the junction table is
+   * small (typically < 10 links per node).
+   *
+   * The `cbm_node_ids` JSON column on `human_nodes` is kept as a denormalized
+   * cache for backward compatibility (export, hash, rendering). It MUST be
+   * updated by the caller BEFORE calling this method (createNode/updateNode
+   * already do this via the SET clause).
+   *
+   * @param humanNodeId  the source human node ID
+   * @param cbmNodeIds    the new set of cbm_node_ids (duplicates filtered, invalid filtered)
+   */
+  private syncCbmLinks(humanNodeId: number, cbmNodeIds: number[]): void {
+    // Filter to valid positive integers, deduplicate.
+    const validIds = [...new Set(
+      cbmNodeIds.filter((id) => typeof id === 'number' && Number.isFinite(id) && id > 0)
+    )];
+
+    // Delete all existing links for this node.
+    this.db
+      .prepare('DELETE FROM human_node_cbm_links WHERE human_node_id = ?')
+      .run(humanNodeId);
+
+    // Insert the new set (bulk INSERT for efficiency).
+    if (validIds.length > 0) {
+      const stmt = this.db.prepare(
+        'INSERT OR IGNORE INTO human_node_cbm_links (human_node_id, cbm_node_id) VALUES (?, ?)'
+      );
+      const tx = this.db.transaction((ids: number[]) => {
+        for (const cbmId of ids) {
+          stmt.run(humanNodeId, cbmId);
+        }
+      });
+      tx(validIds);
+    }
   }
 }
 

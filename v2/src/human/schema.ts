@@ -226,6 +226,50 @@ CREATE INDEX IF NOT EXISTS idx_human_nodes_project_label ON human_nodes(project,
 CREATE INDEX IF NOT EXISTS idx_human_nodes_project_status ON human_nodes(project, status);
 `;
 
+/**
+ * R21 Migration V3: junction table for cbm_node_ids.
+ *
+ * Creates a normalized junction table `human_node_cbm_links` to replace
+ * the JSON_EACH(cbm_node_ids) query pattern. The junction table is the
+ * NEW source of truth for code-node ↔ human-node links, while the
+ * `cbm_node_ids` TEXT column is kept as a denormalized cache for backward
+ * compatibility (export, hash, rendering).
+ *
+ * Benefits:
+ * - Indexed reverse lookup (cbm_node_id → human_nodes) via covering index
+ * - Referential integrity via FK CASCADE on delete
+ * - No duplicate links (PRIMARY KEY prevents dups)
+ * - O(1) add/remove instead of read-modify-write on JSON
+ *
+ * The backfill populates the junction table from existing cbm_node_ids
+ * JSON arrays. If a node has cbm_node_ids = [1, 42, 99], three rows are
+ * inserted: (node_id, 1), (node_id, 42), (node_id, 99).
+ *
+ * After migration, the app keeps both representations in sync:
+ * - createNode/updateNode: write junction table + update JSON cache
+ * - createEdge (R19): write junction table + update JSON cache
+ * - deleteNode: FK CASCADE cleans up junction table automatically
+ */
+const SCHEMA_V3 = `
+CREATE TABLE IF NOT EXISTS human_node_cbm_links (
+    human_node_id   INTEGER NOT NULL,
+    cbm_node_id     INTEGER NOT NULL,
+    PRIMARY KEY (human_node_id, cbm_node_id),
+    FOREIGN KEY (human_node_id) REFERENCES human_nodes(id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+-- Covering index for reverse lookups: "which human nodes link to cbm_node_id X?"
+CREATE INDEX IF NOT EXISTS idx_cbm_links_cbm_id ON human_node_cbm_links(cbm_node_id);
+
+-- Backfill: populate the junction table from existing cbm_node_ids JSON arrays.
+-- JSON_EACH expands the array; we INSERT OR IGNORE to handle potential dups.
+INSERT OR IGNORE INTO human_node_cbm_links (human_node_id, cbm_node_id)
+SELECT n.id, je.value
+FROM human_nodes n, JSON_EACH(n.cbm_node_ids) AS je
+WHERE je.value IS NOT NULL AND typeof(je.value) IN ('integer', 'real')
+  AND je.value > 0;
+`;
+
 interface Migration {
   version: number;
   name: string;
@@ -235,6 +279,7 @@ interface Migration {
 const MIGRATIONS: Migration[] = [
   { version: 1, name: 'initial_schema', sql: SCHEMA_V1 },
   { version: 2, name: 'optimize_indexes', sql: SCHEMA_V2 },
+  { version: 3, name: 'cbm_links_junction_table', sql: SCHEMA_V3 },
 ];
 
 export function runMigrations(db: Database): void {

@@ -38,11 +38,14 @@ describe('R20: Migration V2 — index optimization', () => {
       const migrations = db
         .prepare('SELECT version, name FROM schema_migrations ORDER BY version')
         .all() as any[];
-      expect(migrations.length).toBe(2);
+      // R21 added migration V3 (cbm_links_junction_table).
+      expect(migrations.length).toBe(3);
       expect(migrations[0].version).toBe(1);
       expect(migrations[0].name).toBe('initial_schema');
       expect(migrations[1].version).toBe(2);
       expect(migrations[1].name).toBe('optimize_indexes');
+      expect(migrations[2].version).toBe(3);
+      expect(migrations[2].name).toBe('cbm_links_junction_table');
     } finally {
       store.close();
     }
@@ -129,12 +132,13 @@ describe('R20: Migration V2 — index optimization', () => {
     // Now run migrations (should apply V2).
     runMigrations(db);
 
-    // Verify V2 migration was applied.
+    // Verify V2+V3 migrations were applied.
     const migrations = db
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as any[];
-    expect(migrations.length).toBe(2);
+    expect(migrations.length).toBe(3);
     expect(migrations[1].version).toBe(2);
+    expect(migrations[2].version).toBe(3);
 
     // Verify old indexes were dropped.
     const afterIndexes = db
