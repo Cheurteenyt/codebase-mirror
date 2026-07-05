@@ -1,5 +1,7 @@
 # Token Economy — How V2 Saves API Tokens
 
+> Updated 2026-07-05 for version 0.5.5.
+
 V2 is designed to **minimize the number of API calls and tokens** an AI agent needs to understand and modify a codebase.
 
 ## The Problem
@@ -15,7 +17,7 @@ Each step requires multiple API calls (grep, read, search), consuming thousands 
 
 ## The V2 Solution
 
-V2 consolidates all these steps into **single MCP tool calls** that return pre-computed, structured data.
+V2 consolidates all these steps into **single MCP tool calls** that return pre-computed, structured data. Internally, V2 uses **bulk queries** to avoid N+1 patterns — a single MCP call may execute only 4 SQL queries even when analyzing 5000 nodes.
 
 ## Token Savings by Scenario
 
@@ -75,6 +77,26 @@ V2 consolidates all these steps into **single MCP tool calls** that return pre-c
 - "SAFE TO EDIT" or "PROCEED WITH CAUTION" with specific warnings
 - Agent doesn't need to interpret raw data — V2 tells it what to do
 
+## How V2 Minimizes Internal Query Count (N+1 Elimination)
+
+Rounds 13-15 systematically eliminated N+1 query patterns. A single MCP call now executes only a handful of SQL queries, even for large projects:
+
+| MCP Tool / API Path | Before (R12) | After (R15) | Reduction |
+|---|---|---|---|
+| `get_project_overview` | ~5000 queries (listNodesByCbmNodeId per module) | ~4 queries (1 bulk) | -99.9% |
+| `get_module_context` | 1 query (single node — OK) | 1 bulk query (consistent path) | — |
+| `prepare_edit_context` | ~100 queries | ~4 queries | -96% |
+| `prepare_edit_context` blast radius | 3 getNodesByIds calls | 1 call | -67% |
+| `/api/layout` notesCount | ~2000 queries | ~4 queries | -99.8% |
+| `/api/layout` edges | ~2000 queries (getNeighbors per node) | ~4 queries (getBulkEdges) | -99.8% |
+| `/api/dashboard` critical notes | ~5000 queries | ~1 query | -99.98% |
+| `report undocumented` | ~25000 queries | ~25 queries | -99.9% |
+| `backup export` edges | ~1000 queries (per note) | 1 query (listAllEdges) | -99.9% |
+
+### SQL-level limit via ROW_NUMBER() (R15)
+
+`getBulkNotesByCbmNodeIds(project, ids, limit)` previously loaded ALL matching rows from SQLite then capped per-node in JavaScript. For a node with 10000 notes and `limit=1`, this loaded all 10000 rows. R15 uses `ROW_NUMBER() OVER (PARTITION BY ...)` to cap at the database level — only `limit` rows per node are transferred. Falls back to the old behavior if window functions are unavailable (SQLite < 3.25, pre-2018).
+
 ## Estimated Monthly Savings
 
 Assuming an agent makes 100 edits/month on a mid-size project:
@@ -96,3 +118,6 @@ For a team of 10 developers: **~$41/month, ~$492/year**.
 3. **Use `search_code_and_memory` for exploration** — unified search saves a round-trip
 4. **Create notes via `create_human_note`** — one call instead of file write + sync + edge creation
 5. **Check `graph_status.freshness_label`** — if STALE or worse, recommend re-indexing before trusting the data
+6. **Respect the `recommendation` field** — it tells you "SAFE TO EDIT" or "PROCEED WITH CAUTION" with specific warnings
+7. **Use `blast_radius` to gauge impact** — if `affected_routes > 0`, your edit could break HTTP endpoints
+

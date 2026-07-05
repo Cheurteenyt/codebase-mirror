@@ -21,13 +21,21 @@ Codebase Memory V2 adds the **human context**:
 
 It syncs everything to an **Obsidian-compatible Markdown vault** so you can read and edit notes in your favorite editor, with backlinks and tags.
 
+## Current version: 0.5.5
+
+- **175 tests** (all passing)
+- **7 MCP tools** (including the flagship `prepare_edit_context`)
+- **15+ CLI commands** across 6 command groups
+- **403+ bugs fixed** across 15 audit rounds
+- **Graph UI** with 2D d3-force canvas, dashboard, filters
+
 ## Quick start
 
 ```bash
 cd v2
 npm install
 npm run build
-npm test                    # 124+ tests
+npm test                    # 175 tests
 
 # Try the demo (no V1 needed)
 node dist/cli/index.js demo
@@ -37,6 +45,9 @@ node dist/cli/index.js init --project my-app
 
 # Run diagnostics
 node dist/cli/index.js doctor --project my-app
+
+# Start the graph UI (http://127.0.0.1:9749)
+node dist/cli/index.js ui --project my-app
 ```
 
 ## CLI reference
@@ -50,6 +61,7 @@ node dist/cli/index.js doctor --project my-app
 | `cbm-v2 stats` | Show a pretty statistics dashboard |
 | `cbm-v2 demo` | Create a demo project with sample notes + vault |
 | `cbm-v2 mcp` | Run as MCP server (JSON-RPC over stdio) |
+| `cbm-v2 ui` | Start the graph UI web server (port 9749) |
 
 ### Human memory commands
 
@@ -57,7 +69,7 @@ node dist/cli/index.js doctor --project my-app
 |---|---|
 | `cbm-v2 human create --type ADR --title "ADR-001: ..."` | Create a note |
 | `cbm-v2 human list [--type ADR] [--status active]` | List notes |
-| `cbm-v2 human show <id>` | Show a note (JSON) |
+| `cbm-v2 human show <id>` | Show a note (JSON, includes edges) |
 | `cbm-v2 human link <noteId> --to-cbm-node <id> --edge DECIDES` | Link note to code node |
 
 ### Obsidian commands
@@ -92,18 +104,19 @@ node dist/cli/index.js doctor --project my-app
 | `cbm-v2 backup import backup.json` | Import from JSON backup |
 | `cbm-v2 backup import backup.json --dry-run` | Preview import |
 
-## MCP tools (6)
+## MCP tools (7)
 
-The `cbm-v2 mcp` command exposes 6 tools via JSON-RPC 2.0 over stdio:
+The `cbm-v2 mcp` command exposes 7 tools via JSON-RPC 2.0 over stdio:
 
 | Tool | Type | Description |
 |---|---|---|
-| `get_project_overview` | read | High-level project stats (nodes, notes, coverage) |
+| `get_project_overview` | read | High-level project stats (nodes, notes, coverage, freshness) |
 | `get_module_context` | read | Full module context: code + human notes + ADRs + bugs + refactors |
 | `get_undocumented_hotspots` | read | Critical code nodes without documentation |
 | `create_human_note` | write | Create ADR/BugNote/etc. + link to code nodes |
 | `link_note_to_code_node` | write | Link existing note to a code node |
 | `search_code_and_memory` | read | Unified search across code graph + human memory |
+| `prepare_edit_context` ⭐ | read | **Flagship** — call BEFORE editing any file. Returns code structure, dependencies, human notes, blast radius, risk score, freshness, and recommendations |
 
 ### Connecting an AI agent
 
@@ -131,7 +144,8 @@ Add to your MCP client config (Claude Desktop, Cursor, Zed, etc.):
 │   │  C Engine (V1)      │    │  TS Sidecar (V2)         │   │
 │   │  tree-sitter 158    │    │  Human Memory DB         │   │
 │   │  SQLite code graph  │◄───┤  Obsidian vault sync     │   │
-│   │  14 MCP tools (V1)  │    │  6 MCP tools (V2)        │   │
+│   │  14 MCP tools (V1)  │    │  7 MCP tools (V2)        │   │
+│   │                     │    │  Graph UI (d3-force 2D)  │   │
 │   └─────────────────────┘    └──────────────────────────┘   │
 │                                                              │
 │   Storage:                                                   │
@@ -201,6 +215,20 @@ Use JWT tokens signed with HS256.
 
 The `## HUMAN NOTES` section is **never** overwritten by V2. Edit it freely in Obsidian — the next sync preserves your edits.
 
+## Graph UI
+
+The V2 graph UI replaces V1's 3D Three.js scene with a cleaner 2D d3-force canvas:
+
+- **Dashboard tab** (default): KPIs, graph freshness, smart recommendations
+- **Graph tab**: 2D force-directed canvas with filters, pan/zoom, node detail panel
+- **Projects tab**: Project list with node/edge counts and health status
+- **Control tab**: System info
+
+```bash
+cbm-v2 ui --project my-app          # http://127.0.0.1:9749
+cbm-v2 ui --project my-app --port 8080
+```
+
 ## Docker
 
 ```bash
@@ -220,7 +248,7 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 ### Design Documents
 - [V2 Audit](docs/V2_AUDIT.md) — Analysis of V1 (C11 codebase, 65K LOC)
 - [V2 Architecture](docs/V2_ARCHITECTURE.md) — Sidecar TypeScript design
-- [V2 Roadmap](docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.4.3)
+- [V2 Roadmap](docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.5.5)
 - [Obsidian Integration](docs/OBSIDIAN_INTEGRATION.md) — Vault format and sync
 - [Human Memory Schema](docs/HUMAN_MEMORY_GRAPH_SCHEMA.md) — SQL schema
 
@@ -232,7 +260,6 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 
 ### Project
 - [Contributing](CONTRIBUTING.md) — How to contribute
-- [Changelog](v2/CHANGELOG.md) — Version history (0.1.0 → 0.4.3)
 - [License](LICENSE) — MIT
 
 ## Security
@@ -242,6 +269,15 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 - **Path traversal protection**: `obsidian_path` validated against `..` and backslashes
 - **Backup rotation**: max 5 `.bak` files per note
 - **Dry-run**: available on `obsidian sync`, `obsidian export`, `obsidian import`, `backup import`
+- **Consistent sync hashes**: `markSynced` computes the same DB-derived hash for both export and import directions, making conflict detection reliable (R14 fix)
+
+## Performance
+
+- **N+1 query elimination**: all hot paths use bulk fetches (`getBulkNotesByCbmNodeIds`, `getBulkNodeDegrees`, `getBulkEdges`)
+- **SQL-level limit**: `getBulkNotesByCbmNodeIds` uses `ROW_NUMBER() OVER (PARTITION BY ...)` to cap per-node at the database level
+- **Stable UI listeners**: `GraphCanvas` uses refs for callbacks — no listener rebinds on filter toggle
+- **Cursor-following tooltip**: `NodeTooltip` tracks mouse position
+- **Zoom-to-mouse**: `GraphCanvas` zoom centers on the cursor, not the origin
 
 ## License
 

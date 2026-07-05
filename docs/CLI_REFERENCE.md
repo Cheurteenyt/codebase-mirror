@@ -1,5 +1,7 @@
 # CLI Reference — Codebase Memory V2
 
+> Updated 2026-07-05 for version 0.5.5.
+
 All commands are available via `cbm-v2` (or `node dist/cli/index.js` before global install).
 
 ## Core Commands
@@ -19,7 +21,7 @@ Run diagnostics to verify the setup.
 cbm-v2 doctor --project my-app
 ```
 
-Checks: Node.js version, config file, human DB, code graph DB, vault path writability.
+Checks: Node.js version (≥18), config file, human DB, code graph DB, vault path writability.
 
 ### `cbm-v2 stats`
 Show a pretty statistics dashboard.
@@ -45,6 +47,21 @@ Run as MCP server (JSON-RPC 2.0 over stdio). For AI agent integration.
 cbm-v2 mcp --project my-app
 ```
 
+### `cbm-v2 ui`
+Start the graph UI web server (2D d3-force canvas, dashboard, filters).
+
+```bash
+cbm-v2 ui --project my-app                     # http://127.0.0.1:9749
+cbm-v2 ui --project my-app --port 8080         # custom port
+cbm-v2 ui --project my-app --graph-ui-path /custom/dist  # custom UI build
+```
+
+The UI has 4 tabs:
+- **Dashboard** (default when a project is selected): KPIs, graph freshness, recommendations
+- **Graph**: 2D force-directed canvas with filters, sidebar, node detail panel
+- **Projects**: Project list with node/edge counts and health status
+- **Control**: System info
+
 ## Human Memory Commands
 
 ### `cbm-v2 human create`
@@ -61,6 +78,8 @@ cbm-v2 human create \
   --status active
 ```
 
+**Validation** (R15): `--link-edge` is always validated, even if no `--link-cbm` is provided. Previously an invalid edge type was silently accepted when no links were created.
+
 ### `cbm-v2 human list`
 List notes with optional filters.
 
@@ -70,11 +89,13 @@ cbm-v2 human list --project my-app --type ADR --status active --limit 50
 ```
 
 ### `cbm-v2 human show`
-Show a single note (JSON output).
+Show a single note (JSON output, includes edges).
 
 ```bash
 cbm-v2 human show 42 --project my-app
 ```
+
+**R15**: The output now includes the note's edges (up to 1000), so you can see what code nodes and human nodes it's linked to.
 
 ### `cbm-v2 human link`
 Link a note to a code node.
@@ -133,12 +154,16 @@ Create a ModuleNote for a specific module.
 cbm-v2 obsidian create-module-note --project my-app --module auth
 ```
 
+**R15**: Errors with a clear message if a ModuleNote already exists for this module (previously `createNode` would auto-suffix the slug, producing an unexpected `obsidian_path`).
+
 ### `cbm-v2 obsidian create-route-note`
 Create a RouteNote for a specific HTTP route.
 
 ```bash
 cbm-v2 obsidian create-route-note --project my-app --method POST --path /api/login
 ```
+
+**R15**: Same pre-creation check as `create-module-note`.
 
 ## Report Commands
 
@@ -172,6 +197,8 @@ Export all human notes + edges to a portable JSON file.
 cbm-v2 backup export --project my-app --output backup.json
 ```
 
+**R15**: Now exports ALL fields (`provenance`, `confidence`, `source_file`, `last_synced_at` for notes; `provenance`, `confidence`, `source_file` for edges). Previously these fields were lost on export. Also uses a single `listAllEdges` query instead of N+1 per-note queries.
+
 ### `cbm-v2 backup import`
 Import from a JSON backup file.
 
@@ -179,6 +206,8 @@ Import from a JSON backup file.
 cbm-v2 backup import backup.json --project my-app
 cbm-v2 backup import backup.json --project restored-app --dry-run
 ```
+
+**R15**: Skipped notes now log WHY they were skipped (slug collision or obsidian_path collision). Previously skips were silent.
 
 ## Global Options
 
@@ -193,3 +222,4 @@ cbm-v2 backup import backup.json --project restored-app --dry-run
 |---|---|
 | 0 | Success |
 | 1 | Error (validation, DB, filesystem) |
+

@@ -28,32 +28,35 @@
 ├──────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │   ┌────────────────────────────────┐      ┌──────────────────────────┐  │
-│   │  C Engine (V1, inchangé)       │      │  TS Sidecar (V2 new)     │  │
+│   │  C Engine (V1, inchangé)       │      │  TS Sidecar (V2)         │  │
 │   │  ──────────────────────────    │      │  ──────────────────────  │  │
 │   │  Foundation (mem, log, etc.)   │      │  v2/src/                 │  │
 │   │  Store (SQLite code graph)     │      │   ├─ human/              │  │
 │   │  Pipeline (158 lang, 22 passes)│      │   │  ├─ schema.ts        │  │
-│   │  Cypher engine                 │      │   │  ├─ store.ts         │  │
-│   │  MCP server (14 tools V1)      │◄────►│   │  ├─ importer.ts      │  │
-│   │  HTTP UI server (127.0.0.1)    │      │   │  └─ exporter.ts      │  │
-│   │  React/Three.js UI (existing)  │      │   ├─ obsidian/           │  │
-│   │  Watcher (polling)             │      │   │  ├─ vault.ts          │  │
-│   │  CLI (install, config, etc.)   │      │   │  ├─ frontmatter.ts   │  │
-│   │  ──────────────────────────    │      │   │  ├─ wikilinks.ts     │  │
-│   │  + 15 new MCP tools V2 (C ext) │      │   │  ├─ generator.ts     │  │
-│   │  + New HTTP /api/* routes      │      │   │  └─ importer.ts      │  │
-│   │  + New UI tabs (notes, memory) │      │   ├─ mcp/                │  │
-│   │                                │      │   │  ├─ server.ts        │  │
-│   │                                │      │   │  └─ tools/ (15)      │  │
+│   │  Cypher engine                 │      │   │  └─ store.ts         │  │
+│   │  MCP server (14 tools V1)      │◄────►│   ├─ obsidian/           │  │
+│   │  HTTP UI server (127.0.0.1)    │      │   │  ├─ vault.ts          │  │
+│   │  React/d3-force UI (V2 2D)     │      │   │  ├─ frontmatter.ts   │  │
+│   │  Watcher (polling)             │      │   │  ├─ wikilinks.ts     │  │
+│   │  CLI (install, config, etc.)   │      │   │  ├─ generator.ts     │  │
+│   │  ──────────────────────────    │      │   │  └─ importer.ts      │  │
+│   │  + 7 new MCP tools V2          │      │   ├─ mcp/                │  │
+│   │  + New HTTP /api/* routes      │      │   │  ├─ server.ts        │  │
+│   │  + New UI tabs (dashboard)     │      │   │  └─ tools/ (7)       │  │
 │   │                                │      │   ├─ reports/            │  │
 │   │                                │      │   │  ├─ hotspots.ts      │  │
 │   │                                │      │   │  ├─ undocumented.ts  │  │
 │   │                                │      │   │  └─ risk.ts          │  │
+│   │                                │      │   ├─ intelligence/       │  │
+│   │                                │      │   │  └─ graph-status.ts  │  │
+│   │                                │      │   ├─ ui/                │  │
+│   │                                │      │   │  └─ server.ts        │  │
+│   │                                │      │   ├─ bridge/             │  │
+│   │                                │      │   │  └─ sqlite-ro.ts     │  │
 │   │                                │      │   ├─ cli/                │  │
 │   │                                │      │   │  └─ commands/        │  │
-│   │                                │      │   ├─ bridge/             │  │
-│   │                                │      │   │  ├─ c-engine.ts      │  │
-│   │                                │      │   │  └─ sqlite-ro.ts     │  │
+│   │                                │      │   ├─ config.ts           │  │
+│   │                                │      │   ├─ constants.ts        │  │
 │   │                                │      │   └─ index.ts            │  │
 │   └────────────────────────────────┘      └──────────────────────────┘  │
 │                                                                          │
@@ -62,41 +65,41 @@
 │   │  ─────────────────────────────────────────────────────────────  │  │
 │   │  ~/.cache/codebase-memory-mcp/                                  │  │
 │   │     <project>.db              ← code graph (V1, inchangé)       │  │
-│   │     <project>.human.db        ← human memory (V2 new)           │  │
+│   │     <project>.human.db        ← human memory (V2)               │  │
 │   │     _config.db                ← runtime KV (V1+V2 keys)         │  │
 │   │     config.json               ← UI config (V1+V2 keys)          │  │
 │   │  <repo>/                                                         │  │
 │   │     .codebase-memory/                                           │  │
 │   │        graph.db.zst            ← team code artifact (V1)        │  │
 │   │        human-memory.db.zst     ← team human artifact (V2 new)   │  │
-│   │     .codebase-memory-vault/   ← Obsidian vault (V2 new)         │  │
+│   │     .codebase-memory-vault/   ← Obsidian vault (V2)             │  │
 │   │        00_Index.md                                              │  │
-│   │        Architecture/                                            │  │
-│   │        ADR/                                                      │  │
-│   │        Modules/                                                  │  │
-│   │        Routes/                                                   │  │
-│   │        Refactor/                                                 │  │
-│   │        Bugs/                                                     │  │
-│   │        Legacy/                                                   │  │
-│   │        Conventions/                                              │  │
-│   │        Prompts/                                                  │  │
-│   │        Journal/                                                  │  │
+│   │        Architecture/ ADR/ Modules/ Routes/ Refactor/            │  │
+│   │        Bugs/ Legacy/ Conventions/ Prompts/ Journal/             │  │
 │   │     .codebase-memory.json      ← project config (V1+V2 keys)    │  │
 │   └──────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
+> **Note**: L'UI V2 remplace la 3D Three.js de V1 par un canvas 2D d3-force
+> (plus simple, pas de GPU, gère 5000+ nodes). Le dashboard est la vue par
+> défaut, pas le graphe complet.
+
 ## 3. Modules internes (V2 sidecar TypeScript)
 
 | Module | Rôle | Fichiers |
 |---|---|---|
-| `v2/src/human/` | Human memory DB (SQLite séparé) : schema, CRUD, importer/exporter | `schema.ts`, `store.ts`, `importer.ts`, `exporter.ts` |
+| `v2/src/human/` | Human memory DB (SQLite séparé) : schema, CRUD | `schema.ts`, `store.ts` |
 | `v2/src/obsidian/` | Génération et sync du vault Markdown | `vault.ts`, `frontmatter.ts`, `wikilinks.ts`, `generator.ts`, `importer.ts` |
-| `v2/src/mcp/` | Serveur MCP TypeScript (15 tools V2) | `server.ts`, `tools/*.ts` |
+| `v2/src/mcp/` | Serveur MCP TypeScript (7 tools V2) | `server.ts`, `tools/*.ts` |
 | `v2/src/reports/` | Reports CLI (hotspots, undocumented, risk) | `hotspots.ts`, `undocumented.ts`, `risk.ts` |
-| `v2/src/cli/` | CLI commands V2 (`obsidian init/sync/import/export`, `report`, `query`) | `commands/*.ts` |
-| `v2/src/bridge/` | Communication avec le moteur C (MCP via stdio, SQLite RO direct) | `c-engine.ts`, `sqlite-ro.ts` |
-| `v2/src/index.ts` | Entry point CLI V2 | — |
+| `v2/src/cli/` | CLI commands V2 (`obsidian init/sync/import/export`, `report`, `stats`, `backup`, `demo`, `human`, `mcp`, `ui`, `init`, `doctor`) | `index.ts`, `commands/*.ts` |
+| `v2/src/bridge/` | Communication avec le moteur C (SQLite RO direct) | `sqlite-ro.ts` |
+| `v2/src/intelligence/` | Graph freshness detection, smart recommendations | `graph-status.ts` |
+| `v2/src/ui/` | HTTP server pour le graph UI (127.0.0.1:9749) | `server.ts` |
+| `v2/src/config.ts` | Loader pour `.codebase-memory.json` | — |
+| `v2/src/constants.ts` | Constantes partagées (thresholds, limits, safeJsonParse) | — |
+| `graph-ui/src/` | React + Vite + d3-force 2D canvas | `App.tsx`, `components/*.tsx`, `hooks/*.ts`, `api/*.ts`, `lib/*.ts` |
 
 ## 4. Schéma de graphe unifié
 
@@ -143,12 +146,16 @@ interface HumanNode {
   label: HumanNodeLabel;
   title: string;
   body_markdown: string;       // contenu Markdown (sans frontmatter)
-  frontmatter_yaml: string;    // YAML frontmatter sérialisé
+  frontmatter_json: string;    // JSON frontmatter sérialisé (pas YAML — voir schema.ts)
   status: 'draft' | 'active' | 'reviewed' | 'deprecated';
   source: 'human' | 'generated' | 'mixed';
   cbm_node_ids: number[];      // liens vers code nodes (JSON array)
   obsidian_path: string;       // chemin relatif dans le vault
   tags: string[];
+  provenance: string;          // 'human' | 'generated' | 'mixed'
+  confidence: number;          // 0.0 à 1.0
+  source_file: string | null;  // chemin du fichier Markdown (si importé)
+  author: string | null;
   created_at: string;          // ISO 8601
   updated_at: string;
   last_synced_at: string | null;
@@ -276,30 +283,31 @@ Voir `OBSIDIAN_INTEGRATION.md` pour le détail. Synthèse ici :
 - Si une note a été supprimée du DB mais existe dans le vault, on demande
   confirmation à l'utilisateur avant import.
 
-## 7. Design des tools MCP V2 (15 nouveaux)
+## 7. Design des tools MCP V2 (7 implémentés, 8 planifiés)
 
 Tous les tools V2 vivent dans `v2/src/mcp/tools/`. Ils sont exposés via le
-serveur MCP TypeScript qui tourne en parallèle du moteur C, ou bien via le
-même processus C (option : `cbm_mcp_register_v2_tools` en C qui délègue au
-sidecar TS via subprocess).
+serveur MCP TypeScript qui tourne en parallèle du moteur C.
 
-| # | Tool | Type | Description |
-|---|---|---|---|
-| 1 | `get_project_overview` | lecture | Résumé exécutif : nb modules, routes, ADRs, bugs, hotspots, dette technique |
-| 2 | `get_architecture_dashboard` | lecture | KPIs d'architecture : modules critiques, zones à risque, doc coverage, legacy |
-| 3 | `get_module_context` | lecture | Contexte complet d'un module : code nodes + human notes + ADR + bugs + refactors liés |
-| 4 | `get_route_flow` | lecture | Flow d'une route HTTP : handler → service → repo → external calls + notes humaines |
-| 5 | `get_blast_radius` | lecture | Impact direct + indirect d'un symbol : routes affectées, tests, notes, ADR |
-| 6 | `get_human_notes_for_node` | lecture | Toutes les notes humaines liées à un code node (cbm_node_id) |
-| 7 | `get_related_adrs` | lecture | ADRs qui DECIDES/AFFECTS/TOUCHES un code node |
-| 8 | `get_related_bugs` | lecture | Bugs qui AFFECTS un module/route/symbol |
-| 9 | `get_refactor_plans` | lecture | Refactors qui TOUCHES/REPLACES un code node |
-| 10 | `get_undocumented_hotspots` | lecture | Modules/routes/fonctions centrales SANS note humaine |
-| 11 | `create_human_note` | écriture | Crée une note humaine (ADR, BugNote, etc.) + link à un code node |
-| 12 | `update_human_note` | écriture | Met à jour le body d'une note existante (préserve HUMAN NOTES) |
-| 13 | `create_adr` | écriture | Crée une ADR avec frontmatter standard + edges DECIDES |
-| 14 | `link_note_to_code_node` | écriture | Crée un human edge entre une note et un code node |
-| 15 | `search_code_and_memory` | lecture | Recherche unifiée : BM25 sur code + BM25 sur human + fusion |
+> **Note**: L'architecture cible prévoyait 15 tools. Actuellement 7 sont implémentés
+> (version 0.5.5). Les 8 restants sont planifiés pour les phases 2-3 (voir V2_ROADMAP.md).
+
+| # | Tool | Type | Statut | Description |
+|---|---|---|---|---|
+| 1 | `get_project_overview` | lecture | ✅ Implémenté | Résumé exécutif : nb modules, routes, ADRs, bugs, hotspots, dette technique |
+| 2 | `get_module_context` | lecture | ✅ Implémenté | Contexte complet d'un module : code nodes + human notes + ADR + bugs + refactors liés |
+| 3 | `get_undocumented_hotspots` | lecture | ✅ Implémenté | Modules/routes/fonctions centrales SANS note humaine |
+| 4 | `create_human_note` | écriture | ✅ Implémenté | Crée une note humaine (ADR, BugNote, etc.) + link à un code node |
+| 5 | `link_note_to_code_node` | écriture | ✅ Implémenté | Crée un human edge entre une note et un code node |
+| 6 | `search_code_and_memory` | lecture | ✅ Implémenté | Recherche unifiée : BM25 sur code + LIKE sur human + fusion |
+| 7 | `prepare_edit_context` ⭐ | lecture | ✅ Implémenté | **Flagship** — context complet avant édition d'un fichier (code + human + blast radius + risk + freshness) |
+| 8 | `get_architecture_dashboard` | lecture | 🔜 Planifié | KPIs d'architecture : modules critiques, zones à risque, doc coverage, legacy |
+| 9 | `get_route_flow` | lecture | 🔜 Planifié | Flow d'une route HTTP : handler → service → repo → external calls + notes humaines |
+| 10 | `get_blast_radius` | lecture | 🔜 Planifié | Impact direct + indirect d'un symbol : routes affectées, tests, notes, ADR |
+| 11 | `get_human_notes_for_node` | lecture | 🔜 Planifié | Toutes les notes humaines liées à un code node (cbm_node_id) |
+| 12 | `get_related_adrs` | lecture | 🔜 Planifié | ADRs qui DECIDES/AFFECTS/TOUCHES un code node |
+| 13 | `get_related_bugs` | lecture | 🔜 Planifié | Bugs qui AFFECTS un module/route/symbol |
+| 14 | `get_refactor_plans` | lecture | 🔜 Planifié | Refactors qui TOUCHES/REPLACES un code node |
+| 15 | `update_human_note` | écriture | 🔜 Planifié | Met à jour le body d'une note existante (préserve HUMAN NOTES) |
 
 ### 7.1 Schéma d'input/output (exemple : `get_module_context`)
 
