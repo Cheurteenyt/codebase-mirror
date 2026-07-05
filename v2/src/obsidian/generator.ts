@@ -326,15 +326,17 @@ function generateVaultIndexAndTemplate(opts: GenerateOptions, _result: GenerateR
     modulesCount = labelCounts['Module'] ?? 0;
     routesCount = labelCounts['Route'] ?? 0;
   }
+  // R39: use countNodesByLabel (1 query instead of 4).
+  const humanLabelCounts = opts.humanStore.countNodesByLabel(opts.project);
   const indexContent = renderVaultIndex({
     projectName: opts.project,
     stats: {
       modulesCount,
       routesCount,
-      adrsCount: opts.humanStore.countNodes(opts.project, 'ADR'),
-      bugsCount: opts.humanStore.countNodes(opts.project, 'BugNote'),
-      refactorsCount: opts.humanStore.countNodes(opts.project, 'RefactorPlan'),
-      notesTotal: opts.humanStore.countNodes(opts.project),
+      adrsCount: humanLabelCounts['ADR'] ?? 0,
+      bugsCount: humanLabelCounts['BugNote'] ?? 0,
+      refactorsCount: humanLabelCounts['RefactorPlan'] ?? 0,
+      notesTotal: humanLabelCounts['_total'] ?? 0,
     },
   });
   if (!opts.dryRun) {

@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-05 for version 0.10.2.
+> Updated 2026-07-05 for version 0.10.3.
 
-## Current State (0.10.2)
+## Current State (0.10.3)
 
 ### ✅ Completed
 
@@ -47,6 +47,7 @@
 | Round 36 architecture perf | 0.10.0 | TTL cache (30s) for getGraphStatus, batch transaction in importer (10-100x faster), generator-based walkVaultIter for memory efficiency |
 | Round 37 SWR cache | 0.10.1 | Stale-While-Revalidate cache with adaptive TTL, memory-aware eviction, background refresh — replaces TtlCache for getGraphStatus |
 | Round 38 CI fix + countNodesByLabel | 0.10.2 | Fixed flaky SWR test (isolated cache instance), added countNodesByLabel (5 queries -> 1 GROUP BY for /api/dashboard) |
+| Round 39 countNodesByLabel expansion | 0.10.3 | Applied countNodesByLabel to get_project_overview MCP tool (4->1 query) and generateVault 00_Index.md (4->1 query) |
 
 ### 📊 Metrics
 
@@ -55,7 +56,7 @@
 | Source files (v2) | 38 |
 | Test files | 28 |
 | Tests | 292 (all passing) |
-| Bugs fixed (38 rounds) | 428+ |
+| Bugs fixed (39 rounds) | 428+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -76,7 +77,7 @@
 | ✅ Storage optimization (indexes + PRAGMAs) | Done | Medium | Completed in 0.6.3 |
 | ✅ Junction table (complex storage) | Done | High | Completed in 0.7.0 |
 | ✅ WebSocket real-time | Done | High | Completed in 0.8.0 |
-| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.10.2 |
+| ✅ `cbm-v2 watch` daemon | Done | Medium | Completed in 0.10.3 |
 | Tests for reports (hotspots, undocumented, risk) | High | Medium | Planned |
 | ESLint + Prettier configuration | Medium | Low | Planned |
 | `noUncheckedIndexedAccess` in tsconfig | Medium | Low | Planned |
@@ -95,7 +96,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.10.2)
+### Phase 3: V1 Complete (0.10.3)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -159,6 +160,7 @@
 | R36 (architecture perf) | 0.10.0 | — (perf) | — | 272 |
 | R37 (SWR cache) | 0.10.1 | — (perf) | — | 292 |
 | R38 (CI fix + countNodesByLabel) | 0.10.2 | 1 (flaky test) | 1 | 292 |
+| R39 (countNodesByLabel expansion) | 0.10.3 | — (perf) | — | 292 |
 | **Total** | | **428+** | **428+** | **292** |
 
 ## Performance Milestones
@@ -183,8 +185,10 @@
 | R36 | `walkVault` (1000 files) | Array of 1000 strings in memory | Generator yields one at a time | -90% peak memory |
 | R37 | `getGraphStatus` (stale reads) | 50-200ms blocking on every TTL expiry | 0ms stale return + background refresh | -100% latency on stale reads |
 | R38 | `/api/dashboard` countNodes | 5 separate COUNT queries | 1 GROUP BY query | -80% query count |
+| R39 | `get_project_overview` countNodes | 4 separate COUNT queries | 1 GROUP BY query | -75% query count |
+| R39 | `generateVault` 00_Index.md countNodes | 4 separate COUNT queries | 1 GROUP BY query | -75% query count |
 
-## API Endpoints (0.10.2)
+## API Endpoints (0.10.3)
 
 | Endpoint | Method | Description |
 |---|---|---|

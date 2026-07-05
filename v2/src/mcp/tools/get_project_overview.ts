@@ -48,17 +48,15 @@ export class GetProjectOverviewTool extends BaseTool {
         result['code_graph'] = { available: false, reason: 'Code graph reader not configured. Index the project with V1 first.' };
       }
 
-      const adrsCount = humanStore.countNodes(project, 'ADR');
-      const bugsCount = humanStore.countNodes(project, 'BugNote');
-      const refactorsCount = humanStore.countNodes(project, 'RefactorPlan');
-      const notesTotal = humanStore.countNodes(project);
+      // R39: use countNodesByLabel (1 GROUP BY query instead of 4 COUNT queries).
+      const labelCounts = humanStore.countNodesByLabel(project);
       const humanEdgesCount = humanStore.countEdges(project);
 
       result['human_memory'] = {
-        total_notes: notesTotal,
-        adrs: adrsCount,
-        bugs: bugsCount,
-        refactors: refactorsCount,
+        total_notes: labelCounts['_total'] ?? 0,
+        adrs: labelCounts['ADR'] ?? 0,
+        bugs: labelCounts['BugNote'] ?? 0,
+        refactors: labelCounts['RefactorPlan'] ?? 0,
         human_edges: humanEdgesCount,
       };
 
@@ -112,11 +110,11 @@ export class GetProjectOverviewTool extends BaseTool {
       if (graphStatus?.stale) {
         recommendations.push(`Refresh the code graph: ${graphStatus.stale_reason}. Run "cbm index_repository".`);
       }
-      if (bugsCount > 0) {
-        recommendations.push(`${bugsCount} open bug(s) — review before making changes. Use prepare_edit_context to see affected files.`);
+      if ((labelCounts['BugNote'] ?? 0) > 0) {
+        recommendations.push(`${labelCounts['BugNote']} open bug(s) — review before making changes. Use prepare_edit_context to see affected files.`);
       }
-      if (refactorsCount > 0) {
-        recommendations.push(`${refactorsCount} pending refactor plan(s) — check if your work overlaps. Use get_module_context to see details.`);
+      if ((labelCounts['RefactorPlan'] ?? 0) > 0) {
+        recommendations.push(`${labelCounts['RefactorPlan']} pending refactor plan(s) — check if your work overlaps. Use get_module_context to see details.`);
       }
       const docCoverage = result['documentation_coverage'] as any;
       if (docCoverage && docCoverage.coverage_pct !== null && docCoverage.coverage_pct < 50) {
