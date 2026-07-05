@@ -21,14 +21,14 @@ Codebase Memory V2 adds the **human context**:
 
 It syncs everything to an **Obsidian-compatible Markdown vault** so you can read and edit notes in your favorite editor, with backlinks and tags.
 
-## Current version: 0.7.0
+## Current version: 0.8.1
 
-- **221 tests** (all passing)
+- **241 tests** (all passing)
 - **7 MCP tools** (including the flagship `prepare_edit_context`)
 - **15+ CLI commands** across 6 command groups
 - **15 API endpoints** (6 original + 9 R17)
-- **403+ bugs fixed** across 21 audit rounds
-- **Graph UI** with 2D d3-force canvas, dashboard, filters
+- **403+ bugs fixed** across 27 audit rounds
+- **Graph UI** with 2D d3-force canvas, dashboard, filters, **real-time WebSocket**
 - **Optimized SQLite storage** (junction table, composite indexes, PRAGMAs)
 
 ## Quick start
@@ -37,7 +37,7 @@ It syncs everything to an **Obsidian-compatible Markdown vault** so you can read
 cd v2
 npm install
 npm run build
-npm test                    # 221 tests
+npm test                    # 241 tests
 
 # Try the demo (no V1 needed)
 node dist/cli/index.js demo
@@ -250,7 +250,7 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 ### Design Documents
 - [V2 Audit](docs/V2_AUDIT.md) — Analysis of V1 (C11 codebase, 65K LOC)
 - [V2 Architecture](docs/V2_ARCHITECTURE.md) — Sidecar TypeScript design
-- [V2 Roadmap](docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.7.0)
+- [V2 Roadmap](docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.8.1)
 - [Obsidian Integration](docs/OBSIDIAN_INTEGRATION.md) — Vault format and sync
 - [Human Memory Schema](docs/HUMAN_MEMORY_GRAPH_SCHEMA.md) — SQL schema
 

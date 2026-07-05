@@ -136,8 +136,14 @@ function importSingleFile(relPath: string, opts: ImportOptions, result: ImportRe
   }
 
   // Process wikilinks → edges.
+  // R27 (Bug #8 fix): if the node was renamed (existing had a different
+  // obsidian_path), also clean up edges from the OLD source_file path.
+  const oldObsidianPath = (existing && typeof existing === 'object' && existing.obsidian_path && existing.obsidian_path !== relPath)
+    ? existing.obsidian_path
+    : null;
+
   if (sourceNodeId !== null) {
-    const edgeCount = processWikilinks(sourceNodeId, humanBody, relPath, opts, result);
+    const edgeCount = processWikilinks(sourceNodeId, humanBody, relPath, opts, result, oldObsidianPath);
     if (edgeCount !== null && !opts.dryRun) {
       result.edgesCreated += edgeCount.created;
       result.edgesDeleted += edgeCount.deleted;
@@ -168,8 +174,17 @@ function validateEnum(
 
 /**
  * Find an existing human_node for this vault file.
- * Match by obsidian_path first (authoritative). Fall back to slug ONLY if
- * the matched node has no obsidian_path (orphan node created programmatically).
+ *
+ * R27 (Bug #8 fix): match by obsidian_path first (authoritative), then by
+ * slug — EVEN if the matched node has an obsidian_path. This handles the
+ * rename scenario: when a user moves a file in Obsidian, the new path
+ * doesn't match any existing obsidian_path, but the slug (derived from
+ * the title, which hasn't changed) matches the existing node. The importer
+ * then updates the node's obsidian_path to the new path.
+ *
+ * To prevent hijacking a node that belongs to a DIFFERENT file (same slug,
+ * different content), we only accept the slug match if the existing node's
+ * obsidian_path file no longer exists on disk (confirming the rename).
  *
  * Returns the node, null if no match, or 'CONFLICT' if there's a slug collision.
  */
@@ -183,9 +198,23 @@ function resolveExistingNode(
   let existingBySlug = null;
   if (!existingByPath && slug) {
     const slugMatch = opts.humanStore.getNodeBySlug(opts.project, slug);
-    // Only use slug match if the matched node has no obsidian_path (orphan).
-    if (slugMatch && !slugMatch.obsidian_path) {
-      existingBySlug = slugMatch;
+    if (slugMatch) {
+      if (!slugMatch.obsidian_path) {
+        // Orphan node (no vault file) — safe to claim.
+        existingBySlug = slugMatch;
+      } else if (slugMatch.obsidian_path !== relPath) {
+        // R27: The slug matches a node with a DIFFERENT obsidian_path.
+        // This is a rename scenario IF the old file no longer exists on disk.
+        // Check whether the old path's file is gone.
+        const oldContent = readNote(opts.vaultPath, slugMatch.obsidian_path);
+        if (oldContent === null) {
+          // Old file is gone — this is a rename. Claim the node.
+          existingBySlug = slugMatch;
+        }
+        // If oldContent is not null, the old file still exists — this is
+        // a genuine slug collision (two files with the same title). Don't
+        // claim the node; a new one will be created with auto-suffixed slug.
+      }
     }
   }
 
@@ -235,7 +264,12 @@ function upsertNode(
     // no-op check would short-circuit and the edit would never reach the DB.
     const existingFm = safeJsonParse(existing.frontmatter_json, {} as Record<string, unknown>);
     const sameFrontmatter = JSON.stringify(sortKeys(existingFm)) === JSON.stringify(sortKeys(spec.fm));
-    if (sameContent && sameTitle && sameCbmIds && sameTags && sameStatus && sameFrontmatter) {
+    // R27 (Bug #8 fix): compare obsidian_path too. When a note is renamed,
+    // the path changes but the content stays the same. Without this check,
+    // the rename would be treated as a no-op and the obsidian_path would
+    // never be updated in the DB.
+    const samePath = existing.obsidian_path === spec.relPath;
+    if (sameContent && sameTitle && sameCbmIds && sameTags && sameStatus && sameFrontmatter && samePath) {
       result.unchanged.push(spec.relPath);
       return existing.id;
     }
@@ -282,15 +316,26 @@ function upsertNode(
 /**
  * Parse wikilinks from HUMAN NOTES, create edges, and clean up stale edges.
  * Returns {created, deleted} counts, or null if dry-run.
+ *
+ * R27 (Bug #8 fix): if oldSourceFile is provided (note was renamed),
+ * also clean up edges from the OLD source_file path before processing
+ * the new one. This prevents orphaned edges from accumulating.
  */
 function processWikilinks(
   sourceNodeId: number,
   humanBody: string,
   relPath: string,
   opts: ImportOptions,
-  _result: ImportResult
+  _result: ImportResult,
+  oldSourceFile: string | null = null,
 ): { created: number; deleted: number } | null {
   if (opts.dryRun) return null;
+
+  // R27: clean up edges from the OLD source_file (rename scenario).
+  let deleted = 0;
+  if (oldSourceFile && oldSourceFile !== relPath) {
+    deleted += opts.humanStore.deleteStaleEdgesFromNode(sourceNodeId, oldSourceFile, []);
+  }
 
   const wikilinks = parseWikilinks(humanBody);
   const seenEdgeIds: number[] = [];
@@ -303,7 +348,7 @@ function processWikilinks(
   }
 
   // Clean up stale edges that were created from this file but no longer exist.
-  const deleted = opts.humanStore.deleteStaleEdgesFromNode(sourceNodeId, relPath, seenEdgeIds);
+  deleted += opts.humanStore.deleteStaleEdgesFromNode(sourceNodeId, relPath, seenEdgeIds);
   return { created: seenEdgeIds.length, deleted };
 }
 
