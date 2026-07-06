@@ -435,10 +435,14 @@ export class UiServer {
     // limitPerNode=20 matches the previous per-node cap from getNeighbors.
     const edges = this.codeReader.getBulkEdges(nodeIds, 20);
 
+    // R49 (#8): reuse SWR-cached graphStatus.total_nodes instead of a separate
+    // countNodes query (same pattern as R47 H3 for routeDashboard).
+    const graphStatus = getGraphStatus(project, this.codeReader, process.cwd());
+
     this.sendJson(res, 200, {
       nodes: layoutNodes,
       edges,
-      total_nodes: this.codeReader.countNodes(project),
+      total_nodes: graphStatus.total_nodes,
     });
     return;
   }

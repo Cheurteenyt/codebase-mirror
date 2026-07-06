@@ -48,10 +48,12 @@ async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, signal } = opts;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  // If caller supplied an external signal (e.g. unmount), forward its abort.
+  // R49 (#7): store the abort listener so we can remove it in finally.
+  // Without this, a long-lived external signal accumulates listeners.
+  const onExternalAbort = () => controller.abort();
   if (signal) {
     if (signal.aborted) controller.abort();
-    else signal.addEventListener("abort", () => controller.abort(), { once: true });
+    else signal.addEventListener("abort", onExternalAbort, { once: true });
   }
   try {
     const res = await fetch(url, { signal: controller.signal });
@@ -64,12 +66,17 @@ async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
     // Distinguish abort (timeout or external) from real network errors.
     if (e instanceof ApiError) throw e;
     if (e?.name === "AbortError" || controller.signal.aborted) {
-      throw new ApiError(0, `Request timed out after ${timeoutMs}ms`);
+      // R49 (#6): distinguish timeout (our timer) from external abort (caller's signal).
+      // The old code always said "timed out" even when the caller cancelled at 50ms.
+      const reason = signal?.aborted ? "Request aborted by caller" : `Request timed out after ${timeoutMs}ms`;
+      throw new ApiError(0, reason);
     }
     // Network error (DNS, connection refused, CORS) — wrap for consistent shape.
     throw new ApiError(0, e?.message ?? "Network error");
   } finally {
     clearTimeout(timer);
+    // R49 (#7): remove the external-signal listener to prevent leaks.
+    if (signal && !signal.aborted) signal.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -81,9 +88,10 @@ async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}):
   const { timeoutMs = DEFAULT_TIMEOUT_MS, signal } = opts;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
   if (signal) {
     if (signal.aborted) controller.abort();
-    else signal.addEventListener("abort", () => controller.abort(), { once: true });
+    else signal.addEventListener("abort", onExternalAbort, { once: true });
   }
   try {
     const res = await fetch(url, {
@@ -100,11 +108,14 @@ async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}):
   } catch (e: any) {
     if (e instanceof ApiError) throw e;
     if (e?.name === "AbortError" || controller.signal.aborted) {
-      throw new ApiError(0, `Request timed out after ${timeoutMs}ms`);
+      // R49 (#6): distinguish timeout from external abort.
+      const reason = signal?.aborted ? "Request aborted by caller" : `Request timed out after ${timeoutMs}ms`;
+      throw new ApiError(0, reason);
     }
     throw new ApiError(0, e?.message ?? "Network error");
   } finally {
     clearTimeout(timer);
+    if (signal && !signal.aborted) signal.removeEventListener("abort", onExternalAbort);
   }
 }
 

@@ -295,7 +295,10 @@ export class SwrCache<K, V> {
     } else {
       // Stale: trigger background refresh if not already in-flight.
       if (this.trackStats) this.stats.staleHits++;
-      if (!entry.refreshing) {
+      // R49 (#12): only schedule a refresh if a handler exists. Entries added
+      // via set() without setRefreshHandler would trigger a useless setTimeout(0)
+      // on every stale hit, which immediately fires and does nothing.
+      if (!entry.refreshing && this.refreshHandlers.has(key)) {
         entry.refreshing = true;
         this.scheduleBackgroundRefresh(key);
       }
