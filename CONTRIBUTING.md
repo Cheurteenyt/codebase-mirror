@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This guide covers everything you ne
 
 ```bash
 # Clone
-git clone https://gitlab.com/cheurteen1/cheurteen-project.git
+git clone https://github.com/Cheurteenyt/codebase-mirror.git
 cd cheurteen-project/v2
 
 # Install dependencies
@@ -41,7 +41,7 @@ v2/
 │   ├── reports/        # Hotspots, undocumented, risk reports
 │   ├── config.ts       # .codebase-memory.json loader
 │   └── constants.ts    # Shared constants (no magic numbers)
-├── tests/              # Vitest test files (124 tests)
+├── tests/              # Vitest test files (374 tests)
 ├── docs/               # Design documents (5 files)
 ├── examples/           # Sample vault and demo data
 ├── package.json
@@ -104,7 +104,7 @@ refactor(v2): decompose generateVault into helpers
 git push origin feature/your-feature-name
 ```
 
-Then create a MR on GitLab. Include:
+Then create a PR on GitHub. Include:
 - What changed and why
 - Test results (`npm test` output)
 - Breaking changes (if any)
@@ -193,11 +193,11 @@ Currently requires editing 5 files (planned: single source of truth in 0.4.0):
 
 ## CI/CD
 
-The `.gitlab-ci.yml` pipeline runs on every push:
+The GitHub Actions CI runs on every push:
 1. `npm ci` — install dependencies
 2. `npm run typecheck` — TypeScript strict compilation
 3. `npm run build` — production build
-4. `npm test` — all 124+ tests
+4. `npm test` — all 374+ tests
 
 A failed pipeline blocks merge.
 
@@ -211,6 +211,6 @@ A failed pipeline blocks merge.
 
 ## Questions?
 
-- Open an issue on GitLab: https://gitlab.com/cheurteen1/cheurteen-project/-/issues
+- Open an issue on GitLab: https://github.com/Cheurteenyt/codebase-mirror/issues
 - Read the docs: `docs/` directory
 - Check the CHANGELOG: `v2/CHANGELOG.md`

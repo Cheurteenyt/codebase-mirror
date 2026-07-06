@@ -241,6 +241,10 @@ export class SwrCache<K, V> {
       const entry = this.entries.get(oldestKey);
       if (entry) this.totalBytes -= entry.size;
       this.entries.delete(oldestKey);
+      // R50 (#8): also clear refresh handler to prevent orphaned handler
+      // being used by stale-hit scheduling after eviction.
+      this.refreshHandlers.delete(oldestKey);
+      this.refreshTimers.delete(oldestKey);
       if (this.trackStats) this.stats.evictions++;
     }
 
@@ -254,6 +258,9 @@ export class SwrCache<K, V> {
       const entry = this.entries.get(oldestKey);
       if (entry) this.totalBytes -= entry.size;
       this.entries.delete(oldestKey);
+      // R50 (#8): also clear refresh handler + timer.
+      this.refreshHandlers.delete(oldestKey);
+      this.refreshTimers.delete(oldestKey);
       if (this.trackStats) this.stats.evictions++;
     }
   }

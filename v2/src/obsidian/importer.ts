@@ -196,15 +196,10 @@ function importSingleFile(relPath: string, opts: ImportOptions, result: ImportRe
       result.edgesCreated += edgeCount.created;
       result.edgesDeleted += edgeCount.deleted;
     }
-  } else if (sourceNodeId !== null && oldObsidianPath) {
-    // R49 (#4): even if the note content is unchanged, if it was renamed we
-    // still need to update the edges' source_file field.
-    const edgeCount = processWikilinks(sourceNodeId, humanBody, relPath, opts, result, oldObsidianPath);
-    if (edgeCount !== null && !opts.dryRun) {
-      result.edgesCreated += edgeCount.created;
-      result.edgesDeleted += edgeCount.deleted;
-    }
   }
+  // R50 (#5): removed dead else-if branch — wasUnchanged implies samePath=true
+  // implies oldObsidianPath=null, so the branch was unreachable. The rename
+  // case is handled by the first branch (rename => !wasUnchanged).
 }
 
 /**

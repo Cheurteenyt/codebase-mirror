@@ -36,4 +36,4 @@ CMD ["--help"]
 LABEL org.opencontainers.image.title="Codebase Memory V2"
 LABEL org.opencontainers.image.description="Human memory graph + Obsidian sync for Codebase Memory MCP"
 LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.source="https://gitlab.com/cheurteen1/cheurteen-project"
+LABEL org.opencontainers.image.source="https://github.com/Cheurteenyt/codebase-mirror"
