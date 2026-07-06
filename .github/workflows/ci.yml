@@ -1,0 +1,79 @@
+# GitHub Actions CI for Codebase Memory V2
+# Runs typecheck, build, and tests on every push and pull request.
+# This is the primary CI — GitLab CI is disabled to avoid minute limits.
+# Public repos on GitHub have unlimited Actions minutes.
+#
+# The workflow mirrors the previous .gitlab-ci.yml pipeline:
+#   1. typecheck (fastest gate)
+#   2. build (compiles TypeScript)
+#   3. test (runs vitest for both v2 backend and graph-ui frontend)
+
+name: CI
+
+on:
+  push:
+    branches: [main, 'v2/**']
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch (saves minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Backend (v2): typecheck + build + test ─────────────────────
+  backend:
+    name: Backend (v2)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: v2/package.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  # ── Frontend (graph-ui): typecheck + build + test ──────────────
+  frontend:
+    name: Frontend (graph-ui)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: graph-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: graph-ui/package.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
