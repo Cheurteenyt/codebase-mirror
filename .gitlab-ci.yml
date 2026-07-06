@@ -1,21 +1,32 @@
-# GitLab CI — disabled (CI moved to GitHub Actions)
+# GitLab CI — lightweight mirror to GitHub (CI runs on GitHub Actions)
 #
 # R48: GitLab CI minutes are limited (400/month for free tier, even for public
 # projects). GitHub Actions offers unlimited minutes for public repos. The
-# actual CI (typecheck, build, test) now runs on GitHub Actions via the
-# .github/workflows/ci.yml workflow. Code is automatically mirrored from
-# GitLab to GitHub via the project's push mirror setting (Settings → Repository
-# → Mirroring repositories).
+# actual CI (typecheck, build, test) runs on GitHub Actions via
+# .github/workflows/ci.yml. This pipeline only mirrors the code to GitHub so
+# the Actions workflow triggers automatically.
 #
-# This file is kept so GitLab doesn't show a "missing CI config" warning.
-# The job below is a no-op that completes instantly (0 minutes consumed).
+# Setup: add a CI/CD variable named GITHUB_MIRROR_TOKEN in
+# Settings → CI/CD → Variables with the GitHub PAT value.
+#
+# Cost: ~5-10 seconds per pipeline (git push only, no npm install).
 
-ci-moved-to-github:
-  stage: test
+stages:
+  - mirror
+
+mirror-to-github:
+  stage: mirror
   image: alpine:latest
+  before_script:
+    - apk add --no-cache git
   script:
-    - echo "CI runs on GitHub Actions — see .github/workflows/ci.yml"
-    - echo "Mirror: https://github.com/Cheurteenyt/codebase-mirror"
+    - echo "Mirroring to GitHub to trigger Actions CI..."
+    - git push "https://Cheurteenyt:${GITHUB_MIRROR_TOKEN}@github.com/Cheurteenyt/codebase-mirror.git" HEAD:main --force
+    - echo "Mirror complete. CI runs at https://github.com/Cheurteenyt/codebase-mirror/actions"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
+  variables:
+    # Don't clone submodules or LFS — just the bare repo for pushing.
+    GIT_STRATEGY: "clone"
+    GIT_DEPTH: "0"
