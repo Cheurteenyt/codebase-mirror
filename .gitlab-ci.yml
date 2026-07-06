@@ -1,64 +1,21 @@
-# GitLab CI/CD pipeline for Codebase Memory V2
-# Runs typecheck, build, and tests on every push/merge request.
+# GitLab CI — disabled (CI moved to GitHub Actions)
 #
-# Note: We use `npm install` instead of `npm ci` because package-lock.json
-# is gitignored (the project doesn't commit lockfiles). If a lockfile is
-# added in the future, switch back to `npm ci` for reproducible installs.
+# R48: GitLab CI minutes are limited (400/month for free tier, even for public
+# projects). GitHub Actions offers unlimited minutes for public repos. The
+# actual CI (typecheck, build, test) now runs on GitHub Actions via the
+# .github/workflows/ci.yml workflow. Code is automatically mirrored from
+# GitLab to GitHub via the project's push mirror setting (Settings → Repository
+# → Mirroring repositories).
+#
+# This file is kept so GitLab doesn't show a "missing CI config" warning.
+# The job below is a no-op that completes instantly (0 minutes consumed).
 
-stages:
-  - lint
-  - build
-  - test
-
-variables:
-  NODE_VERSION: "20"
-
-# Cache npm dependencies between jobs (and between pipeline runs)
-cache:
-  key: ${CI_COMMIT_REF_SLUG}
-  paths:
-    - v2/node_modules/
-
-# ── Type-check (fastest gate) ──────────────────────────────────────
-typecheck:
-  stage: lint
-  image: node:${NODE_VERSION}
-  script:
-    - cd v2
-    - npm install
-    - npm run typecheck
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH
-
-# ── Build ──────────────────────────────────────────────────────────
-build:
-  stage: build
-  image: node:${NODE_VERSION}
-  script:
-    - cd v2
-    - npm install
-    - npm run build
-  artifacts:
-    paths:
-      - v2/dist/
-    expire_in: 1 week
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH
-
-# ── Test (requires build first) ────────────────────────────────────
-test:
+ci-moved-to-github:
   stage: test
-  image: node:${NODE_VERSION}
-  needs:
-    - build
+  image: alpine:latest
   script:
-    - cd v2
-    - npm install
-    - npm run build
-    - npm test
+    - echo "CI runs on GitHub Actions — see .github/workflows/ci.yml"
+    - echo "Mirror: https://github.com/Cheurteenyt/codebase-mirror"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
-  coverage: '/Tests.*?(\d+).*?passing/'
