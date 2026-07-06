@@ -17,7 +17,7 @@ import { join, extname, resolve, sep, dirname } from "node:path";
 import { homedir } from 'node:os';
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
 import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
-import { getGraphStatus, getFreshnessScore, freshnessLabel } from '../intelligence/graph-status.js';
+import { getGraphStatus, getFreshnessScore, freshnessLabel, invalidateGraphStatusCache } from '../intelligence/graph-status.js';
 import { computeRiskScore } from '../reports/risk.js';
 import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
 import { getNotifyHub } from './notify-hub.js';
@@ -435,14 +435,14 @@ export class UiServer {
     // limitPerNode=20 matches the previous per-node cap from getNeighbors.
     const edges = this.codeReader.getBulkEdges(nodeIds, 20);
 
-    // R49 (#8): reuse SWR-cached graphStatus.total_nodes instead of a separate
-    // countNodes query (same pattern as R47 H3 for routeDashboard).
-    const graphStatus = getGraphStatus(project, this.codeReader, process.cwd());
+    // R50 (#2): revert R49 #8 — getGraphStatus on cold cache adds 50-200ms (git log)
+    // for a field the frontend doesn't render in the Graph tab. countNodes is ~1ms.
+    const totalNodes = this.codeReader.countNodes(project);
 
     this.sendJson(res, 200, {
       nodes: layoutNodes,
       edges,
-      total_nodes: graphStatus.total_nodes,
+      total_nodes: totalNodes,
     });
     return;
   }
@@ -885,6 +885,12 @@ export class UiServer {
         if (code === 0) {
           job.status = 'completed';
           this.log(`Index job ${jobId} completed`);
+          // R50 (#1): invalidate the SWR cache so /api/dashboard, /api/graph-status,
+          // /api/layout, and get_project_overview serve fresh data immediately.
+          // Without this, the cache serves stale counts for up to 60s after re-index.
+          invalidateGraphStatusCache(projectName);
+          // Notify WebSocket clients that the code graph changed.
+          getNotifyHub().notify(projectName, 'code_graph_changed');
         } else {
           job.status = 'failed';
           job.error = `exit code ${code}: ${stderr.slice(0, 500)}`;

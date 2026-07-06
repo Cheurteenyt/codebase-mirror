@@ -21,7 +21,7 @@ Codebase Memory V2 adds the **human context**:
 
 It syncs everything to an **Obsidian-compatible Markdown vault** so you can read and edit notes in your favorite editor, with backlinks and tags.
 
-## Current version: 0.11.3
+## Current version: 0.11.4
 
 - **374 tests** (353 backend + 21 frontend, all passing)
 - **7 MCP tools** (including the flagship `prepare_edit_context`)
