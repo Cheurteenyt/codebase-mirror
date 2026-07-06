@@ -631,7 +631,7 @@ export class UiServer {
     let notes;
     if (cbmNodeId) {
       const n = parseInt(cbmNodeId, 10);
-      if (!Number.isFinite(n)) {
+      if (!Number.isFinite(n) || n <= 0) {
         this.sendJson(res, 400, { error: "invalid cbm_node_id" });
         return;
       }
@@ -704,7 +704,16 @@ export class UiServer {
     }
     const content = typeof body.content === 'string' ? body.content : '';
     const title = typeof body.title === 'string' ? body.title : `ADR-${Date.now().toString(36)}`;
-    const adrProject = typeof body.project === 'string' ? body.project : project;
+    // R51 (SEC-6): validate body.project if provided — must match the same
+    // regex as routeIndex/routeProjectHealth to prevent IDOR.
+    let adrProject = project;
+    if (typeof body.project === 'string') {
+      if (!/^[a-zA-Z0-9_-]+$/.test(body.project) || body.project.startsWith('-')) {
+        this.sendJson(res, 400, { error: 'Invalid project name in body' });
+        return;
+      }
+      adrProject = body.project;
+    }
     try {
       // Check if an ADR with this title already exists; if so, update it.
       const existing = this.humanStore.listNodes(adrProject, { label: 'ADR', limit: 500 })
@@ -822,7 +831,7 @@ export class UiServer {
       this.sendJson(res, 400, { error: 'Invalid JSON body' });
       return;
     }
-    const rootPath = typeof body.root_path === 'string' ? body.root_path : '';
+    let rootPath = typeof body.root_path === 'string' ? body.root_path : '';
     const projectName = typeof body.project_name === 'string' ? body.project_name : '';
     if (!rootPath || !projectName) {
       this.sendJson(res, 400, { error: 'root_path and project_name are required' });
@@ -849,10 +858,25 @@ export class UiServer {
       this.sendJson(res, 400, { error: 'Invalid project name (must not start with a hyphen)' });
       return;
     }
-    if (!existsSync(rootPath)) {
+    // R51 (SEC-7): validate rootPath — reject leading hyphens and restrict to
+    // home directory (same policy as routeBrowse).
+    if (rootPath.startsWith('-')) {
+      this.sendJson(res, 400, { error: 'root_path must not start with a hyphen' });
+      return;
+    }
+    const home = homedir();
+    let realRootPath: string;
+    try {
+      realRootPath = realpathSync(resolve(rootPath));
+    } catch {
       this.sendJson(res, 404, { error: `root_path not found: ${rootPath}` });
       return;
     }
+    if (!realRootPath.startsWith(home + sep) && realRootPath !== home) {
+      this.sendJson(res, 403, { error: 'root_path must be inside the user home directory' });
+      return;
+    }
+    rootPath = realRootPath;
     // Generate a job ID and track it. The actual indexing is done by V1's
     // `cbm index_repository` command — we spawn it as a subprocess.
     const jobId = `idx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -896,6 +920,8 @@ export class UiServer {
           job.error = `exit code ${code}: ${stderr.slice(0, 500)}`;
           this.log(`Index job ${jobId} failed (exit ${code})`);
         }
+        // R51 (SEC-8): clear childPid to prevent stale PID in process-kill allowlist.
+        job.childPid = undefined;
       });
     } catch (e: any) {
       job.status = 'failed';
@@ -1043,7 +1069,8 @@ export class UiServer {
       // spawns these via spawn('cbm', ...) and tracks them in this.indexJobs.
       // The child process PID is available after spawn() returns.
       for (const job of this.indexJobs.values()) {
-        if (job.childPid && Number.isFinite(job.childPid)) {
+        // R51 (SEC-8): only allowlist PIDs from RUNNING jobs.
+        if (job.status === 'running' && job.childPid && Number.isFinite(job.childPid)) {
           knownPids.add(job.childPid);
         }
       }
@@ -1070,7 +1097,7 @@ export class UiServer {
       return;
     }
     const name = typeof body.name === 'string' ? body.name : '';
-    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name) || name.startsWith('-')) {
       this.sendJson(res, 400, { error: 'Invalid project name (alphanumeric, dash, underscore only)' });
       return;
     }

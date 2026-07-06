@@ -48,7 +48,7 @@ export function parseNote(content: string): ParsedNote {
 
   let fm: Record<string, unknown>;
   try {
-    const parsed = yaml.parse(fmStr);
+    const parsed = yaml.parse(fmStr, { maxAliasCount: 100 });
     fm = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
       ? parsed as Record<string, unknown>
       : {};

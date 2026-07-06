@@ -2,7 +2,7 @@
 // Vault filesystem helpers — walk, ensure dirs, read/write notes.
 // All path-taking functions validate against path traversal.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, lstatSync, realpathSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname, basename, relative, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { MAX_VAULT_DEPTH, MAX_BACKUPS_PER_FILE } from '../constants.js';
@@ -13,6 +13,9 @@ const SKIP_DIRS = new Set(['.obsidian', '.git', '.trash', 'node_modules', '.cach
 
 /**
  * Validate that a relative path stays inside the vault. Rejects path traversal.
+ * R51 (SEC-5): uses realpathSync to resolve symlinks before containment check.
+ * Without this, a symlink inside the vault pointing outside (e.g. ~/.ssh) could
+ * be used to read/write arbitrary files via import/export sync.
  */
 function assertPathInsideVault(vaultPath: string, relPath: string): void {
   if (relPath.includes('..')) {
@@ -21,9 +24,32 @@ function assertPathInsideVault(vaultPath: string, relPath: string): void {
   if (/[\\]/.test(relPath)) {
     throw new Error(`Path traversal rejected: "${relPath}" contains backslashes.`);
   }
-  const absVault = resolve(vaultPath);
+  // R51 (SEC-5): resolve vault root symlinks. Fall back to resolve() if the
+  // vault doesn't exist yet (e.g., readNote called before ensureVaultDirs).
+  let absVault: string;
+  try {
+    absVault = realpathSync(vaultPath);
+  } catch {
+    absVault = resolve(vaultPath);
+  }
   const absPath = resolve(join(absVault, relPath));
-  if (absPath !== absVault && !absPath.startsWith(absVault + sep)) {
+  // R51 (SEC-5): resolve symlinks on the target path. For existing files,
+  // realpathSync follows the full chain. For non-existent files (writeNote
+  // creating a new file), resolve the parent directory.
+  let realPath: string;
+  try {
+    realPath = realpathSync(absPath);
+  } catch {
+    // File doesn't exist yet — resolve the parent dir and re-append basename.
+    try {
+      const realParent = realpathSync(dirname(absPath));
+      realPath = join(realParent, basename(absPath));
+    } catch {
+      // Parent doesn't exist either — fall back to string-based check.
+      realPath = absPath;
+    }
+  }
+  if (realPath !== absVault && !realPath.startsWith(absVault + sep)) {
     throw new Error(
       `Path traversal rejected: "${relPath}" resolves outside the vault root "${absVault}".`
     );
@@ -165,12 +191,28 @@ export function* walkVaultIter(vaultPath: string): Generator<string> {
       const full = join(dir, entry);
       let stat;
       try {
-        // Use statSync (follows symlinks) — if it's a symlink to a dir, we descend.
-        stat = statSync(full, { throwIfNoEntry: false });
+        // R51 (SEC-5): use lstatSync (does NOT follow symlinks) to detect
+        // symlinks before descending. statSync would follow symlinks silently,
+        // allowing a symlink to ~/.ssh to be walked as if inside the vault.
+        stat = lstatSync(full);
       } catch {
         continue;
       }
       if (!stat) continue;
+
+      // R51 (SEC-5): skip symlinks that point outside the vault.
+      if (stat.isSymbolicLink()) {
+        try {
+          const realTarget = realpathSync(full);
+          const realVault = realpathSync(vaultPath);
+          if (realTarget !== realVault && !realTarget.startsWith(realVault + sep)) {
+            continue;
+          }
+          stat = statSync(full);
+        } catch {
+          continue;
+        }
+      }
 
       if (stat.isDirectory()) {
         // Skip well-known non-vault directories. Allow other dotfiles (e.g., .attachments).
