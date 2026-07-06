@@ -1,8 +1,25 @@
 # Changelog — Codebase Memory V2
 
+## 0.10.6 — Round 42 (2026-07-06)
+
+4 issues fixed based on Claude Sonnet round 5 audit (1 LOW a11y, 1 LOW doc arithmetic, 1 LOW doc stale, 1 MEDIUM perf). 10 new tests (339 total).
+
+### Fixes (Claude Sonnet round 5 audit)
+
+- **App.tsx D1** (LOW a11y): `aria-labelledby={`tab-${activeTab}`}` on the `<main>` tabpanel referenced an `id` that didn't exist — no tab `<button>` had `id={`tab-${tab.id}`}`. The `aria-controls` (button→panel) relationship was wired correctly, but the reverse (panel→button) was broken, so screen readers couldn't resolve the accessible name from the label relationship. Fixed: added `id={`tab-${tab.id}`}` to each tab button.
+
+- **CHANGELOG.md D2** (LOW doc): the R41 entry's parenthetical breakdown summed to 15 ("2 MEDIUM perf" + "8 LOW") while the header said 13 and the actual bullet count was 12 (L2+N2 is one bullet covering 2 issues). Recounted: 1 HIGH perf + 1 HIGH complexity + 1 MEDIUM perf + 1 MEDIUM UX + 2 MEDIUM leak + 7 LOW = 13. Corrected the parenthetical to match the header.
+
+- **CLI_REFERENCE.md D3** (LOW doc): the `cbm-v2 watch` section described the export mechanism but didn't mention the `source: 'watch-import'` tag filtering (R40) that prevents redundant exports. Given the guard went through 3 redesigns (boolean → timestamp window → source tagging), the current mechanism is worth documenting precisely. Added a paragraph explaining the source-tag filter and the known-harmless no-op from store-emitted events.
+
+- **searchHumanNodes E1** (MEDIUM perf): FTS5 search was phrase-only — the entire query was wrapped in one pair of double quotes, requiring words to appear as an exact adjacent phrase. Changed to AND-of-terms: each whitespace-separated term is individually quoted and joined with spaces, so FTS5 treats them as an implicit AND. A search for "auth login bug" now matches notes containing all three words anywhere (reordered, scattered across title/body/tags), not just notes with the literal three-word phrase. Single-term queries degenerate to the same phrase query as before. The LIKE fallback is unchanged (uses the original full substring).
+
+### Test coverage
+- 10 new tests in `tests/round42-fixes.test.ts`: AND-of-terms matching (all terms required, missing-term exclusion, reordered equivalence, scattered terms, extra whitespace, limit, deprecated exclusion, LIKE fallback).
+
 ## 0.10.5 — Round 41 (2026-07-06)
 
-13 issues fixed across V2 + Graph UI (1 HIGH perf, 1 HIGH complexity, 2 MEDIUM perf, 1 MEDIUM UX, 2 MEDIUM leak, 8 LOW). 23 new tests (329 total).
+13 issues fixed across V2 + Graph UI (1 HIGH perf, 1 HIGH complexity, 1 MEDIUM perf, 1 MEDIUM UX, 2 MEDIUM leak, 7 LOW). 23 new tests (329 total).
 
 ### HIGH fixes
 

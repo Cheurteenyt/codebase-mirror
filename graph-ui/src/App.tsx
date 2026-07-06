@@ -90,6 +90,7 @@ export function App() {
               return (
                 <button
                   key={tab.id}
+                  id={`tab-${tab.id}`}
                   role="tab"
                   aria-selected={active}
                   aria-controls={`tabpanel-${tab.id}`}

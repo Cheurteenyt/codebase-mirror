@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-06 for version 0.10.5.
+> Updated 2026-07-06 for version 0.10.6.
 
-## Current State (0.10.5)
+## Current State (0.10.6)
 
 ### ✅ Completed
 
@@ -50,15 +50,16 @@
 | Round 39 countNodesByLabel expansion | 0.10.3 | Applied countNodesByLabel to get_project_overview MCP tool (4->1 query) and generateVault 00_Index.md (4->1 query) |
 | Round 40 deep quality | 0.10.4 | 12 fixes: H1 watch guard (source filter), UI-1 WS zombie race (gen counter), UI-2 sim reuse on filter, UI-3 stale highlight effect order, UI-4 hover setState dedup, UI-5 mouseup window, UI-11 pointer cancel, UI-12 tooltip viewport flip, M2 create_human_note batch validate, M3 getBulkNeighbors (40->3 queries), M4 generator page-level bulk code nodes, M8 buildFenceState (O(K×N) -> O(N+K)), L5 swr-cache opts preserved across refreshes. 14 new tests (306 total) |
 | Round 41 FTS5 + route table | 0.10.5 | 13 fixes: M5 FTS5 search (migration V4, searchHumanNodes, BM25 ranking), L1 handleApi route-table refactor (588->22 lines), N1 report.ts resource leak (withProjectStores helper), L2+N2 countAll single-query + finally close, UI-9 pan bounds + reset view (forwardRef), L4 slug prepare hoist, L3 dead dynamic imports, N3 dead outer catch, UI-7 sidebar O(n²) fix, UI-8 dead showLabels toggle, L6 SlugConflictError class, UI-10 ARIA tablist + canvas role. 23 new tests (329 total) |
+| Round 42 Claude Sonnet R5 audit | 0.10.6 | 4 fixes from external audit: D1 tab button id (aria-labelledby contract), D2 changelog arithmetic correction, D3 watch docs (source-tag guard mechanism), E1 FTS5 AND-of-terms search (phrase-only → multi-term AND, matches scattered/reordered words). 10 new tests (339 total) |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
 | Source files (v2) | 38 |
-| Test files | 30 |
-| Tests | 329 (all passing) |
-| Bugs fixed (41 rounds) | 453+ |
+| Test files | 31 |
+| Tests | 339 (all passing) |
+| Bugs fixed (42 rounds) | 457+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -98,7 +99,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.10.5)
+### Phase 3: V1 Complete (0.10.6)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -165,7 +166,8 @@
 | R39 (countNodesByLabel expansion) | 0.10.3 | — (perf) | — | 292 |
 | R40 (deep quality: 5 HIGH bugs + 4 N+1 + 1 latent + 2 UX) | 0.10.4 | 12 | 14 | 306 |
 | R41 (FTS5 + route table + leaks + a11y) | 0.10.5 | 13 | 23 | 329 |
-| **Total** | | **453+** | **453+** | **329** |
+| R42 (Claude Sonnet R5 audit) | 0.10.6 | 4 | 10 | 339 |
+| **Total** | | **457+** | **457+** | **339** |
 
 ## Performance Milestones
 
@@ -199,8 +201,9 @@
 | R41 | `/api/projects` per-project counts | 2N queries (countNodes + countEdges) × N projects | N queries (countAll single-query) | -50% query count |
 | R41 | `server.ts handleApi` | 588-line monolith with 17 chained ifs | 22-line route-table dispatcher | -96% method size |
 | R41 | `Sidebar flattenSingleChild` | O(n²) on deep single-child chains | O(n) (use already-flattened sc.children) | -~n× on deep chains |
+| R42 | `searchHumanNodes` FTS5 query | Phrase-only (entire query in one pair of quotes — required exact adjacent phrase) | AND-of-terms (each term individually quoted, implicit AND) | Matches scattered/reordered words, not just adjacent phrases |
 
-## API Endpoints (0.10.5)
+## API Endpoints (0.10.6)
 
 | Endpoint | Method | Description |
 |---|---|---|

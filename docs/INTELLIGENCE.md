@@ -94,15 +94,22 @@ src/mcp/tools/
 The `countNodesByLabel` helper (R38/R39) also uses a single GROUP BY query
 instead of N separate COUNT queries when computing per-label counts.
 
-### Full-text search (R41)
+### Full-text search (R41 + R42)
 
 `HumanMemoryStore.searchHumanNodes(project, query, limit)` uses an FTS5
 virtual table (`human_nodes_fts`, migration V4) over `human_nodes`'
 searchable columns (title, body_markdown, tags, frontmatter_json, author).
 External-content pattern with 3 sync triggers. Tokenizer: `porter unicode61`
 (English stemming + accented-char support). Ranking: BM25 via `ORDER BY rank`.
-Falls back to the old 5× `LIKE %q%` scan if the FTS5 table is missing or the
-query syntax trips FTS5's parser. Used by `search_code_and_memory` MCP tool.
+
+**Query construction (R42):** multi-term queries use AND-of-terms — each
+whitespace-separated term is individually double-quoted and joined with
+spaces, so FTS5 treats them as an implicit AND. A search for "auth login bug"
+matches notes containing all three words anywhere (reordered, scattered
+across title/body/tags), not just notes with the literal adjacent phrase.
+Single-term queries degenerate to a simple phrase query. Falls back to the
+old 5× `LIKE %q%` substring scan if the FTS5 table is missing or the query
+syntax trips FTS5's parser. Used by `search_code_and_memory` MCP tool.
 
 ## Data Flow
 

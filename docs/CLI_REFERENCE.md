@@ -1,6 +1,6 @@
 # CLI Reference — Codebase Memory V2
 
-> Updated 2026-07-06 for version 0.10.5.
+> Updated 2026-07-06 for version 0.10.6.
 
 All commands are available via `cbm-v2` (or `node dist/cli/index.js` before global install).
 
@@ -80,7 +80,16 @@ The watch daemon uses Node.js `fs.watch` (recursive, Node 18+) to monitor the va
 3. **Export**: runs `generateVault` to regenerate AUTO-GENERATED sections
 4. **Notify**: pushes WebSocket notifications to connected UI clients
 
-The daemon also subscribes to the `NotifyHub` so that DB-side mutations (from MCP tools or API endpoints running in the same process) trigger an automatic export.
+The daemon also subscribes to the `NotifyHub` so that DB-side mutations (from
+MCP tools or API endpoints running in the same process) trigger an automatic
+export. To prevent the import path from redundantly triggering an export of
+its own output, `runSync()` tags its explicit `hub.notify()` calls with
+`{ source: 'watch-import' }`, and the hub subscriber skips events carrying
+that tag — since `runSync()` already ran `generateVault()` inline. Internal
+store-level events (`createNode`/`updateNode` fired inside `importVault`)
+are not tagged and still schedule a second `generateVault()` call after the
+debounce window; this is a known no-op (the generator's frontmatter diff
+detection skips unchanged files), so the redundancy is harmless by design.
 
 Press `Ctrl+C` to stop the daemon.
 

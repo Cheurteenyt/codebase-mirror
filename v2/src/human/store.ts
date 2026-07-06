@@ -760,16 +760,36 @@ export class HumanMemoryStore {
    *
    * @param project  restrict to this project
    * @param query    raw user query (e.g. "auth login bug"). Internally
-   *                 wrapped in double-quotes for FTS5 phrase matching.
+   *                 split into terms and AND-ed as individually-quoted FTS5
+   *                 phrases — matches notes containing ALL terms anywhere,
+   *                 not just the exact adjacent phrase.
    * @param limit    max results (default 50)
    */
   searchHumanNodes(project: string, query: string, limit = 50): HumanNode[] {
     if (!query || query.trim().length === 0) return [];
 
-    // FTS5 phrase query: wrap in double-quotes, escape internal quotes by doubling.
-    // Phrase matching is safer than raw MATCH (which treats "OR" "AND" "NOT" as operators).
     const trimmed = query.trim();
-    const phraseQuery = '"' + trimmed.replace(/"/g, '""') + '"';
+
+    // R42 (E1): AND-of-terms FTS5 query. Each whitespace-separated term is
+    // individually double-quoted (escaping internal quotes by doubling) and
+    // the terms are joined with spaces — FTS5 treats multiple quoted phrases
+    // as an implicit AND. This matches notes containing ALL terms anywhere,
+    // not just notes containing the exact adjacent phrase.
+    //
+    // Example: "auth login bug" → MATCH '"auth" "login" "bug"'
+    //   - matches "auth login bug" (adjacent) ✓
+    //   - matches "bug in auth login flow" (reordered) ✓
+    //   - matches "auth module has a bug in login.ts" (scattered) ✓
+    //   - does NOT match "auth service" (missing login + bug) ✗
+    //
+    // Previously (R41) the entire query was wrapped in one pair of quotes,
+    // requiring the words to appear as an exact adjacent phrase — matching
+    // the pre-FTS5 LIKE behavior but wasting the inverted index's capability.
+    //
+    // If the query is a single term, this degenerates to a simple phrase
+    // query (same as R41). The LIKE fallback is unchanged.
+    const terms = trimmed.split(/\s+/).filter(t => t.length > 0);
+    const andQuery = terms.map(t => '"' + t.replace(/"/g, '""') + '"').join(' ');
 
     try {
       const rows = this.db
@@ -780,15 +800,18 @@ export class HumanMemoryStore {
            ORDER BY rank
            LIMIT ?`
         )
-        .all(project, phraseQuery, limit) as any[];
+        .all(project, andQuery, limit) as any[];
       if (rows.length > 0) return rows.map(deserializeNode);
-      // 0 hits from FTS5 — could be a tokenizer edge case. Fall through to LIKE
-      // which does substring matching (broader than FTS5's token matching).
+      // 0 hits from FTS5 — fall through to LIKE which does substring matching
+      // (broader than FTS5's token matching — might catch a typo or a word
+      // split by punctuation that FTS5's tokenizer handled differently).
     } catch {
       // FTS5 table missing (pre-V4 DB) or query syntax error → fall through to LIKE.
     }
 
     // LIKE fallback — identical to the pre-R41 behavior (5× substring scan).
+    // Uses the original trimmed query (not the AND-split version) so the
+    // fallback matches the full substring, preserving backward compatibility.
     const escaped = trimmed.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
     const likePattern = `%${escaped}%`;
     const rows = this.db
