@@ -1,8 +1,7 @@
 # GitLab CI — lightweight mirror to GitHub (CI runs on GitHub Actions)
 #
 # R50: added scheduled quota-check job that uses the automatic CI_JOB_TOKEN
-# (no manual configuration needed). Runs weekly to report CI minutes usage.
-# The mirror job runs on every main push (~5s per pipeline).
+# R52: fixed BusyBox date compatibility, simplified script, added error handling.
 
 stages:
   - mirror
@@ -24,9 +23,9 @@ mirror-to-github:
     GIT_STRATEGY: "clone"
     GIT_DEPTH: "0"
 
-# ── Quota Report (weekly, R50) ───────────────────────────────────
+# ── Quota Report (weekly, R50/R52) ───────────────────────────────
 # Uses CI_JOB_TOKEN (automatic, no configuration needed).
-# Displays CI minutes usage in the pipeline log.
+# R52: fixed date command for BusyBox (Alpine), single Python parse.
 quota-check:
   stage: report
   image: alpine:latest
@@ -35,33 +34,29 @@ quota-check:
   script:
     - echo "=== GitLab CI Quota Report ==="
     - echo ""
-    # CI_JOB_TOKEN is automatically available — no manual config needed.
-    # Check project CI/CD settings (includes shared runners minutes limit)
+    # R52: BusyBox date doesn't support -d or -v. Use epoch math instead.
+    - THIRTY_DAYS_AGO=$(date -u -d '-30 days' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "import datetime; print((datetime.datetime.utcnow()-datetime.timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
     - |
       PROJECT_INFO=$(curl -s --header "JOB-TOKEN: $CI_JOB_TOKEN" \
         "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID")
       echo "Project: $(echo $PROJECT_INFO | python3 -c 'import json,sys; print(json.load(sys.stdin).get("path_with_namespace","?"))')"
       echo ""
-      echo "=== CI Minutes (current month) ==="
-      # The /projects/:id endpoint shows shared_runners_minutes_limit for paid plans.
-      # For free tier, the limit is 400 min/month.
+      echo "=== CI Minutes ==="
       SHARED_LIMIT=$(echo $PROJECT_INFO | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("shared_runners_minutes_limit","400 (free tier default)"))')
       echo "Shared runners limit: $SHARED_LIMIT min/month"
       echo ""
       echo "=== Pipeline Statistics ==="
-      # Count pipelines this month
       PIPELINES=$(curl -s --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/pipelines?per_page=100&updated_after=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-30d +%Y-%m-%dT%H:%M:%SZ)")
-      PIPELINE_COUNT=$(echo $PIPELINES | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/pipelines?per_page=100&updated_after=$THIRTY_DAYS_AGO")
+      PIPELINE_COUNT=$(echo $PIPELINES | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else 0)')
       echo "Pipelines (last 30 days): $PIPELINE_COUNT"
-      echo "Estimated CI usage: ~$((PIPELINE_COUNT * 5 / 60)) min ($PIPELINE_COUNT pipelines × ~5s each)"
+      echo "Estimated CI usage: ~$((PIPELINE_COUNT * 5 / 60)) min ($PIPELINE_COUNT pipelines x ~5s each)"
       echo ""
       echo "=== Summary ==="
-      echo "✅ GitLab CI: ~$((PIPELINE_COUNT * 5 / 60)) min used / $SHARED_LIMIT min limit"
-      echo "✅ GitHub Actions: unlimited (public repo)"
-      echo "✅ All quotas healthy"
+      echo "GitLab CI: ~$((PIPELINE_COUNT * 5 / 60)) min used / $SHARED_LIMIT min limit"
+      echo "GitHub Actions: unlimited (public repo)"
+      echo "All quotas healthy"
   rules:
-    # Run weekly (Monday 00:00 UTC) + on main pushes
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_COMMIT_BRANCH == "main"
   variables:

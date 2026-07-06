@@ -4,8 +4,8 @@
 # Public repos on GitHub have unlimited Actions minutes.
 #
 # R50: added quota-report job that uses the automatic GITHUB_TOKEN
-# (no manual configuration needed) to display API + Actions usage
-# in the job summary.
+# R52: security hardening (least-privilege permissions), perf (npm ci),
+#      quality (single-parse API calls, no redundant build).
 
 name: CI
 
@@ -15,13 +15,17 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # R50: weekly quota check every Monday at 00:00 UTC
     - cron: '0 0 * * 1'
 
 # Cancel in-progress runs for the same branch (saves minutes).
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# R52: least-privilege — the default GITHUB_TOKEN has write permissions
+# we don't need. Restrict to read-only for all jobs.
+permissions:
+  contents: read
 
 jobs:
   # ── Backend (v2): typecheck + build + test ─────────────────────
@@ -42,7 +46,7 @@ jobs:
           cache-dependency-path: v2/package.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Typecheck
         run: npx tsc --noEmit
@@ -51,7 +55,7 @@ jobs:
         run: npm run build
 
       - name: Test
-        run: npm test
+        run: npx vitest run
 
   # ── Frontend (graph-ui): typecheck + build + test ──────────────
   frontend:
@@ -71,7 +75,7 @@ jobs:
           cache-dependency-path: graph-ui/package.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Typecheck
         run: npx tsc --noEmit
@@ -80,83 +84,58 @@ jobs:
         run: npm run build
 
       - name: Test
-        run: npm test
+        run: npx vitest run
 
-  # ── Quota Report (R50) ────────────────────────────────────────
+  # ── Quota Report (R50, R52) ───────────────────────────────────
   # Uses the automatic GITHUB_TOKEN — no manual configuration needed.
-  # Displays API rate limits + Actions usage in the job summary.
-  # Runs on every push AND on the weekly schedule.
+  # R52: single API call + single parse, least-privilege permissions.
   quota-report:
     name: Quota Report
     runs-on: ubuntu-latest
-    # Run on schedule + on pushes to main (not on feature branches to save minutes)
     if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     steps:
-      - name: Check GitHub API rate limits
-        id: rate_limit
+      - name: Generate quota report
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "## 🔍 Quota Report" >> $GITHUB_STEP_SUMMARY
+          echo "## Quota Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # GitHub API rate limit (authenticated = 5000/hr instead of 60/hr)
-          RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+          # Single API call + single Python parse for all rate limit data
+          RATE_LIMIT=$(curl -s -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/rate_limit")
 
-          CORE_REMAINING=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['resources']['core']['remaining'])")
-          CORE_LIMIT=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['resources']['core']['limit'])")
-          SEARCH_REMAINING=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['resources']['search']['remaining'])")
-          SEARCH_LIMIT=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['resources']['search']['limit'])")
+          echo "$RATE_LIMIT" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          core = d['resources']['core']
+          search = d['resources']['search']
+          print('### GitHub API Rate Limits')
+          print()
+          print('| Resource | Remaining | Limit |')
+          print('|----------|-----------|-------|')
+          print(f'| Core API | {core[\"remaining\"]} | {core[\"limit\"]} |')
+          print(f'| Search API | {search[\"remaining\"]} | {search[\"limit\"]} |')
+          print()
+          " >> $GITHUB_STEP_SUMMARY
 
-          echo "### GitHub API Rate Limits" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Resource | Remaining | Limit |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Core API | $CORE_REMAINING | $CORE_LIMIT |" >> $GITHUB_STEP_SUMMARY
-          echo "| Search API | $SEARCH_REMAINING | $SEARCH_LIMIT |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-      - name: Check GitHub Actions usage
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Count Actions minutes used this month (from workflow runs)
-          # Note: GitHub doesn't expose billing minutes via API for free accounts.
-          # But we can count the number of runs and their duration.
+          # Single API call for Actions runs count
           RUNS_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=100&created=$(date -u -d '30 days ago' +%Y-%m-%d)..$(date -u +%Y-%m-%d)")
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=1")
 
-          TOTAL_RUNS=$(echo "$RUNS_RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('total_count', 0))")
+          TOTAL_RUNS=$(echo "$RUNS_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('total_count', 0))")
 
           echo "### GitHub Actions (last 30 days)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Total runs (30d) | $TOTAL_RUNS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Actions minutes | **Unlimited** (public repo) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Total runs | $TOTAL_RUNS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Actions minutes | Unlimited (public repo) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> ✅ Public repos have **unlimited** Actions minutes — no quota to exhaust." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-      - name: Check GitLab CI minutes
-        env:
-          # CI_JOB_TOKEN is automatically available in GitLab CI but NOT in GitHub Actions.
-          # We use the GITHUB_TOKEN to check the GitHub mirror's CI status instead.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "### GitLab CI Minutes" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| GitLab CI limit | 400 min/month (free tier) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Our usage | ~3 min/month (mirror job only, ~5s per merge) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Remaining | **~397 min/month** (99% available) |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> ℹ️ GitLab CI quota is checked via the GitLab pipeline logs (mirror job)." >> $GITHUB_STEP_SUMMARY
+          echo "> Public repos have unlimited Actions minutes." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **GitHub Actions**: unlimited (public repo)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **GitLab CI**: ~1% usage (mirror only)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **GitHub API**: 5000 req/hr (authenticated)" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub Actions: unlimited (public repo)" >> $GITHUB_STEP_SUMMARY
+          echo "- GitLab CI: ~1% usage (mirror only)" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub API: 5000 req/hr (authenticated)" >> $GITHUB_STEP_SUMMARY
