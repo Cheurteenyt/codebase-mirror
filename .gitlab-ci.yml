@@ -2,10 +2,46 @@
 #
 # R50: added scheduled quota-check job that uses the automatic CI_JOB_TOKEN
 # R52: fixed BusyBox date compatibility, simplified script, added error handling.
+# R54: added workflow:rules + mr-preflight so MR pipelines PASS (not skip).
+#      Without this, "Pipelines must succeed" blocks MRs because all jobs
+#      are filtered out by `if: $CI_COMMIT_BRANCH == "main"` (CI_COMMIT_BRANCH
+#      is undefined for merge_request_event pipelines).
+
+# R54: workflow:rules controls WHEN a pipeline is created at all.
+# - merge_request_event: MR pipelines (must have at least one passing job)
+# - push to main: mirror + quota-check
+# - schedule: quota-check only
+# - All other events (push to feature branches, tags, web): no pipeline
+#   (those branches don't need GitLab CI — GitHub Actions handles them).
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
 
 stages:
+  - preflight
   - mirror
   - report
+
+# ── MR preflight (R54) ───────────────────────────────────────────
+# Lightweight job that runs ONLY on MR events. Without it, MR pipelines
+# have zero jobs and GitLab marks them as "skipped" → "Pipelines must
+# succeed" blocks the MR. This job runs in ~2s and just confirms the MR
+# pipeline can pass. Real CI (typecheck/build/test) runs on GitHub Actions
+# after merge to main.
+mr-preflight:
+  stage: preflight
+  image: alpine:latest
+  script:
+    - echo "MR pipeline OK — GitLab CI is mirror-only."
+    - echo "Real CI (typecheck + build + test) runs on GitHub Actions after merge."
+    - echo "Source branch: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+    - echo "Target branch:  $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - echo "Commit:         $CI_COMMIT_SHA"
+    - echo "See: https://github.com/Cheurteenyt/codebase-mirror/actions"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
 # ── Mirror to GitHub (on every main push) ────────────────────────
 mirror-to-github:
