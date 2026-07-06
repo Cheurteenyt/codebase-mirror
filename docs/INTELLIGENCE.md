@@ -69,28 +69,49 @@ The agent gets a prioritized action list without having to ask "what should I do
 ```
 src/intelligence/
   graph-status.ts    — freshness detection (getGraphStatus, getFreshnessScore, freshnessLabel)
+  swr-cache.ts       — Stale-While-Revalidate cache (R37): adaptive TTL, memory-aware eviction, background refresh dedup
+  ttl-cache.ts       — simple TTL cache (R36, kept for compat; new code should prefer SwrCache)
 
 src/mcp/tools/
   prepare_edit_context.ts  — flagship tool (context before editing)
   get_project_overview.ts  — enhanced with graph_status + recommendations
 ```
 
+### Caching (R36–R37)
+
+`getGraphStatus` is the most frequently-called function on the API surface
+(every `/api/dashboard` and `/api/stats` call hits it). Two cache layers:
+
+1. **SwrCache** (`swr-cache.ts`) — primary cache. Fresh for `ttlMs` (default
+   30s), then stale-but-served for another `staleMs` (default 30s). Stale
+   reads return in 0ms and trigger a background refresh via `setTimeout(0)`.
+   Adaptive TTL: entries accessed ≥3× get 3× TTL; ≥10× get 10× TTL. Memory-aware
+   eviction: when total cached bytes exceed `maxBytes`, least-recently-accessed
+   entries are evicted.
+2. **`invalidateGraphStatusCache()`** — call this whenever the code graph DB
+   changes (re-index, import) so the next read doesn't return a stale entry.
+
+The `countNodesByLabel` helper (R38/R39) also uses a single GROUP BY query
+instead of N separate COUNT queries when computing per-label counts.
+
 ## Data Flow
 
 ```
 Agent calls prepare_edit_context(file_path="src/auth/login.ts")
   ↓
-1. Search code graph for nodes matching file_path
+1. Search code graph for nodes matching file_path (up to 20 matches)
   ↓
-2. For each node: getNeighbors (callers/callees)
+2. Bulk-fetch degrees (split in/out) for all 20 nodes in ONE query (getBulkNodeDegreesSplit)
+   Bulk-fetch human notes for all 20 nodes in ONE query (getBulkNotesByCbmNodeIds)
+   Bulk-fetch neighbors for all 20 nodes in 3 queries (getBulkNeighbors — R40 M3)
   ↓
-3. For each node: listNodesByCbmNodeId (human notes: bugs, ADRs, refactors, conventions)
+3. Compute risk score (degree × complexity × documentation) per node
   ↓
-4. Compute risk score (degree × complexity × documentation)
+4. Collect blast radius (unique dependent node IDs from in-neighbors)
   ↓
-5. Collect blast radius (unique dependent node IDs)
+5. Bulk-fetch blast-radius node labels in ONE query (getNodesByIds)
   ↓
-6. Get graph freshness (git log + DB mtime)
+6. Get graph freshness (cached: SWR cache, 30s fresh / 30s stale)
   ↓
 7. Build recommendation (warnings → "PROCEED WITH CAUTION" or "SAFE TO EDIT")
   ↓
@@ -101,7 +122,7 @@ Return complete context in one response
 
 | Feature | Description | Status |
 |---|---|---|
-| `cbm-v2 watch` | Daemon: auto-sync Obsidian + code graph | Planned |
+| `cbm-v2 watch` | Daemon: auto-sync Obsidian vault on file change | ✅ Done (0.9.0 / R29) |
 | Git hooks | Auto-journal after each commit | Planned |
 | Proactive suggestions | V2 suggests creating notes for undocumented modules | Planned |
 | Smart-sync | Incremental sync based on mtime (10x faster) | Planned |

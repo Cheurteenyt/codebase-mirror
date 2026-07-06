@@ -355,6 +355,118 @@ export class CodeGraphReader {
   }
 
   /**
+   * R40 (M3): Bulk-fetch neighbors for a set of node IDs in at most
+   * 2 chunked queries + 1 getNodesByIds for the unique neighbor nodes.
+   * Returns Map<nodeId, { edge, node }[]> — same shape as getNeighbors,
+   * but for N nodes at once. Used by prepare_edit_context to eliminate
+   * the N+1 pattern of calling getNeighbors per matching node (20 nodes ×
+   * 2 queries = 40 queries → 3 queries).
+   *
+   * Unlike getBulkEdges (which only returns edges within the visible set),
+   * this method returns the FULL neighbor node data for edges in BOTH
+   * directions, regardless of whether the neighbor is in the input set.
+   *
+   * @param nodeIds      the nodes to fetch neighbors for
+   * @param direction    'in' (callers), 'out' (callees), or 'both'
+   * @param limitPerNode cap on edges per node per direction (default 50)
+   */
+  getBulkNeighbors(
+    nodeIds: number[],
+    direction: 'in' | 'out' | 'both' = 'both',
+    limitPerNode = 50,
+  ): Map<number, { edge: CodeEdge; node: CodeNode }[]> {
+    const result = new Map<number, { edge: CodeEdge; node: CodeNode }[]>();
+    if (nodeIds.length === 0) return result;
+    for (const id of nodeIds) result.set(id, []);
+
+    // Step 1: collect all (anchorId, edge, neighborId, side) tuples in 2
+    // chunked queries. limitPerNode is enforced PER DIRECTION (matching
+    // getNeighbors's behavior: 50 out + 50 in = 100 total when direction='both').
+    interface EdgeRow { anchorId: number; edge: CodeEdge; neighborId: number; side: 'out' | 'in'; }
+    const allRows: EdgeRow[] = [];
+    // Per-anchor per-direction counters (so we cap 50 out AND 50 in, not 100 total).
+    const outCount = new Map<number, number>();
+    const inCount = new Map<number, number>();
+    const EDGE_COLS = `e.id AS edge_id, e.project AS edge_project, e.source_id, e.target_id,
+                       e.type AS edge_type, e.properties_json AS edge_properties`;
+
+    const makeEdge = (row: any): CodeEdge => ({
+      id: row.edge_id,
+      project: row.edge_project,
+      source_id: row.source_id,
+      target_id: row.target_id,
+      type: row.edge_type,
+      properties_json: row.edge_properties ?? '{}',
+    });
+
+    for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
+      const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        if (direction === 'out' || direction === 'both') {
+          // Out-edges: chunk nodes are sources; neighbor is target.
+          const outRows = this.db
+            .prepare(
+              `SELECT ${EDGE_COLS} FROM edges e
+               WHERE e.source_id IN (${placeholders})
+               ORDER BY e.id ASC`,
+            )
+            .all(...chunk) as any[];
+          for (const row of outRows) {
+            const anchorId = row.source_id;
+            const cnt = outCount.get(anchorId) ?? 0;
+            if (cnt >= limitPerNode) continue;
+            outCount.set(anchorId, cnt + 1);
+            allRows.push({
+              anchorId,
+              edge: makeEdge(row),
+              neighborId: row.target_id,
+              side: 'out',
+            });
+          }
+        }
+        if (direction === 'in' || direction === 'both') {
+          // In-edges: chunk nodes are targets; neighbor is source.
+          const inRows = this.db
+            .prepare(
+              `SELECT ${EDGE_COLS} FROM edges e
+               WHERE e.target_id IN (${placeholders})
+               ORDER BY e.id ASC`,
+            )
+            .all(...chunk) as any[];
+          for (const row of inRows) {
+            const anchorId = row.target_id;
+            const cnt = inCount.get(anchorId) ?? 0;
+            if (cnt >= limitPerNode) continue;
+            inCount.set(anchorId, cnt + 1);
+            allRows.push({
+              anchorId,
+              edge: makeEdge(row),
+              neighborId: row.source_id,
+              side: 'in',
+            });
+          }
+        }
+      } catch {
+        // ignore — return partial results for this chunk
+      }
+    }
+
+    // Step 2: bulk-fetch all unique neighbor nodes in 1 chunked query.
+    const uniqueNeighborIds = [...new Set(allRows.map(r => r.neighborId))];
+    const neighborNodeMap = this.getNodesByIds(uniqueNeighborIds);
+
+    // Step 3: attach neighbor nodes to their anchor entries.
+    for (const row of allRows) {
+      const neighborNode = neighborNodeMap.get(row.neighborId);
+      if (!neighborNode) continue; // neighbor node was deleted — skip
+      result.get(row.anchorId)!.push({ edge: row.edge, node: neighborNode });
+    }
+
+    return result;
+  }
+
+  /**
    * Find nodes by file path substring (used by prepare_edit_context).
    */
   findNodesByFilePath(project: string, filePathSubstr: string, limit = 50): CodeNode[] {

@@ -145,15 +145,44 @@ CREATE TABLE human_nodes (
     UNIQUE(project, slug)
 );
 
-CREATE INDEX idx_human_nodes_project ON human_nodes(project);
-CREATE INDEX idx_human_nodes_label ON human_nodes(label);
-CREATE INDEX idx_human_nodes_status ON human_nodes(status);
-CREATE INDEX idx_human_nodes_obsidian_path ON human_nodes(obsidian_path);
-CREATE INDEX idx_human_nodes_updated_at ON human_nodes(updated_at);
-
--- Index sur cbm_node_ids (JSON array) — requêtes via JSON_EACH
-CREATE INDEX idx_human_nodes_cbm_node_ids ON human_nodes(project, cbm_node_ids);
+-- R20 (migration V2): replaced the original single-column indexes with two
+-- composite indexes that match the actual query patterns. The previous
+-- idx_human_nodes_project / _label / _status were redundant (the composites
+-- cover their leading column) and idx_human_nodes_cbm_node_ids (a JSON-text
+-- index) was useless — JSON_EACH cannot use a text index on the JSON column.
+CREATE INDEX idx_human_nodes_project_label  ON human_nodes(project, label);
+CREATE INDEX idx_human_nodes_project_status ON human_nodes(project, status);
+CREATE INDEX idx_human_nodes_obsidian_path  ON human_nodes(obsidian_path);
+CREATE INDEX idx_human_nodes_updated_at     ON human_nodes(updated_at);
 ```
+
+### 4.6 Table `human_node_cbm_links` (R21 / migration V3)
+
+Junction table that replaces the JSON_EACH-on-`cbm_node_ids` query pattern.
+The original schema stored `cbm_node_ids` as a JSON array column on `human_nodes`;
+queries like "find all notes linked to code node X" required `JSON_EACH(cbm_node_ids)`
+which is a full-table scan and cannot use any index.
+
+```sql
+CREATE TABLE human_node_cbm_links (
+    human_node_id   INTEGER NOT NULL,
+    cbm_node_id     INTEGER NOT NULL,
+    project         TEXT NOT NULL,
+    PRIMARY KEY(human_node_id, cbm_node_id),
+    FOREIGN KEY(human_node_id) REFERENCES human_nodes(id) ON DELETE CASCADE
+) WITHOUT ROWID;
+
+CREATE INDEX idx_cbm_links_cbm_id ON human_node_cbm_links(cbm_node_id);
+```
+
+`WITHOUT ROWID` makes the table a clustered B-tree on the primary key, so:
+- lookup "all cbm ids for note N" → PK seek + range scan (no JSON parse)
+- lookup "all notes linked to cbm node X" → covering index `idx_cbm_links_cbm_id`
+
+The `cbm_node_ids` JSON column is still present on `human_nodes` for backward
+compatibility and is kept in sync by `HumanMemoryStore.syncCbmLinks` (called
+from `createNode`/`updateNode`). New code should query the junction table
+(`getBulkNotesByCbmNodeIds`, `syncCbmLinks`) — never `JSON_EACH`.
 
 ### 4.2 Table `human_edges`
 
