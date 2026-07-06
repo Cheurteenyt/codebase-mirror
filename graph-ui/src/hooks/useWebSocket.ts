@@ -50,6 +50,14 @@ export function useWebSocket(
   const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pongTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  // R40: generation counter to invalidate stale WS callbacks. When project
+  // changes or the component unmounts, we increment this. Any callback (onopen,
+  // onmessage, onclose, onerror) captured by a previous socket checks its
+  // captured gen against the current value and bails if stale. This prevents
+  // the zombie-connection race where the OLD socket's onclose fires after the
+  // NEW socket is already open, scheduling a reconnect to the OLD project and
+  // leaking project-A events into project-B's view.
+  const wsGenRef = useRef(0);
   // R25: keep the latest onNotification in a ref so the WebSocket listener
   // always calls the latest callback without re-connecting.
   const callbackRef = useRef(onNotification);
@@ -73,9 +81,13 @@ export function useWebSocket(
       return;
     }
 
+    // R40: capture the current generation. All callbacks below close over
+    // `gen` and compare against wsGenRef.current to detect staleness.
+    const gen = ++wsGenRef.current;
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (wsGenRef.current !== gen) return; // stale socket
       if (!mountedRef.current) return;
       reconnectAttemptRef.current = 0;
       setConnected(true);
@@ -86,6 +98,7 @@ export function useWebSocket(
     };
 
     ws.onmessage = (event: MessageEvent) => {
+      if (wsGenRef.current !== gen) return; // stale socket
       if (!mountedRef.current) return;
       try {
         const msg = JSON.parse(event.data);
@@ -114,6 +127,10 @@ export function useWebSocket(
     };
 
     ws.onclose = () => {
+      // R40: if the generation changed, this close is from a stale socket
+      // (project changed or component unmounted). Do NOT scheduleReconnect —
+      // the new socket is already being managed by the new effect run.
+      if (wsGenRef.current !== gen) return;
       if (!mountedRef.current) return;
       setConnected(false);
       stopPing();
@@ -121,6 +138,7 @@ export function useWebSocket(
     };
 
     ws.onerror = () => {
+      if (wsGenRef.current !== gen) return; // stale socket
       // The close event will fire after error — no need to handle separately.
       // Just close the socket to trigger the close handler.
       try { ws.close(); } catch { /* ignore */ }
@@ -181,6 +199,12 @@ export function useWebSocket(
     connect();
     return () => {
       mountedRef.current = false;
+      // R40: increment the generation to invalidate any in-flight callbacks
+      // (onopen/onmessage/onclose/onerror) captured by the previous socket.
+      // Without this, the old socket's onclose fires after the new socket is
+      // already open, scheduling a reconnect to the OLD project (zombie
+      // connection that leaks cross-project events into the current view).
+      wsGenRef.current++;
       stopPing();
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (wsRef.current) {

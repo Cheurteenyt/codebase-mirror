@@ -289,7 +289,7 @@ Tous les tools V2 vivent dans `v2/src/mcp/tools/`. Ils sont exposés via le
 serveur MCP TypeScript qui tourne en parallèle du moteur C.
 
 > **Note**: L'architecture cible prévoyait 15 tools. Actuellement 7 sont implémentés
-> (version 0.10.3). Les 8 restants sont planifiés pour les phases 2-3 (voir V2_ROADMAP.md).
+> (version 0.10.4). Les 8 restants sont planifiés pour les phases 2-3 (voir V2_ROADMAP.md).
 
 | # | Tool | Type | Statut | Description |
 |---|---|---|---|---|
@@ -384,25 +384,30 @@ d'architecture qui affiche :
 - Modules legacy non documentés
 - Refactors prévus
 
-### 8.2 Vues ajoutées
+### 8.2 Vues implémentées (React + d3-force)
 
-| Vue | Description | Composant React |
+The graph UI shipped in 0.8.0 with 4 tabs. The originally-planned views
+(ModuleEgoGraph, RouteFlowView, BlastRadiusView, etc.) are deferred — see
+`docs/V2_ROADMAP.md` Phase 2.
+
+| Tab | Description | Composants React |
 |---|---|---|
-| Architecture Dashboard | KPIs + listes top | `ArchitectureDashboard.tsx` |
-| Module Ego Graph | 1 module au centre + dépendances + notes | `ModuleEgoGraph.tsx` |
-| Route Flow View | Route → handler → service → repo → external | `RouteFlowView.tsx` |
-| Blast Radius View | Impact direct + indirect d'un symbol | `BlastRadiusView.tsx` |
-| Human Memory Overlay | Notes Obsidian sur le graphe | `HumanMemoryOverlay.tsx` |
-| Documentation Coverage | Heatmap modules × documentation | `DocumentationCoverage.tsx` |
-| Risk Dashboard | High coupling, dead code, fragile interfaces | `RiskDashboard.tsx` |
+| Dashboard | KPIs (nodes, edges, notes, freshness) + lists (top-degree modules, undocumented hotspots) | `DashboardTab.tsx`, `ProjectCard.tsx` |
+| Graph | 2D canvas graph with d3-force — pan, zoom-to-cursor, filter by label/edge-type, click-to-detail, real-time WS updates | `GraphTab.tsx`, `GraphCanvas.tsx`, `FilterPanel.tsx`, `NodeTooltip.tsx`, `NodeDetailPanel.tsx`, `Sidebar.tsx`, `ResizeHandle.tsx` |
+| Stats | Per-label node counts, edge-type counts, project freshness breakdown | `StatsTab.tsx` |
+| Control | Start/stop MCP server, trigger sync, view logs | `ControlTab.tsx` |
+
+Auxiliary UI files: `App.tsx` (tab navigation + project selector),
+`ErrorBoundary.tsx`, `main.tsx` (entry), `hooks/useWebSocket.ts`,
+`hooks/useGraphData.ts`, `lib/types.ts`, `lib/colors.ts`, `lib/api.ts`.
 
 ### 8.3 Modifications UI existante
 
-- `App.tsx` `TabId` : ajouter `"dashboard"`, `"notes"`, `"memory"`, `"decisions"`. Default = `"dashboard"`.
+- `App.tsx` `TabId` : 4 valeurs — `"dashboard"`, `"graph"`, `"stats"`, `"control"`. Default = `"dashboard"`.
 - `useGraphData.ts` `fetchDetail()` : implémenter le vrai subgraph expansion
   centré sur un nœud (pas un stub). Appel : `GET /api/subgraph?project=...&center=<cbm_node_id>&depth=2&max_nodes=200`.
 - `GraphTab.tsx` : default filters à `["Module", "Route"]` au lieu de tous.
-- Nouveau endpoint HTTP : `GET /api/human-notes?project=...&cbm_node_id=...`.
+- Endpoint HTTP existant : `GET /api/human-notes?project=...&cbm_node_id=...`.
 
 ## 9. Config système V2
 

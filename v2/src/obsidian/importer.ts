@@ -19,7 +19,8 @@ import {
   parseWikilinks,
   classifyWikilinkTarget,
   parseCodeNodeId,
-  inferEdgeTypeFromContext,
+  buildFenceState,
+  inferEdgeTypeFromContextWithState,
   Wikilink,
 } from './wikilinks.js';
 import { walkVault, readNote } from './vault.js';
@@ -370,8 +371,36 @@ function processWikilinks(
   const wikilinks = parseWikilinks(humanBody);
   const seenEdgeIds: number[] = [];
 
+  // R40 (M8): precompute the fence state once per note. The previous code
+  // called inferEdgeTypeFromContext(humanBody, wl) per wikilink, and that
+  // function rescanned the entire note each time to build fence state —
+  // O(K×N) for K wikilinks and N lines. For a 1000-line note with 10
+  // wikilinks, that's 10× the line-scanning work. We now build the state
+  // once and pass it (sliced to the wikilink's line) to the per-wikilink
+  // classifier.
+  const allLines = humanBody.split('\n');
+  const fullFenceState = buildFenceState(allLines);
+  // Cache line index per wikilink startIndex (computed once).
+  // lineStarts[i] = char offset where line i begins (for mapping wikilink
+  // startIndex → line index in O(log N) via binary search, or O(1) via
+  // a cumulative-scan lookup).
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < allLines.length; i++) {
+    lineStarts.push(lineStarts[i] + allLines[i].length + 1); // +1 for '\n'
+  }
+  const lineIndexForOffset = (offset: number): number => {
+    // Binary search: largest i such that lineStarts[i] <= offset.
+    let lo = 0, hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+
   for (const wl of wikilinks) {
-    const edgeId = createEdgeFromWikilink(wl, sourceNodeId, humanBody, relPath, opts);
+    const edgeId = createEdgeFromWikilink(wl, sourceNodeId, relPath, opts, allLines, fullFenceState, lineIndexForOffset);
     if (edgeId !== null) {
       seenEdgeIds.push(edgeId);
     }
@@ -385,20 +414,31 @@ function processWikilinks(
 /**
  * Create a single edge from a wikilink. Returns the edge ID, or null if the
  * wikilink couldn't be resolved.
+ *
+ * R40 (M8): accepts precomputed (allLines, fullFenceState, lineIndexForOffset)
+ * to avoid rescanning the entire note per wikilink. The per-wikilink classifier
+ * slices the state up to the wikilink's line and runs the backward heading scan.
  */
 function createEdgeFromWikilink(
   wl: Wikilink,
   sourceNodeId: number,
-  humanBody: string,
   relPath: string,
-  opts: ImportOptions
+  opts: ImportOptions,
+  allLines: string[],
+  fullFenceState: Int8Array,
+  lineIndexForOffset: (offset: number) => number,
 ): number | null {
   const kind = classifyWikilinkTarget(wl.target);
 
   if (kind === 'code') {
     const cbmId = parseCodeNodeId(wl.target);
     if (cbmId == null) return null;
-    const edgeType = inferEdgeTypeFromContext(humanBody, wl);
+    // R40 (M8): slice the precomputed lines + fence state up to the wikilink's
+    // line, then run the (cheap) backward heading scan.
+    const upToLine = lineIndexForOffset(wl.startIndex);
+    const linesSlice = allLines.slice(0, upToLine + 1);
+    const fenceSlice = fullFenceState.subarray(0, upToLine + 1);
+    const edgeType = inferEdgeTypeFromContextWithState(linesSlice, fenceSlice);
     const edge = opts.humanStore.createEdge({
       project: opts.project,
       source_human_node_id: sourceNodeId,

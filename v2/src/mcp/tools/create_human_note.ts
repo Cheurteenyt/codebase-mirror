@@ -60,7 +60,11 @@ export class CreateHumanNoteTool extends BaseTool {
       const cbmNodeIds: number[] = [];
       const validatedLinks: Array<{ cbm_node_id: number; edge_type: any; exists: boolean }> = [];
 
-      // Validate each link target against the code graph (if reader is available).
+      // R40 (M2): validate edge_type and coerce cbm_node_id in a first pass,
+      // then batch-verify all cbm_node_ids against the code graph in a single
+      // getNodesByIds call instead of N× getNodeById. For a note linking 10
+      // code symbols, this is 1 query instead of 10. Also reports ALL missing
+      // ids in one error message instead of short-circuiting on the first.
       for (const link of links) {
         const cbmId = typeof link.cbm_node_id === 'number'
           ? link.cbm_node_id
@@ -73,20 +77,22 @@ export class CreateHumanNoteTool extends BaseTool {
         if (!HUMAN_EDGE_TYPES.includes(link.edge_type)) {
           return this.error(`Invalid edge_type "${link.edge_type}" in links. Valid: ${HUMAN_EDGE_TYPES.join(', ')}`);
         }
-        let exists = true;
-        if (this.codeReader) {
-          const node = this.codeReader.getNodeById(cbmId);
-          if (!node) {
-            return this.error(
-              `Code node with id=${cbmId} not found in project "${project}". ` +
-              `Indexed nodes may have different IDs after re-indexing — verify with search_code_and_memory first.`
-            );
-          }
-        } else {
-          exists = false; // can't verify
-        }
         cbmNodeIds.push(cbmId);
-        validatedLinks.push({ cbm_node_id: cbmId, edge_type: link.edge_type, exists });
+        validatedLinks.push({ cbm_node_id: cbmId, edge_type: link.edge_type, exists: true });
+      }
+
+      if (this.codeReader && cbmNodeIds.length > 0) {
+        const foundMap = this.codeReader.getNodesByIds(cbmNodeIds);
+        const missing = cbmNodeIds.filter(id => !foundMap.has(id));
+        if (missing.length > 0) {
+          return this.error(
+            `Code node(s) not found in project "${project}": id=${missing.join(', id=')}. ` +
+            `Indexed nodes may have different IDs after re-indexing — verify with search_code_and_memory first.`
+          );
+        }
+      } else if (cbmNodeIds.length > 0) {
+        // No codeReader available — mark all as unverifiable (preserves prior behavior).
+        for (const vl of validatedLinks) vl.exists = false;
       }
 
       // R26 (Bug #4 fix): wrap createNode + createEdge in a single transaction

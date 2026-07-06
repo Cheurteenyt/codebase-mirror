@@ -99,14 +99,14 @@ export function registerWatchCommand(program: Command): void {
       // is safe and simpler than diffing the file set.
       let importTimer: ReturnType<typeof setTimeout> | null = null;
       let exportTimer: ReturnType<typeof setTimeout> | null = null;
-      // R32 (C-new-1 fix): replaced the broken isSyncing boolean with a
-      // timestamp-based guard. The boolean was always false by the time
-      // runIncrementalExport actually ran (NotifyHub debounces 200ms +
-      // watch.ts debounces 500ms = ~700ms, but runSync completes in
-      // single-digit ms). The timestamp records when the last sync finished;
-      // runIncrementalExport skips if it's within the combined debounce window.
-      let lastSyncFinishedAt = 0;
-      const SYNC_GUARD_WINDOW_MS = 1500; // covers 200ms hub + 500ms watch + margin
+      // R40: removed the timestamp-based SYNC_GUARD_WINDOW_MS guard. The guard
+      // was suppressing legitimate MCP/API-triggered exports that arrived
+      // within 1500ms of a file-triggered sync finishing. The new approach:
+      // the hub subscriber filters out events whose data.source === 'watch-import'
+      // (set by runSync after importVault), so runSync's own notifications no
+      // longer trigger a redundant export. Store-emitted events from importVault
+      // (createNode/updateNode) DO trigger an export, but generateVault is
+      // idempotent (frontmatter no-op detection), so the extra call is a no-op.
 
       /**
        * R31 (B2 fix): renamed from runIncrementalImport to runSync.
@@ -115,8 +115,7 @@ export function registerWatchCommand(program: Command): void {
        * via field comparison) to keep DB writes cheap.
        *
        * R30: wrapped in try/catch to prevent the daemon from crashing.
-       * R32 (C-new-1 fix): records lastSyncFinishedAt timestamp to suppress
-       * redundant hub-triggered export within the debounce window.
+       * R40: removed the lastSyncFinishedAt timestamp guard (see above).
        * R31 (B3 fix): uses consistent auto-generate flags for both paths.
        */
       function runSync(): void {
@@ -131,6 +130,8 @@ export function registerWatchCommand(program: Command): void {
             if (result.created.length > 0 || result.updated.length > 0 || result.edgesCreated > 0) {
               console.log(`[cbm-v2 watch] Import: ${result.created.length} created, ${result.updated.length} updated, ${result.edgesCreated} edges`);
               // Notify WebSocket clients that the DB changed.
+              // R40: source: 'watch-import' lets the hub subscriber skip the
+              // redundant export (runSync runs its own export below).
               hub.notify(project, 'human_nodes_changed', { source: 'watch-import' });
               hub.notify(project, 'human_edges_changed', { source: 'watch-import' });
             }
@@ -155,32 +156,24 @@ export function registerWatchCommand(program: Command): void {
           }
         } catch (e: any) {
           console.error(`[cbm-v2 watch] Error during sync: ${e.message}`);
-        } finally {
-          // R32 (C-new-1 fix): record when the sync finished. The hub-triggered
-          // export checks this timestamp and skips if within SYNC_GUARD_WINDOW_MS.
-          lastSyncFinishedAt = Date.now();
         }
       }
 
       /**
        * Run an export (DB -> vault). Triggered when the DB changes via MCP
-       * tools or API endpoints (detected via NotifyHub).
+       * tools or API endpoints (detected via NotifyHub). The hub subscriber
+       * filters out 'watch-import' source events, so this only runs for
+       * genuine external mutations (MCP tools, /api/* endpoints).
        *
-       * R32 (C-new-1 fix): skips if the last sync finished within
-       * SYNC_GUARD_WINDOW_MS (the sync cycle already ran its own export,
-       * so this would be redundant). The previous isSyncing boolean was
-       * always false by the time this function ran due to debounce delays.
+       * R40: removed the timestamp guard — see the comment near the top of
+       * the action for the rationale. The guard was over-broad and silently
+       * dropped legitimate MCP mutations within 1500ms of a sync.
        * R31 (B3 fix): uses the same auto-generate flags as runSync for
        * consistency. Both paths now respect the user's --auto-modules /
        * --auto-routes settings.
        */
       function runIncrementalExport(): void {
         if (direction !== 'export' && direction !== 'both') return;
-        // R32 (C-new-1 fix): timestamp-based guard. Skip if the last sync
-        // finished within the guard window — the sync already ran export.
-        if (lastSyncFinishedAt > 0 && Date.now() - lastSyncFinishedAt < SYNC_GUARD_WINDOW_MS) {
-          return;
-        }
         try {
           const result = generateVault({
             project,
@@ -203,10 +196,20 @@ export function registerWatchCommand(program: Command): void {
       // Subscribe to NotifyHub for DB-side changes (MCP tools, API endpoints).
       // This triggers an export when the DB changes, closing the loop:
       // MCP tool creates note -> NotifyHub -> export -> vault file updated.
-      // R31 (B1): the isSyncing guard in runIncrementalExport prevents
-      // redundant exports when the change originated from runSync's own import.
+      //
+      // R40: filter events whose data.source === 'watch-import' — these are
+      // fired by runSync after importVault, and runSync already runs its own
+      // generateVault below. The previous timestamp guard (SYNC_GUARD_WINDOW_MS)
+      // was over-broad and silently dropped legitimate MCP/API mutations that
+      // arrived within 1500ms of a file-triggered sync completing.
+      //
+      // Store-emitted events from importVault (createNode/updateNode/deleteNode
+      // during import) do NOT carry a source field and will trigger an export,
+      // but generateVault is idempotent (frontmatter no-op detection), so the
+      // extra call after runSync's own export is a no-op.
       const hubUnsubscribe = hub.subscribe((event) => {
         if (event.project !== project) return;
+        if (event.data?.source === 'watch-import') return; // R40: runSync already exported
         // Debounce export on DB changes.
         if (exportTimer) clearTimeout(exportTimer);
         exportTimer = setTimeout(() => {

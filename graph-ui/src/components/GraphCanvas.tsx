@@ -47,6 +47,15 @@ export function GraphCanvas({
   const nodesRef = useRef<SimNode[]>([]);
   const edgesRef = useRef<SimEdge[]>([]);
   const drawRef = useRef<(() => void) | null>(null);
+  // R40 (UI-2): cache nodeMap in a ref. The draw() function used to rebuild
+  // a Map of all nodes on every call (every tick during layout = many times
+  // per frame for a 2000-node graph). The map only changes when nodesRef
+  // changes, so we rebuild it only on data updates.
+  const nodeMapRef = useRef<Map<number, SimNode>>(new Map());
+  // R40 (UI-6): rAF-batched tick handler. d3-force ticks much faster than
+  // 60fps during initial layout; without batching, draw() runs multiple
+  // times per frame, wasting CPU on a canvas redraw that the user never sees.
+  const rafIdRef = useRef<number | null>(null);
 
   // Stable refs for callbacks so the mouse-interaction useEffect doesn't re-bind
   // listeners on every render. Without this, toggling filters recreates all
@@ -62,50 +71,110 @@ export function GraphCanvas({
     startX: 0,
     startY: 0,
   });
+  // R40 (UI-4): track the last hovered node id to avoid calling onNodeHover
+  // (which calls setState in the parent) on every mouse move. The previous
+  // code called onNodeHover on every mousemove event even when the hovered
+  // node was unchanged, causing the whole GraphTab tree to re-render
+  // continuously while the cursor was over the canvas.
+  const lastHoverIdRef = useRef<number | null>(null);
 
-  // Initialize simulation when data changes
+  // Update simulation when data changes.
+  // R40 (UI-2): previously this effect tore down the entire simulation and
+  // rebuilt it from scratch whenever `data` changed (which happens on every
+  // filter toggle, since GraphTab creates a new filteredData object). Every
+  // node lost its position and the graph "exploded" and re-flowed — a visual
+  // jolt and several seconds of CPU on a 2000-node graph.
+  // The fix: reuse the existing simulation. Preserve x/y/vx/vy for nodes
+  // that already exist (so they keep their layout positions), feed the new
+  // nodes/edges to the existing sim, and reheat with alpha=0.3 (gentle
+  // re-layout) instead of alpha=1 (full restart).
   useEffect(() => {
-    if (!data || data.nodes.length === 0) return;
+    if (!data || data.nodes.length === 0) {
+      // No data — stop the sim but keep it around for the next non-empty data
+      if (simRef.current) {
+        simRef.current.stop();
+        simRef.current.alpha(0);
+      }
+      nodesRef.current = [];
+      edgesRef.current = [];
+      nodeMapRef.current = new Map();
+      drawRef.current?.();
+      return;
+    }
 
-    const nodes: SimNode[] = data.nodes.map((n) => ({ ...n }));
+    // Preserve positions for nodes that already exist in the previous array.
+    const prev = new Map<number, SimNode>();
+    for (const n of nodesRef.current) prev.set(n.id, n);
+    const nodes: SimNode[] = data.nodes.map((n) => {
+      const p = prev.get(n.id);
+      // Keep physics state (x/y/vx/vy) and any drag-anchored fx/fy.
+      if (p) return { ...n, x: p.x, y: p.y, vx: p.vx, vy: p.vy, fx: p.fx, fy: p.fy };
+      return { ...n };
+    });
     const edges: SimEdge[] = data.edges.map((e) => ({ ...e }));
 
     nodesRef.current = nodes;
     edgesRef.current = edges;
+    // Rebuild the nodeMap cache (used by draw()).
+    const map = new Map<number, SimNode>();
+    for (const n of nodes) map.set(n.id, n);
+    nodeMapRef.current = map;
 
-    const sim = forceSimulation(nodes)
-      .force("charge", forceManyBody().strength(CHARGE_STRENGTH))
-      .force(
-        "link",
-        forceLink<SimNode, SimEdge>(edges)
-          .id((d) => d.id)
-          .distance(LINK_DISTANCE)
-          .strength(0.3),
-      )
-      .force("center", forceCenter(0, 0))
-      .force("collide", forceCollide(COLLIDE_RADIUS))
-      .alpha(1)
-      .alphaDecay(0.02);
+    if (simRef.current) {
+      // Reuse existing simulation — swap nodes/edges and reheat gently.
+      simRef.current.nodes(nodes);
+      (simRef.current.force("link") as any).links(edges);
+      simRef.current.alpha(0.3).restart();
+    } else {
+      const sim = forceSimulation(nodes)
+        .force("charge", forceManyBody().strength(CHARGE_STRENGTH))
+        .force(
+          "link",
+          forceLink<SimNode, SimEdge>(edges)
+            .id((d) => d.id)
+            .distance(LINK_DISTANCE)
+            .strength(0.3),
+        )
+        .force("center", forceCenter(0, 0))
+        .force("collide", forceCollide(COLLIDE_RADIUS))
+        .alpha(1)
+        .alphaDecay(0.02);
 
-    sim.on("tick", () => {
-      drawRef.current?.();
-    });
+      // R40 (UI-6): batch tick-driven draws via requestAnimationFrame.
+      // d3 ticks much faster than 60fps during initial layout; without
+      // batching, draw() runs many times per visible frame.
+      sim.on("tick", () => {
+        if (rafIdRef.current != null) return;
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafIdRef.current = null;
+          drawRef.current?.();
+        });
+      });
 
-    simRef.current = sim as any;
-
-    return () => {
-      sim.on("tick", null);
-      sim.stop();
-      simRef.current = null;
-    };
+      simRef.current = sim as any;
+    }
+    // No cleanup here — the sim is preserved across data changes. Cleanup is
+    // handled by the unmount-only effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  // Redraw when highlights or dead-code view changes
+  // R40 (UI-2): unmount-only cleanup. Stop the simulation and cancel any
+  // pending rAF when the component unmounts. Previously the data-effect's
+  // cleanup stopped the sim on every data change, which defeated the
+  // simulation-reuse optimization.
   useEffect(() => {
-    drawRef.current?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [highlightedIds, deadCodeView]);
+    return () => {
+      if (rafIdRef.current != null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      if (simRef.current) {
+        simRef.current.on("tick", null);
+        simRef.current.stop();
+        simRef.current = null;
+      }
+    };
+  }, []);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -127,9 +196,8 @@ export function GraphCanvas({
     ctx.translate(width / (2 * dpr) + tx, height / (2 * dpr) + ty);
     ctx.scale(tk, tk);
 
-    // Draw edges — forceLink mutates source/target into object refs, so handle both.
-    const nodeMap = new Map<number, SimNode>();
-    for (const n of nodesRef.current) nodeMap.set(n.id, n);
+    // R40 (UI-2): use the cached nodeMap instead of rebuilding it on every draw.
+    const nodeMap = nodeMapRef.current;
     ctx.strokeStyle = "rgba(100, 116, 139, 0.15)";
     ctx.lineWidth = 0.5 / tk;
     for (const edge of edgesRef.current) {
@@ -176,9 +244,20 @@ export function GraphCanvas({
     ctx.restore();
   }, [highlightedIds, deadCodeView]);
 
-  // Sync drawRef AFTER draw is declared (avoids TDZ — draw is a block-scoped
-  // const that can't be referenced before its declaration line).
-  useEffect(() => { drawRef.current = draw; }, [draw]);
+  // R40 (UI-3): sync drawRef AND immediately call the new draw. Previously
+  // this was split into two effects: one to set drawRef.current, and a
+  // separate one to call drawRef.current?.() when highlightedIds changed.
+  // React runs effects in declaration order, so the redraw effect ran FIRST
+  // (with the OLD drawRef) and the drawRef sync ran SECOND — too late. The
+  // canvas was painted with stale highlights, and once the simulation cooled
+  // down (no more ticks) the stale paint stayed until the next pan/zoom.
+  // The fix: merge the redraw into the drawRef sync so the new draw is
+  // always called AFTER being installed.
+  useEffect(() => {
+    drawRef.current = draw;
+    draw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draw]);
 
   // Canvas resize observer
   useEffect(() => {
@@ -248,6 +327,12 @@ export function GraphCanvas({
         isPanning = true;
         panStart = { x: e.clientX - transformRef.current.x, y: e.clientY - transformRef.current.y };
       }
+      // R40 (UI-5): bind mouseup to window for the duration of this drag/pan.
+      // If the user releases the button off-canvas, the canvas never sees the
+      // mouseup event, the drag never ends, and the simulation keeps running
+      // at alphaTarget(0.3) forever (CPU leak). The window listener is removed
+      // in onMouseUp.
+      window.addEventListener("mouseup", onMouseUp);
     };
 
     const onMouseMove = (e: MouseEvent) => {
@@ -264,11 +349,20 @@ export function GraphCanvas({
       } else {
         // Hover detection — pass the mouse position (relative to canvas) to the
         // parent so the tooltip can follow the cursor instead of being stuck at (12,12).
+        // R40 (UI-4): only call onNodeHover when the hovered node id actually
+        // changes. The previous code called onNodeHover on every mousemove,
+        // which triggered setState in the parent (GraphTab) and re-rendered
+        // the whole subtree (FilterPanel, Sidebar, NodeDetailPanel) on every
+        // mouse move event — a continuous CPU drain.
         const rect = canvas.getBoundingClientRect();
         const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
         const pos = getMousePos(e);
         const node = findNodeAt(pos.x, pos.y);
-        onNodeHoverRef.current(node ?? null, screenPos);
+        const hoverId = node?.id ?? null;
+        if (hoverId !== lastHoverIdRef.current) {
+          lastHoverIdRef.current = hoverId;
+          onNodeHoverRef.current(node ?? null, screenPos);
+        }
         canvas.style.cursor = node ? "pointer" : "default";
       }
     };
@@ -285,6 +379,9 @@ export function GraphCanvas({
       }
       dragRef.current.node = null;
       isPanning = false;
+      // R40 (UI-5): remove the window-level mouseup listener added in
+      // onMouseDown. Without this, listeners accumulate across drag sessions.
+      window.removeEventListener("mouseup", onMouseUp);
     };
 
     const onWheel = (e: WheelEvent) => {
@@ -314,14 +411,19 @@ export function GraphCanvas({
 
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("mousemove", onMouseMove);
-    canvas.addEventListener("mouseup", onMouseUp);
     canvas.addEventListener("wheel", onWheel, { passive: false });
+    // R40 (UI-5): do NOT bind mouseup to the canvas. If the user releases the
+    // mouse button outside the canvas (common when dragging a node toward the
+    // edge), the canvas never sees mouseup, the drag never ends, and the
+    // simulation keeps running at alphaTarget(0.3) forever — a permanent CPU
+    // drain. Instead, onMouseDown binds a one-shot window-level mouseup that
+    // fires regardless of where the cursor is when the button is released.
 
     return () => {
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("mousemove", onMouseMove);
-      canvas.removeEventListener("mouseup", onMouseUp);
       canvas.removeEventListener("wheel", onWheel);
+      window.removeEventListener("mouseup", onMouseUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // stable — callbacks accessed via refs, no re-binding needed

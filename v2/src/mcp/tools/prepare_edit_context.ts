@@ -93,9 +93,14 @@ export class PrepareEditContextTool extends BaseTool {
       const nodeIds = matchingNodes.slice(0, 20).map(n => n.id);
       const degreeSplitMap = codeReader.getBulkNodeDegreesSplit(nodeIds);
       const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, nodeIds);
+      // R40 (M3): bulk-fetch neighbors for ALL matching nodes in 3 queries
+      // (2 for edges + 1 for neighbor nodes) instead of N×2 = 40 queries.
+      // The returned Map<nodeId, {edge, node}[]> has the same shape as
+      // getNeighbors, so the per-node logic below is unchanged.
+      const bulkNeighborsMap = codeReader.getBulkNeighbors(nodeIds, 'both', 50);
 
       for (const node of matchingNodes.slice(0, 20)) {
-        const neighbors = codeReader.getNeighbors(node.id, 'both', 50);
+        const neighbors = bulkNeighborsMap.get(node.id) ?? [];
         const outNeighbors = neighbors.filter((n) => n.edge.source_id === node.id);
         const inNeighbors = neighbors.filter((n) => n.edge.target_id === node.id);
 

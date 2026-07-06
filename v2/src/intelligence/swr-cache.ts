@@ -324,26 +324,36 @@ export class SwrCache<K, V> {
    * This ensures the current caller returns immediately with the stale value.
    * The refresh callback must be set via `setRefreshHandler()`.
    */
-  private refreshHandlers = new Map<K, () => V>();
+  // R40 (L5): store opts alongside the handler so background refreshes honor
+  // the caller's custom ttlMs/staleMs instead of degrading to the cache's
+  // defaults after the first refresh. The previous code discarded opts, so
+  // a caller passing { ttlMs: 60000 } would see their initial entry live for
+  // 60s but the refreshed entry live for only 30s (the default).
+  private refreshHandlers = new Map<K, { handler: () => V; opts?: { ttlMs?: number; staleMs?: number } }>();
 
   private scheduleBackgroundRefresh(key: K): void {
     setTimeout(() => {
       const entry = this.entries.get(key);
       if (!entry) return; // entry was evicted before refresh ran
 
-      const handler = this.refreshHandlers.get(key);
-      if (handler) {
+      const handlerEntry = this.refreshHandlers.get(key);
+      if (handlerEntry) {
         try {
-          const newValue = handler();
+          const newValue = handlerEntry.handler();
           // Update the entry with the fresh value.
-          const newTtl = this.computeAdaptiveTtl(entry.accessCount);
+          // R40 (L5): honor the caller's opts.ttlMs (with adaptive fallback)
+          // and opts.staleMs (with cache default fallback) instead of always
+          // using the cache-wide defaults.
+          const opts = handlerEntry.opts;
+          const newTtl = opts?.ttlMs ?? this.computeAdaptiveTtl(entry.accessCount);
+          const newStale = opts?.staleMs ?? this.staleMs;
           const newSize = this.estimateSize(newValue);
           this.totalBytes -= entry.size;
           entry.value = newValue;
           entry.size = newSize;
           this.totalBytes += newSize;
           entry.freshUntil = Date.now() + newTtl;
-          entry.staleUntil = entry.freshUntil + this.staleMs;
+          entry.staleUntil = entry.freshUntil + newStale;
           entry.currentTtl = newTtl;
           entry.refreshing = false;
           if (this.trackStats) this.stats.backgroundRefreshes++;
@@ -398,14 +408,19 @@ export class SwrCache<K, V> {
    * Set a refresh handler for a key. The handler will be called in the
    * background when the entry transitions from fresh to stale.
    *
+   * R40 (L5): opts (ttlMs, staleMs) are stored alongside the handler and used
+   * by scheduleBackgroundRefresh. Without this, a caller passing custom opts
+   * to getOrCompute would see them honored on the initial set but silently
+   * downgraded to the cache defaults after the first background refresh.
+   *
    * Example:
-   *   cache.set('project:status', expensiveCompute());
-   *   cache.setRefreshHandler('project:status', () => expensiveCompute());
+   *   cache.set('project:status', expensiveCompute(), { ttlMs: 60000 });
+   *   cache.setRefreshHandler('project:status', () => expensiveCompute(), { ttlMs: 60000 });
    *   // Now, when the entry goes stale, the cache will automatically
-   *   // refresh it in the background.
+   *   // refresh it in the background, preserving the 60s TTL.
    */
-  setRefreshHandler(key: K, handler: () => V): void {
-    this.refreshHandlers.set(key, handler);
+  setRefreshHandler(key: K, handler: () => V, opts?: { ttlMs?: number; staleMs?: number }): void {
+    this.refreshHandlers.set(key, { handler, opts });
   }
 
   /**
@@ -424,8 +439,9 @@ export class SwrCache<K, V> {
     const result = this.getWithPhase(key);
     if (result !== undefined) {
       // Cache hit (fresh or stale). Ensure refresh handler is set for future stale hits.
+      // R40 (L5): pass opts so future background refreshes honor the caller's TTL.
       if (!this.refreshHandlers.has(key)) {
-        this.setRefreshHandler(key, compute);
+        this.setRefreshHandler(key, compute, opts);
       }
       return result.value;
     }
@@ -434,7 +450,8 @@ export class SwrCache<K, V> {
     const value = compute();
     this.set(key, value, opts);
     // Set refresh handler for future background refreshes.
-    this.setRefreshHandler(key, compute);
+    // R40 (L5): pass opts so future background refreshes honor the caller's TTL.
+    this.setRefreshHandler(key, compute, opts);
     return value;
   }
 
