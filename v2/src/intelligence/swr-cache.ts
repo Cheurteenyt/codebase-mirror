@@ -330,11 +330,20 @@ export class SwrCache<K, V> {
   // a caller passing { ttlMs: 60000 } would see their initial entry live for
   // 60s but the refreshed entry live for only 30s (the default).
   private refreshHandlers = new Map<K, { handler: () => V; opts?: { ttlMs?: number; staleMs?: number } }>();
+  // R47 (L1): track pending refresh timers so invalidate/clear can cancel
+  // them. Without this, a refresh scheduled before invalidate fires after
+  // invalidate, re-inserting the just-invalidated value.
+  private refreshTimers = new Map<K, ReturnType<typeof setTimeout>>();
 
   private scheduleBackgroundRefresh(key: K): void {
-    setTimeout(() => {
+    // Cancel any previously-scheduled refresh for this key (dedup).
+    const existing = this.refreshTimers.get(key);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.refreshTimers.delete(key);
       const entry = this.entries.get(key);
-      if (!entry) return; // entry was evicted before refresh ran
+      if (!entry) return; // entry was evicted/invalidated before refresh ran
 
       const handlerEntry = this.refreshHandlers.get(key);
       if (handlerEntry) {
@@ -368,6 +377,7 @@ export class SwrCache<K, V> {
         entry.refreshing = false;
       }
     }, 0);
+    this.refreshTimers.set(key, timer);
   }
 
   /**
@@ -459,6 +469,13 @@ export class SwrCache<K, V> {
    * Invalidate a single cache entry.
    */
   invalidate(key: K): void {
+    // R47 (L1): cancel any pending background refresh for this key so it
+    // doesn't re-insert the value we're about to evict.
+    const timer = this.refreshTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.refreshTimers.delete(key);
+    }
     const entry = this.entries.get(key);
     if (entry) {
       this.totalBytes -= entry.size;
@@ -483,6 +500,9 @@ export class SwrCache<K, V> {
    * Clear all cache entries and refresh handlers.
    */
   clear(): void {
+    // R47 (L1): cancel all pending refresh timers.
+    for (const timer of this.refreshTimers.values()) clearTimeout(timer);
+    this.refreshTimers.clear();
     this.entries.clear();
     this.refreshHandlers.clear();
     this.totalBytes = 0;

@@ -21,18 +21,19 @@ Codebase Memory V2 adds the **human context**:
 
 It syncs everything to an **Obsidian-compatible Markdown vault** so you can read and edit notes in your favorite editor, with backlinks and tags.
 
-## Current version: 0.11.0
+## Current version: 0.11.1
 
-- **368 tests** (347 backend + 21 frontend, all passing)
+- **374 tests** (353 backend + 21 frontend, all passing)
 - **7 MCP tools** (including the flagship `prepare_edit_context`)
 - **16+ CLI commands** across 7 command groups (including `watch` daemon)
 - **15 API endpoints** (6 original + 9 R17)
-- **493+ bugs fixed** across 46 audit rounds
+- **503+ bugs fixed** across 47 audit rounds
 - **Graph UI** with 2D d3-force canvas, dashboard, filters, **real-time WebSocket**, ARIA tablist, stale-while-revalidate refetch, AbortController timeouts
 - **Watch daemon** — auto-sync when vault files change (fs.watch recursive)
 - **FTS5 full-text search** on human notes (BM25 ranking, AND-of-terms, migration V4)
 - **Hardened API** — project_name validation + `--` separator, process-kill allowlist (cbm/cbm-v2 only), browse restricted to home (realpath-resolved), project-health path-traversal guard
-- **Transactional writes** — updateNode/deleteNode/createEdge wrapped in transactions (atomicity guarantee)
+- **Transactional writes** — updateNode/deleteNode/createEdge/syncCbmLinks wrapped in transactions (atomicity guarantee)
+- **N+1 elimination** — getBulkNeighbors in prepare_edit_context (40→3 queries), generator module/route export (200+→6 queries), routeDashboard reuses SWR-cached counts
 - **Frontend test infrastructure** — Vitest + @testing-library/react + jsdom (21 tests covering C1 regression, WS zombie race, sim reuse, viewport flip, pointer cancel, kill confirmation, corrupt-state gate)
 - **Optimized SQLite storage** (junction table, composite indexes, FTS5, PRAGMAs)
 
@@ -42,7 +43,7 @@ It syncs everything to an **Obsidian-compatible Markdown vault** so you can read
 cd v2
 npm install
 npm run build
-npm test                    # 368 tests
+npm test                    # 374 tests
 
 # Try the demo (no V1 needed)
 node dist/cli/index.js demo

@@ -92,7 +92,10 @@ export class PrepareEditContextTool extends BaseTool {
       // Bulk-fetch degrees (split in/out) and notes for all matching nodes (eliminates N+1).
       const nodeIds = matchingNodes.slice(0, 20).map(n => n.id);
       const degreeSplitMap = codeReader.getBulkNodeDegreesSplit(nodeIds);
-      const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, nodeIds);
+      // R47 (H1): pass limit=200 so ALL linked notes are returned, not just 1.
+      // The default limit=1 silently under-reported — agents saw "1 known bug"
+      // when 10 bugs were linked. Matches get_module_context.ts which uses 200.
+      const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, nodeIds, 200);
       // R40 (M3): bulk-fetch neighbors for ALL matching nodes in 3 queries
       // (2 for edges + 1 for neighbor nodes) instead of N×2 = 40 queries.
       // The returned Map<nodeId, {edge, node}[]> has the same shape as
