@@ -22,10 +22,21 @@ export function StatsTab({ onSelectProject }: StatsTabProps) {
     );
   }
 
+  // R43 (M5): error state had no retry button — dead-end UI. The Refresh
+  // button only appeared in the success branch, so an initial-fetch failure
+  // required switching tabs to recover. Now the error branch has a Retry.
   if (error) {
     return (
       <div className="flex items-center justify-center h-full">
-        <p className="text-red-400 text-sm">{error}</p>
+        <div className="text-center">
+          <p className="text-red-400 text-sm mb-3">{error}</p>
+          <button
+            onClick={refresh}
+            className="px-4 py-2 rounded-lg bg-white/[0.04] text-foreground/60 hover:bg-white/[0.08] text-[12px]"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }

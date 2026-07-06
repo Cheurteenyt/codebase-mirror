@@ -205,7 +205,12 @@ export function GraphTab({ project }: GraphTabProps) {
     );
   }
 
-  if (loading) {
+  // R43 (C1): only show the full-spinner on INITIAL load (no data yet).
+  // Refetches (WS notifications, manual refresh) keep the existing graph
+  // visible so GraphCanvas stays mounted and the d3-force simulation is
+  // preserved (R40 sim-reuse optimization). Previously, `if (loading)`
+  // unmounted the canvas on every refetch, destroying the sim + pan/zoom.
+  if (loading && !data) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
@@ -297,7 +302,10 @@ export function GraphTab({ project }: GraphTabProps) {
           </div>
         ) : (
           <>
-            <ErrorBoundary>
+            {/* R43 (M2): key={project} forces a fresh ErrorBoundary on project
+                switch. Without it, an error rendering project A leaves the
+                boundary stuck in hasError state for project B until manual retry. */}
+            <ErrorBoundary key={project}>
               <GraphCanvas
                 ref={canvasRef}
                 data={filteredData}
@@ -380,7 +388,6 @@ export function GraphTab({ project }: GraphTabProps) {
               allNodes={filteredData.nodes}
               allEdges={filteredData.edges}
               project={project}
-              repoInfo={null}
               onNavigate={(n) => setSelectedNode(n)}
               onClose={() => {
                 setSelectedNode(null);

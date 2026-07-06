@@ -1,5 +1,39 @@
 # Changelog — Codebase Memory V2
 
+## 0.10.7 — Round 43 (2026-07-06)
+
+14 issues fixed across V2 + Graph UI (1 CRITICAL regression, 3 SECURITY, 1 HIGH UX, 5 MEDIUM, 4 LOW). 4 new tests (343 total).
+
+### CRITICAL fix (regression)
+
+- **useGraphData C1**: WS-triggered refetch unmounted `GraphCanvas`, silently defeating the R40 sim-reuse optimization. `fetchOverview()` called `setLoading(true)` unconditionally, and `GraphTab`'s `if (loading)` gate returned a spinner — which **unmounted** the canvas. On the next render, a fresh `GraphCanvas` mounted → its unmount-cleanup destroyed the `forceSimulation` → a brand-new sim was created at `alpha=1` → the entire 2000-node graph re-layouted from scratch. User's pan, zoom, selection, and node positions were all lost on every WebSocket notification. Fixed: `useGraphData` now tracks the current project and only sets `loading=true` on project switch (initial fetch). Refetches for the same project keep existing data visible (stale-while-revalidate) so the canvas stays mounted. Same fix applied to `useDashboard` (H1).
+
+### SECURITY fixes
+
+- **`/api/index` SEC1 (HIGH)**: `project_name` from the HTTP body was passed unsanitized to `spawn('cbm', ['--project', projectName, ...])`. `spawn` with an arg array is safe from shell injection, but NOT from CLI argument injection — a value like `--config=/tmp/evil.json` would be parsed as a flag by the V1 `cbm` binary. `routeProjectDelete` already enforced `^[a-zA-Z0-9_-]+$`; `routeIndex` was missing it. Fixed: added the same regex validation.
+
+- **`/api/process-kill` SEC2 (MEDIUM)**: accepted any positive PID (only refused self-kill). Any local process with HTTP access could SIGTERM ANY user process (IDE, browser, ssh-agent) by brute-forcing PIDs. Fixed: cross-check the PID against the live `cbm|node` process list from `ps aux` before killing. Non-cbm/node PIDs get 403.
+
+- **`/api/browse` SEC3 (MEDIUM)**: enumerated any directory on the filesystem (`/etc`, `~/.ssh`, `~/.aws`) — no sandboxing. Fixed: restricted to the user's home directory. Paths outside home get 403.
+
+### MEDIUM fixes (UX)
+
+- **DashboardTab H1**: same full-spinner flicker as C1. `if (loading)` → `if (loading && !data)` so refetches keep the existing dashboard visible.
+- **NodeDetailPanel M1**: added risk-score display in the Stats row. `node.risk_score` and `colorForRisk()` already existed but were never used in the detail panel (only in the hover tooltip). Now consistent.
+- **ControlTab M3**: process-kill now requires `window.confirm()` — killing is irreversible, a misclick shouldn't terminate a long-running index job.
+- **StatsTab M5**: error state had no retry button — dead-end UI requiring tab switch to recover. Added a Retry button (uses the existing `refresh` from `useProjects`).
+- **ErrorBoundary M2**: added `key={project}` so the boundary resets on project switch. Without it, an error rendering project A left the boundary stuck in `hasError` state for project B until manual retry.
+
+### LOW fixes (cleanup + a11y)
+
+- **NodeDetailPanel L1**: removed ~80 lines of dead code — "Show code" button (canFetchCode hardcoded false, RPC not implemented), "Open on GitHub" link (repoInfo always null, no `/api/repo-info` endpoint), dead helpers (`lineSuffix`, `encodePath`, `githubUrl`), dead `callTool`/`RepoInfo` imports. Deleted `graph-ui/src/api/rpc.ts` (only consumer was this dead code).
+- **NodeDetailPanel L2**: `groupByType` was O(n²) (spread-per-iteration `[...(g.get(k) ?? []), c]`). Rewritten to push-in-place. Memoized via `useMemo` so it doesn't recompute on every parent re-render.
+- **NodeDetailPanel + App.tsx a11y**: close buttons using the `×` glyph now have `aria-label="Close"` / `aria-label="Close project"` — screen readers announced "times" instead of "Close".
+
+### Test coverage
+- 4 new tests in `tests/ui/server-r17.test.ts`: SEC1 argument-injection rejection (`--config=...`, `;rm -rf /`), valid project_name acceptance, SEC3 browse 403 for paths outside home.
+- Updated existing browse 404 test to use a path inside home (was using `/nonexistent/path/...` which now correctly returns 403).
+
 ## 0.10.6 — Round 42 (2026-07-06)
 
 4 issues fixed based on Claude Sonnet round 5 audit (1 LOW a11y, 1 LOW doc arithmetic, 1 LOW doc stale, 1 MEDIUM perf). 10 new tests (339 total).

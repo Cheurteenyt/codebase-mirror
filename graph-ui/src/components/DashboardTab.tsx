@@ -33,7 +33,9 @@ export function DashboardTab({ project, onNavigateToGraph }: DashboardTabProps) 
     fetch(project);
   }, [project, fetch, refreshKey]);
 
-  if (loading) {
+  // R43 (H1): only show spinner on initial load (no data yet). Refetches
+  // (WS notifications) keep the existing dashboard visible to avoid flicker.
+  if (loading && !data) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">

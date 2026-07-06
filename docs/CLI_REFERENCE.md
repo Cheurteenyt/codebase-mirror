@@ -1,6 +1,6 @@
 # CLI Reference — Codebase Memory V2
 
-> Updated 2026-07-06 for version 0.10.6.
+> Updated 2026-07-06 for version 0.10.7.
 
 All commands are available via `cbm-v2` (or `node dist/cli/index.js` before global install).
 

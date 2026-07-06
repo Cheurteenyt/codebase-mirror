@@ -1,8 +1,7 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { colorForLabel } from "../lib/colors";
-import { callTool } from "../api/rpc";
-import type { GraphNode, GraphEdge, RepoInfo } from "../lib/types";
+import { colorForLabel, colorForRisk } from "../lib/colors";
+import type { GraphNode, GraphEdge } from "../lib/types";
 
 interface Connection {
   node: GraphNode;
@@ -14,80 +13,39 @@ interface NodeDetailPanelProps {
   node: GraphNode;
   allNodes: GraphNode[];
   allEdges: GraphEdge[];
+  /** Kept for API compatibility — currently unused (no /api/repo-info endpoint). */
   project: string | null;
-  repoInfo: RepoInfo | null;
   onClose: () => void;
   onNavigate: (node: GraphNode) => void;
 }
 
-interface SnippetResult {
-  source?: string;
-  start_line?: number;
-  end_line?: number;
-}
-
-function lineSuffix(node: GraphNode): string {
-  if (!node.start_line) return "";
-  const end = node.end_line && node.end_line !== node.start_line ? `-L${node.end_line}` : "";
-  return `#L${node.start_line}${end}`;
-}
-
-/* Encode each path segment so an unusual file_path can't break (or escape) the
- * URL. The scheme is already https-forced by the backend (/api/repo-info);
- * this is defense-in-depth on the path. */
-function encodePath(p: string): string {
-  return p.split("/").map(encodeURIComponent).join("/");
-}
-
-/* GitHub (or GitLab) deep-link, or null when we lack remote/path/line info. */
-function githubUrl(node: GraphNode, repoInfo: RepoInfo | null): string | null {
-  if (!repoInfo?.blob_base || !node.file_path) return null;
-  return `${repoInfo.blob_base}/${encodePath(node.file_path)}${lineSuffix(node)}`;
-}
-
+/**
+ * R43 (L1 + L2 + M1 + a11y): cleaned up NodeDetailPanel.
+ *
+ * Removed (L1): dead "Show code" button + state (canFetchCode was hardcoded
+ * false, RPC endpoint not implemented in V2), dead "Open on GitHub" link
+ * (repoInfo was always null — no /api/repo-info endpoint exists), dead
+ * helpers (lineSuffix, encodePath, githubUrl), dead SnippetResult type,
+ * dead callTool/rpc import, dead RepoInfo import. ~80 lines removed.
+ *
+ * Fixed (L2): groupByType was O(n²) (spread-per-iteration). Rewritten to
+ * push-in-place. Also memoized via useMemo so it doesn't recompute on every
+ * parent re-render (e.g., when hoveredNode changes in GraphTab).
+ *
+ * Added (M1): risk-score display in the Stats row. The data (node.risk_score)
+ * and the color function (colorForRisk) already existed but were unused —
+ * hover showed risk, detail panel didn't. Now consistent.
+ *
+ * Added (a11y): aria-label="Close" on the × button (screen readers announced
+ * "times" / "multiplication sign" instead of "Close").
+ */
 export function NodeDetailPanel({
   node,
   allNodes,
   allEdges,
-  project,
-  repoInfo,
   onClose,
   onNavigate,
 }: NodeDetailPanelProps) {
-  const [code, setCode] = useState<string | null>(null);
-  const [codeLoading, setCodeLoading] = useState(false);
-  const [codeError, setCodeError] = useState<string | null>(null);
-
-  /* Reset the fetched code whenever the selected node changes. */
-  useEffect(() => {
-    setCode(null);
-    setCodeError(null);
-    setCodeLoading(false);
-  }, [node.id]);
-
-  // R24: canFetchCode is always false in V2 because the RPC endpoint
-  // (get_code_snippet) is not implemented. Hiding the button avoids
-  // showing a "Show code" button that always fails with an error.
-  const canFetchCode = false; // Boolean(project && node.qualified_name);
-  const ghUrl = githubUrl(node, repoInfo);
-
-  const loadCode = async () => {
-    if (!project || !node.qualified_name) return;
-    setCodeLoading(true);
-    setCodeError(null);
-    try {
-      const res = await callTool<SnippetResult>("get_code_snippet", {
-        qualified_name: node.qualified_name,
-        project,
-      });
-      setCode(res.source ?? "(source not available)");
-    } catch (e) {
-      setCodeError(e instanceof Error ? e.message : "Failed to load code");
-    } finally {
-      setCodeLoading(false);
-    }
-  };
-
   const connections = useMemo(() => {
     const nodeMap = new Map<number, GraphNode>();
     for (const n of allNodes) nodeMap.set(n.id, n);
@@ -105,14 +63,17 @@ export function NodeDetailPanel({
     return conns;
   }, [node, allNodes, allEdges]);
 
-  const outbound = connections.filter((c) => c.direction === "outbound");
-  const inbound = connections.filter((c) => c.direction === "inbound");
-
-  const groupByType = (conns: Connection[]) => {
-    const g = new Map<string, Connection[]>();
-    for (const c of conns) g.set(c.edgeType, [...(g.get(c.edgeType) ?? []), c]);
-    return [...g.entries()].sort((a, b) => b[1].length - a[1].length);
-  };
+  // R43 (L2): memoize the split + grouping so it doesn't recompute on every
+  // parent re-render. groupByType was O(n²) (spread-per-iteration); now O(n).
+  const { groupedOutbound, groupedInbound } = useMemo(() => {
+    const out: Connection[] = [];
+    const inb: Connection[] = [];
+    for (const c of connections) {
+      if (c.direction === "outbound") out.push(c);
+      else inb.push(c);
+    }
+    return { groupedOutbound: groupByType(out), groupedInbound: groupByType(inb) };
+  }, [connections]);
 
   return (
     <div className="w-full bg-[#0b1920]/95 backdrop-blur-xl flex flex-col h-full min-h-0 overflow-hidden">
@@ -131,7 +92,8 @@ export function NodeDetailPanel({
               {node.label}
             </span>
           </div>
-          <button onClick={onClose} className="text-foreground/20 hover:text-foreground/50 transition-colors text-[16px] leading-none p-1">×</button>
+          {/* R43 (a11y): aria-label so screen readers announce "Close" instead of "times". */}
+          <button onClick={onClose} aria-label="Close" className="text-foreground/20 hover:text-foreground/50 transition-colors text-[16px] leading-none p-1">×</button>
         </div>
 
         {node.file_path && (
@@ -146,41 +108,11 @@ export function NodeDetailPanel({
           </p>
         )}
 
-        {/* Code actions */}
-        <div className="flex flex-wrap items-center gap-2 mt-2.5">
-          {canFetchCode && (
-            <button
-              onClick={code ? () => setCode(null) : loadCode}
-              disabled={codeLoading}
-              className="px-2.5 py-1 rounded-md bg-primary/15 text-primary text-[11px] font-medium hover:bg-primary/25 transition-colors disabled:opacity-50"
-            >
-              {codeLoading ? "Loading…" : code ? "Hide code" : "Show code"}
-            </button>
-          )}
-          {ghUrl && (
-            <a
-              href={ghUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-2.5 py-1 rounded-md bg-white/[0.05] text-foreground/60 text-[11px] font-medium hover:bg-white/[0.09] hover:text-foreground/90 transition-colors"
-            >
-              Open on GitHub ↗
-            </a>
-          )}
-        </div>
-
-        {codeError && <p className="text-[11px] text-red-400/80 mt-2">{codeError}</p>}
-        {code && (
-          <pre className="mt-2 max-h-[300px] overflow-auto rounded-md bg-black/40 border border-white/[0.06] p-2.5 text-[10.5px] leading-relaxed font-mono text-foreground/75 whitespace-pre">
-            {code}
-          </pre>
-        )}
-
         {/* Stats */}
         <div className="flex gap-5 mt-3">
           {[
-            { label: "Out", value: outbound.length, color: "text-primary" },
-            { label: "In", value: inbound.length, color: "text-accent" },
+            { label: "Out", value: groupedOutbound.reduce((s, [, c]) => s + c.length, 0), color: "text-primary" },
+            { label: "In", value: groupedInbound.reduce((s, [, c]) => s + c.length, 0), color: "text-accent" },
             { label: "Total", value: connections.length, color: "text-foreground" },
           ].map((s) => (
             <div key={s.label}>
@@ -188,17 +120,31 @@ export function NodeDetailPanel({
               <p className={`text-[18px] font-semibold tabular-nums ${s.color}`}>{s.value}</p>
             </div>
           ))}
+          {/* R43 (M1): risk-score display. The data and colorForRisk function
+              already existed but were never used in the detail panel — only
+              in the hover tooltip. Now consistent. */}
+          {node.risk_score != null && (
+            <div>
+              <p className="text-[9px] text-foreground/25 uppercase tracking-widest">Risk</p>
+              <p
+                className="text-[18px] font-semibold tabular-nums"
+                style={{ color: colorForRisk(node.risk_score) }}
+              >
+                {(node.risk_score * 100).toFixed(0)}%
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Connections */}
       <ScrollArea className="flex-1 min-h-0">
         <div className="px-4 py-3 space-y-4">
-          {outbound.length > 0 && (
-            <ConnectionSection title="References" count={outbound.length} icon="→" groups={groupByType(outbound)} onNavigate={onNavigate} />
+          {groupedOutbound.length > 0 && (
+            <ConnectionSection title="References" count={groupedOutbound.reduce((s, [, c]) => s + c.length, 0)} icon="→" groups={groupedOutbound} onNavigate={onNavigate} />
           )}
-          {inbound.length > 0 && (
-            <ConnectionSection title="Referenced by" count={inbound.length} icon="←" groups={groupByType(inbound)} onNavigate={onNavigate} />
+          {groupedInbound.length > 0 && (
+            <ConnectionSection title="Referenced by" count={groupedInbound.reduce((s, [, c]) => s + c.length, 0)} icon="←" groups={groupedInbound} onNavigate={onNavigate} />
           )}
           {connections.length === 0 && (
             <p className="text-[12px] text-foreground/20 text-center py-8">No connections</p>
@@ -207,6 +153,20 @@ export function NodeDetailPanel({
       </ScrollArea>
     </div>
   );
+}
+
+/**
+ * Group connections by edge type, sorted by count descending.
+ * R43 (L2): rewritten to push-in-place (was O(n²) spread-per-iteration).
+ */
+function groupByType(conns: Connection[]): [string, Connection[]][] {
+  const g = new Map<string, Connection[]>();
+  for (const c of conns) {
+    const arr = g.get(c.edgeType);
+    if (arr) arr.push(c);
+    else g.set(c.edgeType, [c]);
+  }
+  return [...g.entries()].sort((a, b) => b[1].length - a[1].length);
 }
 
 function ConnectionSection({ title, count, icon, groups, onNavigate }: {

@@ -14,10 +14,19 @@ export function useDashboard(): UseDashboardResult {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reqIdRef = useRef(0);
+  // R43 (H1): same fix as useGraphData (C1) — only show loading spinner on
+  // initial fetch / project switch. Refetches (WS notifications) keep the
+  // existing dashboard visible to avoid the full-spinner flicker.
+  const dataProjectRef = useRef<string | null>(null);
 
   const fetch = useCallback(async (project: string) => {
     const reqId = ++reqIdRef.current;
-    setLoading(true);
+    const isProjectSwitch = dataProjectRef.current !== project;
+    if (isProjectSwitch) {
+      dataProjectRef.current = project;
+      setLoading(true);
+      setData(null);
+    }
     setError(null);
     try {
       const result = await api.getDashboard(project);

@@ -139,9 +139,21 @@ describe('R17: UiServer new endpoints', () => {
     });
 
     it('returns 404 for non-existent path', async () => {
-      const res = await fetchJson('/api/browse?path=/nonexistent/path/that/does/not/exist');
+      // R43 (SEC3): /api/browse is now restricted to the user's home directory.
+      // Use a path inside home that doesn't exist so we test the 404 path
+      // (not the 403 home-restriction path).
+      const os = require('os');
+      const path = require('path');
+      const nonexistentInHome = path.join(os.homedir(), 'nonexistent-cbm-test-path-12345');
+      const res = await fetchJson(`/api/browse?path=${encodeURIComponent(nonexistentInHome)}`);
       expect(res.status).toBe(404);
       expect(res.body.error).toContain('not found');
+    });
+
+    it('R43 (SEC3): returns 403 for paths outside home directory', async () => {
+      const res = await fetchJson('/api/browse?path=/etc');
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('home directory');
     });
   });
 
@@ -179,6 +191,35 @@ describe('R17: UiServer new endpoints', () => {
         body: { root_path: '/nonexistent/path', project_name: 'test' },
       });
       expect(res.status).toBe(404);
+    });
+
+    // R43 (SEC1): project_name argument-injection guard.
+    it('rejects project_name starting with -- (CLI argument injection)', async () => {
+      const res = await fetchJson('/api/index', {
+        method: 'POST',
+        body: { root_path: '/tmp', project_name: '--config=/tmp/evil.json' },
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Invalid project name');
+    });
+
+    it('rejects project_name with shell metacharacters', async () => {
+      const res = await fetchJson('/api/index', {
+        method: 'POST',
+        body: { root_path: '/tmp', project_name: 'foo;rm -rf /' },
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Invalid project name');
+    });
+
+    it('accepts valid project_name (alphanumeric + dash + underscore)', async () => {
+      const res = await fetchJson('/api/index', {
+        method: 'POST',
+        body: { root_path: '/tmp', project_name: 'my-app_2' },
+      });
+      // 404 is expected (root_path exists, but cbm binary may not be installed
+      // in test env). The key assertion: NOT 400 (invalid project name).
+      expect(res.status).not.toBe(400);
     });
   });
 

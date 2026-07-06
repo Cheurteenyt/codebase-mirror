@@ -124,6 +124,7 @@ export function App() {
             </span>
             <button
               onClick={() => navigate("stats", null)}
+              aria-label="Close project"
               className="text-foreground/20 hover:text-foreground/50 text-[12px] ml-1 transition-colors"
             >
               ×

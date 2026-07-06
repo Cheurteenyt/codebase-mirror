@@ -725,12 +725,23 @@ export class UiServer {
   // GET /api/browse — file picker (list directories)
   private async routeBrowse(url: URL, _req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
     const queryPath = url.searchParams.get('path');
+    const home = homedir();
     let targetPath: string;
     if (queryPath) {
       targetPath = resolve(queryPath);
     } else {
       // Default: home directory
-      targetPath = homedir();
+      targetPath = home;
+    }
+    // R43 (SEC3): restrict browsing to the user's home directory. Without
+    // this, any local process with HTTP access could enumerate any directory
+    // on the filesystem (/etc, ~/.ssh, ~/.aws, etc.) for reconnaissance.
+    // The file picker is only used to select a project root for indexing,
+    // which lives under home in the vast majority of cases. Absolute paths
+    // outside home are rejected with 403.
+    if (!targetPath.startsWith(home + sep) && targetPath !== home) {
+      this.sendJson(res, 403, { error: 'Browse is restricted to the user home directory' });
+      return;
     }
     try {
       if (!existsSync(targetPath)) {
@@ -782,6 +793,15 @@ export class UiServer {
     const projectName = typeof body.project_name === 'string' ? body.project_name : '';
     if (!rootPath || !projectName) {
       this.sendJson(res, 400, { error: 'root_path and project_name are required' });
+      return;
+    }
+    // R43 (SEC1): validate project_name to prevent CLI argument injection.
+    // spawn() with an arg array is safe from shell injection, but NOT from
+    // argument injection — a value like "--config=/tmp/evil.json" would be
+    // parsed as a flag by the V1 cbm binary. The routeProjectDelete handler
+    // already enforces this same regex (line 924); routeIndex was missing it.
+    if (!/^[a-zA-Z0-9_-]+$/.test(projectName)) {
+      this.sendJson(res, 400, { error: 'Invalid project name (alphanumeric, dash, underscore only)' });
       return;
     }
     if (!existsSync(rootPath)) {
@@ -902,6 +922,33 @@ export class UiServer {
     if (pid === process.pid) {
       this.sendJson(res, 400, { error: 'Cannot kill the UI server itself' });
       return;
+    }
+    // R43 (SEC2): cross-check the PID against the live cbm/node process list.
+    // Without this, any local process with HTTP access could SIGTERM ANY
+    // user process (IDE, browser, ssh-agent, etc.) by brute-forcing PIDs.
+    // We re-run `ps` here (not cached) so a freshly-spawned cbm process is
+    // recognized — the kill button is only ever used seconds after the
+    // process list was displayed, so the cost is acceptable.
+    if (process.platform !== 'win32') {
+      let knownPids: Set<number>;
+      try {
+        const output = execSync('ps aux 2>/dev/null | grep -E "cbm|node" | grep -v grep', {
+          encoding: 'utf-8',
+          timeout: 5000,
+        });
+        knownPids = new Set<number>();
+        for (const line of output.split('\n')) {
+          const parts = line.trim().split(/\s+/);
+          const p = parseInt(parts[1], 10);
+          if (Number.isFinite(p) && p > 0) knownPids.add(p);
+        }
+      } catch {
+        knownPids = new Set<number>();
+      }
+      if (!knownPids.has(pid)) {
+        this.sendJson(res, 403, { error: 'Refusing to kill a non-cbm/node process' });
+        return;
+      }
     }
     try {
       process.kill(pid, 'SIGTERM');

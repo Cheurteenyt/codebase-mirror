@@ -51,7 +51,11 @@ export function ControlTab() {
     };
   }, [refresh]);
 
+  // R43 (M3): confirmation gate on process-kill. Killing a process is
+  // irreversible — a misclick on the small Kill button shouldn't terminate
+  // a long-running index job without consent.
   const handleKill = async (pid: number) => {
+    if (!window.confirm(`Kill process ${pid}? This cannot be undone.`)) return;
     setKillError(null);
     try {
       await api.killProcess(pid);
