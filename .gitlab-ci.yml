@@ -6,6 +6,10 @@
 #      Without this, "Pipelines must succeed" blocks MRs because all jobs
 #      are filtered out by `if: $CI_COMMIT_BRANCH == "main"` (CI_COMMIT_BRANCH
 #      is undefined for merge_request_event pipelines).
+# R54b: switched all script blocks to block scalars (|). YAML was parsing
+#       lines containing `: ` (e.g. "Source branch: $VAR") as mappings
+#       instead of strings, which fails GitLab's CI validation:
+#       "script config should be a string or a nested array of strings".
 
 # R54: workflow:rules controls WHEN a pipeline is created at all.
 # - merge_request_event: MR pipelines (must have at least one passing job)
@@ -34,12 +38,13 @@ mr-preflight:
   stage: preflight
   image: alpine:latest
   script:
-    - echo "MR pipeline OK — GitLab CI is mirror-only."
-    - echo "Real CI (typecheck + build + test) runs on GitHub Actions after merge."
-    - echo "Source branch: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
-    - echo "Target branch:  $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-    - echo "Commit:         $CI_COMMIT_SHA"
-    - echo "See: https://github.com/Cheurteenyt/codebase-mirror/actions"
+    - |
+      echo "MR pipeline OK — GitLab CI is mirror-only."
+      echo "Real CI (typecheck + build + test) runs on GitHub Actions after merge."
+      echo "Source branch: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+      echo "Target branch:  $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+      echo "Commit:         $CI_COMMIT_SHA"
+      echo "See: https://github.com/Cheurteenyt/codebase-mirror/actions"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
@@ -50,14 +55,15 @@ mirror-to-github:
   before_script:
     - apk add --no-cache git
   script:
-    - echo "Mirroring to GitHub to trigger Actions CI..."
-    # R53 (D1): use --force-with-lease instead of --force. If GitHub's main
-    # has moved (e.g. a PR was merged directly on GitHub), the push FAILS
-    # loudly instead of silently discarding the GitHub-only commits.
-    # R53 (D2): use http.extraHeader for auth instead of embedding the token
-    # in the URL — prevents token leakage in git error output.
-    - git -c http.extraHeader="Authorization: basic $(printf '%s' "Cheurteenyt:${GITHUB_MIRROR_TOKEN}" | base64 -w0)" push "https://github.com/Cheurteenyt/codebase-mirror.git" HEAD:main --force-with-lease
-    - echo "Mirror complete. CI runs at https://github.com/Cheurteenyt/codebase-mirror/actions"
+    - |
+      echo "Mirroring to GitHub to trigger Actions CI..."
+      # R53 (D1): use --force-with-lease instead of --force. If GitHub's main
+      # has moved (e.g. a PR was merged directly on GitHub), the push FAILS
+      # loudly instead of silently discarding the GitHub-only commits.
+      # R53 (D2): use http.extraHeader for auth instead of embedding the token
+      # in the URL — prevents token leakage in git error output.
+      git -c http.extraHeader="Authorization: basic $(printf '%s' "Cheurteenyt:${GITHUB_MIRROR_TOKEN}" | base64 -w0)" push "https://github.com/Cheurteenyt/codebase-mirror.git" HEAD:main --force-with-lease
+      echo "Mirror complete. CI runs at https://github.com/Cheurteenyt/codebase-mirror/actions"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
   variables:
@@ -73,11 +79,11 @@ quota-check:
   before_script:
     - apk add --no-cache curl python3
   script:
-    - echo "=== GitLab CI Quota Report ==="
-    - echo ""
-    # R52: BusyBox date doesn't support -d or -v. Use epoch math instead.
-    - THIRTY_DAYS_AGO=$(date -u -d '-30 days' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "import datetime; print((datetime.datetime.utcnow()-datetime.timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
     - |
+      echo "=== GitLab CI Quota Report ==="
+      echo ""
+      # R52: BusyBox date doesn't support -d or -v. Use epoch math instead.
+      THIRTY_DAYS_AGO=$(date -u -d '-30 days' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "import datetime; print((datetime.datetime.utcnow()-datetime.timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
       PROJECT_INFO=$(curl -s --header "JOB-TOKEN: $CI_JOB_TOKEN" \
         "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID")
       echo "Project: $(echo $PROJECT_INFO | python3 -c 'import json,sys; print(json.load(sys.stdin).get("path_with_namespace","?"))')"
