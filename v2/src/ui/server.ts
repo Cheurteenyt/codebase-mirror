@@ -505,6 +505,14 @@ export class UiServer {
   // GET /api/project-health — check DB integrity
   private async routeProjectHealth(url: URL, _req: IncomingMessage, res: ServerResponse, project: string): Promise<void> {
     const name = url.searchParams.get('name') ?? project;
+    // R45 (F6/SEC4): validate name against the same regex as routeProjectDelete
+    // and routeIndex. Without this, ?name=../../etc/x constructs a dbPath
+    // outside ~/.cache/codebase-memory-mcp/ via defaultCodeDbPath(), and
+    // existsSync() becomes a file-existence oracle for arbitrary paths.
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name) || name.startsWith('-')) {
+      this.sendJson(res, 400, { error: 'Invalid project name (alphanumeric, dash, underscore only, no leading hyphen)' });
+      return;
+    }
     const dbPath = defaultCodeDbPath(name);
     if (!existsSync(dbPath)) {
       this.sendJson(res, 200, { name, status: 'missing', reason: 'DB file not found' });
@@ -907,12 +915,19 @@ export class UiServer {
       // Use `ps` to list processes (Unix only). On Windows, return empty.
       if (process.platform !== 'win32') {
         // R41 (L3): execSync is now a static import.
-        // ps aux — filter for cbm/cbm-v2/node processes
-        const output = execSync('ps aux 2>/dev/null | grep -E "cbm|node" | grep -v grep', {
+        // R45 (F7): aligned with routeProcessKill's regex (R44 B2). The list
+        // endpoint previously used `grep -E "cbm|node"` which matched every
+        // Node.js process on the system (VS Code, Electron, other dev servers).
+        // The kill endpoint uses `grep -wE "cbm|cbm-v2"` — now both match.
+        // We also explicitly include the current process (this UI server) so
+        // the ControlTab can show it with is_self=true, even though it runs
+        // under `node` (not `cbm-v2` directly).
+        const output = execSync('ps aux 2>/dev/null | grep -wE "cbm|cbm-v2" | grep -v grep', {
           encoding: 'utf-8',
           timeout: 5000,
         });
         const lines = output.split('\n').filter((l) => l.trim().length > 0);
+        const seenPids = new Set<number>();
         for (const line of lines.slice(0, 50)) {
           const parts = line.trim().split(/\s+/);
           if (parts.length < 11) continue;
@@ -923,6 +938,7 @@ export class UiServer {
           const command = parts.slice(10).join(' ').slice(0, 200);
           // Skip the grep process itself and the current ps command
           if (command.includes('grep ')) continue;
+          seenPids.add(pid);
           processes.push({
             pid,
             cpu,
@@ -931,6 +947,30 @@ export class UiServer {
             command,
             is_self: pid === currentPid,
           });
+        }
+        // R45 (F7): always include the current UI server process so the
+        // ControlTab can display it with is_self=true, even if it wasn't
+        // caught by the cbm/cbm-v2 regex (e.g. launched via `node dist/cli.js`).
+        if (!seenPids.has(currentPid)) {
+          try {
+            const selfLine = execSync(`ps -o pid,pcpu,rss,etime,command -p ${currentPid} --no-headers 2>/dev/null`, {
+              encoding: 'utf-8',
+              timeout: 3000,
+            }).trim();
+            if (selfLine) {
+              const parts = selfLine.trim().split(/\s+/);
+              processes.push({
+                pid: currentPid,
+                cpu: parseFloat(parts[1]) || 0,
+                rss_mb: Math.round((parseFloat(parts[2]) || 0) / 1024),
+                elapsed: parts[3] || 'unknown',
+                command: parts.slice(4).join(' ').slice(0, 200) || `pid ${currentPid}`,
+                is_self: true,
+              });
+            }
+          } catch {
+            // ps failed for self — skip
+          }
         }
       }
     } catch {
@@ -1044,7 +1084,10 @@ export class UiServer {
         if (existsSync(humanDbPath + suffix)) unlinkSync(humanDbPath + suffix);
       }
       this.log(`Project deleted: name="${name}" db=${dbPath}`);
-      this.sendJson(res, 200, { success: true, name, deleted, db_path: dbPath });
+      // R45 (F8): omit db_path from the response — the client doesn't read it
+      // (api.deleteProject only checks `success`), and exposing absolute server
+      // filesystem paths is a defense-in-depth info leak.
+      this.sendJson(res, 200, { success: true, name, deleted });
     } catch (e: any) {
       this.sendJson(res, 500, { error: `Failed to delete project: ${e.message}` });
     }

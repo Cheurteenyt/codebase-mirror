@@ -37,3 +37,27 @@ if (!global.requestAnimationFrame) {
     setTimeout(() => cb(Date.now()), 16) as unknown as number;
   global.cancelAnimationFrame = (id: number) => clearTimeout(id);
 }
+
+// Mock `HTMLCanvasElement.prototype.getContext` — jsdom doesn't implement
+// the Canvas 2D API (requires the `canvas` npm package). GraphCanvas calls
+// getContext("2d") in its draw function. We return a stub with no-op methods.
+// R45 (F5): needed for the GraphCanvas sim-reuse regression test.
+if (typeof HTMLCanvasElement !== "undefined") {
+  HTMLCanvasElement.prototype.getContext = function () {
+    return {
+      clearRect: () => {},
+      save: () => {},
+      restore: () => {},
+      scale: () => {},
+      translate: () => {},
+      beginPath: () => {},
+      arc: () => {},
+      fill: () => {},
+      stroke: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      // Allow tests that read width/height to get sane defaults.
+      canvas: { width: 800, height: 600 },
+    } as any;
+  } as any;
+}

@@ -1,5 +1,38 @@
 # Changelog — Codebase Memory V2
 
+## 0.10.9 — Round 45 (2026-07-06)
+
+8 issues fixed across V2 + Graph UI (1 HIGH bug, 1 MEDIUM security, 4 MEDIUM test-coverage, 2 LOW cleanup). 9 new tests (357 total: 347 backend + 10 frontend).
+
+### HIGH fix (UX/bug)
+
+- **`api/client.ts` F1**: `fetchJson` and `postJson` had NO timeout — a hung backend (locked SQLite during large index) left `loading=true` forever with no recovery. Added `AbortController`-based 20s default timeout (30s for dashboard/browse). `ApiError` is now exported so hooks can distinguish timeout (`code=0`) from server errors (`code=HTTP status`). Supports per-call timeout override and external `AbortSignal` for unmount cancellation.
+
+### MEDIUM fix (security)
+
+- **`/api/project-health` F6 (SEC4)**: `name` query param was not validated — `?name=../../etc/x` constructed a dbPath outside `~/.cache/codebase-memory-mcp/` via `defaultCodeDbPath()`, making `existsSync()` a file-existence oracle for arbitrary paths. Applied the same `^[a-zA-Z0-9_-]+$` + leading-hyphen regex as `routeProjectDelete` and `routeIndex`.
+
+### MEDIUM fixes (test coverage — the structural fix)
+
+- **`useDashboard.test.ts` F2**: 3 tests covering the C1 regression invariant for `useDashboard` (same-project refetch preserves data, project switch clears stale data, stale-response race). Mirrors the R44 `useGraphData.test.ts` — `useDashboard` had the same bug and same fix but no test.
+- **`useWebSocket.test.ts` F3**: 2 tests covering the R40 generation-counter fix (zombie-connection race). Mocks `WebSocket` via `vi.stubGlobal` — asserts stale socket's `onclose`/`onmessage` don't fire after project change.
+- **`GraphCanvas.test.tsx` F5**: 2 tests covering the R40 sim-reuse optimization. Spies on `forceSimulation` to assert it's constructed exactly ONCE across data changes (not recreated on every filter toggle), and `sim.stop()` is called exactly ONCE on unmount (not on every data change). Mocks d3-force chainable API + `HTMLCanvasElement.getContext` (jsdom doesn't implement Canvas 2D).
+
+### MEDIUM fix (perf)
+
+- **`useProjects.ts` F4**: replaced the `cancelled` boolean with a real `AbortController`. The old flag prevented stale state updates but the network request still ran to completion — for `/api/projects` that means opening N SQLite readers (one per `.db` file) on the server, all wasted if the user navigated away. Now the fetch is cancelled at the network level on unmount/refresh.
+
+### LOW fixes (cleanup)
+
+- **`/api/processes` F7**: aligned the list regex with the kill regex (R44 B2). The list used `grep -E "cbm|node"` (matched every Node.js process — VS Code, Electron, other dev servers); the kill used `grep -wE "cbm|cbm-v2"`. Now both use the narrow regex. The current UI server process is always included via an explicit `ps -p $PID` fallback so `is_self` still works.
+- **`/api/project-delete` F8**: omitted `db_path` from the response — the client doesn't read it (only checks `success`), and exposing absolute server filesystem paths is a defense-in-depth info leak.
+
+### Test coverage
+- 2 new backend tests in `tests/ui/server-r17.test.ts`: F6 path-traversal rejection, F6 bare-flag rejection.
+- 7 new frontend tests: F2 useDashboard (3), F3 useWebSocket (2), F5 GraphCanvas (2).
+- Frontend test count: 3 → 10.
+- `test-setup.ts` enhanced: `HTMLCanvasElement.getContext` mock (jsdom doesn't implement Canvas 2D).
+
 ## 0.10.8 — Round 44 (2026-07-06)
 
 5 issues fixed based on Claude Sonnet round 7 audit (2 security gaps in R43 fixes, 1 security edge case, 1 structural test gap, 1 regression test). 5 new tests (348 total: 345 backend + 3 frontend).

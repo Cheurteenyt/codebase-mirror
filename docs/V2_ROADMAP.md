@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-06 for version 0.10.8.
+> Updated 2026-07-06 for version 0.10.9.
 
-## Current State (0.10.8)
+## Current State (0.10.9)
 
 ### ✅ Completed
 
@@ -53,15 +53,16 @@
 | Round 42 Claude Sonnet R5 audit | 0.10.6 | 4 fixes from external audit: D1 tab button id (aria-labelledby contract), D2 changelog arithmetic correction, D3 watch docs (source-tag guard mechanism), E1 FTS5 AND-of-terms search (phrase-only → multi-term AND, matches scattered/reordered words). 10 new tests (339 total) |
 | Round 43 proactive audit (security + C1 regression) | 0.10.7 | 14 fixes: C1 CRITICAL useGraphData loading gate unmounted GraphCanvas on WS refetch (defeated R40 sim reuse — now project-aware stale-while-revalidate), SEC1 /api/index project_name argument-injection validation, SEC2 /api/process-kill allowlist cbm/node PIDs, SEC3 /api/browse restricted to home dir, H1 DashboardTab same loading gate fix, M1 NodeDetailPanel risk-score display, M2 ErrorBoundary key={project}, M3 ControlTab kill confirmation, M5 StatsTab error retry button, L1 NodeDetailPanel ~80 lines dead code removed (Show code + GitHub link + rpc.ts deleted), L2 groupByType O(n²)→O(n) + memoized, a11y close buttons aria-label. 4 new tests (343 total) |
 | Round 44 Claude Sonnet R7 audit (security gaps + frontend tests) | 0.10.8 | 5 fixes: B1 /api/index leading-hyphen rejection + `--` separator (closes bare-flag argument injection that passed R43's regex), B2 /api/process-kill narrowed allowlist from `cbm|node` substring to `cbm|cbm-v2` whole-word + tracked job PIDs (was matching every Node.js process), B3 /api/browse realpathSync before containment check (closes symlink bypass), Part C frontend test infrastructure (vitest config + setup + first 3 tests), C1 regression test (useGraphData same-project refetch preserves data). 5 new tests (348 total: 345 backend + 3 frontend) |
+| Round 45 client timeout + test coverage expansion | 0.10.9 | 8 fixes: F1 api/client.ts AbortController 20s timeout + exported ApiError (was hanging forever on locked SQLite), F6 /api/project-health path-traversal validation (SEC4 — same regex as routeIndex/routeProjectDelete), F2 useDashboard C1 regression test (3 tests, mirrors useGraphData), F3 useWebSocket generation-counter test (2 tests, mocks WebSocket), F5 GraphCanvas sim-reuse test (2 tests, mocks d3-force + canvas), F4 useProjects AbortController (was running to completion after unmount), F7 /api/processes regex aligned with kill regex, F8 /api/project-delete omits db_path (info-leak). 9 new tests (357 total: 347 backend + 10 frontend) |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
 | Source files (v2) | 38 |
-| Test files | 32 (31 backend + 1 frontend) |
-| Tests | 348 (345 backend + 3 frontend, all passing) |
-| Bugs fixed (44 rounds) | 476+ |
+| Test files | 35 (31 backend + 4 frontend) |
+| Tests | 357 (347 backend + 10 frontend, all passing) |
+| Bugs fixed (45 rounds) | 485+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -101,7 +102,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.10.8)
+### Phase 3: V1 Complete (0.10.9)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -171,7 +172,8 @@
 | R42 (Claude Sonnet R5 audit) | 0.10.6 | 4 | 10 | 339 |
 | R43 (proactive: C1 regression + 3 security + 10 UX/cleanup) | 0.10.7 | 14 | 4 | 343 |
 | R44 (Claude Sonnet R7: security gaps + frontend tests) | 0.10.8 | 5 | 5 | 348 |
-| **Total** | | **476+** | **476+** | **348** |
+| R45 (client timeout + test coverage expansion) | 0.10.9 | 8 | 9 | 357 |
+| **Total** | | **485+** | **485+** | **357** |
 
 ## Performance Milestones
 
@@ -207,7 +209,7 @@
 | R41 | `Sidebar flattenSingleChild` | O(n²) on deep single-child chains | O(n) (use already-flattened sc.children) | -~n× on deep chains |
 | R42 | `searchHumanNodes` FTS5 query | Phrase-only (entire query in one pair of quotes — required exact adjacent phrase) | AND-of-terms (each term individually quoted, implicit AND) | Matches scattered/reordered words, not just adjacent phrases |
 
-## API Endpoints (0.10.8)
+## API Endpoints (0.10.9)
 
 | Endpoint | Method | Description |
 |---|---|---|

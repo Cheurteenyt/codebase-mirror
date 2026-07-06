@@ -27,7 +27,7 @@ It syncs everything to an **Obsidian-compatible Markdown vault** so you can read
 cd v2
 npm install
 npm run build
-npm test                    # 348 tests (345 backend + 3 frontend)
+npm test                    # 357 tests (347 backend + 10 frontend)
 
 # Try the demo (no V1 needed)
 node dist/cli/index.js demo
@@ -223,7 +223,7 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 ### Design Documents
 - [V2 Audit](../docs/V2_AUDIT.md) — Analysis of V1 (C11 codebase, 65K LOC)
 - [V2 Architecture](../docs/V2_ARCHITECTURE.md) — Sidecar TypeScript design
-- [V2 Roadmap](../docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.10.8)
+- [V2 Roadmap](../docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.10.9)
 - [Obsidian Integration](../docs/OBSIDIAN_INTEGRATION.md) — Vault format and sync
 - [Human Memory Schema](../docs/HUMAN_MEMORY_GRAPH_SCHEMA.md) — SQL schema
 
@@ -235,7 +235,7 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 
 ### Project
 - [Contributing](../CONTRIBUTING.md) — How to contribute
-- [Changelog](CHANGELOG.md) — Version history (0.1.0 → 0.10.8)
+- [Changelog](CHANGELOG.md) — Version history (0.1.0 → 0.10.9)
 - [License](../LICENSE) — MIT
 
 ## Security

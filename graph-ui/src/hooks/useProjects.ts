@@ -24,25 +24,32 @@ export function useProjects(): UseProjectsResult {
 
   useEffect(() => {
     const reqId = ++reqIdRef.current;
-    let cancelled = false;
+    // R45 (F4): AbortController cancels the in-flight fetch on unmount or
+    // refresh. The old `cancelled` boolean prevented stale state updates but
+    // the network request still ran to completion — for /api/projects that
+    // means opening N SQLite readers (one per .db file) on the server, all
+    // wasted if the user navigated away. Now the fetch is cancelled at the
+    // network level too.
+    const controller = new AbortController();
     setLoading(true);
     api
-      .getProjects()
+      .getProjects({ signal: controller.signal })
       .then((data) => {
-        // R24: only apply if this is the latest request AND not cancelled.
-        if (cancelled || reqIdRef.current !== reqId) return;
+        if (controller.signal.aborted || reqIdRef.current !== reqId) return;
         setProjects(data.projects ?? []);
         setError(null);
       })
       .catch((e) => {
-        if (cancelled || reqIdRef.current !== reqId) return;
+        // AbortError is expected on unmount/refresh — swallow it.
+        if (controller.signal.aborted || (e instanceof Error && e.name === "AbortError")) return;
+        if (reqIdRef.current !== reqId) return;
         setError(e instanceof Error ? e.message : "Failed to fetch projects");
       })
       .finally(() => {
-        if (!cancelled && reqIdRef.current === reqId) setLoading(false);
+        if (!controller.signal.aborted && reqIdRef.current === reqId) setLoading(false);
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [refreshKey]);
 
