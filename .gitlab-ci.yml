@@ -56,13 +56,33 @@ mirror-to-github:
     - apk add --no-cache git
   script:
     - |
+      set -euo pipefail
       echo "Mirroring to GitHub to trigger Actions CI..."
-      # R53 (D1): use --force-with-lease instead of --force. If GitHub's main
-      # has moved (e.g. a PR was merged directly on GitHub), the push FAILS
-      # loudly instead of silently discarding the GitHub-only commits.
-      # R53 (D2): use http.extraHeader for auth instead of embedding the token
-      # in the URL — prevents token leakage in git error output.
-      git -c http.extraHeader="Authorization: basic $(printf '%s' "Cheurteenyt:${GITHUB_MIRROR_TOKEN}" | base64 -w0)" push "https://github.com/Cheurteenyt/codebase-mirror.git" HEAD:main --force-with-lease
+      # R53 (D1): --force-with-lease instead of --force, so a diverged GitHub
+      # main (e.g. PR merged directly on GitHub) fails loudly instead of being
+      # silently overwritten.
+      # R53 (D2): http.extraHeader for auth — token never appears in URL or
+      # git error output.
+      # R54c: --force-with-lease without an expected SHA fails with "stale
+      # info" on the 2nd+ mirror, because pushing to a bare URL doesn't
+      # populate a remote-tracking ref. Fix: query GitHub's main SHA with
+      # ls-remote first, then pass it explicitly as --force-with-lease=main:<sha>.
+      GH_URL="https://github.com/Cheurteenyt/codebase-mirror.git"
+      AUTH=$(printf '%s' "Cheurteenyt:${GITHUB_MIRROR_TOKEN}" | base64 -w0)
+      # Fetch current GitHub main SHA (empty if first-time mirror).
+      GH_MAIN=$(git -c http.extraHeader="Authorization: basic $AUTH" \
+        ls-remote "$GH_URL" refs/heads/main 2>/dev/null | awk '{print $1}')
+      if [ -z "$GH_MAIN" ]; then
+        echo "First-time mirror — pushing with --force (no remote ref yet)."
+        git -c http.extraHeader="Authorization: basic $AUTH" push "$GH_URL" HEAD:main --force
+      else
+        echo "GitHub main is at: $GH_MAIN"
+        echo "Local  HEAD is at: $(git rev-parse HEAD)"
+        # --force-with-lease=main:<sha> requires the remote ref to still be at <sha>.
+        # If GitHub main moved (direct PR merge), this push fails loudly and the
+        # CI job will be red — operator can investigate.
+        git -c http.extraHeader="Authorization: basic $AUTH" push "$GH_URL" HEAD:main --force-with-lease=main:"$GH_MAIN"
+      fi
       echo "Mirror complete. CI runs at https://github.com/Cheurteenyt/codebase-mirror/actions"
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
