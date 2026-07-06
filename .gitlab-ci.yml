@@ -24,8 +24,11 @@ mirror-to-github:
     - git push "https://Cheurteenyt:${GITHUB_MIRROR_TOKEN}@github.com/Cheurteenyt/codebase-mirror.git" HEAD:main --force
     - echo "Mirror complete. CI runs at https://github.com/Cheurteenyt/codebase-mirror/actions"
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH
+    # R48 (#1): only mirror on main branch pushes. Previously, ANY branch push
+    # (v2/round47, ci/github-mirror, etc.) would force-push HEAD to GitHub's
+    # main, clobbering it. Now only main is mirrored — feature branches are
+    # pushed to GitHub manually if needed.
+    - if: $CI_COMMIT_BRANCH == "main"
   variables:
     # Don't clone submodules or LFS — just the bare repo for pushing.
     GIT_STRATEGY: "clone"

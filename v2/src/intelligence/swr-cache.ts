@@ -385,6 +385,15 @@ export class SwrCache<K, V> {
    * If a refresh handler was previously set for this key, it is preserved.
    */
   set(key: K, value: V, opts?: { ttlMs?: number; staleMs?: number }): void {
+    // R48 (#5): cancel any pending background refresh timer for this key.
+    // Without this, a set() while a refresh is pending would let the old
+    // handler overwrite the new value when the timer fires.
+    const existingTimer = this.refreshTimers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.refreshTimers.delete(key);
+    }
+
     const ttl = opts?.ttlMs ?? this.ttlMs;
     const stale = opts?.staleMs ?? this.staleMs;
     const now = Date.now();

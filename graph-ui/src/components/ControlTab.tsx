@@ -53,14 +53,19 @@ export function ControlTab() {
     // Auto-refresh every 10 seconds. R47 (M1): guard against overlapping
     // refreshes on slow backends — the AbortController cancels the previous
     // batch before starting a new one.
+    // R48 (#2): use abortRef.current?.abort() instead of controller.abort()
+    // — the closure captures the ORIGINAL controller, not the latest one.
+    // After the first interval, abortRef.current points to a NEW controller,
+    // but controller.abort() would abort the already-aborted original,
+    // leaving the new one running forever.
     const interval = setInterval(() => {
-      controller.abort(); // cancel any in-flight requests
+      abortRef.current?.abort(); // abort the CURRENT controller, not the stale one
       const newController = new AbortController();
       abortRef.current = newController;
       refresh(newController.signal);
     }, 10000);
     return () => {
-      controller.abort();
+      abortRef.current?.abort(); // R48 (#2): abort current, not stale closure
       clearInterval(interval);
       // R47 (L3): clean up the kill-refresh timer.
       if (killTimerRef.current) clearTimeout(killTimerRef.current);
@@ -76,6 +81,9 @@ export function ControlTab() {
     try {
       await api.killProcess(pid);
       // R47 (L3): track the timer so it's cleaned up on unmount.
+      // R48 (#6): clear any previous kill timer to prevent double-refresh
+      // when rapidly killing multiple processes.
+      if (killTimerRef.current) clearTimeout(killTimerRef.current);
       killTimerRef.current = setTimeout(() => refresh(abortRef.current?.signal), 500);
     } catch (e) {
       setKillError(e instanceof Error ? e.message : "Failed to kill process");
