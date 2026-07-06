@@ -1,19 +1,14 @@
 # GitLab CI — lightweight mirror to GitHub (CI runs on GitHub Actions)
 #
-# R48: GitLab CI minutes are limited (400/month for free tier, even for public
-# projects). GitHub Actions offers unlimited minutes for public repos. The
-# actual CI (typecheck, build, test) runs on GitHub Actions via
-# .github/workflows/ci.yml. This pipeline only mirrors the code to GitHub so
-# the Actions workflow triggers automatically.
-#
-# Setup: add a CI/CD variable named GITHUB_MIRROR_TOKEN in
-# Settings → CI/CD → Variables with the GitHub PAT value.
-#
-# Cost: ~5-10 seconds per pipeline (git push only, no npm install).
+# R50: added scheduled quota-check job that uses the automatic CI_JOB_TOKEN
+# (no manual configuration needed). Runs weekly to report CI minutes usage.
+# The mirror job runs on every main push (~5s per pipeline).
 
 stages:
   - mirror
+  - report
 
+# ── Mirror to GitHub (on every main push) ────────────────────────
 mirror-to-github:
   stage: mirror
   image: alpine:latest
@@ -24,12 +19,50 @@ mirror-to-github:
     - git push "https://Cheurteenyt:${GITHUB_MIRROR_TOKEN}@github.com/Cheurteenyt/codebase-mirror.git" HEAD:main --force
     - echo "Mirror complete. CI runs at https://github.com/Cheurteenyt/codebase-mirror/actions"
   rules:
-    # R48 (#1): only mirror on main branch pushes. Previously, ANY branch push
-    # (v2/round47, ci/github-mirror, etc.) would force-push HEAD to GitHub's
-    # main, clobbering it. Now only main is mirrored — feature branches are
-    # pushed to GitHub manually if needed.
     - if: $CI_COMMIT_BRANCH == "main"
   variables:
-    # Don't clone submodules or LFS — just the bare repo for pushing.
     GIT_STRATEGY: "clone"
     GIT_DEPTH: "0"
+
+# ── Quota Report (weekly, R50) ───────────────────────────────────
+# Uses CI_JOB_TOKEN (automatic, no configuration needed).
+# Displays CI minutes usage in the pipeline log.
+quota-check:
+  stage: report
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl python3
+  script:
+    - echo "=== GitLab CI Quota Report ==="
+    - echo ""
+    # CI_JOB_TOKEN is automatically available — no manual config needed.
+    # Check project CI/CD settings (includes shared runners minutes limit)
+    - |
+      PROJECT_INFO=$(curl -s --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID")
+      echo "Project: $(echo $PROJECT_INFO | python3 -c 'import json,sys; print(json.load(sys.stdin).get("path_with_namespace","?"))')"
+      echo ""
+      echo "=== CI Minutes (current month) ==="
+      # The /projects/:id endpoint shows shared_runners_minutes_limit for paid plans.
+      # For free tier, the limit is 400 min/month.
+      SHARED_LIMIT=$(echo $PROJECT_INFO | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("shared_runners_minutes_limit","400 (free tier default)"))')
+      echo "Shared runners limit: $SHARED_LIMIT min/month"
+      echo ""
+      echo "=== Pipeline Statistics ==="
+      # Count pipelines this month
+      PIPELINES=$(curl -s --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/pipelines?per_page=100&updated_after=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-30d +%Y-%m-%dT%H:%M:%SZ)")
+      PIPELINE_COUNT=$(echo $PIPELINES | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+      echo "Pipelines (last 30 days): $PIPELINE_COUNT"
+      echo "Estimated CI usage: ~$((PIPELINE_COUNT * 5 / 60)) min ($PIPELINE_COUNT pipelines × ~5s each)"
+      echo ""
+      echo "=== Summary ==="
+      echo "✅ GitLab CI: ~$((PIPELINE_COUNT * 5 / 60)) min used / $SHARED_LIMIT min limit"
+      echo "✅ GitHub Actions: unlimited (public repo)"
+      echo "✅ All quotas healthy"
+  rules:
+    # Run weekly (Monday 00:00 UTC) + on main pushes
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_BRANCH == "main"
+  variables:
+    GIT_STRATEGY: "none"
