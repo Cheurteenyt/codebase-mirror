@@ -22,10 +22,25 @@ export function parseNote(content: string): ParsedNote {
   let fm: Record<string, unknown>;
   try {
     const parsed = yaml.parse(fmMatch[1]);
-    fm = (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : {};
+    fm = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed as Record<string, unknown> : {};
   } catch {
-    // Malformed YAML — return empty frontmatter, treat entire content as body.
+    // R47 (M4/F9): the regex likely matched a `---` inside a quoted YAML value
+    // (e.g. `title: "a --- b"`). Check if the body starts with a stray `---\n`
+    // — that would be the real frontmatter terminator, meaning the regex split
+    // too early. If so, treat the whole content as body to avoid corrupting
+    // the note with truncated frontmatter.
+    if (fmMatch[2].startsWith('---\n') || fmMatch[2].startsWith('---\r\n')) {
+      return { frontmatter: {}, body: cleanContent };
+    }
+    // Malformed YAML without stray `---` — return empty frontmatter, treat
+    // remaining content as body.
     return { frontmatter: {}, body: fmMatch[2] || '' };
+  }
+  // R47 (M4/F9): defensive — if the body starts with `---\n`, the regex
+  // matched a `---` inside the YAML value as the terminator. Treat the whole
+  // content as body to preserve the original note.
+  if (fmMatch[2].startsWith('---\n') || fmMatch[2].startsWith('---\r\n')) {
+    return { frontmatter: {}, body: cleanContent };
   }
   return {
     frontmatter: fm,

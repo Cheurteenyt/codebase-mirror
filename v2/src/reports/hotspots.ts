@@ -47,7 +47,9 @@ export function computeHotspotsReport(
   // Bulk-fetch degrees to avoid N+1.
   const moduleIds = modules.map((m) => m.id);
   const degreeMap = codeReader.getBulkNodeDegrees(moduleIds);
-  const notesMap = humanStore.getBulkNotesByCbmNodeIds(project, moduleIds, 1);
+  // R47 (M3): fetch up to 200 notes per module so notes_count is accurate.
+  // The old limit=1 capped notes_count at 1 even when 10 notes were linked.
+  const notesMap = humanStore.getBulkNotesByCbmNodeIds(project, moduleIds, 200);
 
   // Get exact total module count (don't rely on `modules.length` which caps at MAX_NODES_PER_LABEL).
   const labelCounts = codeReader.countNodesByLabel(project);

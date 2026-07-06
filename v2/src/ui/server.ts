@@ -588,11 +588,15 @@ export class UiServer {
     this.sendJson(res, 200, {
       project,
       generated_at: new Date().toISOString(),
+      // R47 (H3): reuse graphStatus data instead of re-running 3 uncached
+      // queries (countNodes, countEdges, countNodesByLabel). graphStatus is
+      // SWR-cached (30s fresh + 30s stale) and already computed these exact
+      // values at line 542. Saves 3 SQLite scans per dashboard refresh.
       code_graph: this.codeReader
         ? {
-            total_nodes: this.codeReader.countNodes(project),
-            total_edges: this.codeReader.countEdges(project),
-            nodes_by_label: this.codeReader.countNodesByLabel(project),
+            total_nodes: graphStatus.total_nodes,
+            total_edges: graphStatus.total_edges,
+            nodes_by_label: graphStatus.nodes_by_label,
           }
         : { total_nodes: 0, total_edges: 0, nodes_by_label: {} },
       human_memory: {

@@ -916,23 +916,24 @@ export class HumanMemoryStore {
       cbmNodeIds.filter((id) => typeof id === 'number' && Number.isFinite(id) && id > 0)
     )];
 
-    // Delete all existing links for this node.
-    this.db
-      .prepare('DELETE FROM human_node_cbm_links WHERE human_node_id = ?')
-      .run(humanNodeId);
-
-    // Insert the new set (bulk INSERT for efficiency).
-    if (validIds.length > 0) {
-      const stmt = this.db.prepare(
-        'INSERT OR IGNORE INTO human_node_cbm_links (human_node_id, cbm_node_id) VALUES (?, ?)'
-      );
-      const tx = this.db.transaction((ids: number[]) => {
-        for (const cbmId of ids) {
-          stmt.run(humanNodeId, cbmId);
-        }
-      });
-      tx(validIds);
-    }
+    // R47 (L2): wrap the DELETE + INSERT in a single transaction so the
+    // junction table is never left empty between the two operations. The
+    // old code had the DELETE outside the inner transaction — safe only
+    // because both callers (createNode, updateNode) wrap syncCbmLinks in
+    // an outer transaction. Now syncCbmLinks is self-contained atomic.
+    const deleteStmt = this.db.prepare(
+      'DELETE FROM human_node_cbm_links WHERE human_node_id = ?'
+    );
+    const insertStmt = this.db.prepare(
+      'INSERT OR IGNORE INTO human_node_cbm_links (human_node_id, cbm_node_id) VALUES (?, ?)'
+    );
+    const tx = this.db.transaction(() => {
+      deleteStmt.run(humanNodeId);
+      for (const cbmId of validIds) {
+        insertStmt.run(humanNodeId, cbmId);
+      }
+    });
+    tx();
   }
 }
 

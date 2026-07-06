@@ -4,7 +4,7 @@
 // R24: fixed setState-on-unmounted via cancelled flag + abort stale refresh.
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { ProcessInfo } from "../lib/types";
 import { formatBytes } from "../lib/utils";
 
@@ -15,39 +15,55 @@ export function ControlTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [killError, setKillError] = useState<string | null>(null);
-  // R24: track mounted state to prevent setState on unmounted components.
-  const mountedRef = useRef(true);
+  // R47 (M1): replaced mountedRef with AbortController for real network
+  // cancellation. The old mountedRef prevented setState on unmounted but
+  // the 3 API requests still ran to completion (each spawning ps aux on
+  // the server). Now the fetch is cancelled at the network level.
+  const abortRef = useRef<AbortController | null>(null);
+  // R47 (L3): track the kill-refresh timer so it can be cleaned up on unmount.
+  const killTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
       const [procRes, logRes, jobRes] = await Promise.all([
-        api.getProcesses(),
-        api.getLogs(50),
-        api.getIndexStatus(),
+        api.getProcesses({ signal }),
+        api.getLogs(50, { signal }),
+        api.getIndexStatus({ signal }),
       ]);
-      // R24: only update state if still mounted.
-      if (!mountedRef.current) return;
+      if (signal?.aborted) return;
       setProcesses(procRes.processes ?? []);
       setLogs(logRes.lines ?? []);
       setJobs(jobRes.jobs ?? []);
     } catch (e) {
-      if (!mountedRef.current) return;
+      // AbortError is expected on unmount/refresh — swallow it.
+      if (signal?.aborted) return;
+      if (e instanceof ApiError && e.code === 0) return; // timeout or abort
       setError(e instanceof Error ? e.message : "Failed to fetch control data");
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    mountedRef.current = true;
-    refresh();
-    // Auto-refresh every 10 seconds.
-    const interval = setInterval(refresh, 10000);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    refresh(controller.signal);
+    // Auto-refresh every 10 seconds. R47 (M1): guard against overlapping
+    // refreshes on slow backends — the AbortController cancels the previous
+    // batch before starting a new one.
+    const interval = setInterval(() => {
+      controller.abort(); // cancel any in-flight requests
+      const newController = new AbortController();
+      abortRef.current = newController;
+      refresh(newController.signal);
+    }, 10000);
     return () => {
-      mountedRef.current = false;
+      controller.abort();
       clearInterval(interval);
+      // R47 (L3): clean up the kill-refresh timer.
+      if (killTimerRef.current) clearTimeout(killTimerRef.current);
     };
   }, [refresh]);
 
@@ -59,8 +75,8 @@ export function ControlTab() {
     setKillError(null);
     try {
       await api.killProcess(pid);
-      // Refresh after a short delay.
-      setTimeout(refresh, 500);
+      // R47 (L3): track the timer so it's cleaned up on unmount.
+      killTimerRef.current = setTimeout(() => refresh(abortRef.current?.signal), 500);
     } catch (e) {
       setKillError(e instanceof Error ? e.message : "Failed to kill process");
     }
@@ -79,7 +95,7 @@ export function ControlTab() {
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
           <p className="text-red-400 text-sm mb-2">{error}</p>
-          <button onClick={refresh} className="px-4 py-2 rounded-lg bg-white/[0.04] text-foreground/60 hover:bg-white/[0.08] text-sm">
+          <button onClick={() => refresh(abortRef.current?.signal)} className="px-4 py-2 rounded-lg bg-white/[0.04] text-foreground/60 hover:bg-white/[0.08] text-sm">
             Retry
           </button>
         </div>
@@ -93,7 +109,7 @@ export function ControlTab() {
         <h2 className="text-[14px] font-semibold text-foreground/60 uppercase tracking-wider">
           System Control
         </h2>
-        <button onClick={refresh} className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]">
+        <button onClick={() => refresh(abortRef.current?.signal)} className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]">
           Refresh
         </button>
       </div>
