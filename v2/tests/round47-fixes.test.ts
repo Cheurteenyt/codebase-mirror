@@ -17,11 +17,13 @@ describe('R47 (M4): parseNote handles --- inside quoted YAML', () => {
   it('preserves frontmatter when --- appears inside a quoted value', () => {
     const content = '---\ntitle: "a --- b"\ntype: adr\n---\n# Body\n';
     const result = parseNote(content);
-    // The regex may match the --- inside the quoted string. The R47 fix
-    // ensures we don't corrupt the note — either the frontmatter is correctly
-    // parsed, or the whole content is preserved as body (no data loss).
-    // The key assertion: the body must contain '# Body' (the real content).
-    expect(result.body).toContain('# Body');
+    // R48 (#4): strengthened from just checking body contains '# Body' to
+    // verifying frontmatter is actually parsed correctly. The old test passed
+    // even though frontmatter was silently lost (the body contained '# Body'
+    // as part of the truncated content).
+    expect(result.frontmatter.title).toBe('a --- b');
+    expect(result.frontmatter.type).toBe('adr');
+    expect(result.body.trim()).toBe('# Body');
   });
 
   it('does not corrupt a well-formed note', () => {

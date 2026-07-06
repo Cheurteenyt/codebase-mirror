@@ -11,41 +11,53 @@ export interface ParsedNote {
 /**
  * Parse a Markdown note with YAML frontmatter.
  * Frontmatter must be between `---` lines at the very start.
+ *
+ * R48 (#3): replaced regex-based parsing with line-by-line scanning. The old
+ * regex `/^---\r?\n([\s\S]*?)\r?\n?---\r?\n?([\s\S]*)$/` could match `---`
+ * inside quoted YAML string values (e.g. `title: "a --- b"`), truncating the
+ * frontmatter and corrupting the note on re-export. The line-by-line approach
+ * looks for a LINE that is exactly `---`, which correctly handles `---` inside
+ * quoted values.
  */
 export function parseNote(content: string): ParsedNote {
   // Strip UTF-8 BOM if present (Windows editors sometimes add it).
   const cleanContent = content.replace(/^\uFEFF/, '');
-  const fmMatch = cleanContent.match(/^---\r?\n([\s\S]*?)\r?\n?---\r?\n?([\s\S]*)$/);
-  if (!fmMatch) {
+  const lines = cleanContent.split(/\r?\n/);
+
+  // Frontmatter must start with a line that is exactly `---`.
+  if (lines.length === 0 || lines[0] !== '---') {
     return { frontmatter: {}, body: cleanContent };
   }
+
+  // Find the closing `---` line (must be a line that is exactly `---`).
+  let closeIdx = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i] === '---') {
+      closeIdx = i;
+      break;
+    }
+  }
+
+  if (closeIdx === -1) {
+    // No closing `---` — treat entire content as body.
+    return { frontmatter: {}, body: cleanContent };
+  }
+
+  const fmStr = lines.slice(1, closeIdx).join('\n');
+  const body = lines.slice(closeIdx + 1).join('\n');
+
   let fm: Record<string, unknown>;
   try {
-    const parsed = yaml.parse(fmMatch[1]);
-    fm = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed as Record<string, unknown> : {};
+    const parsed = yaml.parse(fmStr);
+    fm = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+      ? parsed as Record<string, unknown>
+      : {};
   } catch {
-    // R47 (M4/F9): the regex likely matched a `---` inside a quoted YAML value
-    // (e.g. `title: "a --- b"`). Check if the body starts with a stray `---\n`
-    // — that would be the real frontmatter terminator, meaning the regex split
-    // too early. If so, treat the whole content as body to avoid corrupting
-    // the note with truncated frontmatter.
-    if (fmMatch[2].startsWith('---\n') || fmMatch[2].startsWith('---\r\n')) {
-      return { frontmatter: {}, body: cleanContent };
-    }
-    // Malformed YAML without stray `---` — return empty frontmatter, treat
-    // remaining content as body.
-    return { frontmatter: {}, body: fmMatch[2] || '' };
+    // Malformed YAML — return empty frontmatter, treat remaining content as body.
+    return { frontmatter: {}, body };
   }
-  // R47 (M4/F9): defensive — if the body starts with `---\n`, the regex
-  // matched a `---` inside the YAML value as the terminator. Treat the whole
-  // content as body to preserve the original note.
-  if (fmMatch[2].startsWith('---\n') || fmMatch[2].startsWith('---\r\n')) {
-    return { frontmatter: {}, body: cleanContent };
-  }
-  return {
-    frontmatter: fm,
-    body: fmMatch[2] || '',
-  };
+
+  return { frontmatter: fm, body };
 }
 
 /**

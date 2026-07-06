@@ -1,5 +1,29 @@
 # Changelog — Codebase Memory V2
 
+## 0.11.2 — Round 48 (2026-07-06)
+
+6 issues fixed (1 CRITICAL CI, 1 HIGH bug, 2 MEDIUM bug+test, 2 LOW defensive).
+
+### CRITICAL fix (CI)
+
+- **`.gitlab-ci.yml` #1**: mirror job force-pushed ANY branch to GitHub's `main`. Pushing to `v2/round48` would clobber GitHub `main` and trigger Actions CI on the wrong content. Fixed: restrict mirror rules to `$CI_COMMIT_BRANCH == "main"` only.
+
+### HIGH fix (bug)
+
+- **`ControlTab.tsx` #2**: interval callback aborted the ORIGINAL `controller` (captured by closure) instead of `abortRef.current` (the latest). After the first 10s interval, the original controller was already aborted — subsequent intervals created new controllers without cancelling the previous ones, causing request pileup + stale-data races. Fixed: use `abortRef.current?.abort()` in both the interval and cleanup.
+
+### MEDIUM fixes (bug + test)
+
+- **`frontmatter.ts` #3**: `parseNote` regex matched `---` inside quoted YAML string values (e.g. `title: "a --- b"`), silently losing frontmatter on re-export. The R47 defensive fix was incomplete — it only checked if the body started with `---\n`, but the actual body started with ` b"`. Fixed: replaced regex with line-by-line scanning that looks for a LINE that is exactly `---`, correctly handling `---` inside quoted values.
+
+- **`round47-fixes.test.ts` #4**: the `parseNote` edge-case test only asserted `body.contains('# Body')` — which passed even though frontmatter was completely lost (the body contained `# Body` as part of truncated content). Fixed: now asserts `frontmatter.title === 'a --- b'`, `frontmatter.type === 'adr'`, and `body.trim() === '# Body'`.
+
+### LOW fixes (defensive)
+
+- **`swr-cache.ts` #5**: `set()` didn't cancel pending refresh timers (only `invalidate()` and `clear()` did). A `set()` while a refresh was pending would let the old handler overwrite the new value. Fixed: cancel timer at the top of `set()`.
+
+- **`ControlTab.tsx` #6**: `handleKill` didn't clear the previous kill timer before setting a new one. Rapidly killing 2+ processes stacked multiple timers, causing double-refresh. Fixed: `clearTimeout(killTimerRef.current)` before setting new timer.
+
 ## 0.11.1 — Round 47 (2026-07-06)
 
 10 issues fixed across V2 + Graph UI (3 HIGH, 4 MEDIUM, 3 LOW). 6 new tests (374 total: 353 backend + 21 frontend).

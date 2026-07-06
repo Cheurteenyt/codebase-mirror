@@ -1,6 +1,6 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Codebase Memory V2 sidecar — human memory graph + Obsidian sync",
   "type": "module",
   "main": "dist/cli/index.js",
