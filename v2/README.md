@@ -3,7 +3,7 @@
 > Human memory graph + Obsidian vault sync for [Codebase Memory MCP](https://github.com/DeusData/codebase-memory-mcp).
 > Adds ADRs, bug notes, refactor plans, conventions, and more — layered on top of the C engine's code graph.
 
-[![pipeline status](https://gitlab.com/cheurteen1/cheurteen-project/badges/main/pipeline.svg)](https://gitlab.com/cheurteen1/cheurteen-project/-/commits/main)
+[![CI](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## What is this?

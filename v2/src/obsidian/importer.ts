@@ -26,6 +26,7 @@ import {
 import { walkVault, readNote } from './vault.js';
 import {
   slugify,
+  type HumanNode,
   HumanNodeLabel,
   HumanNodeStatus,
   HumanNodeSource,
@@ -175,6 +176,13 @@ function importSingleFile(relPath: string, opts: ImportOptions, result: ImportRe
     result.orphanNotes.push(relPath);
   }
 
+  // R49 (#4): skip wikilink processing for unchanged notes. upsertNode pushes
+  // to result.unchanged and returns the existing id — the note content hasn't
+  // changed, so the wikilinks haven't changed either. Re-parsing 1000 unchanged
+  // notes on every sync wastes ~5000 SQL round-trips and 1000× buildFenceState.
+  // Only process wikilinks for created/updated notes.
+  const wasUnchanged = result.unchanged.length > 0 && result.unchanged[result.unchanged.length - 1] === relPath;
+
   // Process wikilinks → edges.
   // R27 (Bug #8 fix): if the node was renamed (existing had a different
   // obsidian_path), also clean up edges from the OLD source_file path.
@@ -182,7 +190,15 @@ function importSingleFile(relPath: string, opts: ImportOptions, result: ImportRe
     ? existing.obsidian_path
     : null;
 
-  if (sourceNodeId !== null) {
+  if (sourceNodeId !== null && !wasUnchanged) {
+    const edgeCount = processWikilinks(sourceNodeId, humanBody, relPath, opts, result, oldObsidianPath);
+    if (edgeCount !== null && !opts.dryRun) {
+      result.edgesCreated += edgeCount.created;
+      result.edgesDeleted += edgeCount.deleted;
+    }
+  } else if (sourceNodeId !== null && oldObsidianPath) {
+    // R49 (#4): even if the note content is unchanged, if it was renamed we
+    // still need to update the edges' source_file field.
     const edgeCount = processWikilinks(sourceNodeId, humanBody, relPath, opts, result, oldObsidianPath);
     if (edgeCount !== null && !opts.dryRun) {
       result.edgesCreated += edgeCount.created;
@@ -557,9 +573,6 @@ function extractTitle(body: string, relPath?: string): string | null {
   }
   return null;
 }
-
-// Import HumanNode type for resolveExistingNode return type.
-import type { HumanNode } from '../human/schema.js';
 
 /**
  * R26: Recursively sort object keys for stable JSON comparison.

@@ -209,28 +209,42 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     ctx.scale(tk, tk);
 
     // R40 (UI-2): use the cached nodeMap instead of rebuilding it on every draw.
+    // R49 (#9): batch edges into two passes (default + highlighted) to minimize
+    // canvas state changes. The old code set strokeStyle/lineWidth PER EDGE,
+    // forcing a state change each time — the #1 perf killer for large graphs.
     const nodeMap = nodeMapRef.current;
-    ctx.strokeStyle = "rgba(100, 116, 139, 0.15)";
+
+    // Pass 1: default (non-highlighted) edges — single path, single stroke.
+    ctx.strokeStyle = "rgba(100, 116, 139, 0.1)";
     ctx.lineWidth = 0.5 / tk;
+    ctx.beginPath();
     for (const edge of edgesRef.current) {
       const sId = typeof edge.source === "number" ? edge.source : edge.source.id;
       const tId = typeof edge.target === "number" ? edge.target : edge.target.id;
       const source = nodeMap.get(sId);
       const target = nodeMap.get(tId);
       if (!source || !target) continue;
-
-      // Highlight edges connected to highlighted nodes
-      if (highlightedIds && (highlightedIds.has(source.id) || highlightedIds.has(target.id))) {
-        ctx.strokeStyle = "rgba(6, 182, 212, 0.4)";
-        ctx.lineWidth = 1 / tk;
-      } else {
-        ctx.strokeStyle = "rgba(100, 116, 139, 0.1)";
-        ctx.lineWidth = 0.5 / tk;
-      }
-
-      ctx.beginPath();
+      if (highlightedIds && (highlightedIds.has(source.id) || highlightedIds.has(target.id))) continue;
       ctx.moveTo(source.x ?? 0, source.y ?? 0);
       ctx.lineTo(target.x ?? 0, target.y ?? 0);
+    }
+    ctx.stroke();
+
+    // Pass 2: highlighted edges — single path, single stroke.
+    if (highlightedIds) {
+      ctx.strokeStyle = "rgba(6, 182, 212, 0.4)";
+      ctx.lineWidth = 1 / tk;
+      ctx.beginPath();
+      for (const edge of edgesRef.current) {
+        const sId = typeof edge.source === "number" ? edge.source : edge.source.id;
+        const tId = typeof edge.target === "number" ? edge.target : edge.target.id;
+        const source = nodeMap.get(sId);
+        const target = nodeMap.get(tId);
+        if (!source || !target) continue;
+        if (!highlightedIds.has(source.id) && !highlightedIds.has(target.id)) continue;
+        ctx.moveTo(source.x ?? 0, source.y ?? 0);
+        ctx.lineTo(target.x ?? 0, target.y ?? 0);
+      }
       ctx.stroke();
     }
 

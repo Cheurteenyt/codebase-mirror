@@ -3,7 +3,7 @@
 > Human memory graph + Obsidian vault sync for [Codebase Memory MCP](https://github.com/DeusData/codebase-memory-mcp).
 > Adds ADRs, bug notes, refactor plans, conventions, and more — layered on top of the C engine's code graph.
 
-[![pipeline status](https://gitlab.com/cheurteen1/cheurteen-project/badges/main/pipeline.svg)](https://gitlab.com/cheurteen1/cheurteen-project/-/commits/main)
+[![CI](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## What is this?
@@ -21,7 +21,7 @@ Codebase Memory V2 adds the **human context**:
 
 It syncs everything to an **Obsidian-compatible Markdown vault** so you can read and edit notes in your favorite editor, with backlinks and tags.
 
-## Current version: 0.11.2
+## Current version: 0.11.3
 
 - **374 tests** (353 backend + 21 frontend, all passing)
 - **7 MCP tools** (including the flagship `prepare_edit_context`)
