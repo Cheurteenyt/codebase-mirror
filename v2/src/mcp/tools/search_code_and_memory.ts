@@ -79,24 +79,12 @@ export class SearchCodeAndMemoryTool extends BaseTool {
       }
 
       if (searchHuman && humanLimit > 0) {
-        // LIKE-based search across human_nodes. Searches title, body, tags, and frontmatter.
-        const escaped = query.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
-        const likePattern = `%${escaped}%`;
-        const db = this.humanStore.getRawDb();
-        const rows = db
-          .prepare(
-            `SELECT * FROM human_nodes
-             WHERE project = ?
-               AND status != 'deprecated'
-               AND (title LIKE ? ESCAPE '\\'
-                    OR body_markdown LIKE ? ESCAPE '\\'
-                    OR tags LIKE ? ESCAPE '\\'
-                    OR frontmatter_json LIKE ? ESCAPE '\\'
-                    OR author LIKE ? ESCAPE '\\')
-             ORDER BY updated_at DESC
-             LIMIT ?`
-          )
-          .all(project, likePattern, likePattern, likePattern, likePattern, likePattern, humanLimit) as any[];
+        // R41 (M5): use FTS5-backed searchHumanNodes (migration V4) instead
+        // of the inline 5× LIKE %q% scan. searchHumanNodes falls back to
+        // LIKE automatically if the FTS5 table is missing (pre-V4 DB) or if
+        // the query syntax trips FTS5's parser. Ranking is now BM25 (most
+        // relevant first) instead of updated_at DESC.
+        const rows = this.humanStore.searchHumanNodes(project, query, humanLimit);
 
         for (const row of rows) {
           humanResults.push({

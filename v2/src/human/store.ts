@@ -190,13 +190,15 @@ export class HumanMemoryStore {
     const tags = JSON.stringify(input.tags ?? []);
 
     // Handle slug collisions: auto-suffix with -2, -3, ... up to -99.
+    // R41 (L4): hoist the prepared statement out of the loop. better-sqlite3
+    // caches prepared statements internally, but allocating the JS Statement
+    // wrapper up to 100 times is still wasteful.
     let attempt = 0;
     let finalSlug = slug;
+    const checkSlug = this.db.prepare('SELECT id FROM human_nodes WHERE project = ? AND slug = ?');
     while (attempt < 100) {
       const candidate = attempt === 0 ? slug : `${slug}-${attempt + 1}`;
-      const existing = this.db
-        .prepare('SELECT id FROM human_nodes WHERE project = ? AND slug = ?')
-        .get(input.project, candidate) as any;
+      const existing = checkSlug.get(input.project, candidate) as any;
       if (!existing) {
         finalSlug = candidate;
         // Recompute obsidianPath if slug changed and user didn't supply an explicit path.
@@ -741,6 +743,68 @@ export class HumanMemoryStore {
     }
     result['_total'] = total;
     return result;
+  }
+
+  /**
+   * R41 (M5): full-text search over human_nodes using the FTS5 index
+   * (migration V4). Replaces the 5× LIKE %q% scan in search_code_and_memory
+   * with a single MATCH query against the inverted index.
+   *
+   * Falls back to LIKE if the FTS5 table is missing (pre-V4 DB) or if the
+   * query syntax is invalid (e.g. unbalanced quotes). The fallback preserves
+   * the old behavior exactly.
+   *
+   * Ranking: FTS5's `ORDER BY rank` returns BM25-scored results (most
+   * relevant first). The old LIKE query used `updated_at DESC` — a
+   * behavioral change, but BM25 is semantically better for search.
+   *
+   * @param project  restrict to this project
+   * @param query    raw user query (e.g. "auth login bug"). Internally
+   *                 wrapped in double-quotes for FTS5 phrase matching.
+   * @param limit    max results (default 50)
+   */
+  searchHumanNodes(project: string, query: string, limit = 50): HumanNode[] {
+    if (!query || query.trim().length === 0) return [];
+
+    // FTS5 phrase query: wrap in double-quotes, escape internal quotes by doubling.
+    // Phrase matching is safer than raw MATCH (which treats "OR" "AND" "NOT" as operators).
+    const trimmed = query.trim();
+    const phraseQuery = '"' + trimmed.replace(/"/g, '""') + '"';
+
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT n.* FROM human_nodes n
+           JOIN human_nodes_fts f ON f.rowid = n.id
+           WHERE n.project = ? AND n.status != 'deprecated' AND human_nodes_fts MATCH ?
+           ORDER BY rank
+           LIMIT ?`
+        )
+        .all(project, phraseQuery, limit) as any[];
+      if (rows.length > 0) return rows.map(deserializeNode);
+      // 0 hits from FTS5 — could be a tokenizer edge case. Fall through to LIKE
+      // which does substring matching (broader than FTS5's token matching).
+    } catch {
+      // FTS5 table missing (pre-V4 DB) or query syntax error → fall through to LIKE.
+    }
+
+    // LIKE fallback — identical to the pre-R41 behavior (5× substring scan).
+    const escaped = trimmed.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
+    const likePattern = `%${escaped}%`;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM human_nodes
+         WHERE project = ? AND status != 'deprecated'
+           AND (title LIKE ? ESCAPE '\\'
+                OR body_markdown LIKE ? ESCAPE '\\'
+                OR tags LIKE ? ESCAPE '\\'
+                OR frontmatter_json LIKE ? ESCAPE '\\'
+                OR author LIKE ? ESCAPE '\\')
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(project, likePattern, likePattern, likePattern, likePattern, likePattern, limit) as any[];
+    return rows.map(deserializeNode);
   }
 
   countEdges(project: string, type?: HumanEdgeType): number {

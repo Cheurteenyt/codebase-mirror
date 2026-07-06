@@ -3,10 +3,22 @@
 // Replaces V1's 3D Three.js scene with a cleaner, more readable 2D layout.
 // Advantages: no GPU needed, handles 5000+ nodes, simpler interaction.
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import { forceSimulation, forceManyBody, forceLink, forceCenter, forceCollide } from "d3-force";
 import type { GraphData, GraphNode } from "../lib/types";
 import { colorForLabel, colorForStatus } from "../lib/colors";
+
+/**
+ * R41 (UI-9): imperative handle exposed by GraphCanvas. Lets the parent
+ * (GraphTab) wire a "Reset view" button without lifting transformRef out
+ * of the canvas (which would break encapsulation and re-introduce re-renders).
+ */
+export interface GraphCanvasHandle {
+  /** Reset pan to (0,0) and zoom to 1×. */
+  resetView: () => void;
+  /** Zoom in/out by a factor (e.g. 1.2 to zoom in, 0.83 to zoom out). */
+  zoomBy: (factor: number) => void;
+}
 
 interface GraphCanvasProps {
   data: GraphData;
@@ -34,13 +46,13 @@ const LINK_DISTANCE = 30;
 const CHARGE_STRENGTH = -80;
 const COLLIDE_RADIUS = 8;
 
-export function GraphCanvas({
+export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function GraphCanvas({
   data,
   highlightedIds,
   deadCodeView,
   onNodeClick,
   onNodeHover,
-}: GraphCanvasProps) {
+}, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simRef = useRef<ReturnType<typeof forceSimulation> | null>(null);
   const transformRef = useRef({ x: 0, y: 0, k: 1 });
@@ -343,8 +355,17 @@ export function GraphCanvas({
         dragRef.current.node.fy = pos.y / k;
         simRef.current?.alphaTarget(0.3).restart();
       } else if (isPanning) {
-        transformRef.current.x = e.clientX - panStart.x;
-        transformRef.current.y = e.clientY - panStart.y;
+        // R41 (UI-9): clamp pan to ±10× viewport so the graph can't be
+        // dragged entirely off-screen with no recovery. 10× is generous
+        // enough for legitimate deep-pan exploration but prevents the
+        // "lost graph" UX where the only recovery was a page refresh.
+        const rect = canvas.getBoundingClientRect();
+        const maxX = rect.width * 10;
+        const maxY = rect.height * 10;
+        const rawX = e.clientX - panStart.x;
+        const rawY = e.clientY - panStart.y;
+        transformRef.current.x = Math.max(-maxX, Math.min(maxX, rawX));
+        transformRef.current.y = Math.max(-maxY, Math.min(maxY, rawY));
         drawRef.current?.();
       } else {
         // Hover detection — pass the mouse position (relative to canvas) to the
@@ -428,11 +449,27 @@ export function GraphCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // stable — callbacks accessed via refs, no re-binding needed
 
+  // R41 (UI-9): expose imperative resetView/zoomBy so GraphTab can wire a
+  // "Reset view" button without lifting transformRef out of the canvas.
+  useImperativeHandle(ref, () => ({
+    resetView: () => {
+      transformRef.current = { x: 0, y: 0, k: 1 };
+      drawRef.current?.();
+    },
+    zoomBy: (factor: number) => {
+      const newK = Math.max(0.1, Math.min(10, transformRef.current.k * factor));
+      transformRef.current.k = newK;
+      drawRef.current?.();
+    },
+  }), []);
+
   return (
     <canvas
       ref={canvasRef}
       className="w-full h-full"
       style={{ background: "#06090f", cursor: "default" }}
+      role="img"
+      aria-label={`Code graph: ${data?.nodes.length ?? 0} nodes, ${data?.edges.length ?? 0} edges. Drag to pan, scroll to zoom, click a node for details.`}
     />
   );
-}
+});

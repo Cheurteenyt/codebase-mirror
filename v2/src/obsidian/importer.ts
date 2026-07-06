@@ -153,8 +153,17 @@ function importSingleFile(relPath: string, opts: ImportOptions, result: ImportRe
   const humanBody = sections.humanNotes.split(HUMAN_NOTES_PLACEHOLDER).join('').trim();
 
   // Find existing node (by obsidian_path first, then slug for orphans only).
-  const existing = resolveExistingNode(opts, relPath, slug, result);
-  if (existing === 'CONFLICT') return; // error already pushed
+  // R41 (L6): SlugConflictError replaces the 'CONFLICT' string-literal return.
+  let existing: HumanNode | null;
+  try {
+    existing = resolveExistingNode(opts, relPath, slug);
+  } catch (e) {
+    if (e instanceof SlugConflictError) {
+      result.errors.push({ path: e.path, error: e.message });
+      return; // skip this file, continue import
+    }
+    throw e;
+  }
 
   // R26 (Bug #5 fix): removed vestigial vaultHash computation — markSynced()
   // ignores the parameter (prefixed _vaultContentHash). Was wasted SHA-256 on every file.
@@ -217,14 +226,29 @@ function validateEnum(
  * different content), we only accept the slug match if the existing node's
  * obsidian_path file no longer exists on disk (confirming the rename).
  *
- * Returns the node, null if no match, or 'CONFLICT' if there's a slug collision.
+ * R41 (L6): throws SlugConflictError instead of returning 'CONFLICT' —
+ * eliminates the string-literal return discriminator that defeated
+ * TypeScript's exhaustiveness checking. Callers wrap the call in
+ * try/catch and check `instanceof SlugConflictError`.
  */
+export class SlugConflictError extends Error {
+  constructor(
+    public readonly path: string,
+    public readonly pathMatchId: number,
+    public readonly slugMatchId: number,
+  ) {
+    super(
+      `slug collision: path-match node id=${pathMatchId} and slug-match node id=${slugMatchId} are different. Skipping — resolve manually.`,
+    );
+    this.name = 'SlugConflictError';
+  }
+}
+
 function resolveExistingNode(
   opts: ImportOptions,
   relPath: string,
   slug: string,
-  result: ImportResult
-): HumanNode | null | 'CONFLICT' {
+): HumanNode | null {
   const existingByPath = opts.humanStore.getNodeByObsidianPath(opts.project, relPath);
   let existingBySlug = null;
   if (!existingByPath && slug) {
@@ -251,11 +275,7 @@ function resolveExistingNode(
 
   // Detect slug-collision conflict: both exist but differ.
   if (existingByPath && existingBySlug && existingByPath.id !== existingBySlug.id) {
-    result.errors.push({
-      path: relPath,
-      error: `slug collision: path-match node id=${existingByPath.id} and slug-match node id=${existingBySlug.id} are different. Skipping — resolve manually.`,
-    });
-    return 'CONFLICT';
+    throw new SlugConflictError(relPath, existingByPath.id, existingBySlug.id);
   }
 
   return existingByPath ?? existingBySlug;

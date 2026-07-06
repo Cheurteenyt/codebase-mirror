@@ -7,10 +7,8 @@ interface FilterPanelProps {
   data: GraphData;
   enabledLabels: Set<string>;
   enabledEdgeTypes: Set<string>;
-  showLabels: boolean;
   onToggleLabel: (label: string) => void;
   onToggleEdgeType: (type: string) => void;
-  onToggleShowLabels: () => void;
   onEnableAll: () => void;
   onDisableAll: () => void;
   /* Dead-code view */
@@ -62,10 +60,8 @@ export function FilterPanel({
   data,
   enabledLabels,
   enabledEdgeTypes,
-  showLabels,
   onToggleLabel,
   onToggleEdgeType,
-  onToggleShowLabels,
   onEnableAll,
   onDisableAll,
   deadCodeView,
@@ -208,23 +204,6 @@ export function FilterPanel({
             ))}
           </div>
         )}
-      </div>
-
-      {/* Display options — pinned footer */}
-      <div className="px-4 py-2.5 border-t border-border/20 shrink-0">
-        <button
-          onClick={onToggleShowLabels}
-          className={`inline-flex items-center gap-1.5 text-[11px] font-medium transition-all ${
-            showLabels ? "text-primary" : "text-foreground/30"
-          }`}
-        >
-          <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${
-            showLabels ? "border-primary bg-primary/20" : "border-foreground/15"
-          }`}>
-            {showLabels && <span className="text-primary text-[9px]">✓</span>}
-          </span>
-          Show labels
-        </button>
       </div>
     </div>
   );

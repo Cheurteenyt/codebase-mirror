@@ -500,6 +500,26 @@ export class CodeGraphReader {
     ).c;
   }
 
+  /**
+   * R41 (L2): single-query node + edge counts for a project. Replaces the
+   * countNodes + countEdges pair used by /api/projects (2 queries → 1,
+   * plus 1 statement prepare instead of 2). Both subqueries hit the
+   * composite index on (project, ...) — index-only scans.
+   *
+   * Used by the /api/projects endpoint to avoid opening N SQLite readers
+   * and running 2N queries when listing all projects.
+   */
+  countAll(project: string): { nodes: number; edges: number } {
+    const row = this.db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM nodes WHERE project = ?) AS n,
+           (SELECT COUNT(*) FROM edges WHERE project = ?) AS e`
+      )
+      .get(project, project) as any;
+    return { nodes: row?.n ?? 0, edges: row?.e ?? 0 };
+  }
+
   countNodesByLabel(project: string): Record<string, number> {
     const rows = this.db
       .prepare(

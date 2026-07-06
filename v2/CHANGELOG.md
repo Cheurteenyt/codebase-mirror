@@ -1,5 +1,34 @@
 # Changelog — Codebase Memory V2
 
+## 0.10.5 — Round 41 (2026-07-06)
+
+13 issues fixed across V2 + Graph UI (1 HIGH perf, 1 HIGH complexity, 2 MEDIUM perf, 1 MEDIUM UX, 2 MEDIUM leak, 8 LOW). 23 new tests (329 total).
+
+### HIGH fixes
+
+- **search_code_and_memory M5**: replaced 5× `LIKE %q%` substring scan (10k rows × 5 comparisons = 50k ops) with FTS5 full-text search. New migration V4 adds `human_nodes_fts` virtual table (external-content, porter+unicode61 tokenizer) + 3 sync triggers. New `searchHumanNodes()` method on HumanMemoryStore uses `MATCH` + `ORDER BY rank` (BM25 scoring), falls back to LIKE if FTS5 table is missing or query syntax errors. Ranking is now relevance-based instead of `updated_at DESC` — semantically better.
+- **server.ts L1**: refactored `handleApi` from a 588-line monolith with 17 chained `if (path === ...)` blocks into a 22-line route-table dispatcher (`Map<string, RouteHandler>`). Each route is now a private method (`routeLayout`, `routeProjects`, etc.). Adding a route no longer requires editing the central method.
+
+### MEDIUM fixes
+
+- **report.ts N1**: `HumanMemoryStore` handle leaked when `CodeGraphReader` constructor threw — the early `return` jumped over the second `try/finally`. Fixed: extracted `withProjectStores()` helper wraps open-compute-close in a single `try/finally` that always closes both handles. Applied to all 3 report actions (hotspots, undocumented, risk).
+- **server.ts L2+N2**: `/api/projects` ran 2 separate `countNodes` + `countEdges` queries per project (2N queries for N projects) and skipped `reader.close()` on exception (handle leak on Windows). Fixed: new `countAll(project)` method does both counts in 1 query (subquery pattern), and `reader.close()` moved to a `finally` block.
+- **GraphCanvas UI-9**: no pan bounds + no reset-view control — user could drag the graph entirely off-screen with no recovery except page refresh. Fixed: pan clamped to ±10× viewport, `GraphCanvas` now exposes `resetView()`/`zoomBy()` via `forwardRef`/`useImperativeHandle`, "Reset view" button added to GraphTab actions.
+
+### LOW fixes
+
+- **store.ts L4**: slug-collision loop re-prepared the SELECT statement per attempt (up to 100×). Hoisted the `prepare()` call above the loop.
+- **server.ts L3**: 4 redundant `await import('node:fs'/'node:child_process')` calls (one was pure dead code shadowing the static import; 3 were dynamic imports on every request). Replaced with static top-level imports.
+- **human.ts N3**: `human create` action had a redundant outer try/catch wrapping an inner try/catch with identical handler — the outer catch was unreachable (inner catch's `return` always fired first). Collapsed into a single try.
+- **Sidebar.tsx UI-7**: `flattenSingleChild` was O(n²) on deep single-child directory chains (`src/a/b/c/d/e/file.ts`) — the inner `flattenSingleChild(sc)` re-flattened an already-flattened subtree. Fixed: use `sc.children` directly.
+- **GraphTab/FilterPanel UI-8**: "Show labels" toggle was dead code — FilterPanel rendered the checkbox but `GraphCanvas.draw` never rendered any text. Removed the toggle + state + props.
+- **importer.ts L6**: `resolveExistingNode` returned `HumanNode | null | 'CONFLICT'` (string-literal discriminator that defeated TypeScript's exhaustiveness checking). Refactored to throw a typed `SlugConflictError` class, caught via `instanceof` at the call site.
+- **GraphCanvas/App UI-10**: `<canvas>` had no `role`/`aria-label`; tab buttons lacked `role="tab"`/`aria-selected`/`aria-controls`. Added ARIA tablist semantics + canvas role="img" with descriptive label.
+
+### Test coverage
+- 23 new tests in `tests/round41-fixes.test.ts`: FTS5 migration presence + triggers, searchHumanNodes by title/body/tag, deprecated exclusion, project scoping, FTS5 sync after create/update/delete, countAll correctness + scoping, SlugConflictError class behavior, slug-collision behavioral parity.
+- Updated `tests/round20-optimizations.test.ts` for the new migration count (3 → 4).
+
 ## 0.10.4 — Round 40 Deep Quality (2026-07-06)
 
 12 issues fixed across V2 + Graph UI (5 HIGH bugs, 4 MEDIUM perf, 1 MEDIUM latent bug, 2 LOW UX). 14 new tests (306 total).

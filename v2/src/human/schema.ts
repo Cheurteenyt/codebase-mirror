@@ -270,6 +270,58 @@ WHERE je.value IS NOT NULL AND typeof(je.value) IN ('integer', 'real')
   AND je.value > 0;
 `;
 
+/**
+ * R41 (M5): FTS5 full-text index over human_nodes' searchable text columns.
+ * Replaces the 5× LIKE %q% scan in search_code_and_memory.ts (which did
+ * 10k row × 5 substring checks = 50k comparisons per call) with a single
+ * FTS5 MATCH query that uses the inverted index.
+ *
+ * External-content table pattern (content='human_nodes', content_rowid='id'):
+ * the FTS5 table stores only the inverted index, not the row data itself.
+ * Triggers keep it in sync on INSERT/UPDATE/DELETE.
+ *
+ * Tokenizer: 'porter unicode61' — porter stemming for English + unicode61
+ * for accented chars (French titles like "décision" work correctly).
+ */
+const SCHEMA_V4 = `
+-- FTS5 virtual table. content='' would make it contentless (no row data
+-- retrievable from FTS), but we use external-content so JOINs back to
+-- human_nodes work via rowid.
+CREATE VIRTUAL TABLE IF NOT EXISTS human_nodes_fts USING fts5(
+  title,
+  body_markdown,
+  tags,
+  frontmatter_json,
+  author,
+  content='human_nodes',
+  content_rowid='id',
+  tokenize='porter unicode61'
+);
+
+-- Backfill: index all existing rows. Uses INSERT directly (the AFTER INSERT
+-- trigger below only fires for NEW inserts after migration).
+INSERT INTO human_nodes_fts(rowid, title, body_markdown, tags, frontmatter_json, author)
+SELECT id, title, body_markdown, tags, frontmatter_json, author FROM human_nodes
+WHERE id NOT IN (SELECT rowid FROM human_nodes_fts);
+
+-- Triggers keep the FTS index in sync. The 'delete' special command removes
+-- the old version; a fresh INSERT adds the new version.
+CREATE TRIGGER IF NOT EXISTS human_nodes_fts_ai AFTER INSERT ON human_nodes BEGIN
+  INSERT INTO human_nodes_fts(rowid, title, body_markdown, tags, frontmatter_json, author)
+  VALUES (new.id, new.title, new.body_markdown, new.tags, new.frontmatter_json, new.author);
+END;
+CREATE TRIGGER IF NOT EXISTS human_nodes_fts_ad AFTER DELETE ON human_nodes BEGIN
+  INSERT INTO human_nodes_fts(human_nodes_fts, rowid, title, body_markdown, tags, frontmatter_json, author)
+  VALUES ('delete', old.id, old.title, old.body_markdown, old.tags, old.frontmatter_json, old.author);
+END;
+CREATE TRIGGER IF NOT EXISTS human_nodes_fts_au AFTER UPDATE ON human_nodes BEGIN
+  INSERT INTO human_nodes_fts(human_nodes_fts, rowid, title, body_markdown, tags, frontmatter_json, author)
+  VALUES ('delete', old.id, old.title, old.body_markdown, old.tags, old.frontmatter_json, old.author);
+  INSERT INTO human_nodes_fts(rowid, title, body_markdown, tags, frontmatter_json, author)
+  VALUES (new.id, new.title, new.body_markdown, new.tags, new.frontmatter_json, new.author);
+END;
+`;
+
 interface Migration {
   version: number;
   name: string;
@@ -280,6 +332,7 @@ const MIGRATIONS: Migration[] = [
   { version: 1, name: 'initial_schema', sql: SCHEMA_V1 },
   { version: 2, name: 'optimize_indexes', sql: SCHEMA_V2 },
   { version: 3, name: 'cbm_links_junction_table', sql: SCHEMA_V3 },
+  { version: 4, name: 'human_nodes_fts', sql: SCHEMA_V4 },
 ];
 
 export function runMigrations(db: Database): void {

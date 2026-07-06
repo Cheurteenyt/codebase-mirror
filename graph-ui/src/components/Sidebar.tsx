@@ -50,9 +50,13 @@ function flattenSingleChild(dir: DirNode): DirNode {
   const children = new Map<string, DirNode>();
   for (const [key, child] of dir.children) {
     let flat = flattenSingleChild(child);
+    // R41 (UI-7): `sc` is already a child of `flat` (which we just flattened),
+    // so it's ALREADY flattened — calling flattenSingleChild(sc) again re-walks
+    // the entire sc subtree, giving O(n²) on deep single-child chains like
+    // src/a/b/c/d/e/file.ts. Use sc.children directly.
     while (flat.children.size === 1 && flat.directNodes.length === 0) {
       const [sk, sc] = [...flat.children.entries()][0];
-      flat = { ...sc, name: `${flat.name}/${sk}`, children: flattenSingleChild(sc).children };
+      flat = { ...sc, name: `${flat.name}/${sk}`, children: sc.children };
     }
     children.set(key, flat);
   }

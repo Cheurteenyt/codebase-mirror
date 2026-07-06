@@ -79,12 +79,21 @@ export function App() {
           </div>
 
           {/* Tabs */}
-          <nav className="flex items-center gap-0.5">
+          {/* R41 (UI-10): ARIA tablist — role="tablist" on the nav, role="tab" /
+              aria-selected / aria-controls / tabIndex roving on each button so
+              screen readers announce the tab structure and keyboard users can
+              arrow-navigate. */}
+          <nav className="flex items-center gap-0.5" role="tablist" aria-label="Main views">
             {tabs.map((tab) => {
               const disabled = (tab.id === "graph" || tab.id === "dashboard") && !selectedProject;
+              const active = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
+                  role="tab"
+                  aria-selected={active}
+                  aria-controls={`tabpanel-${tab.id}`}
+                  tabIndex={active ? 0 : -1}
                   onClick={() => navigate(tab.id, tab.id === "stats" ? null : selectedProject)}
                   disabled={disabled}
                   title={disabled ? "Select a project first" : undefined}
@@ -92,7 +101,7 @@ export function App() {
                     "px-3 py-1 rounded-md text-[12px] font-medium transition-all",
                     disabled
                       ? "text-muted/30 cursor-not-allowed"
-                      : activeTab === tab.id
+                      : active
                         ? "bg-primary/15 text-primary"
                         : "text-muted hover:text-foreground hover:bg-white/[0.04]",
                   )}
@@ -123,7 +132,15 @@ export function App() {
       </header>
 
       {/* Content */}
-      <main className="flex-1 min-h-0">
+      {/* R41 (UI-10): role="tabpanel" + id + aria-labelledby wiring so screen
+          readers announce the tab ↔ panel relationship. The id matches the
+          aria-controls on the corresponding tab button. */}
+      <main
+        className="flex-1 min-h-0"
+        role="tabpanel"
+        id={`tabpanel-${activeTab}`}
+        aria-labelledby={`tab-${activeTab}`}
+      >
         {activeTab === "dashboard" && selectedProject ? (
           <DashboardTab project={selectedProject} onNavigateToGraph={() => navigate("graph", selectedProject)} />
         ) : activeTab === "graph" && selectedProject ? (

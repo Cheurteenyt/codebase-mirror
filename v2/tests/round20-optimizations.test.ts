@@ -39,13 +39,16 @@ describe('R20: Migration V2 — index optimization', () => {
         .prepare('SELECT version, name FROM schema_migrations ORDER BY version')
         .all() as any[];
       // R21 added migration V3 (cbm_links_junction_table).
-      expect(migrations.length).toBe(3);
+      // R41 added migration V4 (human_nodes_fts).
+      expect(migrations.length).toBe(4);
       expect(migrations[0].version).toBe(1);
       expect(migrations[0].name).toBe('initial_schema');
       expect(migrations[1].version).toBe(2);
       expect(migrations[1].name).toBe('optimize_indexes');
       expect(migrations[2].version).toBe(3);
       expect(migrations[2].name).toBe('cbm_links_junction_table');
+      expect(migrations[3].version).toBe(4);
+      expect(migrations[3].name).toBe('human_nodes_fts');
     } finally {
       store.close();
     }
@@ -136,7 +139,7 @@ describe('R20: Migration V2 — index optimization', () => {
     const migrations = db
       .prepare('SELECT version FROM schema_migrations ORDER BY version')
       .all() as any[];
-    expect(migrations.length).toBe(3);
+    expect(migrations.length).toBe(4);
     expect(migrations[1].version).toBe(2);
     expect(migrations[2].version).toBe(3);
 

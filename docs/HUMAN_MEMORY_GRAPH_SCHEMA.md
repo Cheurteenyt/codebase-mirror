@@ -184,6 +184,40 @@ compatibility and is kept in sync by `HumanMemoryStore.syncCbmLinks` (called
 from `createNode`/`updateNode`). New code should query the junction table
 (`getBulkNotesByCbmNodeIds`, `syncCbmLinks`) — never `JSON_EACH`.
 
+### 4.7 FTS5 index `human_nodes_fts` (R41 / migration V4)
+
+Full-text search index over `human_nodes`' searchable columns. Replaces the
+5× `LIKE %q%` substring scan in `search_code_and_memory` with a single
+`MATCH` query against the inverted index.
+
+```sql
+CREATE VIRTUAL TABLE human_nodes_fts USING fts5(
+  title, body_markdown, tags, frontmatter_json, author,
+  content='human_nodes',
+  content_rowid='id',
+  tokenize='porter unicode61'
+);
+```
+
+External-content pattern: the FTS5 table stores only the inverted index, not
+the row data. Three triggers keep it in sync on INSERT/UPDATE/DELETE:
+`human_nodes_fts_ai`, `human_nodes_fts_ad`, `human_nodes_fts_au`.
+
+Tokenizer: `porter unicode61` — porter stemming for English + unicode61 for
+accented chars (French titles like "décision" work correctly).
+
+Query pattern (in `HumanMemoryStore.searchHumanNodes`):
+```sql
+SELECT n.* FROM human_nodes n
+JOIN human_nodes_fts f ON f.rowid = n.id
+WHERE n.project = ? AND n.status != 'deprecated' AND human_nodes_fts MATCH ?
+ORDER BY rank   -- BM25 scoring
+LIMIT ?
+```
+
+The method falls back to the old 5× `LIKE %q%` scan if the FTS5 table is
+missing (pre-V4 DB) or if the query syntax trips FTS5's parser.
+
 ### 4.2 Table `human_edges`
 
 ```sql

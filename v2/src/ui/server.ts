@@ -6,7 +6,13 @@
 
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { existsSync, readFileSync, statSync, readdirSync } from "node:fs";
+// R41 (L3): replaced 4 dynamic `await import('node:fs'/'node:child_process')`
+// with static imports. Dynamic imports of built-in modules hit the require
+// cache but still resolve a Promise per call (~50-100µs overhead). The line
+// `const { readdirSync } = await import('node:fs')` at line 399 was also pure
+// dead code — it shadowed the top-level static import.
+import { existsSync, readFileSync, statSync, readdirSync, unlinkSync } from "node:fs";
+import { spawn, execSync } from "node:child_process";
 import { join, extname, resolve, sep, dirname } from "node:path";
 import { homedir } from 'node:os';
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
@@ -39,6 +45,17 @@ export interface UiServerOptions {
   graphUiPath?: string; // path to graph-ui/dist
 }
 
+// R41 (L1): route-table dispatcher type. Each /api/* endpoint is a
+// RouteHandler that receives the parsed URL, the request, the response,
+// and the resolved project name. Routes that don't use `project` (e.g.
+// /api/projects lists all projects) simply ignore the parameter.
+type RouteHandler = (
+  url: URL,
+  req: IncomingMessage,
+  res: ServerResponse,
+  project: string,
+) => Promise<void>;
+
 export class UiServer {
   private server: ReturnType<typeof createServer>;
   private wss: WebSocketServer | null = null;
@@ -56,6 +73,28 @@ export class UiServer {
   private wsClients: Set<WebSocket> = new Set();
   // R25: unsubscribe function for the notification hub.
   private hubUnsubscribe: (() => void) | null = null;
+  // R41 (L1): route-table dispatcher. Replaces a 580-line chain of
+  // `if (path === '/api/...' && req.method === '...')` blocks with a
+  // Map<string, RouteHandler> lookup. Each value is an arrow function
+  // that delegates to a private async routeXxx method. Order matches
+  // source order of the original if-blocks for documentation readability.
+  private routes: Map<string, RouteHandler> = new Map([
+    ['GET /api/layout',          (u, r, s, p) => this.routeLayout(u, r, s, p)],
+    ['GET /api/projects',        (u, r, s, p) => this.routeProjects(u, r, s, p)],
+    ['GET /api/project-health',  (u, r, s, p) => this.routeProjectHealth(u, r, s, p)],
+    ['GET /api/dashboard',       (u, r, s, p) => this.routeDashboard(u, r, s, p)],
+    ['GET /api/human-notes',     (u, r, s, p) => this.routeHumanNotes(u, r, s, p)],
+    ['GET /api/graph-status',    (u, r, s, p) => this.routeGraphStatus(u, r, s, p)],
+    ['GET /api/adr',             (u, r, s, p) => this.routeAdrGet(u, r, s, p)],
+    ['POST /api/adr',            (u, r, s, p) => this.routeAdrPost(u, r, s, p)],
+    ['GET /api/browse',          (u, r, s, p) => this.routeBrowse(u, r, s, p)],
+    ['POST /api/index',          (u, r, s, p) => this.routeIndex(u, r, s, p)],
+    ['GET /api/index-status',    (u, r, s, p) => this.routeIndexStatus(u, r, s, p)],
+    ['GET /api/processes',       (u, r, s, p) => this.routeProcesses(u, r, s, p)],
+    ['POST /api/process-kill',   (u, r, s, p) => this.routeProcessKill(u, r, s, p)],
+    ['POST /api/project-delete', (u, r, s, p) => this.routeProjectDelete(u, r, s, p)],
+    ['GET /api/logs',            (u, r, s, p) => this.routeLogs(u, r, s, p)],
+  ]);
 
   constructor(opts: UiServerOptions) {
     this.port = opts.port ?? DEFAULT_PORT;
@@ -319,6 +358,14 @@ export class UiServer {
     }
   }
 
+  /**
+   * R41 (L1): route-table dispatcher. Replaces a 580-line chain of
+   * `if (path === '/api/...' && req.method === '...')` blocks with a
+   * Map<string, RouteHandler> lookup. The project query parameter is
+   * extracted once here (DRY) and passed to each route handler.
+   * Per-route exceptions propagate up to handleRequest's try/catch
+   * (lines 297-326 of the pre-R41 source) which converts them to 500s.
+   */
   private async handleApi(
     path: string,
     url: URL,
@@ -326,578 +373,596 @@ export class UiServer {
     res: ServerResponse,
   ): Promise<void> {
     const project = url.searchParams.get('project') ?? this.project;
+    const handler = this.routes.get(`${req.method ?? 'GET'} ${path}`);
+    if (!handler) {
+      this.sendJson(res, 404, { error: `Unknown API endpoint: ${path}` });
+      return;
+    }
+    await handler.call(this, url, req, res, project);
+  }
 
-    // GET /api/layout — graph layout data (2D, computed on-the-fly)
-    if (path === '/api/layout' && req.method === 'GET') {
-      if (!this.codeReader) {
-        this.sendJson(res, 404, { error: 'Code graph not available' });
-        return;
+  // ── R41 (L1): route handlers ──────────────────────────────────────────
+  // Each method below is the verbatim body of the original
+  // "if (path === '/api/...' && req.method === '...')" block from the old
+  // handleApi. No logic changes — only moved into a private async method
+  // and de-indented one level. Unused parameters are prefixed with `_`
+  // to satisfy noUnusedParameters.
+
+  // GET /api/layout — graph layout data (2D, computed on-the-fly)
+  private async routeLayout(url: URL, _req: IncomingMessage, res: ServerResponse, project: string): Promise<void> {
+    if (!this.codeReader) {
+      this.sendJson(res, 404, { error: 'Code graph not available' });
+      return;
+    }
+    // R20: clamp maxNodes to [1, 10000] to prevent DoS via negative limit
+    // (SQLite treats LIMIT -1 as "no limit", which could return millions of rows).
+    const rawMaxNodes = parseInt(url.searchParams.get('max_nodes') ?? '2000', 10);
+    const maxNodes = Math.max(1, Math.min(10000, Number.isFinite(rawMaxNodes) ? rawMaxNodes : 2000));
+    const nodes = this.codeReader.listNodes(project, { limit: maxNodes });
+    const nodeIds = nodes.map((n) => n.id);
+    const degreeMap = this.codeReader.getBulkNodeDegrees(nodeIds);
+
+    // Assign simple layout positions (ring layout, will be refined by d3-force in browser)
+    const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, nodeIds, 1);
+    const layoutNodes = nodes.map((n, i) => {
+      const angle = (i / nodes.length) * Math.PI * 2;
+      const radius = 200 + (n.id % 100);
+      const degree = degreeMap.get(n.id) ?? 0;
+      const props = safeJsonParse(n.properties_json, {} as Record<string, any>);
+      const complexity = props.complexity_avg ?? props.complexity ?? 0;
+      const notesCount = notesByNode.get(n.id)?.length ?? 0;
+      const riskScore = computeRiskScore(degree, complexity, notesCount);
+
+      return {
+        id: n.id,
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius,
+        label: n.label,
+        name: n.name,
+        file_path: n.file_path,
+        qualified_name: n.qualified_name,
+        start_line: n.start_line,
+        end_line: n.end_line,
+        size: Math.max(3, Math.min(12, Math.sqrt(degree) + 3)),
+        color: this.colorForLabel(n.label),
+        risk_score: riskScore,
+        notes_count: notesCount,
+      };
+    });
+
+    // Fetch edges in BULK (2 chunked queries) instead of N+1 getNeighbors calls.
+    // For 2000 nodes, this replaces ~2000 queries with ~4 queries (-99.8%).
+    // limitPerNode=20 matches the previous per-node cap from getNeighbors.
+    const edges = this.codeReader.getBulkEdges(nodeIds, 20);
+
+    this.sendJson(res, 200, {
+      nodes: layoutNodes,
+      edges,
+      total_nodes: this.codeReader.countNodes(project),
+    });
+    return;
+  }
+
+  // GET /api/projects — list indexed projects with health info
+  private async routeProjects(_url: URL, _req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
+    const projects: Array<{
+      name: string;
+      root_path: string;
+      indexed_at: string;
+      node_count?: number;
+      edge_count?: number;
+      size_bytes?: number;
+      status?: string;
+    }> = [];
+    const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
+    const cbmDir = join(cacheDir, 'codebase-memory-mcp');
+    if (existsSync(cbmDir)) {
+      // R41 (L3): readdirSync is now a static import — no dynamic import needed.
+      const files = readdirSync(cbmDir);
+      for (const f of files) {
+        if (f.endsWith('.db') && !f.endsWith('.human.db') && !f.startsWith('_')) {
+          const name = f.replace(/\.db$/, '');
+          const dbPath = join(cbmDir, f);
+          const stat = statSync(dbPath);
+          // R15: open each DB read-only to get node/edge counts for the
+          // ProjectCard. Previously the card always showed "Loading schema..."
+          // because no counts were provided.
+          let nodeCount: number | undefined;
+          let edgeCount: number | undefined;
+          let status = 'healthy';
+          // R41 (L2+N2): use the new countAll single-query method (2 → 1
+          // query per project) and close the reader in a finally block so
+          // the handle is released even if countAll throws (corrupt schema).
+          // The previous code skipped reader.close() on exception, leaking
+          // the better-sqlite3 handle (file lock on Windows until GC).
+          let reader: CodeGraphReader | undefined;
+          try {
+            reader = new CodeGraphReader(dbPath);
+            const counts = reader.countAll(name);
+            nodeCount = counts.nodes;
+            edgeCount = counts.edges;
+          } catch {
+            status = 'corrupt';
+          } finally {
+            reader?.close();
+          }
+          projects.push({
+            name,
+            root_path: '',
+            indexed_at: stat.mtime.toISOString(),
+            node_count: nodeCount,
+            edge_count: edgeCount,
+            size_bytes: stat.size,
+            status,
+          });
+        }
       }
-      // R20: clamp maxNodes to [1, 10000] to prevent DoS via negative limit
-      // (SQLite treats LIMIT -1 as "no limit", which could return millions of rows).
-      const rawMaxNodes = parseInt(url.searchParams.get('max_nodes') ?? '2000', 10);
-      const maxNodes = Math.max(1, Math.min(10000, Number.isFinite(rawMaxNodes) ? rawMaxNodes : 2000));
-      const nodes = this.codeReader.listNodes(project, { limit: maxNodes });
-      const nodeIds = nodes.map((n) => n.id);
-      const degreeMap = this.codeReader.getBulkNodeDegrees(nodeIds);
+    }
+    this.sendJson(res, 200, { projects });
+    return;
+  }
 
-      // Assign simple layout positions (ring layout, will be refined by d3-force in browser)
-      const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, nodeIds, 1);
-      const layoutNodes = nodes.map((n, i) => {
-        const angle = (i / nodes.length) * Math.PI * 2;
-        const radius = 200 + (n.id % 100);
-        const degree = degreeMap.get(n.id) ?? 0;
-        const props = safeJsonParse(n.properties_json, {} as Record<string, any>);
-        const complexity = props.complexity_avg ?? props.complexity ?? 0;
-        const notesCount = notesByNode.get(n.id)?.length ?? 0;
-        const riskScore = computeRiskScore(degree, complexity, notesCount);
-
-        return {
-          id: n.id,
-          x: Math.cos(angle) * radius,
-          y: Math.sin(angle) * radius,
-          label: n.label,
-          name: n.name,
-          file_path: n.file_path,
-          qualified_name: n.qualified_name,
-          start_line: n.start_line,
-          end_line: n.end_line,
-          size: Math.max(3, Math.min(12, Math.sqrt(degree) + 3)),
-          color: this.colorForLabel(n.label),
-          risk_score: riskScore,
-          notes_count: notesCount,
-        };
-      });
-
-      // Fetch edges in BULK (2 chunked queries) instead of N+1 getNeighbors calls.
-      // For 2000 nodes, this replaces ~2000 queries with ~4 queries (-99.8%).
-      // limitPerNode=20 matches the previous per-node cap from getNeighbors.
-      const edges = this.codeReader.getBulkEdges(nodeIds, 20);
-
+  // GET /api/project-health — check DB integrity
+  private async routeProjectHealth(url: URL, _req: IncomingMessage, res: ServerResponse, project: string): Promise<void> {
+    const name = url.searchParams.get('name') ?? project;
+    const dbPath = defaultCodeDbPath(name);
+    if (!existsSync(dbPath)) {
+      this.sendJson(res, 200, { name, status: 'missing', reason: 'DB file not found' });
+      return;
+    }
+    try {
+      const reader = new CodeGraphReader(dbPath);
+      const nodes = reader.countNodes(name);
+      const edges = reader.countEdges(name);
+      const stat = statSync(dbPath);
+      reader.close();
       this.sendJson(res, 200, {
-        nodes: layoutNodes,
+        name,
+        status: 'healthy',
+        nodes,
         edges,
-        total_nodes: this.codeReader.countNodes(project),
+        size_bytes: stat.size,
       });
-      return;
+    } catch (e: any) {
+      this.sendJson(res, 200, { name, status: 'corrupt', reason: e.message });
     }
+    return;
+  }
 
-    // GET /api/projects — list indexed projects with health info
-    if (path === '/api/projects' && req.method === 'GET') {
-      const projects: Array<{
-        name: string;
-        root_path: string;
-        indexed_at: string;
-        node_count?: number;
-        edge_count?: number;
-        size_bytes?: number;
-        status?: string;
-      }> = [];
-      const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
-      const cbmDir = join(cacheDir, 'codebase-memory-mcp');
-      if (existsSync(cbmDir)) {
-        const { readdirSync } = await import('node:fs');
-        const files = readdirSync(cbmDir);
-        for (const f of files) {
-          if (f.endsWith('.db') && !f.endsWith('.human.db') && !f.startsWith('_')) {
-            const name = f.replace(/\.db$/, '');
-            const dbPath = join(cbmDir, f);
-            const stat = statSync(dbPath);
-            // R15: open each DB read-only to get node/edge counts for the
-            // ProjectCard. Previously the card always showed "Loading schema..."
-            // because no counts were provided.
-            let nodeCount: number | undefined;
-            let edgeCount: number | undefined;
-            let status = 'healthy';
-            try {
-              const reader = new CodeGraphReader(dbPath);
-              nodeCount = reader.countNodes(name);
-              edgeCount = reader.countEdges(name);
-              reader.close();
-            } catch {
-              status = 'corrupt';
-            }
-            projects.push({
-              name,
-              root_path: '',
-              indexed_at: stat.mtime.toISOString(),
-              node_count: nodeCount,
-              edge_count: edgeCount,
-              size_bytes: stat.size,
-              status,
-            });
-          }
+  // GET /api/dashboard — V2 dashboard data
+  private async routeDashboard(_url: URL, _req: IncomingMessage, res: ServerResponse, project: string): Promise<void> {
+    const graphStatus = getGraphStatus(project, this.codeReader, process.cwd());
+    const freshnessScore = getFreshnessScore(graphStatus);
+
+    // R38: single GROUP BY query instead of 5 separate COUNT queries.
+    const labelCounts = this.humanStore.countNodesByLabel(project);
+    const adrs = labelCounts['ADR'] ?? 0;
+    const bugs = labelCounts['BugNote'] ?? 0;
+    const refactors = labelCounts['RefactorPlan'] ?? 0;
+    const conventions = labelCounts['Convention'] ?? 0;
+    const totalNotes = labelCounts['_total'] ?? 0;
+
+    let criticalTotal = 0;
+    let criticalDocumented = 0;
+    if (this.codeReader) {
+      const modules = this.codeReader.listModules(project, MAX_NODES_PER_LABEL);
+      const moduleIds = modules.map((m) => m.id);
+      const degreeMap = this.codeReader.getBulkNodeDegrees(moduleIds);
+      const criticalIds = modules.filter(m => (degreeMap.get(m.id) ?? 0) >= 20).map(m => m.id);
+      const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, criticalIds, 1);
+      for (const m of modules) {
+        if ((degreeMap.get(m.id) ?? 0) >= 20) {
+          criticalTotal++;
         }
       }
-      this.sendJson(res, 200, { projects });
-      return;
+      for (const id of criticalIds) {
+        if ((notesByNode.get(id)?.length ?? 0) > 0) criticalDocumented++;
+      }
     }
 
-    // GET /api/project-health — check DB integrity
-    if (path === '/api/project-health' && req.method === 'GET') {
-      const name = url.searchParams.get('name') ?? project;
-      const dbPath = defaultCodeDbPath(name);
-      if (!existsSync(dbPath)) {
-        this.sendJson(res, 200, { name, status: 'missing', reason: 'DB file not found' });
+    const recommendations: string[] = [];
+    if (graphStatus.stale) {
+      recommendations.push(`Refresh code graph: ${graphStatus.stale_reason}. Run "cbm index_repository".`);
+    }
+    if (bugs > 0) {
+      recommendations.push(`${bugs} open bug(s) — review before making changes.`);
+    }
+    if (refactors > 0) {
+      recommendations.push(`${refactors} pending refactor plan(s) — check if your work overlaps.`);
+    }
+    if (criticalTotal > 0 && criticalDocumented < criticalTotal) {
+      recommendations.push(`Documentation coverage is ${((criticalDocumented / criticalTotal) * 100).toFixed(0)}% — ${criticalTotal - criticalDocumented} critical module(s) undocumented.`);
+    }
+    if (recommendations.length === 0) {
+      recommendations.push('Project is in good shape. Use prepare_edit_context before modifying any file.');
+    }
+
+    this.sendJson(res, 200, {
+      project,
+      generated_at: new Date().toISOString(),
+      code_graph: this.codeReader
+        ? {
+            total_nodes: this.codeReader.countNodes(project),
+            total_edges: this.codeReader.countEdges(project),
+            nodes_by_label: this.codeReader.countNodesByLabel(project),
+          }
+        : { total_nodes: 0, total_edges: 0, nodes_by_label: {} },
+      human_memory: {
+        total_notes: totalNotes,
+        adrs,
+        bugs,
+        refactors,
+        conventions,
+      },
+      documentation_coverage: {
+        critical_modules_total: criticalTotal,
+        critical_modules_documented: criticalDocumented,
+        coverage_pct: criticalTotal > 0 ? (criticalDocumented / criticalTotal) * 100 : null,
+      },
+      graph_status: {
+        ...graphStatus,
+        freshness_score: freshnessScore,
+        freshness_label: freshnessLabel(freshnessScore),
+      },
+      recommendations,
+    });
+    return;
+  }
+
+  // GET /api/human-notes — V2 human notes for a code node
+  private async routeHumanNotes(url: URL, _req: IncomingMessage, res: ServerResponse, project: string): Promise<void> {
+    const cbmNodeId = url.searchParams.get('cbm_node_id');
+    let notes;
+    if (cbmNodeId) {
+      const n = parseInt(cbmNodeId, 10);
+      if (!Number.isFinite(n)) {
+        this.sendJson(res, 400, { error: "invalid cbm_node_id" });
         return;
       }
-      try {
-        const reader = new CodeGraphReader(dbPath);
-        const nodes = reader.countNodes(name);
-        const edges = reader.countEdges(name);
-        const stat = statSync(dbPath);
-        reader.close();
-        this.sendJson(res, 200, {
-          name,
-          status: 'healthy',
-          nodes,
-          edges,
-          size_bytes: stat.size,
-        });
-      } catch (e: any) {
-        this.sendJson(res, 200, { name, status: 'corrupt', reason: e.message });
-      }
+      notes = this.humanStore.listNodesByCbmNodeId(project, n);
+    } else {
+      notes = this.humanStore.listNodes(project, { limit: 100 });
+    }
+    this.sendJson(res, 200, {
+      notes: notes.map((n) => ({
+        id: n.id,
+        label: n.label,
+        title: n.title,
+        status: n.status,
+        body_excerpt: (n.body_markdown ?? "").slice(0, 200),
+        obsidian_path: n.obsidian_path,
+        updated_at: n.updated_at,
+      })),
+    });
+    return;
+  }
+
+  // GET /api/graph-status — V2 graph freshness
+  private async routeGraphStatus(_url: URL, _req: IncomingMessage, res: ServerResponse, project: string): Promise<void> {
+    const status = getGraphStatus(project, this.codeReader, process.cwd());
+    const score = getFreshnessScore(status);
+    this.sendJson(res, 200, {
+      ...status,
+      freshness_score: score,
+      freshness_label: freshnessLabel(score),
+    });
+    return;
+  }
+
+  // ── R17: 7 new endpoints ──────────────────────────────────────────
+
+  // GET /api/adr — list all ADR notes for the project
+  private async routeAdrGet(_url: URL, _req: IncomingMessage, res: ServerResponse, project: string): Promise<void> {
+    const adrs = this.humanStore.listNodes(project, { label: 'ADR', limit: 500 });
+    if (adrs.length === 0) {
+      this.sendJson(res, 200, { has_adr: false });
       return;
     }
+    // Return the most recent ADR's content + a list of all ADRs.
+    const latest = adrs[0];
+    this.sendJson(res, 200, {
+      has_adr: true,
+      content: latest.body_markdown,
+      updated_at: latest.updated_at,
+      title: latest.title,
+      slug: latest.slug,
+      obsidian_path: latest.obsidian_path,
+      all_adrs: adrs.map((a) => ({
+        id: a.id,
+        title: a.title,
+        slug: a.slug,
+        status: a.status,
+        updated_at: a.updated_at,
+        obsidian_path: a.obsidian_path,
+      })),
+    });
+    return;
+  }
 
-    // GET /api/dashboard — V2 dashboard data
-    if (path === '/api/dashboard' && req.method === 'GET') {
-      const graphStatus = getGraphStatus(project, this.codeReader, process.cwd());
-      const freshnessScore = getFreshnessScore(graphStatus);
-
-      // R38: single GROUP BY query instead of 5 separate COUNT queries.
-      const labelCounts = this.humanStore.countNodesByLabel(project);
-      const adrs = labelCounts['ADR'] ?? 0;
-      const bugs = labelCounts['BugNote'] ?? 0;
-      const refactors = labelCounts['RefactorPlan'] ?? 0;
-      const conventions = labelCounts['Convention'] ?? 0;
-      const totalNotes = labelCounts['_total'] ?? 0;
-
-      let criticalTotal = 0;
-      let criticalDocumented = 0;
-      if (this.codeReader) {
-        const modules = this.codeReader.listModules(project, MAX_NODES_PER_LABEL);
-        const moduleIds = modules.map((m) => m.id);
-        const degreeMap = this.codeReader.getBulkNodeDegrees(moduleIds);
-        const criticalIds = modules.filter(m => (degreeMap.get(m.id) ?? 0) >= 20).map(m => m.id);
-        const notesByNode = this.humanStore.getBulkNotesByCbmNodeIds(project, criticalIds, 1);
-        for (const m of modules) {
-          if ((degreeMap.get(m.id) ?? 0) >= 20) {
-            criticalTotal++;
-          }
-        }
-        for (const id of criticalIds) {
-          if ((notesByNode.get(id)?.length ?? 0) > 0) criticalDocumented++;
-        }
-      }
-
-      const recommendations: string[] = [];
-      if (graphStatus.stale) {
-        recommendations.push(`Refresh code graph: ${graphStatus.stale_reason}. Run "cbm index_repository".`);
-      }
-      if (bugs > 0) {
-        recommendations.push(`${bugs} open bug(s) — review before making changes.`);
-      }
-      if (refactors > 0) {
-        recommendations.push(`${refactors} pending refactor plan(s) — check if your work overlaps.`);
-      }
-      if (criticalTotal > 0 && criticalDocumented < criticalTotal) {
-        recommendations.push(`Documentation coverage is ${((criticalDocumented / criticalTotal) * 100).toFixed(0)}% — ${criticalTotal - criticalDocumented} critical module(s) undocumented.`);
-      }
-      if (recommendations.length === 0) {
-        recommendations.push('Project is in good shape. Use prepare_edit_context before modifying any file.');
-      }
-
-      this.sendJson(res, 200, {
-        project,
-        generated_at: new Date().toISOString(),
-        code_graph: this.codeReader
-          ? {
-              total_nodes: this.codeReader.countNodes(project),
-              total_edges: this.codeReader.countEdges(project),
-              nodes_by_label: this.codeReader.countNodesByLabel(project),
-            }
-          : { total_nodes: 0, total_edges: 0, nodes_by_label: {} },
-        human_memory: {
-          total_notes: totalNotes,
-          adrs,
-          bugs,
-          refactors,
-          conventions,
-        },
-        documentation_coverage: {
-          critical_modules_total: criticalTotal,
-          critical_modules_documented: criticalDocumented,
-          coverage_pct: criticalTotal > 0 ? (criticalDocumented / criticalTotal) * 100 : null,
-        },
-        graph_status: {
-          ...graphStatus,
-          freshness_score: freshnessScore,
-          freshness_label: freshnessLabel(freshnessScore),
-        },
-        recommendations,
-      });
+  // POST /api/adr — create or update an ADR note
+  private async routeAdrPost(_url: URL, req: IncomingMessage, res: ServerResponse, project: string): Promise<void> {
+    const body = await this.parseJsonBody(req);
+    if (!body) {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
       return;
     }
-
-    // GET /api/human-notes — V2 human notes for a code node
-    if (path === '/api/human-notes' && req.method === 'GET') {
-      const cbmNodeId = url.searchParams.get('cbm_node_id');
-      let notes;
-      if (cbmNodeId) {
-        const n = parseInt(cbmNodeId, 10);
-        if (!Number.isFinite(n)) {
-          this.sendJson(res, 400, { error: "invalid cbm_node_id" });
-          return;
-        }
-        notes = this.humanStore.listNodesByCbmNodeId(project, n);
+    const content = typeof body.content === 'string' ? body.content : '';
+    const title = typeof body.title === 'string' ? body.title : `ADR-${Date.now().toString(36)}`;
+    const adrProject = typeof body.project === 'string' ? body.project : project;
+    try {
+      // Check if an ADR with this title already exists; if so, update it.
+      const existing = this.humanStore.listNodes(adrProject, { label: 'ADR', limit: 500 })
+        .find((a) => a.title === title);
+      let node;
+      if (existing) {
+        node = this.humanStore.updateNode(existing.id, { body_markdown: content });
       } else {
-        notes = this.humanStore.listNodes(project, { limit: 100 });
-      }
-      this.sendJson(res, 200, {
-        notes: notes.map((n) => ({
-          id: n.id,
-          label: n.label,
-          title: n.title,
-          status: n.status,
-          body_excerpt: (n.body_markdown ?? "").slice(0, 200),
-          obsidian_path: n.obsidian_path,
-          updated_at: n.updated_at,
-        })),
-      });
-      return;
-    }
-
-    // GET /api/graph-status — V2 graph freshness
-    if (path === '/api/graph-status' && req.method === 'GET') {
-      const status = getGraphStatus(project, this.codeReader, process.cwd());
-      const score = getFreshnessScore(status);
-      this.sendJson(res, 200, {
-        ...status,
-        freshness_score: score,
-        freshness_label: freshnessLabel(score),
-      });
-      return;
-    }
-
-    // ── R17: 7 new endpoints ──────────────────────────────────────────
-
-    // GET /api/adr — list all ADR notes for the project
-    if (path === '/api/adr' && req.method === 'GET') {
-      const adrs = this.humanStore.listNodes(project, { label: 'ADR', limit: 500 });
-      if (adrs.length === 0) {
-        this.sendJson(res, 200, { has_adr: false });
-        return;
-      }
-      // Return the most recent ADR's content + a list of all ADRs.
-      const latest = adrs[0];
-      this.sendJson(res, 200, {
-        has_adr: true,
-        content: latest.body_markdown,
-        updated_at: latest.updated_at,
-        title: latest.title,
-        slug: latest.slug,
-        obsidian_path: latest.obsidian_path,
-        all_adrs: adrs.map((a) => ({
-          id: a.id,
-          title: a.title,
-          slug: a.slug,
-          status: a.status,
-          updated_at: a.updated_at,
-          obsidian_path: a.obsidian_path,
-        })),
-      });
-      return;
-    }
-
-    // POST /api/adr — create or update an ADR note
-    if (path === '/api/adr' && req.method === 'POST') {
-      const body = await this.parseJsonBody(req);
-      if (!body) {
-        this.sendJson(res, 400, { error: 'Invalid JSON body' });
-        return;
-      }
-      const content = typeof body.content === 'string' ? body.content : '';
-      const title = typeof body.title === 'string' ? body.title : `ADR-${Date.now().toString(36)}`;
-      const adrProject = typeof body.project === 'string' ? body.project : project;
-      try {
-        // Check if an ADR with this title already exists; if so, update it.
-        const existing = this.humanStore.listNodes(adrProject, { label: 'ADR', limit: 500 })
-          .find((a) => a.title === title);
-        let node;
-        if (existing) {
-          node = this.humanStore.updateNode(existing.id, { body_markdown: content });
-        } else {
-          node = this.humanStore.createNode({
-            project: adrProject,
-            label: 'ADR',
-            title,
-            body_markdown: content,
-            source: 'human',
-            status: 'active',
-            tags: ['adr'],
-          });
-        }
-        this.log(`ADR saved: id=${node!.id} title="${title}"`);
-        this.sendJson(res, 200, {
-          success: true,
-          id: node!.id,
-          title: node!.title,
-          slug: node!.slug,
-          obsidian_path: node!.obsidian_path,
-          updated_at: node!.updated_at,
+        node = this.humanStore.createNode({
+          project: adrProject,
+          label: 'ADR',
+          title,
+          body_markdown: content,
+          source: 'human',
+          status: 'active',
+          tags: ['adr'],
         });
-      } catch (e: any) {
-        this.sendJson(res, 500, { error: e.message });
       }
-      return;
+      this.log(`ADR saved: id=${node!.id} title="${title}"`);
+      this.sendJson(res, 200, {
+        success: true,
+        id: node!.id,
+        title: node!.title,
+        slug: node!.slug,
+        obsidian_path: node!.obsidian_path,
+        updated_at: node!.updated_at,
+      });
+    } catch (e: any) {
+      this.sendJson(res, 500, { error: e.message });
     }
+    return;
+  }
 
-    // GET /api/browse — file picker (list directories)
-    if (path === '/api/browse' && req.method === 'GET') {
-      const queryPath = url.searchParams.get('path');
-      let targetPath: string;
-      if (queryPath) {
-        targetPath = resolve(queryPath);
+  // GET /api/browse — file picker (list directories)
+  private async routeBrowse(url: URL, _req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
+    const queryPath = url.searchParams.get('path');
+    let targetPath: string;
+    if (queryPath) {
+      targetPath = resolve(queryPath);
+    } else {
+      // Default: home directory
+      targetPath = homedir();
+    }
+    try {
+      if (!existsSync(targetPath)) {
+        this.sendJson(res, 404, { error: `Path not found: ${targetPath}` });
+        return;
+      }
+      const stat = statSync(targetPath);
+      if (!stat.isDirectory()) {
+        this.sendJson(res, 400, { error: 'Path is not a directory' });
+        return;
+      }
+      const entries = readdirSync(targetPath, { withFileTypes: true });
+      const dirs = entries
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .map((e) => e.name)
+        .sort();
+      const parent = dirname(targetPath) === targetPath ? '' : dirname(targetPath);
+      // Detect filesystem roots (Unix: /, Windows: C:\, D:\, etc.)
+      const roots: string[] = [];
+      if (process.platform === 'win32') {
+        // Windows: list drive letters
+        for (let i = 65; i <= 90; i++) {
+          const drive = String.fromCharCode(i) + ':\\';
+          if (existsSync(drive)) roots.push(drive);
+        }
       } else {
-        // Default: home directory
-        targetPath = homedir();
+        roots.push('/');
       }
-      try {
-        if (!existsSync(targetPath)) {
-          this.sendJson(res, 404, { error: `Path not found: ${targetPath}` });
-          return;
-        }
-        const stat = statSync(targetPath);
-        if (!stat.isDirectory()) {
-          this.sendJson(res, 400, { error: 'Path is not a directory' });
-          return;
-        }
-        const entries = readdirSync(targetPath, { withFileTypes: true });
-        const dirs = entries
-          .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-          .map((e) => e.name)
-          .sort();
-        const parent = dirname(targetPath) === targetPath ? '' : dirname(targetPath);
-        // Detect filesystem roots (Unix: /, Windows: C:\, D:\, etc.)
-        const roots: string[] = [];
-        if (process.platform === 'win32') {
-          // Windows: list drive letters
-          for (let i = 65; i <= 90; i++) {
-            const drive = String.fromCharCode(i) + ':\\';
-            if (existsSync(drive)) roots.push(drive);
-          }
-        } else {
-          roots.push('/');
-        }
-        this.sendJson(res, 200, {
-          path: targetPath,
-          dirs,
-          roots,
-          parent,
-        });
-      } catch (e: any) {
-        this.sendJson(res, 500, { error: e.message });
-      }
+      this.sendJson(res, 200, {
+        path: targetPath,
+        dirs,
+        roots,
+        parent,
+      });
+    } catch (e: any) {
+      this.sendJson(res, 500, { error: e.message });
+    }
+    return;
+  }
+
+  // POST /api/index — trigger a V1 index job (async, returns job ID)
+  private async routeIndex(_url: URL, req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
+    const body = await this.parseJsonBody(req);
+    if (!body) {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
       return;
     }
+    const rootPath = typeof body.root_path === 'string' ? body.root_path : '';
+    const projectName = typeof body.project_name === 'string' ? body.project_name : '';
+    if (!rootPath || !projectName) {
+      this.sendJson(res, 400, { error: 'root_path and project_name are required' });
+      return;
+    }
+    if (!existsSync(rootPath)) {
+      this.sendJson(res, 404, { error: `root_path not found: ${rootPath}` });
+      return;
+    }
+    // Generate a job ID and track it. The actual indexing is done by V1's
+    // `cbm index_repository` command — we spawn it as a subprocess.
+    const jobId = `idx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const job: { id: string; status: string; error?: string; started_at: string; project: string } = { id: jobId, status: 'pending', started_at: new Date().toISOString(), project: projectName };
+    this.indexJobs.set(jobId, job);
+    this.log(`Index job started: id=${jobId} project="${projectName}" root="${rootPath}"`);
 
-    // POST /api/index — trigger a V1 index job (async, returns job ID)
-    if (path === '/api/index' && req.method === 'POST') {
-      const body = await this.parseJsonBody(req);
-      if (!body) {
-        this.sendJson(res, 400, { error: 'Invalid JSON body' });
-        return;
-      }
-      const rootPath = typeof body.root_path === 'string' ? body.root_path : '';
-      const projectName = typeof body.project_name === 'string' ? body.project_name : '';
-      if (!rootPath || !projectName) {
-        this.sendJson(res, 400, { error: 'root_path and project_name are required' });
-        return;
-      }
-      if (!existsSync(rootPath)) {
-        this.sendJson(res, 404, { error: `root_path not found: ${rootPath}` });
-        return;
-      }
-      // Generate a job ID and track it. The actual indexing is done by V1's
-      // `cbm index_repository` command — we spawn it as a subprocess.
-      const jobId = `idx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      const job: { id: string; status: string; error?: string; started_at: string; project: string } = { id: jobId, status: 'pending', started_at: new Date().toISOString(), project: projectName };
-      this.indexJobs.set(jobId, job);
-      this.log(`Index job started: id=${jobId} project="${projectName}" root="${rootPath}"`);
-
-      // Spawn the V1 indexer. We use `cbm` if available, otherwise `npx cbm`.
-      // The job status is updated in-memory when the process exits.
-      const { spawn } = await import('node:child_process');
-      try {
-        const child = spawn('cbm', ['index_repository', '--project', projectName, rootPath], {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          detached: false,
-        });
-        job.status = 'running';
-        let stderr = '';
-        child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-        child.on('error', (err) => {
-          job.status = 'failed';
-          job.error = `spawn error: ${err.message}`;
-          this.log(`Index job ${jobId} failed: ${err.message}`);
-        });
-        child.on('exit', (code) => {
-          if (code === 0) {
-            job.status = 'completed';
-            this.log(`Index job ${jobId} completed`);
-          } else {
-            job.status = 'failed';
-            job.error = `exit code ${code}: ${stderr.slice(0, 500)}`;
-            this.log(`Index job ${jobId} failed (exit ${code})`);
-          }
-        });
-      } catch (e: any) {
+    // Spawn the V1 indexer. We use `cbm` if available, otherwise `npx cbm`.
+    // The job status is updated in-memory when the process exits.
+    // R41 (L3): spawn is now a static import.
+    try {
+      const child = spawn('cbm', ['index_repository', '--project', projectName, rootPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+      });
+      job.status = 'running';
+      let stderr = '';
+      child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('error', (err) => {
         job.status = 'failed';
-        job.error = e.message;
-        this.log(`Index job ${jobId} failed to start: ${e.message}`);
-      }
-
-      this.sendJson(res, 202, { job_id: jobId, status: job.status });
-      return;
-    }
-
-    // GET /api/index-status — list all index jobs
-    if (path === '/api/index-status' && req.method === 'GET') {
-      const jobs = [...this.indexJobs.values()].sort((a, b) => b.started_at.localeCompare(a.started_at));
-      // Clean up old completed/failed jobs (keep last 50)
-      if (this.indexJobs.size > 50) {
-        const toKeep = new Set(jobs.slice(0, 50).map((j) => j.id));
-        for (const id of this.indexJobs.keys()) {
-          if (!toKeep.has(id)) this.indexJobs.delete(id);
+        job.error = `spawn error: ${err.message}`;
+        this.log(`Index job ${jobId} failed: ${err.message}`);
+      });
+      child.on('exit', (code) => {
+        if (code === 0) {
+          job.status = 'completed';
+          this.log(`Index job ${jobId} completed`);
+        } else {
+          job.status = 'failed';
+          job.error = `exit code ${code}: ${stderr.slice(0, 500)}`;
+          this.log(`Index job ${jobId} failed (exit ${code})`);
         }
-      }
-      this.sendJson(res, 200, { jobs });
-      return;
+      });
+    } catch (e: any) {
+      job.status = 'failed';
+      job.error = e.message;
+      this.log(`Index job ${jobId} failed to start: ${e.message}`);
     }
 
-    // GET /api/processes — list running cbm/cbm-v2 processes
-    if (path === '/api/processes' && req.method === 'GET') {
-      const currentPid = process.pid;
-      const processes: Array<{ pid: number; cpu: number; rss_mb: number; elapsed: string; command: string; is_self: boolean }> = [];
-      try {
-        // Use `ps` to list processes (Unix only). On Windows, return empty.
-        if (process.platform !== 'win32') {
-          const { execSync } = await import('node:child_process');
-          // ps aux — filter for cbm/cbm-v2/node processes
-          const output = execSync('ps aux 2>/dev/null | grep -E "cbm|node" | grep -v grep', {
-            encoding: 'utf-8',
-            timeout: 5000,
+    this.sendJson(res, 202, { job_id: jobId, status: job.status });
+    return;
+  }
+
+  // GET /api/index-status — list all index jobs
+  private async routeIndexStatus(_url: URL, _req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
+    const jobs = [...this.indexJobs.values()].sort((a, b) => b.started_at.localeCompare(a.started_at));
+    // Clean up old completed/failed jobs (keep last 50)
+    if (this.indexJobs.size > 50) {
+      const toKeep = new Set(jobs.slice(0, 50).map((j) => j.id));
+      for (const id of this.indexJobs.keys()) {
+        if (!toKeep.has(id)) this.indexJobs.delete(id);
+      }
+    }
+    this.sendJson(res, 200, { jobs });
+    return;
+  }
+
+  // GET /api/processes — list running cbm/cbm-v2 processes
+  private async routeProcesses(_url: URL, _req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
+    const currentPid = process.pid;
+    const processes: Array<{ pid: number; cpu: number; rss_mb: number; elapsed: string; command: string; is_self: boolean }> = [];
+    try {
+      // Use `ps` to list processes (Unix only). On Windows, return empty.
+      if (process.platform !== 'win32') {
+        // R41 (L3): execSync is now a static import.
+        // ps aux — filter for cbm/cbm-v2/node processes
+        const output = execSync('ps aux 2>/dev/null | grep -E "cbm|node" | grep -v grep', {
+          encoding: 'utf-8',
+          timeout: 5000,
+        });
+        const lines = output.split('\n').filter((l) => l.trim().length > 0);
+        for (const line of lines.slice(0, 50)) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length < 11) continue;
+          const pid = parseInt(parts[1], 10);
+          if (!Number.isFinite(pid)) continue;
+          const cpu = parseFloat(parts[2]) || 0;
+          const rssKb = parseFloat(parts[5]) || 0;
+          const command = parts.slice(10).join(' ').slice(0, 200);
+          // Skip the grep process itself and the current ps command
+          if (command.includes('grep ')) continue;
+          processes.push({
+            pid,
+            cpu,
+            rss_mb: Math.round(rssKb / 1024),
+            elapsed: parts[9] || 'unknown',
+            command,
+            is_self: pid === currentPid,
           });
-          const lines = output.split('\n').filter((l) => l.trim().length > 0);
-          for (const line of lines.slice(0, 50)) {
-            const parts = line.trim().split(/\s+/);
-            if (parts.length < 11) continue;
-            const pid = parseInt(parts[1], 10);
-            if (!Number.isFinite(pid)) continue;
-            const cpu = parseFloat(parts[2]) || 0;
-            const rssKb = parseFloat(parts[5]) || 0;
-            const command = parts.slice(10).join(' ').slice(0, 200);
-            // Skip the grep process itself and the current ps command
-            if (command.includes('grep ')) continue;
-            processes.push({
-              pid,
-              cpu,
-              rss_mb: Math.round(rssKb / 1024),
-              elapsed: parts[9] || 'unknown',
-              command,
-              is_self: pid === currentPid,
-            });
-          }
         }
-      } catch {
-        // ps not available or failed — return empty list
       }
-      this.sendJson(res, 200, { processes });
+    } catch {
+      // ps not available or failed — return empty list
+    }
+    this.sendJson(res, 200, { processes });
+    return;
+  }
+
+  // POST /api/process-kill — kill a process by PID
+  private async routeProcessKill(_url: URL, req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
+    const body = await this.parseJsonBody(req);
+    if (!body) {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
       return;
     }
-
-    // POST /api/process-kill — kill a process by PID
-    if (path === '/api/process-kill' && req.method === 'POST') {
-      const body = await this.parseJsonBody(req);
-      if (!body) {
-        this.sendJson(res, 400, { error: 'Invalid JSON body' });
-        return;
-      }
-      const pid = typeof body.pid === 'number' ? body.pid : parseInt(String(body.pid), 10);
-      if (!Number.isFinite(pid) || pid <= 0) {
-        this.sendJson(res, 400, { error: 'pid must be a positive number' });
-        return;
-      }
-      // Defense: refuse to kill ourselves
-      if (pid === process.pid) {
-        this.sendJson(res, 400, { error: 'Cannot kill the UI server itself' });
-        return;
-      }
-      try {
-        process.kill(pid, 'SIGTERM');
-        this.log(`Process killed: pid=${pid}`);
-        this.sendJson(res, 200, { success: true, pid, signal: 'SIGTERM' });
-      } catch (e: any) {
-        this.sendJson(res, 500, { error: `Failed to kill pid ${pid}: ${e.message}` });
-      }
+    const pid = typeof body.pid === 'number' ? body.pid : parseInt(String(body.pid), 10);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      this.sendJson(res, 400, { error: 'pid must be a positive number' });
       return;
     }
-
-    // POST /api/project-delete — delete a project's code graph DB
-    if (path === '/api/project-delete' && req.method === 'POST') {
-      const body = await this.parseJsonBody(req);
-      if (!body) {
-        this.sendJson(res, 400, { error: 'Invalid JSON body' });
-        return;
-      }
-      const name = typeof body.name === 'string' ? body.name : '';
-      if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
-        this.sendJson(res, 400, { error: 'Invalid project name (alphanumeric, dash, underscore only)' });
-        return;
-      }
-      // Defense: refuse to delete the currently active project
-      if (name === this.project) {
-        this.sendJson(res, 400, { error: 'Cannot delete the currently active project. Stop the UI server first.' });
-        return;
-      }
-      const dbPath = defaultCodeDbPath(name);
-      const humanDbPath = defaultHumanDbPath(name);
-      try {
-        const { unlinkSync } = await import('node:fs');
-        let deleted = false;
-        if (existsSync(dbPath)) {
-          unlinkSync(dbPath);
-          deleted = true;
-        }
-        if (existsSync(humanDbPath)) {
-          unlinkSync(humanDbPath);
-          deleted = true;
-        }
-        // Also clean up WAL/SHM files
-        for (const suffix of ['-wal', '-shm']) {
-          if (existsSync(dbPath + suffix)) unlinkSync(dbPath + suffix);
-          if (existsSync(humanDbPath + suffix)) unlinkSync(humanDbPath + suffix);
-        }
-        this.log(`Project deleted: name="${name}" db=${dbPath}`);
-        this.sendJson(res, 200, { success: true, name, deleted, db_path: dbPath });
-      } catch (e: any) {
-        this.sendJson(res, 500, { error: `Failed to delete project: ${e.message}` });
-      }
+    // Defense: refuse to kill ourselves
+    if (pid === process.pid) {
+      this.sendJson(res, 400, { error: 'Cannot kill the UI server itself' });
       return;
     }
+    try {
+      process.kill(pid, 'SIGTERM');
+      this.log(`Process killed: pid=${pid}`);
+      this.sendJson(res, 200, { success: true, pid, signal: 'SIGTERM' });
+    } catch (e: any) {
+      this.sendJson(res, 500, { error: `Failed to kill pid ${pid}: ${e.message}` });
+    }
+    return;
+  }
 
-    // GET /api/logs — return recent log lines
-    if (path === '/api/logs' && req.method === 'GET') {
-      const linesParam = url.searchParams.get('lines');
-      const lines = linesParam ? Math.min(Math.max(parseInt(linesParam, 10) || 100, 1), 500) : 100;
-      const recent = this.logBuffer.slice(-lines);
-      this.sendJson(res, 200, { lines: recent });
+  // POST /api/project-delete — delete a project's code graph DB
+  private async routeProjectDelete(_url: URL, req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
+    const body = await this.parseJsonBody(req);
+    if (!body) {
+      this.sendJson(res, 400, { error: 'Invalid JSON body' });
       return;
     }
+    const name = typeof body.name === 'string' ? body.name : '';
+    if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+      this.sendJson(res, 400, { error: 'Invalid project name (alphanumeric, dash, underscore only)' });
+      return;
+    }
+    // Defense: refuse to delete the currently active project
+    if (name === this.project) {
+      this.sendJson(res, 400, { error: 'Cannot delete the currently active project. Stop the UI server first.' });
+      return;
+    }
+    const dbPath = defaultCodeDbPath(name);
+    const humanDbPath = defaultHumanDbPath(name);
+    try {
+      // R41 (L3): unlinkSync is now a static import.
+      let deleted = false;
+      if (existsSync(dbPath)) {
+        unlinkSync(dbPath);
+        deleted = true;
+      }
+      if (existsSync(humanDbPath)) {
+        unlinkSync(humanDbPath);
+        deleted = true;
+      }
+      // Also clean up WAL/SHM files
+      for (const suffix of ['-wal', '-shm']) {
+        if (existsSync(dbPath + suffix)) unlinkSync(dbPath + suffix);
+        if (existsSync(humanDbPath + suffix)) unlinkSync(humanDbPath + suffix);
+      }
+      this.log(`Project deleted: name="${name}" db=${dbPath}`);
+      this.sendJson(res, 200, { success: true, name, deleted, db_path: dbPath });
+    } catch (e: any) {
+      this.sendJson(res, 500, { error: `Failed to delete project: ${e.message}` });
+    }
+    return;
+  }
 
-    // 404
-    this.sendJson(res, 404, { error: `Unknown API endpoint: ${path}` });
+  // GET /api/logs — return recent log lines
+  private async routeLogs(url: URL, _req: IncomingMessage, res: ServerResponse, _project: string): Promise<void> {
+    const linesParam = url.searchParams.get('lines');
+    const lines = linesParam ? Math.min(Math.max(parseInt(linesParam, 10) || 100, 1), 500) : 100;
+    const recent = this.logBuffer.slice(-lines);
+    this.sendJson(res, 200, { lines: recent });
+    return;
   }
 
   private serveStatic(path: string, res: ServerResponse): void {

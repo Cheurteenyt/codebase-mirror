@@ -67,41 +67,39 @@ export function registerHumanCommand(program: Command): void {
       const project = deriveProject(opts);
       const humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
 
+      // R41 (N3): removed the redundant outer try/catch — its body was only
+      // two Array.isArray ternaries that cannot throw, so the outer catch
+      // was unreachable (the inner catch's `return` always fired first).
+      // The `finally` block is preserved by collapsing into a single try.
+      const tags: string[] = Array.isArray(opts.tag) ? opts.tag : (opts.tag ? [opts.tag] : []);
+      const linkCbmStrs: string[] = Array.isArray(opts.linkCbm) ? opts.linkCbm : (opts.linkCbm ? [opts.linkCbm] : []);
+
       try {
-        const tags: string[] = Array.isArray(opts.tag) ? opts.tag : (opts.tag ? [opts.tag] : []);
-        const linkCbmStrs: string[] = Array.isArray(opts.linkCbm) ? opts.linkCbm : (opts.linkCbm ? [opts.linkCbm] : []);
+        const linkCbm = linkCbmStrs.map((s) => parseIntStrict(s, '--link-cbm'));
+        const node = humanStore.createNode({
+          project,
+          label: opts.type as HumanNodeLabel,
+          title: opts.title,
+          body_markdown: opts.body,
+          status: opts.status,
+          source: 'human',
+          cbm_node_ids: linkCbm,
+          tags,
+        });
 
-        try {
-          const linkCbm = linkCbmStrs.map((s) => parseIntStrict(s, '--link-cbm'));
-          const node = humanStore.createNode({
+        const edgeType = (opts.linkEdge as HumanEdgeType) || 'MENTIONS';
+        for (const cbmId of linkCbm) {
+          humanStore.createEdge({
             project,
-            label: opts.type as HumanNodeLabel,
-            title: opts.title,
-            body_markdown: opts.body,
-            status: opts.status,
-            source: 'human',
-            cbm_node_ids: linkCbm,
-            tags,
+            source_human_node_id: node.id,
+            target_kind: 'code',
+            target_cbm_node_id: cbmId,
+            type: edgeType,
           });
-
-          const edgeType = (opts.linkEdge as HumanEdgeType) || 'MENTIONS';
-          for (const cbmId of linkCbm) {
-            humanStore.createEdge({
-              project,
-              source_human_node_id: node.id,
-              target_kind: 'code',
-              target_cbm_node_id: cbmId,
-              type: edgeType,
-            });
-          }
-          console.log(`✅ Created: id=${node.id}, slug=${node.slug}, path=${node.obsidian_path}`);
-          if (linkCbm.length > 0) {
-            console.log(`   Linked to ${linkCbm.length} code node(s) via ${edgeType} edges.`);
-          }
-        } catch (e: any) {
-          console.error(`Error: ${e.message}`);
-          process.exitCode = 1;
-          return;
+        }
+        console.log(`✅ Created: id=${node.id}, slug=${node.slug}, path=${node.obsidian_path}`);
+        if (linkCbm.length > 0) {
+          console.log(`   Linked to ${linkCbm.length} code node(s) via ${edgeType} edges.`);
         }
       } catch (e: any) {
         console.error(`Error: ${e.message}`);

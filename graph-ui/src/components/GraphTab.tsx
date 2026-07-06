@@ -5,7 +5,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useGraphData } from "../hooks/useGraphData";
 import { useWebSocket } from "../hooks/useWebSocket";
-import { GraphCanvas } from "./GraphCanvas";
+import { GraphCanvas, type GraphCanvasHandle } from "./GraphCanvas";
 import { FilterPanel } from "./FilterPanel";
 import { Sidebar } from "./Sidebar";
 import { NodeDetailPanel } from "./NodeDetailPanel";
@@ -38,7 +38,13 @@ export function GraphTab({ project }: GraphTabProps) {
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const firstLoad = useRef(true);
-  const [showLabels, setShowLabels] = useState(true);
+  // R41 (UI-9): imperative handle to the canvas — used by the "Reset view"
+  // button to call canvasRef.current?.resetView() without lifting transformRef.
+  const canvasRef = useRef<GraphCanvasHandle>(null);
+  // R41 (UI-8): removed `showLabels` state — the toggle was dead code
+  // (FilterPanel rendered the checkbox but GraphCanvas.draw never rendered
+  // any text). Implementing real labels needs collision avoidance on a
+  // 2000-node graph, out of scope for a single-round fix.
   const [leftWidth, setLeftWidth] = useState(() => loadWidth("cbm-left-w", 260));
   const [rightWidth, setRightWidth] = useState(() => loadWidth("cbm-right-w", 280));
 
@@ -249,8 +255,6 @@ export function GraphTab({ project }: GraphTabProps) {
           onToggleEdgeType={toggleEdgeType}
           onEnableAll={enableAll}
           onDisableAll={() => { setEnabledLabels(new Set()); setEnabledEdgeTypes(new Set()); }}
-          showLabels={showLabels}
-          onToggleShowLabels={() => setShowLabels((v) => !v)}
           deadCodeView={deadCodeView}
           showOnlyDead={showOnlyDead}
           hideEntryPoints={hideEntryPoints}
@@ -295,6 +299,7 @@ export function GraphTab({ project }: GraphTabProps) {
           <>
             <ErrorBoundary>
               <GraphCanvas
+                ref={canvasRef}
                 data={filteredData}
                 highlightedIds={highlightedIds}
                 deadCodeView={deadCodeView}
@@ -336,6 +341,15 @@ export function GraphTab({ project }: GraphTabProps) {
                 className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]"
               >
                 Refresh
+              </button>
+              {/* R41 (UI-9): reset pan/zoom to origin. Recovers from
+                  off-screen pans without a page refresh. */}
+              <button
+                onClick={() => canvasRef.current?.resetView()}
+                className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]"
+                title="Reset pan and zoom to default"
+              >
+                Reset view
               </button>
             </div>
 
