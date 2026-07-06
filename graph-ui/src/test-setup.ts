@@ -56,8 +56,22 @@ if (typeof HTMLCanvasElement !== "undefined") {
       stroke: () => {},
       moveTo: () => {},
       lineTo: () => {},
-      // Allow tests that read width/height to get sane defaults.
       canvas: { width: 800, height: 600 },
     } as any;
   } as any;
+}
+
+// Mock pointer capture methods — jsdom doesn't implement them.
+// R48: ResizeHandle calls setPointerCapture in onPointerDown; without this
+// mock, the R46 test throws "setPointerCapture is not a function" in CI.
+if (typeof HTMLElement !== "undefined") {
+  if (!HTMLElement.prototype.setPointerCapture) {
+    HTMLElement.prototype.setPointerCapture = function () {} as any;
+  }
+  if (!HTMLElement.prototype.releasePointerCapture) {
+    HTMLElement.prototype.releasePointerCapture = function () {} as any;
+  }
+  if (!HTMLElement.prototype.hasPointerCapture) {
+    HTMLElement.prototype.hasPointerCapture = function () { return false; } as any;
+  }
 }
