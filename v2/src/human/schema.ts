@@ -337,8 +337,9 @@ const MIGRATIONS: Migration[] = [
 
 export function runMigrations(db: Database): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  // R64: typed row instead of `r: any` — compiler catches column-name typos.
   const applied = new Set(
-    db.prepare('SELECT version FROM schema_migrations').all().map((r: any) => r.version as number)
+    db.prepare('SELECT version FROM schema_migrations').all().map((r: unknown) => (r as { version: number }).version)
   );
 
   for (const m of MIGRATIONS) {

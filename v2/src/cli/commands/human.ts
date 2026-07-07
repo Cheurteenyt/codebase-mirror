@@ -101,8 +101,8 @@ export function registerHumanCommand(program: Command): void {
         if (linkCbm.length > 0) {
           console.log(`   Linked to ${linkCbm.length} code node(s) via ${edgeType} edges.`);
         }
-      } catch (e: any) {
-        console.error(`Error: ${e.message}`);
+      } catch (e: unknown) {
+        console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
         process.exitCode = 1;
       } finally {
         humanStore.close();
@@ -180,8 +180,8 @@ export function registerHumanCommand(program: Command): void {
           })),
         };
         console.log(JSON.stringify(output, null, 2));
-      } catch (e: any) {
-        console.error(`Error: ${e.message}`);
+      } catch (e: unknown) {
+        console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
         process.exitCode = 1;
       } finally {
         humanStore.close();
@@ -245,13 +245,13 @@ export function registerHumanCommand(program: Command): void {
             type: opts.edge as HumanEdgeType,
           });
           console.log(`✅ Edge created: id=${edge.id}, type=${edge.type}, target=${cbmId}`);
-        } catch (e: any) {
-          console.error(`Error: ${e.message}`);
+        } catch (e: unknown) {
+          console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
           process.exitCode = 1;
           return;
         }
-      } catch (e: any) {
-        console.error(`Error: ${e.message}`);
+      } catch (e: unknown) {
+        console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
         process.exitCode = 1;
       } finally {
         humanStore.close();

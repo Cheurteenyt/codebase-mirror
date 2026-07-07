@@ -95,8 +95,8 @@ export class LinkNoteToCodeNodeTool extends BaseTool {
           created_at: edge.created_at,
         },
       });
-    } catch (e: any) {
-      return this.error(e.message);
+    } catch (e: unknown) {
+      return this.error((e instanceof Error ? e.message : String(e)));
     }
   }
 }

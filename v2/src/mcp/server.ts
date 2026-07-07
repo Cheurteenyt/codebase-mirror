@@ -92,7 +92,7 @@ export class McpServer {
         }
         const p = this.handleLine(line)
           .catch((e) => {
-            process.stderr.write(`[cbm-v2 mcp] internal error: ${e.message}\n`);
+            process.stderr.write(`[cbm-v2 mcp] internal error: ${(e instanceof Error ? e.message : String(e))}\n`);
           })
           .finally(() => {
             this.pending.delete(p);
@@ -112,11 +112,11 @@ export class McpServer {
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Per spec, parse errors should still get a response with id: null.
       this.sendResponse(null, {
         code: JSONRPC_ERROR_CODES.PARSE_ERROR,
-        message: `Parse error: ${e.message}`,
+        message: `Parse error: ${(e instanceof Error ? e.message : String(e))}`,
       });
       return;
     }
@@ -225,8 +225,8 @@ export class McpServer {
       try {
         const result = await handler.handle(args || {});
         this.sendResult(req.id, result);
-      } catch (e: any) {
-        this.sendError(req.id, JSONRPC_ERROR_CODES.INTERNAL_ERROR, `Tool "${name}" error: ${e.message}`);
+      } catch (e: unknown) {
+        this.sendError(req.id, JSONRPC_ERROR_CODES.INTERNAL_ERROR, `Tool "${name}" error: ${(e instanceof Error ? e.message : String(e))}`);
       }
       return;
     }

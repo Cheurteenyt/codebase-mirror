@@ -144,8 +144,8 @@ export class CreateHumanNoteTool extends BaseTool {
         edges: createdEdges,
         next_step: 'Run `cbm-v2 obsidian sync --direction export` to generate the note in the Obsidian vault.',
       });
-    } catch (e: any) {
-      return this.error(e.message);
+    } catch (e: unknown) {
+      return this.error((e instanceof Error ? e.message : String(e)));
     }
   }
 }

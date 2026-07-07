@@ -105,6 +105,13 @@ export async function routeIndex(
     job.status = 'failed';
     job.error = errorMessage(e);
     ctx.log(`Index job ${jobId} failed to start: ${errorMessage(e)}`);
+    // R64: if spawn() threw synchronously (e.g. ENOENT when cbm binary is
+    // missing), the job never started — return 500 instead of 202. The
+    // previous code always sent 202 (Accepted) even for failed-to-start
+    // jobs, which was semantically misleading: the client received
+    // "accepted, processing" for a job that already failed.
+    sendJson(res, 500, { job_id: jobId, status: 'failed', error: job.error });
+    return;
   }
 
   sendJson(res, 202, { job_id: jobId, status: job.status });

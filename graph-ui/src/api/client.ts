@@ -62,17 +62,17 @@ async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
       throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
     }
     return res.json() as Promise<T>;
-  } catch (e: any) {
+  } catch (e: unknown) {
     // Distinguish abort (timeout or external) from real network errors.
     if (e instanceof ApiError) throw e;
-    if (e?.name === "AbortError" || controller.signal.aborted) {
+    if ((e instanceof Error && e.name === "AbortError") || controller.signal.aborted) {
       // R49 (#6): distinguish timeout (our timer) from external abort (caller's signal).
       // The old code always said "timed out" even when the caller cancelled at 50ms.
       const reason = signal?.aborted ? "Request aborted by caller" : `Request timed out after ${timeoutMs}ms`;
       throw new ApiError(0, reason);
     }
     // Network error (DNS, connection refused, CORS) — wrap for consistent shape.
-    throw new ApiError(0, e?.message ?? "Network error");
+    throw new ApiError(0, (e instanceof Error ? e.message : "Network error"));
   } finally {
     clearTimeout(timer);
     // R49 (#7): remove the external-signal listener to prevent leaks.
@@ -105,14 +105,14 @@ async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}):
       throw new ApiError(res.status, errBody.error ?? `HTTP ${res.status}`);
     }
     return res.json() as Promise<T>;
-  } catch (e: any) {
+  } catch (e: unknown) {
     if (e instanceof ApiError) throw e;
-    if (e?.name === "AbortError" || controller.signal.aborted) {
+    if ((e instanceof Error && e.name === "AbortError") || controller.signal.aborted) {
       // R49 (#6): distinguish timeout from external abort.
       const reason = signal?.aborted ? "Request aborted by caller" : `Request timed out after ${timeoutMs}ms`;
       throw new ApiError(0, reason);
     }
-    throw new ApiError(0, e?.message ?? "Network error");
+    throw new ApiError(0, (e instanceof Error ? e.message : "Network error"));
   } finally {
     clearTimeout(timer);
     if (signal && !signal.aborted) signal.removeEventListener("abort", onExternalAbort);
