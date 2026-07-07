@@ -7,44 +7,50 @@
 //   cbm-v2 index --project my-app --root ./src --dry-run
 
 import { Command } from 'commander';
-import { indexProject } from '../../indexer/indexer.js';
+import { indexProjectWasm } from '../../indexer/indexer.js';
 import { resolve } from 'node:path';
 
 export function registerIndexCommand(program: Command): void {
   program
     .command('index')
-    .description('Index a TypeScript/JavaScript project natively (no V1 cbm binary needed)')
+    .description('Index a project using web-tree-sitter (WASM, 112 languages, no V1 cbm binary needed)')
     .option('--project <name>', 'Project name')
     .option('--root <path>', 'Root directory to index (default: current directory)')
     .option('--incremental', 'Skip files whose content hash has not changed')
     .option('--dry-run', 'Report what would be indexed without writing to DB')
-    .action((opts) => {
+    .action(async (opts) => {
       const project = opts.project || deriveProjectName();
       const rootPath = resolve(opts.root || '.');
 
-      console.log(`Codebase Memory V2 — Native Indexer (R68)`);
+      console.log(`Codebase Memory V2 — WASM Indexer (R69)`);
       console.log(`==========================================`);
       console.log(`Project: ${project}`);
       console.log(`Root:    ${rootPath}`);
       console.log(`Mode:    ${opts.dryRun ? 'dry-run' : opts.incremental ? 'incremental' : 'full'}`);
+      console.log(`Engine:  web-tree-sitter (WASM, 112 languages)`);
       console.log();
 
       try {
-        const result = indexProject({
+        const result = await indexProjectWasm({
           project,
           rootPath,
           incremental: opts.incremental ?? false,
           dryRun: opts.dryRun ?? false,
+          useWasm: true,
         });
 
         console.log(`Result:`);
-        console.log(`  Files indexed:  ${result.files}`);
+        console.log(`  Files indexed:   ${result.files}`);
         console.log(`  Nodes extracted: ${result.nodes}`);
         console.log(`  Edges extracted: ${result.edges}`);
         console.log(`  Files skipped:   ${result.skipped} ${opts.incremental ? '(incremental)' : ''}`);
         console.log(`  Errors:          ${result.errors.length}`);
         console.log(`  Duration:        ${result.durationMs}ms`);
         console.log(`  DB:              ${result.dbPath}`);
+
+        if (result.languages && result.languages.size > 0) {
+          console.log(`  Languages:       ${[...result.languages].join(', ')}`);
+        }
 
         if (result.errors.length > 0) {
           console.log();
