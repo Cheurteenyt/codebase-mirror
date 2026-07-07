@@ -120,8 +120,8 @@ function syncHumanNodesToVault(opts: GenerateOptions, result: GenerateResult): v
     for (const node of page) {
       try {
         syncSingleNode(node, opts, result, preloadedCodeNodes);
-      } catch (e: any) {
-        result.errors.push({ path: node.obsidian_path ?? `<node ${node.id}>`, error: e.message });
+      } catch (e: unknown) {
+        result.errors.push({ path: node.obsidian_path ?? `<node ${node.id}>`, error: e instanceof Error ? e.message : String(e) });
       }
     }
     if (page.length < SYNC_PAGE_SIZE) break;
@@ -327,8 +327,9 @@ function createAutoNote(opts: GenerateOptions, result: GenerateResult, spec: Aut
       });
       if (writeResult.backupPath) result.backups.push(writeResult.backupPath);
       opts.humanStore.markSynced(node.id, 'export');
-    } catch (e: any) {
-      result.errors.push({ path: spec.relPath, error: `auto-${spec.label.toLowerCase()}-note failed: ${e.message}` });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result.errors.push({ path: spec.relPath, error: `auto-${spec.label.toLowerCase()}-note failed: ${msg}` });
       return; // Don't add to created if it failed
     }
   }
