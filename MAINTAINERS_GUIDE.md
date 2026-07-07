@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 72 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across 73 audit rounds. Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R72). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R73). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -189,7 +189,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.15.4 (R72).
+  - Currently 0.15.5 (R73).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes. Currently `0.10.3` (frozen
   since R36 — the schema hasn't changed).
@@ -228,8 +228,9 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R70 | 0.15.2 | Claude Sonnet R10 audit — vault.ts path safety, WASM anonymous@line, benchmark caveat. |
 | R71 | 0.15.3 | **worker_threads parallel indexing** — worker.ts, 2+ workers, 100+ file threshold, two-pass edge resolution. |
 | R72 | 0.15.4 | **fast-walker** — descendantsOfType() WASM traversal, 1.3x speedup. New fast-walker.ts. Dead code removed. |
+| R73 | 0.15.5 | micro-optimizations — no descendantCount/text.length, pre-built JSON, Map O(1) parent. V2 9% faster than V1 C (277ms vs 305ms). |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R72).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R73).
 
 ---
 

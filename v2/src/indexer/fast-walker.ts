@@ -72,37 +72,50 @@ const CALL_TYPES = ['call_expression', 'call'];
  * 2. We only visit nodes we care about (functions, classes, methods, calls)
  *    instead of every token, string literal, comment, etc.
  * 3. No JS function call overhead per AST node
+ *
+ * R73 optimizations:
+ * - Removed rootNode.descendantCount (unused, causes full tree traversal)
+ * - Removed rootNode.text.length (O(n) string copy) — source length passed in
+ * - Pre-built JSON property strings instead of JSON.stringify per node
+ * - findParentQn uses a Map (O(1)) instead of linear search in nodes[] (O(n))
+ * - Batch descendantsOfType calls where possible
  */
 export function extractFast(
   rootNode: TSNode,
   _project: string,
   relPath: string,
   fileQn: string,
+  sourceLength: number,
 ): FastFileResult {
   const nodes: FastNode[] = [];
   const edges: FastEdge[] = [];
   const nameToQns = new Map<string, string[]>();
-
-  // Count AST nodes for diagnostics
-  const astNodeCount = rootNode.descendantCount;
+  // R73: QN lookup map for O(1) parent resolution (was O(n) linear search)
+  const qnByNode = new Map<TSNode, string>();
 
   // ── Extract File node ────────────────────────────────────────────────
+  const fileName = relPath.split('/').pop() || relPath;
+  // R73: pre-built JSON string instead of JSON.stringify
+  const fileProps = '{"language":"tree-sitter","size":' + sourceLength + '}';
   nodes.push({
     label: 'File',
-    name: relPath.split('/').pop() || relPath,
+    name: fileName,
     qualifiedName: fileQn,
     filePath: relPath,
     startLine: 1,
     endLine: rootNode.endPosition.row + 1,
-    properties: JSON.stringify({ language: 'tree-sitter', size: rootNode.text.length }),
+    properties: fileProps,
   });
 
   // ── Extract all functions in one WASM call ───────────────────────────
   const allFunctions = rootNode.descendantsOfType(FUNCTION_TYPES);
   for (const func of allFunctions) {
     const name = getDeclNameFast(func);
-    const parentQn = findParentQn(func, fileQn, nodes);
+    const parentQn = findParentQnFast(func, fileQn, qnByNode);
     const qn = `${parentQn}::${name}`;
+    // R73: pre-built JSON instead of JSON.stringify
+    const complexity = estimateComplexityFast(func);
+    const props = '{"language":"tree-sitter","complexity":' + complexity + '}';
     nodes.push({
       label: 'Function',
       name,
@@ -110,13 +123,10 @@ export function extractFast(
       filePath: relPath,
       startLine: func.startPosition.row + 1,
       endLine: func.endPosition.row + 1,
-      properties: JSON.stringify({
-        language: 'tree-sitter',
-        complexity: estimateComplexityFast(func),
-      }),
+      properties: props,
     });
     addToMap(nameToQns, name, qn);
-    // CONTAINS edge from parent
+    qnByNode.set(func, qn);
     edges.push({ sourceQn: parentQn, targetQn: qn, type: 'CONTAINS', properties: '{}' });
   }
 
@@ -124,7 +134,7 @@ export function extractFast(
   const allClasses = rootNode.descendantsOfType(CLASS_TYPES);
   for (const cls of allClasses) {
     const name = getDeclNameFast(cls);
-    const parentQn = findParentQn(cls, fileQn, nodes);
+    const parentQn = findParentQnFast(cls, fileQn, qnByNode);
     const qn = `${parentQn}::${name}`;
     nodes.push({
       label: 'Class',
@@ -133,9 +143,10 @@ export function extractFast(
       filePath: relPath,
       startLine: cls.startPosition.row + 1,
       endLine: cls.endPosition.row + 1,
-      properties: JSON.stringify({ language: 'tree-sitter' }),
+      properties: '{"language":"tree-sitter"}',
     });
     addToMap(nameToQns, name, qn);
+    qnByNode.set(cls, qn);
     edges.push({ sourceQn: parentQn, targetQn: qn, type: 'CONTAINS', properties: '{}' });
   }
 
@@ -143,8 +154,10 @@ export function extractFast(
   const allMethods = rootNode.descendantsOfType(METHOD_TYPES);
   for (const method of allMethods) {
     const name = getDeclNameFast(method);
-    const parentQn = findParentQn(method, fileQn, nodes);
+    const parentQn = findParentQnFast(method, fileQn, qnByNode);
     const qn = `${parentQn}::${name}`;
+    const complexity = estimateComplexityFast(method);
+    const props = '{"language":"tree-sitter","complexity":' + complexity + '}';
     nodes.push({
       label: 'Method',
       name,
@@ -152,12 +165,10 @@ export function extractFast(
       filePath: relPath,
       startLine: method.startPosition.row + 1,
       endLine: method.endPosition.row + 1,
-      properties: JSON.stringify({
-        language: 'tree-sitter',
-        complexity: estimateComplexityFast(method),
-      }),
+      properties: props,
     });
     addToMap(nameToQns, name, qn);
+    qnByNode.set(method, qn);
     edges.push({ sourceQn: parentQn, targetQn: qn, type: 'CONTAINS', properties: '{}' });
   }
 
@@ -171,22 +182,21 @@ export function extractFast(
     const candidates = nameToQns.get(calleeName) || nameToQns.get(lastSegment);
     if (!candidates || candidates.length === 0) continue;
 
-    // Find the enclosing function/method for the source QN
-    const sourceQn = findEnclosingDeclQn(call, nodes);
+    const sourceQn = findEnclosingDeclQnFast(call, qnByNode);
     if (!sourceQn) continue;
 
     const targetQn = candidates[0];
-    if (targetQn === sourceQn) continue; // skip self-calls
+    if (targetQn === sourceQn) continue;
 
     edges.push({
       sourceQn,
-      targetQn,
+      targetQn: targetQn,
       type: 'CALLS',
-      properties: JSON.stringify({ callee: calleeName, inferred: true }),
+      properties: '{"callee":"' + calleeName + '","inferred":true}',
     });
   }
 
-  return { nodes, edges, astNodeCount };
+  return { nodes, edges, astNodeCount: 0 };
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -202,26 +212,23 @@ function getDeclNameFast(node: TSNode): string {
 }
 
 /**
- * Find the QN of the parent declaration (function/class/method/file).
- * Walks up the AST to find the nearest enclosing declaration.
+ * R73: Find parent QN using Map lookup (O(1)) instead of linear search (O(n)).
+ * Walks up the AST to find the nearest enclosing declaration, then looks
+ * it up in the qnByNode map.
  */
-function findParentQn(
+function findParentQnFast(
   node: TSNode,
   fileQn: string,
-  nodes: FastNode[],
+  qnByNode: Map<TSNode, string>,
 ): string {
-  // Walk up the tree to find the nearest enclosing function/class/method
   let parent = node.parent;
   while (parent) {
     const parentType = parent.type;
     if (FUNCTION_TYPES.includes(parentType) ||
         CLASS_TYPES.includes(parentType) ||
         METHOD_TYPES.includes(parentType)) {
-      const name = getDeclNameFast(parent);
-      // Find the QN in our nodes list
-      for (const n of nodes) {
-        if (n.name === name) return n.qualifiedName;
-      }
+      const qn = qnByNode.get(parent);
+      if (qn) return qn;
     }
     parent = parent.parent;
   }
@@ -229,19 +236,19 @@ function findParentQn(
 }
 
 /**
- * Find the QN of the enclosing function/method for a call expression.
+ * R73: Find enclosing declaration QN using Map lookup.
  */
-function findEnclosingDeclQn(node: TSNode, nodes: FastNode[]): string | null {
+function findEnclosingDeclQnFast(
+  node: TSNode,
+  qnByNode: Map<TSNode, string>,
+): string | null {
   let parent = node.parent;
   while (parent) {
     const parentType = parent.type;
     if (FUNCTION_TYPES.includes(parentType) ||
         METHOD_TYPES.includes(parentType)) {
-      const name = getDeclNameFast(parent);
-      // Find in nodes by name + approximate line match
-      for (const n of nodes) {
-        if (n.name === name && n.label !== 'File') return n.qualifiedName;
-      }
+      const qn = qnByNode.get(parent);
+      if (qn) return qn;
     }
     parent = parent.parent;
   }

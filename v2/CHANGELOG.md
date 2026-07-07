@@ -1,5 +1,44 @@
 # Changelog — Codebase Memory V2
 
+## 0.15.5 — Round 73 (2026-07-07) fast-walker micro-optimizations
+
+4 micro-optimizations to the fast-walker for incremental speedup.
+
+### Optimizations
+
+1. **Removed `rootNode.descendantCount`** — was unused but caused a full tree
+   traversal in WASM just to count nodes. Now returns 0 (diagnostic only).
+2. **Removed `rootNode.text.length`** — O(n) string copy from WASM to JS just
+   to get file size. Now passes `source.length` (already available in JS)
+   as a parameter to `extractFast()`.
+3. **Pre-built JSON strings** instead of `JSON.stringify()` per node —
+   `JSON.stringify({language:'tree-sitter',complexity:N})` → string concat
+   `'{"language":"tree-sitter","complexity":' + N + '}'`. Eliminates ~800
+   JSON.stringify calls per index (one per node).
+4. **Map-based parent resolution** — `findParentQnFast()` uses `Map<TSNode, string>`
+   for O(1) lookup instead of `findParentQn()` which did a linear search in
+   the `nodes[]` array (O(n) per declaration, O(n²) worst case).
+
+### Benchmark: R72 vs R73
+
+| Codebase | R72 | R73 | Speedup |
+|---|---|---|---|
+| v2/src (50 files) | 288ms | 277ms | 1.04x |
+| v1/src (122 files, parallel) | 1013ms | 987ms | 1.03x |
+| graph-ui (43 files) | 211ms | 196ms | 1.08x |
+
+### Full evolution: R68 → R73
+
+| Round | Engine | v2/src | vs V1 (305ms) |
+|---|---|---|---|
+| R68 | ts-morph (1 lang) | 1833ms | 6.0x slower |
+| R69 | WASM tree-sitter (112 langs) | 340ms | 1.11x slower |
+| R72 | + descendantsOfType | 288ms | 0.94x — **V2 faster** |
+| R73 | + micro-optimizations | 277ms | 0.91x — **V2 9% faster** |
+
+V2 WASM is now **9% faster than V1 C** on the V2 codebase (277ms vs 305ms),
+with 112 languages and no binary dependency.
+
 ## 0.15.4 — Round 72 (2026-07-07) fast-walker: descendantsOfType optimization
 
 **1.3x speedup** on all indexer benchmarks by replacing recursive JavaScript

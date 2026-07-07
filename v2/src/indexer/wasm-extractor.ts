@@ -242,7 +242,7 @@ export async function extractFromFilesWasm(
         // R72: use fast-walker (descendantsOfType) instead of recursive walkAST.
         // This is ~3x faster because the WASM runtime does the tree traversal
         // in C speed, eliminating JavaScript function call overhead.
-        const extracted = extractFast(tree.rootNode, project, relPath, fileQn);
+        const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
 
         // Insert extracted nodes
         for (const node of extracted.nodes) {

@@ -110,7 +110,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         const fileQn = `${batch.project}::${relPath}`;
 
         // R72: use fast-walker (descendantsOfType) instead of recursive walkAST
-        const extracted = extractFast(tree.rootNode, batch.project, relPath, fileQn);
+        const extracted = extractFast(tree.rootNode, batch.project, relPath, fileQn, source.length);
 
         results.push({
           filePath: relPath,
