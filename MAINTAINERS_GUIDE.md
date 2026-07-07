@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 60 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across 61 audit rounds. Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R60). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R61). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -182,7 +182,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.12.7 (R60).
+  - Currently 0.12.8 (R61).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes. Currently `0.10.3` (frozen
   since R36 — the schema hasn't changed).
@@ -208,8 +208,9 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R58 | 0.12.5 | code quality + type safety + perf (18 as any→row types, 3 hot-path prepared statements) |
 | R59 | 0.12.6 | code quality in sqlite-ro.ts (30 as any→row types, 2 hot-path prepared statements) |
 | R60 | 0.12.7 | code quality in swr-cache.ts (dead ternary, evictOne extracted, defensive iteration, typed events) |
+| R61 | 0.12.8 | code quality in server.ts (7 catch(any)→catch(unknown), 2 ws as any→WeakMap, errorMessage helper) |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R60).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R61).
 
 ---
 

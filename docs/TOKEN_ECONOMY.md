@@ -1,6 +1,6 @@
 # Token Economy — How V2 Saves API Tokens
 
-> Updated 2026-07-07 for version 0.12.7.
+> Updated 2026-07-07 for version 0.12.8.
 
 V2 is designed to **minimize the number of API calls and tokens** an AI agent needs to understand and modify a codebase.
 

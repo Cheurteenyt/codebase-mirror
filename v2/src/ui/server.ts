@@ -190,7 +190,7 @@ export class UiServer {
       if (e.code === 'EADDRINUSE') {
         console.error(`Port ${this.port} is already in use. Use --port to specify a different port.`);
       } else {
-        console.error('Server error:', e.message);
+        console.error('Server error:', UiServer.errorMessage(e));
       }
       // R34: close DB handles before exiting (same fix as R26 Bug #6 for MCP server).
       try {
@@ -237,6 +237,13 @@ export class UiServer {
    * Clients send a subscribe message with their project, then receive
    * push notifications for that project.
    */
+  // R61: track per-WebSocket project filter without augmenting the ws object
+  // with an untyped (ws as any)._projectFilter field. A WeakMap is keyed by
+  // the WebSocket instance, so it's automatically garbage-collected when the
+  // ws is closed and removed from wsClients. This is type-safe and avoids
+  // the "as any" cast pattern that hides field-name typos.
+  private wsProjectFilters: WeakMap<WebSocket, string | undefined> = new WeakMap();
+
   private handleWsConnection(ws: WebSocket, _req: IncomingMessage): void {
     this.wsClients.add(ws);
 
@@ -256,8 +263,8 @@ export class UiServer {
         }
         // R25: support 'subscribe' to filter by project.
         if (msg.type === 'subscribe' && typeof msg.project === 'string') {
-          // Store the project filter on the WebSocket instance.
-          (ws as any)._projectFilter = msg.project;
+          // R61: store the project filter in the WeakMap instead of (ws as any)._projectFilter.
+          this.wsProjectFilters.set(ws, msg.project);
         }
       } catch {
         // ignore malformed messages
@@ -291,7 +298,8 @@ export class UiServer {
     for (const ws of this.wsClients) {
       if (ws.readyState !== WebSocket.OPEN) continue;
       // Check project filter — only send if it matches or is not set.
-      const filter = (ws as any)._projectFilter;
+      // R61: read from the WeakMap instead of (ws as any)._projectFilter.
+      const filter = this.wsProjectFilters.get(ws);
       if (filter && filter !== event.project) continue;
       try {
         ws.send(payload);
@@ -352,13 +360,13 @@ export class UiServer {
 
       // Try to serve static asset
       this.serveStatic(path, res);
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (responseSent || res.writableEnded) {
         // Response already sent — log the error but don't try to write again.
-        process.stderr.write(`[cbm-v2 ui] post-response error: ${e.message}\n`);
+        process.stderr.write(`[cbm-v2 ui] post-response error: ${UiServer.errorMessage(e)}\n`);
         return;
       }
-      this.sendJson(res, 500, { error: e.message });
+      this.sendJson(res, 500, { error: UiServer.errorMessage(e) });
     }
   }
 
@@ -539,8 +547,8 @@ export class UiServer {
         edges,
         size_bytes: stat.size,
       });
-    } catch (e: any) {
-      this.sendJson(res, 200, { name, status: 'corrupt', reason: e.message });
+    } catch (e: unknown) {
+      this.sendJson(res, 200, { name, status: 'corrupt', reason: UiServer.errorMessage(e) });
     }
     return;
   }
@@ -745,8 +753,8 @@ export class UiServer {
         obsidian_path: node!.obsidian_path,
         updated_at: node!.updated_at,
       });
-    } catch (e: any) {
-      this.sendJson(res, 500, { error: e.message });
+    } catch (e: unknown) {
+      this.sendJson(res, 500, { error: UiServer.errorMessage(e) });
     }
     return;
   }
@@ -819,8 +827,8 @@ export class UiServer {
         roots,
         parent,
       });
-    } catch (e: any) {
-      this.sendJson(res, 500, { error: e.message });
+    } catch (e: unknown) {
+      this.sendJson(res, 500, { error: UiServer.errorMessage(e) });
     }
     return;
   }
@@ -927,10 +935,10 @@ export class UiServer {
         // R51 (SEC-8): clear childPid to prevent stale PID in process-kill allowlist.
         job.childPid = undefined;
       });
-    } catch (e: any) {
+    } catch (e: unknown) {
       job.status = 'failed';
-      job.error = e.message;
-      this.log(`Index job ${jobId} failed to start: ${e.message}`);
+      job.error = UiServer.errorMessage(e);
+      this.log(`Index job ${jobId} failed to start: ${UiServer.errorMessage(e)}`);
     }
 
     this.sendJson(res, 202, { job_id: jobId, status: job.status });
@@ -1087,8 +1095,8 @@ export class UiServer {
       process.kill(pid, 'SIGTERM');
       this.log(`Process killed: pid=${pid}`);
       this.sendJson(res, 200, { success: true, pid, signal: 'SIGTERM' });
-    } catch (e: any) {
-      this.sendJson(res, 500, { error: `Failed to kill pid ${pid}: ${e.message}` });
+    } catch (e: unknown) {
+      this.sendJson(res, 500, { error: `Failed to kill pid ${pid}: ${UiServer.errorMessage(e)}` });
     }
     return;
   }
@@ -1133,8 +1141,8 @@ export class UiServer {
       // (api.deleteProject only checks `success`), and exposing absolute server
       // filesystem paths is a defense-in-depth info leak.
       this.sendJson(res, 200, { success: true, name, deleted });
-    } catch (e: any) {
-      this.sendJson(res, 500, { error: `Failed to delete project: ${e.message}` });
+    } catch (e: unknown) {
+      this.sendJson(res, 500, { error: `Failed to delete project: ${UiServer.errorMessage(e)}` });
     }
     return;
   }
@@ -1169,6 +1177,19 @@ export class UiServer {
   private sendJson(res: ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(body));
+  }
+
+  /**
+   * R61: safely extract a message from an unknown caught value.
+   * Replaces the previous `catch (e: any) { ... e.message }` pattern which
+   * would throw if `e` was not an Error object (e.g. `throw "string"` or
+   * `throw { code: 42 }`). Now used in all 7 catch blocks that need the
+   * error message for an HTTP response.
+   */
+  private static errorMessage(e: unknown): string {
+    if (e instanceof Error) return e.message;
+    if (typeof e === 'string') return e;
+    return String(e);
   }
 
   private colorForLabel(label: string): string {

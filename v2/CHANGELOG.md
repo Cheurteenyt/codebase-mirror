@@ -1,5 +1,40 @@
 # Changelog — Codebase Memory V2
 
+## 0.12.8 — Round 61 (2026-07-07) code quality in server.ts
+
+No bugs fixed — type safety and WebSocket state management in the UI server
+(`v2/src/ui/server.ts`). Zero functional changes, zero test regressions.
+
+### Type safety (MEDIUM) — 7 `catch (e: any)` + 2 `(ws as any)` removed
+
+- **`catch (e: any)` → `catch (e: unknown)`** in all 7 catch blocks
+  (handleRequest, routeProjectHealth, routeAdrPost, routeBrowse, routeIndex,
+  routeProcessKill, routeProjectDelete). The previous pattern accessed
+  `e.message` on an `any`-typed value, which would throw if `e` was not an
+  Error object (e.g. `throw "string"` or `throw { code: 42 }`).
+- **`UiServer.errorMessage(e: unknown): string` static helper** added.
+  Uses `e instanceof Error ? e.message : typeof e === 'string' ? e : String(e)`.
+  All 7 catch blocks now call `UiServer.errorMessage(e)` instead of `e.message`.
+  Also used in `start()`'s error handler (was `e.message` on `NodeJS.ErrnoException`,
+  which had `.message` but is now unified through the helper for consistency).
+- **`(ws as any)._projectFilter` removed**. The previous pattern augmented the
+  WebSocket instance with an untyped `_projectFilter` field, accessed via
+  `(ws as any)._projectFilter` in 2 places. Replaced with a
+  `WeakMap<WebSocket, string | undefined>` (`wsProjectFilters`). Benefits:
+  - Type-safe: the compiler knows the value is `string | undefined`, not `any`.
+  - No field-name typos: `_projectFilter` vs `_projectfilter` would silently
+    return `undefined` with the old pattern; now it's a compile error.
+  - Automatic GC: when the WebSocket is closed and removed from `wsClients`,
+    the WeakMap entry is garbage-collected automatically.
+
+### Why this matters
+
+`server.ts` is the HTTP/WebSocket server that every UI client connects to.
+The 7 catch blocks handle every API error response — if any of them threw
+while trying to extract `e.message`, the server would return a 500 with no
+error message (or worse, crash the request handler). The WeakMap fix makes
+the WebSocket project-filter mechanism type-safe and self-cleaning.
+
 ## 0.12.7 — Round 60 (2026-07-07) code quality in swr-cache.ts
 
 No bugs fixed — code quality, deduplication, and type safety in the SWR cache
