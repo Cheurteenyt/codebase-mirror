@@ -1,5 +1,52 @@
 # Changelog — Codebase Memory V2
 
+## 0.12.6 — Round 59 (2026-07-07) code quality + type safety in sqlite-ro.ts
+
+No bugs fixed — same pattern as R58 but applied to the code graph reader
+(`v2/src/bridge/sqlite-ro.ts`). Zero functional changes, zero test regressions.
+
+### Type safety (MEDIUM) — 30 `as any` casts removed
+
+- **11 row type interfaces added**: `CodeNodeRow`, `NeighborRow`, `DegreeCountRow`,
+  `CountRow`, `CountAllRow`, `LabelCountRow`, `TypeCountRow`, `EdgeTripleRow`,
+  `BulkEdgeRow`, `ProjectNameRow`, `ProjectRow`. These match what SQLite actually
+  returns for each query shape (simple SELECT *, JOINs with aliases, COUNT
+  aggregations, GROUP BY, etc.).
+- **All 30 `as any` casts replaced** with proper row types: `as CodeNodeRow | undefined`,
+  `as NeighborRow[]`, `as DegreeCountRow[]`, `as CountRow`, `as CountAllRow`,
+  `as LabelCountRow[]`, `as TypeCountRow[]`, `as EdgeTripleRow[]`, `as BulkEdgeRow[]`,
+  `as ProjectNameRow[]`, `as ProjectRow[]`, etc.
+- **`deserializeCodeNode(row: CodeNodeRow)`** — previously typed as `(row: any)`.
+- **`makeEdge(row: BulkEdgeRow)`** in getBulkNeighbors — previously `(row: any)`.
+- **`tryPush(row: EdgeTripleRow, ...)`** in getBulkEdges — previously `(row: any)`.
+- **`params: any[]`** in findNodesByName and listNodes replaced with `(string | number)[]`.
+- **Null safety**: `NeighborRow.node_properties` is `string | null` (LEFT JOIN may
+  produce null). The getNeighbors method now coalesces with `?? '{}'` when passing
+  to deserializeCodeNode, matching the existing `row.properties_json || '{}'` pattern
+  in deserializeCodeNode itself.
+
+### Performance (LOW-MEDIUM) — hot-path prepared statements
+
+- **2 prepared statements moved to constructor**: `stmtGetNodeById`,
+  `stmtFindNodeByQName`. These are the 2 single-row lookups called on every MCP
+  tool invocation (prepare_edit_context, get_module_context, search_code_and_memory).
+  better-sqlite3 caches internally, but holding the Statement object directly
+  avoids the cache lookup + JS wrapper allocation on every call.
+
+### Why this matters
+
+`sqlite-ro.ts` is the read-only bridge to V1's code graph — every MCP tool, every
+UI endpoint that shows code structure goes through `CodeGraphReader`. Before this
+round, 30 `as any` casts meant the TypeScript compiler couldn't catch:
+- Column-name typos (e.g. `row.edge_propertis` instead of `row.edge_properties`)
+- Wrong alias names in JOIN queries (the getNeighbors aliases are critical —
+  both tables have `id`, `project`, `properties_json`, and without aliases
+  better-sqlite3 returns the last column value for duplicate names)
+- Missing fields after a V1 schema change
+
+With proper row types, these are all compile-time errors. The prepared-statement
+optimization is minor but sets the pattern for future hot-path identification.
+
 ## 0.12.5 — Round 58 (2026-07-07) code quality + type safety + perf
 
 No bugs fixed — this round focuses on code quality, type safety, and performance

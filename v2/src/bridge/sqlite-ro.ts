@@ -28,6 +28,110 @@ export interface CodeEdge {
   properties_json: string;
 }
 
+// ── Row types (what SQLite actually returns) ──────────────────────────────
+// R59: same pattern as store.ts R58 — replace `as any` casts with proper row
+// types so the compiler catches column-name typos and schema drift at build time.
+
+/** Raw row from `SELECT * FROM nodes`. */
+interface CodeNodeRow {
+  id: number;
+  project: string;
+  label: string;
+  name: string;
+  qualified_name: string;
+  file_path: string;
+  start_line: number;
+  end_line: number;
+  properties_json: string;
+}
+
+// CodeEdgeRow is not defined here because edges are always queried with column
+// aliases (e.id AS edge_id, etc.) to avoid duplicate-name collisions with nodes
+// in JOIN queries. See BulkEdgeRow and NeighborRow for the aliased edge row types.
+
+/**
+ * Raw row from the getNeighbors JOIN (edges + nodes with column aliases).
+ * The aliases are critical: both tables have `id`, `project`, `properties_json`,
+ * and without aliases better-sqlite3 returns the last column value for
+ * duplicate names, corrupting the data.
+ */
+interface NeighborRow {
+  edge_id: number;
+  edge_project: string;
+  source_id: number;
+  target_id: number;
+  edge_type: string;
+  edge_properties: string | null;
+  node_id: number;
+  node_project: string;
+  label: string;
+  name: string;
+  qualified_name: string;
+  file_path: string;
+  start_line: number;
+  end_line: number;
+  node_properties: string | null;
+}
+
+/** Row from `SELECT source_id|target_id AS id, COUNT(*) AS c ... GROUP BY`. */
+interface DegreeCountRow {
+  id: number;
+  c: number;
+}
+
+/** Row from `SELECT COUNT(*) AS c FROM ...`. */
+interface CountRow {
+  c: number;
+}
+
+/** Row from `SELECT (subquery) AS n, (subquery) AS e`. */
+interface CountAllRow {
+  n: number;
+  e: number;
+}
+
+/** Row from `SELECT label, COUNT(*) AS c ... GROUP BY label`. */
+interface LabelCountRow {
+  label: string;
+  c: number;
+}
+
+/** Row from `SELECT type, COUNT(*) AS c ... GROUP BY type`. */
+interface TypeCountRow {
+  type: string;
+  c: number;
+}
+
+/** Row from `SELECT source_id, target_id, type FROM edges`. */
+interface EdgeTripleRow {
+  source_id: number;
+  target_id: number;
+  type: string;
+}
+
+/**
+ * Row from getBulkNeighbors — edge columns only (aliased to avoid duplicate
+ * column names). Used by the `makeEdge` helper inside getBulkNeighbors.
+ */
+interface BulkEdgeRow {
+  edge_id: number;
+  edge_project: string;
+  source_id: number;
+  target_id: number;
+  edge_type: string;
+  edge_properties: string | null;
+}
+
+/** Row from `SELECT DISTINCT name FROM projects`. */
+interface ProjectNameRow {
+  name: string;
+}
+
+/** Row from `SELECT DISTINCT project FROM nodes`. */
+interface ProjectRow {
+  project: string;
+}
+
 export function defaultCodeDbPath(project: string): string {
   const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
   return join(cacheDir, 'codebase-memory-mcp', `${project}.db`);
@@ -35,6 +139,14 @@ export function defaultCodeDbPath(project: string): string {
 
 export class CodeGraphReader {
   private db: Database.Database;
+
+  // R59: hot-path prepared statements, prepared once in the constructor.
+  // getNodeById and findNodeByQualifiedName are called on every MCP tool
+  // invocation (prepare_edit_context, get_module_context, search_code_and_memory).
+  // countNodes/countEdges are called by /api/projects but countAll replaces
+  // them with a single query — kept for backward compat but not hot-path.
+  private stmtGetNodeById!: Database.Statement;
+  private stmtFindNodeByQName!: Database.Statement;
 
   constructor(dbPath: string) {
     if (!existsSync(dbPath)) {
@@ -58,6 +170,11 @@ export class CodeGraphReader {
     this.db.pragma('cache_size = -65536');
     // NOTE: do NOT set `journal_mode = WAL` on a readonly connection — it's a no-op or error.
     // V1 sets WAL when it opens the DB for writing; the readonly reader inherits it.
+    // R59: prepare hot-path statements once. These two single-row lookups are
+    // called on every MCP tool invocation — preparing them here means each call
+    // is just .get(params) with no SQL compilation or cache lookup.
+    this.stmtGetNodeById = this.db.prepare('SELECT * FROM nodes WHERE id = ?');
+    this.stmtFindNodeByQName = this.db.prepare('SELECT * FROM nodes WHERE project = ? AND qualified_name = ?');
   }
 
   close(): void {
@@ -65,21 +182,17 @@ export class CodeGraphReader {
   }
 
   getNodeById(id: number): CodeNode | null {
-    const row = this.db
-      .prepare('SELECT * FROM nodes WHERE id = ?')
-      .get(id) as any;
+    const row = this.stmtGetNodeById.get(id) as CodeNodeRow | undefined;
     return row ? deserializeCodeNode(row) : null;
   }
 
   findNodeByQualifiedName(project: string, qualifiedName: string): CodeNode | null {
-    const row = this.db
-      .prepare('SELECT * FROM nodes WHERE project = ? AND qualified_name = ?')
-      .get(project, qualifiedName) as any;
+    const row = this.stmtFindNodeByQName.get(project, qualifiedName) as CodeNodeRow | undefined;
     return row ? deserializeCodeNode(row) : null;
   }
 
   findNodesByName(project: string, name: string, label?: string, limit = 50): CodeNode[] {
-    const params: any[] = [project, name];
+    const params: (string | number)[] = [project, name];
     let sql = 'SELECT * FROM nodes WHERE project = ? AND name = ?';
     if (label) {
       sql += ' AND label = ?';
@@ -87,7 +200,7 @@ export class CodeGraphReader {
     }
     sql += ' LIMIT ?';
     params.push(limit);
-    return (this.db.prepare(sql).all(...params) as any[]).map(deserializeCodeNode);
+    return (this.db.prepare(sql).all(...params) as CodeNodeRow[]).map(deserializeCodeNode);
   }
 
   listNodes(project: string, opts: {
@@ -96,7 +209,7 @@ export class CodeGraphReader {
     offset?: number;
   } = {}): CodeNode[] {
     const conditions = ['project = ?'];
-    const params: any[] = [project];
+    const params: (string | number)[] = [project];
     if (opts.label) {
       conditions.push('label = ?');
       params.push(opts.label);
@@ -104,7 +217,7 @@ export class CodeGraphReader {
     const limit = opts.limit ?? 200;
     const offset = opts.offset ?? 0;
     const sql = `SELECT * FROM nodes WHERE ${conditions.join(" AND ")} ORDER BY id ASC LIMIT ? OFFSET ?`;
-    return (this.db.prepare(sql).all(...params, limit, offset) as any[]).map(deserializeCodeNode);
+    return (this.db.prepare(sql).all(...params, limit, offset) as CodeNodeRow[]).map(deserializeCodeNode);
   }
 
   listModules(project: string, limit = 200): CodeNode[] {
@@ -138,7 +251,7 @@ export class CodeGraphReader {
            ORDER BY e.id ASC
            LIMIT ?`
         )
-        .all(nodeId, limit) as any[];
+        .all(nodeId, limit) as NeighborRow[];
       for (const row of rows) {
         results.push({
           edge: {
@@ -158,7 +271,7 @@ export class CodeGraphReader {
             file_path: row.file_path,
             start_line: row.start_line,
             end_line: row.end_line,
-            properties_json: row.node_properties,
+            properties_json: row.node_properties ?? '{}',
           }),
         });
       }
@@ -172,7 +285,7 @@ export class CodeGraphReader {
            ORDER BY e.id ASC
            LIMIT ?`
         )
-        .all(nodeId, limit) as any[];
+        .all(nodeId, limit) as NeighborRow[];
       for (const row of rows) {
         results.push({
           edge: {
@@ -192,7 +305,7 @@ export class CodeGraphReader {
             file_path: row.file_path,
             start_line: row.start_line,
             end_line: row.end_line,
-            properties_json: row.node_properties,
+            properties_json: row.node_properties ?? '{}',
           }),
         });
       }
@@ -215,11 +328,11 @@ export class CodeGraphReader {
       try {
         const outRows = this.db
           .prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${placeholders}) GROUP BY source_id`)
-          .all(...chunk) as any[];
+          .all(...chunk) as DegreeCountRow[];
         for (const r of outRows) result.set(r.id, (result.get(r.id) ?? 0) + r.c);
         const inRows = this.db
           .prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${placeholders}) GROUP BY target_id`)
-          .all(...chunk) as any[];
+          .all(...chunk) as DegreeCountRow[];
         for (const r of inRows) result.set(r.id, (result.get(r.id) ?? 0) + r.c);
       } catch {
         // ignore — return zeros for this chunk
@@ -244,14 +357,14 @@ export class CodeGraphReader {
       try {
         const outRows = this.db
           .prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${placeholders}) GROUP BY source_id`)
-          .all(...chunk) as any[];
+          .all(...chunk) as DegreeCountRow[];
         for (const r of outRows) {
           const entry = result.get(r.id);
           if (entry) entry.out = r.c;
         }
         const inRows = this.db
           .prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${placeholders}) GROUP BY target_id`)
-          .all(...chunk) as any[];
+          .all(...chunk) as DegreeCountRow[];
         for (const r of inRows) {
           const entry = result.get(r.id);
           if (entry) entry.in = r.c;
@@ -276,7 +389,7 @@ export class CodeGraphReader {
       try {
         const rows = this.db
           .prepare(`SELECT * FROM nodes WHERE id IN (${placeholders})`)
-          .all(...chunk) as any[];
+          .all(...chunk) as CodeNodeRow[];
         for (const row of rows) {
           const node = deserializeCodeNode(row);
           result.set(node.id, node);
@@ -315,19 +428,19 @@ export class CodeGraphReader {
           .prepare(
             `SELECT source_id, target_id, type FROM edges WHERE source_id IN (${placeholders}) ORDER BY id ASC`,
           )
-          .all(...chunk) as any[];
+          .all(...chunk) as EdgeTripleRow[];
         // In-edges: chunk nodes are targets.
         const inRows = this.db
           .prepare(
             `SELECT source_id, target_id, type FROM edges WHERE target_id IN (${placeholders}) ORDER BY id ASC`,
           )
-          .all(...chunk) as any[];
+          .all(...chunk) as EdgeTripleRow[];
 
         // Merge and dedup. If limitPerNode > 0, cap per (node, direction).
         const perNodeOutCount = new Map<number, number>();
         const perNodeInCount = new Map<number, number>();
 
-        const tryPush = (row: any, nodeSide: 'source' | 'target') => {
+        const tryPush = (row: EdgeTripleRow, nodeSide: 'source' | 'target') => {
           const s = row.source_id;
           const t = row.target_id;
           // Only keep edges where BOTH endpoints are in the visible set.
@@ -390,7 +503,7 @@ export class CodeGraphReader {
     const EDGE_COLS = `e.id AS edge_id, e.project AS edge_project, e.source_id, e.target_id,
                        e.type AS edge_type, e.properties_json AS edge_properties`;
 
-    const makeEdge = (row: any): CodeEdge => ({
+    const makeEdge = (row: BulkEdgeRow): CodeEdge => ({
       id: row.edge_id,
       project: row.edge_project,
       source_id: row.source_id,
@@ -411,7 +524,7 @@ export class CodeGraphReader {
                WHERE e.source_id IN (${placeholders})
                ORDER BY e.id ASC`,
             )
-            .all(...chunk) as any[];
+            .all(...chunk) as BulkEdgeRow[];
           for (const row of outRows) {
             const anchorId = row.source_id;
             const cnt = outCount.get(anchorId) ?? 0;
@@ -433,7 +546,7 @@ export class CodeGraphReader {
                WHERE e.target_id IN (${placeholders})
                ORDER BY e.id ASC`,
             )
-            .all(...chunk) as any[];
+            .all(...chunk) as BulkEdgeRow[];
           for (const row of inRows) {
             const anchorId = row.target_id;
             const cnt = inCount.get(anchorId) ?? 0;
@@ -480,7 +593,7 @@ export class CodeGraphReader {
            ORDER BY id ASC
            LIMIT ?`
         )
-        .all(project, likePattern, limit) as any[]
+        .all(project, likePattern, limit) as CodeNodeRow[]
     ).map(deserializeCodeNode);
   }
 
@@ -488,7 +601,7 @@ export class CodeGraphReader {
     return (
       this.db
         .prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?')
-        .get(project) as any
+        .get(project) as CountRow
     ).c;
   }
 
@@ -496,7 +609,7 @@ export class CodeGraphReader {
     return (
       this.db
         .prepare('SELECT COUNT(*) AS c FROM edges WHERE project = ?')
-        .get(project) as any
+        .get(project) as CountRow
     ).c;
   }
 
@@ -516,7 +629,7 @@ export class CodeGraphReader {
            (SELECT COUNT(*) FROM nodes WHERE project = ?) AS n,
            (SELECT COUNT(*) FROM edges WHERE project = ?) AS e`
       )
-      .get(project, project) as any;
+      .get(project, project) as CountAllRow;
     return { nodes: row?.n ?? 0, edges: row?.e ?? 0 };
   }
 
@@ -525,7 +638,7 @@ export class CodeGraphReader {
       .prepare(
         `SELECT label, COUNT(*) AS c FROM nodes WHERE project = ? GROUP BY label ORDER BY c DESC`
       )
-      .all(project) as any[];
+      .all(project) as LabelCountRow[];
     const result: Record<string, number> = {};
     for (const row of rows) {
       result[row.label] = row.c;
@@ -538,7 +651,7 @@ export class CodeGraphReader {
       .prepare(
         `SELECT type, COUNT(*) AS c FROM edges WHERE project = ? GROUP BY type ORDER BY c DESC`
       )
-      .all(project) as any[];
+      .all(project) as TypeCountRow[];
     const result: Record<string, number> = {};
     for (const row of rows) {
       result[row.type] = row.c;
@@ -553,12 +666,12 @@ export class CodeGraphReader {
     const outDeg = (
       this.db
         .prepare('SELECT COUNT(*) AS c FROM edges WHERE source_id = ?')
-        .get(nodeId) as any
+        .get(nodeId) as CountRow
     ).c;
     const inDeg = (
       this.db
         .prepare('SELECT COUNT(*) AS c FROM edges WHERE target_id = ?')
-        .get(nodeId) as any
+        .get(nodeId) as CountRow
     ).c;
     return outDeg + inDeg;
   }
@@ -582,7 +695,7 @@ export class CodeGraphReader {
            ORDER BY rank
            LIMIT ?`
         )
-        .all(project, phraseQuery, limit) as any[];
+        .all(project, phraseQuery, limit) as CodeNodeRow[];
       // If FTS5 found results, return them. If zero results, fall through
       // to LIKE (FTS5 tokenization may differ from substring matching).
       if (rows.length > 0) {
@@ -601,7 +714,7 @@ export class CodeGraphReader {
          WHERE project = ? AND (name LIKE ? ESCAPE '\\' OR qualified_name LIKE ? ESCAPE '\\')
          LIMIT ?`
       )
-      .all(project, likePattern, likePattern, limit) as any[];
+      .all(project, likePattern, likePattern, limit) as CodeNodeRow[];
     return rows.map(deserializeCodeNode);
   }
 
@@ -619,7 +732,7 @@ export class CodeGraphReader {
            WHERE project = ? AND label = 'Module' AND name LIKE ? ESCAPE '\\'
            LIMIT ?`
         )
-        .all(project, likePattern, limit) as any[]
+        .all(project, likePattern, limit) as CodeNodeRow[]
     ).map(deserializeCodeNode);
   }
 
@@ -638,7 +751,7 @@ export class CodeGraphReader {
              AND json_extract(properties_json, '$.route_path') = ?
            LIMIT 1`
         )
-        .get(project, method.toUpperCase(), path) as any;
+        .get(project, method.toUpperCase(), path) as CodeNodeRow | undefined;
       return row ? deserializeCodeNode(row) : null;
     } catch {
       // Fallback: scan up to 10000 routes (was 500, which missed routes beyond 500).
@@ -646,7 +759,7 @@ export class CodeGraphReader {
         .prepare(
           `SELECT * FROM nodes WHERE project = ? AND label = 'Route' LIMIT 10000`
         )
-        .all(project) as any[];
+        .all(project) as CodeNodeRow[];
       const methodUpper = method.toUpperCase();
       for (const row of rows) {
         let props: Record<string, unknown>;
@@ -675,7 +788,7 @@ export class CodeGraphReader {
     try {
       const rows = this.db
         .prepare('SELECT DISTINCT name FROM projects')
-        .all() as any[];
+        .all() as ProjectNameRow[];
       if (rows.length > 0) return rows.map((r) => r.name as string);
     } catch {
       // Table may not exist in some V1 schema versions.
@@ -683,7 +796,7 @@ export class CodeGraphReader {
     try {
       const rows = this.db
         .prepare('SELECT DISTINCT project FROM nodes')
-        .all() as any[];
+        .all() as ProjectRow[];
       return rows.map((r) => r.project as string);
     } catch {
       return [];
@@ -691,7 +804,7 @@ export class CodeGraphReader {
   }
 }
 
-function deserializeCodeNode(row: any): CodeNode {
+function deserializeCodeNode(row: CodeNodeRow): CodeNode {
   return {
     id: row.id,
     project: row.project,
