@@ -1,5 +1,56 @@
 # Changelog — Codebase Memory V2
 
+## 0.12.5 — Round 58 (2026-07-07) code quality + type safety + perf
+
+No bugs fixed — this round focuses on code quality, type safety, and performance
+in the DB layer (`v2/src/human/store.ts`). Zero functional changes, zero test
+regressions.
+
+### Type safety (MEDIUM) — 18 `as any` casts removed
+
+- **6 row type interfaces added**: `HumanNodeRow`, `HumanEdgeRow`, `IdRow`,
+  `CountRow`, `LabelCountRow`, `HumanNodeWithCbmIdRow`. These match what SQLite
+  actually returns (JSON columns as `string`, not parsed arrays; label/status/
+  source/type as `string`, not union types — the DB CHECK constraint guarantees
+  validity, but TypeScript can't know that from the raw column type).
+- **All 18 `as any` casts in query methods replaced** with proper row types:
+  `as HumanNodeRow | undefined`, `as HumanEdgeRow[]`, `as CountRow`,
+  `as LabelCountRow[]`, etc. The only remaining `as any` are 4 in
+  `openMemory()` (accessing private fields from a static method — documented
+  with a comment explaining why the alternative would be worse).
+- **`deserializeNode(row: HumanNodeRow)`** and **`deserializeEdge(row: HumanEdgeRow)`**
+  — previously typed as `(row: any)`. Now the compiler catches column-name typos
+  at build time and the schema is self-documenting.
+- **`safeJsonParseArray` return type** tightened from `any[]` to `unknown[]`.
+  The `cbm_node_ids` filter now uses a type guard `(x): x is number => ...`
+  instead of an unchecked `.filter()` returning `any[]`.
+- **`params: any[]`** in `listNodes` and `updateNode` replaced with
+  `(string | number)[]` and `(string | number | null)[]`.
+
+### Performance (LOW-MEDIUM) — hot-path prepared statements
+
+- **3 prepared statements moved to constructor**: `stmtGetNodeById`,
+  `stmtGetNodeBySlug`, `stmtGetNodeByObsidianPath`. These are the 3 single-row
+  lookups called on every MCP tool invocation, every UI dashboard load, and
+  every sync cycle. better-sqlite3 caches prepared statements internally, but
+  holding the Statement object directly avoids the cache lookup + JS wrapper
+  allocation on every call. `openMemory()` (used by tests) also prepares them
+  (after `runMigrations`, since the tables must exist first).
+
+### Why this matters
+
+The DB layer is the foundation of the entire V2 sidecar — every MCP tool, every
+CLI command, every UI endpoint goes through `HumanMemoryStore`. Before this
+round, the store had 22+ `as any` casts, meaning the TypeScript compiler
+couldn't catch:
+- Column-name typos (e.g. `row.cbm_node_id` instead of `row.cbm_node_ids`)
+- Wrong return type assumptions (e.g. treating a JSON string as an array)
+- Missing fields after a schema change
+
+With proper row types, these are all compile-time errors. The prepared-statement
+optimization is minor (better-sqlite3's cache is fast), but it makes the hot
+path explicit and sets the pattern for future optimizations.
+
 ## 0.12.4 — Round 57 (2026-07-07) doc cleanup + private maintainers notes
 
 Doc consistency + maintainability improvements (no code changes).
