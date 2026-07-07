@@ -36,13 +36,13 @@ v2/
 │   ├── human/          # Human memory DB (SQLite, CRUD, schema)
 │   ├── obsidian/       # Vault sync (generator, importer, frontmatter, wikilinks)
 │   ├── bridge/         # Read-only access to V1 code graph
-│   ├── mcp/            # MCP server + 6 tools
+│   ├── mcp/            # MCP server + 7 tools
 │   ├── cli/            # CLI commands (commander-based)
 │   ├── reports/        # Hotspots, undocumented, risk reports
 │   ├── config.ts       # .codebase-memory.json loader
 │   └── constants.ts    # Shared constants (no magic numbers)
-├── tests/              # Vitest test files (374 tests)
-├── docs/               # Design documents (5 files)
+├── tests/              # Vitest test files (378 tests: 355 backend + 23 frontend)
+├── docs/               # Design documents (9 files)
 ├── examples/           # Sample vault and demo data
 ├── package.json
 └── tsconfig.json
@@ -184,7 +184,7 @@ it('rejects invalid label', () => { ... });
 
 ## Adding a New Human Node Label
 
-Currently requires editing 5 files (planned: single source of truth in 0.4.0):
+Currently requires editing 5 files (single source of truth not yet implemented):
 1. `src/human/schema.ts` → `HUMAN_NODE_LABELS` array
 2. `src/human/schema.ts` → SQL CHECK constraint
 3. `src/obsidian/frontmatter.ts` → `mapLabelToType` switch
@@ -193,13 +193,29 @@ Currently requires editing 5 files (planned: single source of truth in 0.4.0):
 
 ## CI/CD
 
-The GitHub Actions CI runs on every push:
-1. `npm ci` — install dependencies
-2. `npm run typecheck` — TypeScript strict compilation
-3. `npm run build` — production build
-4. `npm test` — all 374+ tests
+The project uses a **GitLab → GitHub mirror** setup (GitHub Actions has unlimited
+minutes for public repos; GitLab free tier is limited).
 
-A failed pipeline blocks merge.
+### Pipeline flow
+1. Push to a feature branch on GitLab → MR pipeline runs `mr-preflight` (R54)
+2. Merge to `main` on GitLab → `mirror-to-github` job pushes to GitHub
+3. GitHub Actions CI runs 3 jobs: `backend` (typecheck+build+test),
+   `frontend` (same), `quota-report` (schedule-only, R55 D5)
+
+### Install command
+The project uses `npm install --no-audit --no-fund` (not `npm ci`) because
+`package-lock.json` is gitignored (platform-specific lockfiles). See
+`.gitignore` for the rationale.
+
+### Required checks before merge
+```bash
+cd v2 && npm run build && npx vitest run     # 355 backend tests
+cd ../graph-ui && npx tsc --noEmit && npx vitest run  # 23 frontend tests
+```
+All 378 tests must pass with 0 regressions. A failed pipeline blocks merge.
+
+See `MAINTAINERS_GUIDE.md` for the full workflow (SSH setup, deploy keys,
+branch protection, MR push options, etc.).
 
 ## Release Process
 
