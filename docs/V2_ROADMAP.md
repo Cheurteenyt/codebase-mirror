@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-07 for version 0.15.2.
+> Updated 2026-07-07 for version 0.15.3.
 
-## Current State (0.15.2)
+## Current State (0.15.3)
 
 ### ✅ Completed
 
@@ -64,7 +64,7 @@
 | Round 53 Claude Sonnet R8 audit | 0.12.1 | 8 fixes: D1 HIGH mirror --force-with-lease (prevents silent PR loss), D2 MEDIUM token via http.extraHeader (no token in URL), B1 CHANGELOG R47-R49 backfill, B2 CHANGELOG R51-R52 + version bump, B3 CONTRIBUTING.md GitLab label fix, Part C shared safeRealpath utility, Part E GraphTab C1 chain test. |
 | Round 54 CI pipeline fix | 0.12.1 | 3 CI fixes: R54 workflow:rules + mr-preflight job (MR pipelines were empty → "Pipelines must succeed" blocked MRs), R54b YAML block scalars (YAML parsed `: ` as mapping not string), R54c ls-remote + --force-with-lease=main:<sha> (--force-with-lease without explicit SHA fails on URL push). |
 | Round 55 Claude Sonnet R9 audit | 0.12.2 | 4 fixes: Part A HIGH safe-path.ts dead code wired up (vault.ts assertPathInsideVault → assertPathInsideRoot, server.ts routeBrowse → safeRealpath, routeIndex → safeRealpathStrict), D3 HIGH quota-report job-level permissions: actions: read override (workflow-level contents: read was silently 403ing /actions/runs API), D4 LOW removed unreachable v2/** push pattern, D5 LOW quota-report restricted to schedule-only. |
-| Round 56 self-audit + MAINTAINERS_GUIDE | 0.12.3 | 3 improvements: symlink escape test for assertPathInsideRoot (2 new tests — vault.test.ts now covers the actual SEC-5 attack vector, not just symlink loops), backup.ts version field clarified (10-line comment block — was ambiguous between schema version and package version), MAINTAINERS_GUIDE.md new file (workflow conventions, naming rules, required patterns, anti-patterns, CI/CD setup, audit etiquette — accumulated across 70 rounds). |
+| Round 56 self-audit + MAINTAINERS_GUIDE | 0.12.3 | 3 improvements: symlink escape test for assertPathInsideRoot (2 new tests — vault.test.ts now covers the actual SEC-5 attack vector, not just symlink loops), backup.ts version field clarified (10-line comment block — was ambiguous between schema version and package version), MAINTAINERS_GUIDE.md new file (workflow conventions, naming rules, required patterns, anti-patterns, CI/CD setup, audit etiquette — accumulated across 71 rounds). |
 | Round 57 doc cleanup + private notes | 0.12.4 | Doc consistency + maintainability (no code changes). 12 stale refs fixed across v2/README.md (test count 374→378, version refs 0.11.3→0.12.4, security section R51/R55), CONTRIBUTING.md (6→7 tools, 374→378 tests, 5→9 docs, npm ci→npm install, stale "planned: 0.4.0" removed, CI/CD section rewritten), MAINTAINERS_GUIDE.md (376→378 tests, R55→R56). MAINTAINERS_GUIDE.md enriched with Common pitfalls (9 items), Pre-commit checklist (12 items), Lessons learned (6 items). MAINTAINERS_NOTES.local.md created (gitignored) — operational reminders, env reset recovery, gotchas. |
 | Round 58 code quality + type safety + perf | 0.12.5 | No bugs fixed — code quality + type safety + perf in store.ts. 6 row type interfaces added (HumanNodeRow, HumanEdgeRow, IdRow, CountRow, LabelCountRow, HumanNodeWithCbmIdRow). 18 `as any` casts replaced with proper row types. deserializeNode/Edge typed properly. safeJsonParseArray: any[]→unknown[]. params: any[]→(string|number)[]. 3 hot-path prepared statements moved to constructor (getNodeById, getNodeBySlug, getNodeByObsidianPath). |
 | Round 59 code quality + type safety in sqlite-ro.ts | 0.12.6 | No bugs fixed — same pattern as R58 applied to code graph reader. 11 row type interfaces added (CodeNodeRow, NeighborRow, DegreeCountRow, CountRow, CountAllRow, LabelCountRow, TypeCountRow, EdgeTripleRow, BulkEdgeRow, ProjectNameRow, ProjectRow). 30 `as any` casts replaced. deserializeCodeNode/makeEdge/tryPush typed properly. Null safety: NeighborRow.node_properties coalesced with ?? '{}'. 2 hot-path prepared statements moved to constructor (getNodeById, findNodeByQualifiedName). |
@@ -78,6 +78,9 @@
 | Round 67 V1+V2 combined benchmark | 0.13.4 | Built V1 from source (562 files, 259MB binary). Indexed V2 codebase: 35 files → 460 nodes, 1499 edges in 305ms (115 files/sec). V2 queries same DB: 0.006ms getNodeById, 0.077ms searchCode. V1 vs V2: SQLite overhead negligible (+0.005ms JS binding). V2 SWR cache faster for repeated queries. Key gap: V2 depends entirely on V1 for code analysis — no fallback when cbm binary unavailable. Full report: docs/V1_V2_BENCHMARK_R67.md. |
 | Round 68 native TypeScript/JavaScript indexer | 0.14.0 | **Minor version bump** — V2 can now index TS/JS projects without V1 `cbm` binary. New module `v2/src/indexer/` (schema.ts + extractor.ts + indexer.ts) using ts-morph. Extracts nodes (File, Class, Function, Method, Variable) + edges (CONTAINS, IMPORTS, CALLS). Schema-compatible with V1 (sqlite-ro.ts reads transparently). New CLI: `cbm-v2 index`. Benchmark: V2 native 1833ms vs V1 305ms (6x slower but works without cbm binary). Limitations: TS/JS only, no similarity/cross-repo/git-history/traces. |
 | Round 69 web-tree-sitter WASM — 112 languages | 0.15.0 | **Minor version bump** — V2 indexer upgraded from ts-morph (1 language) to web-tree-sitter WASM (112 languages). 5.4x speedup (340ms vs 1833ms), 2.2x more nodes (784 vs 352). Within 12% of V1 C speed (340ms vs 305ms) with NO binary dependency. Supports TS/TSX/JS/Python/Go/Rust/Java/C/C++/Ruby/PHP/Swift/Kotlin/Scala/Dart/Lua/Bash/YAML/JSON/HTML/CSS/SQL/Dockerfile/Markdown + 88 more. New deps: web-tree-sitter + tree-sitter-wasm. Multi-language benchmarks: V2/src 340ms, V1/C 1233ms (122 files), graph-ui 243ms. |
+| Round 69b package.json fix | 0.15.1 | Fix: R69 commit lost original package.json deps (npm install overwrote instead of merged). Restored better-sqlite3, commander, ws, yaml, typescript, vitest, @types/* + kept new web-tree-sitter, tree-sitter-wasm, ts-morph, tsx. CI was failing. |
+| Round 70 Claude Sonnet R10 audit | 0.15.2 | 3 fixes from Claude Sonnet 5 R10. Part A: vault.ts path safety (capture assertPathInsideRoot return value). Part B: WASM anonymous@line disambiguation. Part C: benchmark node count caveat. |
+| Round 71 worker_threads parallel indexing | 0.15.3 | New v2/src/indexer/worker.ts — parallel WASM parsing. Files grouped by language, split into batches, distributed to worker_threads. Two-pass edge resolution. Auto-detects workers (min 2). Parallel mode for 100+ files. 122 C files: 1262ms with 2 workers. On 8+ cores: expected 4-6x speedup. Limitation: cross-file CALLS limited in parallel. |
 
 ### 📊 Metrics
 
@@ -86,7 +89,7 @@
 | Source files (v2) | 38 |
 | Test files | 43 (32 backend + 11 frontend) |
 | Tests | 378 (355 backend + 23 frontend, all passing) |
-| Bugs fixed (70 rounds) | 565+ |
+| Bugs fixed (71 rounds) | 565+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -126,7 +129,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.15.2)
+### Phase 3: V1 Complete (0.15.3)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -221,6 +224,9 @@
 | R67 (V1+V2 combined benchmark: V1 index 305ms, V2 query 0.006ms, key gap identified, docs/V1_V2_BENCHMARK_R67.md) | 0.13.4 | 0 | 0 | 378 |
 | R68 (native TS/JS indexer: ts-morph, 48 files→352 nodes→1070 edges, 1833ms, no cbm binary needed) | 0.14.0 | 0 | 0 | 378 |
 | R69 (WASM tree-sitter: 112 languages, 340ms, 784 nodes, 5.4x faster than R68, 12% of V1 speed) | 0.15.0 | 0 | 0 | 378 |
+| R69b (package.json fix: restore original deps lost during npm install) | 0.15.1 | 0 | 0 | 378 |
+| R70 (Claude R10: vault.ts path safety, WASM anonymous@line, benchmark caveat) | 0.15.2 | 3 | 0 | 378 |
+| R71 (worker_threads parallel: worker.ts, 2 workers, 100+ file threshold, 2-pass edge resolution) | 0.15.3 | 0 | 0 | 378 |
 | **Total** | | **566+** | **513+** | **378** |
 
 ## Performance Milestones
@@ -257,7 +263,7 @@
 | R41 | `Sidebar flattenSingleChild` | O(n²) on deep single-child chains | O(n) (use already-flattened sc.children) | -~n× on deep chains |
 | R42 | `searchHumanNodes` FTS5 query | Phrase-only (entire query in one pair of quotes — required exact adjacent phrase) | AND-of-terms (each term individually quoted, implicit AND) | Matches scattered/reordered words, not just adjacent phrases |
 
-## API Endpoints (0.15.2)
+## API Endpoints (0.15.3)
 
 | Endpoint | Method | Description |
 |---|---|---|

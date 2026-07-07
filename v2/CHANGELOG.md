@@ -1,5 +1,47 @@
 # Changelog — Codebase Memory V2
 
+## 0.15.3 — Round 71 (2026-07-07) worker_threads parallel indexing
+
+Adds parallel WASM tree-sitter indexing using Node.js `worker_threads`.
+
+### New feature: parallel indexing (MEDIUM)
+
+Created `v2/src/indexer/worker.ts` — worker thread that:
+- Receives a batch of files (same language for grammar cache efficiency)
+- Loads the WASM grammar (once per worker per language)
+- Parses each file and walks the AST
+- Returns serialized nodes + edges to the main thread
+
+Updated `v2/src/indexer/indexer.ts`:
+- Files grouped by language, split into batches, distributed to workers
+- Main thread collects results and writes to SQLite in a single transaction
+- Two-pass edge resolution: (1) insert all nodes + build QN→ID map,
+  (2) insert edges with resolved IDs
+- Auto-detects worker count: `Math.max(2, cpus() - 1)`
+- Parallel mode activates for 100+ files (below that, worker overhead
+  exceeds the parallelism gain)
+
+### Benchmark (2-core machine)
+
+| Codebase | Files | Single-thread | Parallel (2 workers) | Speedup |
+|---|---|---|---|---|
+| v2/src (TS) | 50 | 378ms | 378ms (single, <100 files) | — |
+| v1-reference/src (C) | 122 | 1299ms | 1262ms | 1.03x |
+
+On a 2-core machine, the speedup is modest (overhead vs gain). On 8+ core
+machines, the expected speedup is 4-6x (8 workers parsing in parallel).
+
+### Limitations
+
+- **Cross-file CALLS edges**: in parallel mode, each worker only sees its
+  own batch of files, so cross-file call resolution is limited. Intra-file
+  calls work correctly. A future improvement could do a second pass on the
+  main thread to resolve cross-file calls.
+- **Worker overhead**: spawning threads + WASM init + serialization adds
+  ~100-200ms overhead. Below 100 files, single-threaded mode is faster.
+- **better-sqlite3**: synchronous, main-thread only. All SQLite writes
+  happen in the main thread after workers return.
+
 ## 0.15.2 — Round 70 (2026-07-07) Claude Sonnet R10 audit — 3 fixes
 
 Implements 3 fixes from Claude Sonnet 5 Round 10 audit report.

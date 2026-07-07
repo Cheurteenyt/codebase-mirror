@@ -51,6 +51,9 @@ export function registerIndexCommand(program: Command): void {
         if (result.languages && result.languages.size > 0) {
           console.log(`  Languages:       ${[...result.languages].join(', ')}`);
         }
+        if (result.parallel) {
+          console.log(`  Parallel:        ${result.workerCount} workers`);
+        }
 
         if (result.errors.length > 0) {
           console.log();

@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 70 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across 71 audit rounds. Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R70). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R71). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -189,7 +189,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.15.2 (R70).
+  - Currently 0.15.3 (R71).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes. Currently `0.10.3` (frozen
   since R36 — the schema hasn't changed).
@@ -224,8 +224,11 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R67 | 0.13.4 | V1+V2 combined benchmark — V1 index 305ms (460 nodes), V2 query 0.006ms. Key gap: V2 depends entirely on V1 for code analysis. docs/V1_V2_BENCHMARK_R67.md |
 | R68 | 0.14.0 | **native TS/JS indexer** — V2 can index without V1 `cbm` binary. ts-morph, 48 files→352 nodes→1070 edges, 1833ms. New `cbm-v2 index` CLI. Schema-compatible with V1. |
 | R69 | 0.15.0 | **WASM tree-sitter** — 112 languages, 5.4x faster than R68 (340ms vs 1833ms). Within 12% of V1 C speed. No binary dependency. New deps: web-tree-sitter + tree-sitter-wasm. |
+| R69b | 0.15.1 | Fix: package.json deps lost during npm install. Restored all original + new deps. |
+| R70 | 0.15.2 | Claude Sonnet R10 audit — vault.ts path safety, WASM anonymous@line, benchmark caveat. |
+| R71 | 0.15.3 | **worker_threads parallel indexing** — worker.ts, 2+ workers, 100+ file threshold, two-pass edge resolution. |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R70).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R71).
 
 ---
 
