@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-06 for version 0.12.1.
+> Updated 2026-07-06 for version 0.12.2.
 
-## Current State (0.12.1)
+## Current State (0.12.2)
 
 ### ✅ Completed
 
@@ -56,16 +56,23 @@
 | Round 45 client timeout + test coverage expansion | 0.10.9 | 8 fixes: F1 api/client.ts AbortController 20s timeout + exported ApiError (was hanging forever on locked SQLite), F6 /api/project-health path-traversal validation (SEC4 — same regex as routeIndex/routeProjectDelete), F2 useDashboard C1 regression test (3 tests, mirrors useGraphData), F3 useWebSocket generation-counter test (2 tests, mocks WebSocket), F5 GraphCanvas sim-reuse test (2 tests, mocks d3-force + canvas), F4 useProjects AbortController (was running to completion after unmount), F7 /api/processes regex aligned with kill regex, F8 /api/project-delete omits db_path (info-leak). 9 new tests (357 total: 347 backend + 10 frontend) |
 | Round 46 transaction atomicity + component test coverage | 0.11.0 | 8 fixes: F7 updateNode/deleteNode/createEdge transaction wrapping (was leaving JSON cache + junction table out of sync on crash), F8 get_undocumented_hotspots label enum validation (was silently returning empty for invalid labels), F1 NodeTooltip viewport-flip test (3 tests), F2 ResizeHandle pointerCancel test (1 test), F3 Sidebar flattenSingleChild test (2 tests), F4 ControlTab kill-confirmation test (2 tests), F5 StatsTab retry test (1 test), F6 ProjectCard corrupt-state test (2 tests). 11 new frontend tests (368 total: 347 backend + 21 frontend) |
 | Round 47 performance + invisible bugs | 0.11.1 | 10 fixes: H1 prepare_edit_context under-reported linked notes (limit=1 default, was hiding bugs/ADRs from agents), H2 generator N+1 getNeighbors for modules+routes (200+ queries → 6 via getBulkNeighbors), H3 routeDashboard 3 redundant queries (reuse SWR-cached graphStatus), M1 ControlTab AbortController (was piling up requests on slow backend), M3 hotspots report notes_count under-reported (limit=1 → 200), M4 parseNote --- in quoted YAML (defensive check prevents note corruption), L1 swr-cache refresh timer cancellation on invalidate, L2 syncCbmLinks DELETE inside transaction (self-contained atomic), L3 ControlTab kill timer cleanup. 6 new tests (374 total: 353 backend + 21 frontend) |
-| Round 48 CI fix + invisible bugs | 0.12.1 | 6 fixes: #1 CRITICAL GitLab CI mirror force-pushed ANY branch to GitHub main (clobbered main on feature branch pushes), #2 HIGH ControlTab interval aborted stale controller (request pileup + stale data), #3 MEDIUM parseNote regex replaced with line-by-line scanner (--- in quoted YAML no longer corrupts notes), #4 MEDIUM parseNote test strengthened (was passing despite data loss), #5 LOW swr-cache set() cancels pending refresh timers, #6 LOW ControlTab kill timer clears previous timer. |
+| Round 48 CI fix + invisible bugs | 0.11.2 | 6 fixes: #1 CRITICAL GitLab CI mirror force-pushed ANY branch to GitHub main (clobbered main on feature branch pushes), #2 HIGH ControlTab interval aborted stale controller (request pileup + stale data), #3 MEDIUM parseNote regex replaced with line-by-line scanner (--- in quoted YAML no longer corrupts notes), #4 MEDIUM parseNote test strengthened (was passing despite data loss), #5 LOW swr-cache set() cancels pending refresh timers, #6 LOW ControlTab kill timer clears previous timer. |
+| Round 49 deep audit + perf | 0.11.3 | 9 fixes: cherry-pick of R48 (which had been missed by the working branch), H1 importer skip-wikilinks-for-unchanged (~10× speedup), H2 swr-cache stale-hit scheduling guard, M1 generator bulk-neighbor fetch, M2 hotspots report notes_count under-reported, M3 ControlTab AbortController, L1 swr-cache evictToFit clears refreshHandlers, L2 syncCbmLinks DELETE inside transaction, L3 dead else-if branch removed. |
+| Round 50 deep audit (cache invalidation + perf revert) | 0.11.4 | 9 fixes: #1 HIGH invalidateGraphStatusCache was never called after re-index (SWR cache served stale total_nodes/total_edges for up to 60s), #2 MEDIUM perf revert of R49 #8 routeLayout SWR reuse (getGraphStatus on cold cache adds 50-200ms), #3 MEDIUM doc CONTRIBUTING.md + Dockerfile GitLab URLs updated to GitHub, 6 LOW cleanup/doc. |
+| Round 51 security audit | 0.12.0 | 8 security fixes (1 CRITICAL, 3 HIGH, 2 MEDIUM, 2 LOW): SEC-5 CRITICAL vault.ts symlink traversal (realpathSync + lstatSync), SEC-6/7/8/10/13 IDOR + path traversal + stale PID reuse, SEC-15 unbounded YAML alias count. |
+| Round 52 CI quality + security hardening | 0.12.1 | 6 CI fixes: permissions: contents: read (least-privilege), removed pretest doubling the build, npm install --no-audit --no-fund, quota-report single API call, BusyBox date fix, simplified quota-report output. |
+| Round 53 Claude Sonnet R8 audit | 0.12.1 | 8 fixes: D1 HIGH mirror --force-with-lease (prevents silent PR loss), D2 MEDIUM token via http.extraHeader (no token in URL), B1 CHANGELOG R47-R49 backfill, B2 CHANGELOG R51-R52 + version bump, B3 CONTRIBUTING.md GitLab label fix, Part C shared safeRealpath utility, Part E GraphTab C1 chain test. |
+| Round 54 CI pipeline fix | 0.12.1 | 3 CI fixes: R54 workflow:rules + mr-preflight job (MR pipelines were empty → "Pipelines must succeed" blocked MRs), R54b YAML block scalars (YAML parsed `: ` as mapping not string), R54c ls-remote + --force-with-lease=main:<sha> (--force-with-lease without explicit SHA fails on URL push). |
+| Round 55 Claude Sonnet R9 audit | 0.12.2 | 4 fixes: Part A HIGH safe-path.ts dead code wired up (vault.ts assertPathInsideVault → assertPathInsideRoot, server.ts routeBrowse → safeRealpath, routeIndex → safeRealpathStrict), D3 HIGH quota-report job-level permissions: actions: read override (workflow-level contents: read was silently 403ing /actions/runs API), D4 LOW removed unreachable v2/** push pattern, D5 LOW quota-report restricted to schedule-only. |
 
 ### 📊 Metrics
 
 | Metric | Value |
 |---|---|
 | Source files (v2) | 38 |
-| Test files | 42 (32 backend + 10 frontend) |
-| Tests | 374 (353 backend + 21 frontend, all passing) |
-| Bugs fixed (48 rounds) | 509+ |
+| Test files | 43 (32 backend + 11 frontend) |
+| Tests | 376 (353 backend + 23 frontend, all passing) |
+| Bugs fixed (55 rounds) | 561+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -105,7 +112,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.12.1)
+### Phase 3: V1 Complete (0.12.2)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -178,8 +185,15 @@
 | R45 (client timeout + test coverage expansion) | 0.10.9 | 8 | 9 | 357 |
 | R46 (transaction atomicity + component test coverage) | 0.11.0 | 8 | 11 | 368 |
 | R47 (performance + invisible bugs) | 0.11.1 | 10 | 6 | 374 |
-| R48 (CI fix + invisible bugs) | 0.12.1 | 6 | 0 | 374 |
-| **Total** | | **509+** | **509+** | **374** |
+| R48 (CI fix + invisible bugs) | 0.11.2 | 6 | 0 | 374 |
+| R49 (deep audit + perf) | 0.11.3 | 9 | 0 | 374 |
+| R50 (deep audit: cache invalidation + perf revert) | 0.11.4 | 9 | 0 | 374 |
+| R51 (security audit: 1 CRITICAL + 7 fixes) | 0.12.0 | 8 | 0 | 374 |
+| R52 (CI quality + security hardening) | 0.12.1 | 6 | 0 | 374 |
+| R53 (Claude Sonnet R8 audit: D1/D2/B1-B3/Part C/Part E) | 0.12.1 | 8 | 2 | 376 |
+| R54 (CI pipeline fix: workflow:rules + block scalars + lease SHA) | 0.12.1 | 3 | 0 | 376 |
+| R55 (Claude Sonnet R9 audit: Part A + D3 + D4 + D5) | 0.12.2 | 4 | 0 | 376 |
+| **Total** | | **561+** | **511+** | **376** |
 
 ## Performance Milestones
 
@@ -215,7 +229,7 @@
 | R41 | `Sidebar flattenSingleChild` | O(n²) on deep single-child chains | O(n) (use already-flattened sc.children) | -~n× on deep chains |
 | R42 | `searchHumanNodes` FTS5 query | Phrase-only (entire query in one pair of quotes — required exact adjacent phrase) | AND-of-terms (each term individually quoted, implicit AND) | Matches scattered/reordered words, not just adjacent phrases |
 
-## API Endpoints (0.12.1)
+## API Endpoints (0.12.2)
 
 | Endpoint | Method | Description |
 |---|---|---|
