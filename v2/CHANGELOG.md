@@ -1,5 +1,35 @@
 # Changelog — Codebase Memory V2
 
+## 0.12.3 — Round 56 (2026-07-07) self-audit + MAINTAINERS_GUIDE
+
+3 improvements from GLM self-audit (no external audit report this round).
+
+### Test coverage (MEDIUM)
+
+- **symlink escape test for assertPathInsideRoot**: R55 Part A wired up the
+  shared `safe-path.ts` utility in `vault.ts` and `server.ts`, but the
+  existing `vault.test.ts` only tested symlink loops (R51) — not the actual
+  symlink-escape attack vector that `assertPathInsideRoot` is supposed to
+  prevent. Added 2 tests: (1) symlink inside vault pointing outside is
+  rejected by readNote/writeNote/deleteNote; (2) symlink inside vault
+  pointing to another vault-internal path is allowed (no over-blocking).
+
+### Code clarity (LOW)
+
+- **backup.ts version field clarified**: `version: '0.10.3'` in the backup
+  JSON was ambiguous — could be confused with the package version (0.12.2).
+  Added a 10-line comment block explaining it's a schema version independent
+  from the package version, bumped only when the JSON shape changes.
+
+### Documentation (LOW)
+
+- **MAINTAINERS_GUIDE.md** (new file): captures the workflow conventions,
+  naming rules, required patterns (safe-path, -- separator, grep -wE,
+  maxAliasCount), anti-patterns (force-without-lease, token in URL,
+  unconditional setLoading, unquoted `: ` in YAML), CI/CD setup, test
+  infrastructure, audit etiquette, and versioning rules accumulated across
+  55 rounds. Public doc — for secrets/keys see local `MAINTAINERS_NOTES.local.md`.
+
 ## 0.12.2 — Round 55 (2026-07-07) Claude Sonnet 5 R9 audit
 
 4 issues fixed from Claude Sonnet 5 Round 9 audit report (1 HIGH, 1 LOW, 2 LOW cleanup).

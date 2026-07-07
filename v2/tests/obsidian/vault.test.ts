@@ -70,6 +70,37 @@ describe('vault helpers', () => {
     it('rejects path traversal with backslashes', () => {
       expect(() => readNote(vaultPath, '..\\\\..\\\\etc\\\\passwd')).toThrow(/path traversal/i);
     });
+
+    it('R55 (Part A): rejects symlink escape via assertPathInsideRoot (SEC-5)', () => {
+      // Create a symlink inside the vault pointing outside (e.g. to /tmp).
+      // Before R51 (SEC-5), this would let readNote/writeNote escape the vault.
+      // R55 (Part A) moved the check to the shared assertPathInsideRoot utility —
+      // this test confirms the shared utility still catches the escape.
+      ensureVaultDirs(vaultPath);
+      const outsideTarget = join(tmpDir, 'outside-target');
+      mkdirSync(outsideTarget);
+      writeFileSync(join(outsideTarget, 'secret.md'), 'sensitive content');
+      // Create symlink: vault/escape-link -> outsideTarget/secret.md
+      symlinkSync(join(outsideTarget, 'secret.md'), join(vaultPath, 'escape-link.md'));
+      // readNote should reject because the symlink resolves outside the vault.
+      expect(() => readNote(vaultPath, 'escape-link.md')).toThrow(/path traversal/i);
+      // writeNote should also reject.
+      expect(() => writeNote(vaultPath, 'escape-link.md', 'evil')).toThrow(/path traversal/i);
+      // deleteNote should also reject.
+      expect(() => deleteNote(vaultPath, 'escape-link.md')).toThrow(/path traversal/i);
+    });
+
+    it('R55 (Part A): allows symlinks that stay inside the vault', () => {
+      // A symlink inside the vault pointing to another location inside the vault
+      // is legitimate (e.g. alias notes). The shared assertPathInsideRoot must
+      // not over-block these.
+      ensureVaultDirs(vaultPath);
+      writeFileSync(join(vaultPath, 'original.md'), 'hello');
+      symlinkSync(join(vaultPath, 'original.md'), join(vaultPath, 'alias.md'));
+      // readNote via the symlink should work and return the target's content.
+      const content = readNote(vaultPath, 'alias.md');
+      expect(content).toBe('hello');
+    });
   });
 
   describe('backup rotation', () => {

@@ -35,6 +35,15 @@ export function registerBackupCommand(program: Command): void {
         }
 
         const backup = {
+          // Backup format schema version — bumped only when the JSON shape
+          // changes (new fields, renamed fields, removed fields). Independent
+          // from the package version (0.12.2 at time of writing) so that
+          // restores from older backups keep working across package upgrades.
+          // Current schema: { version, exported_at, project, notes[], edges[] }
+          // - notes[]: id, label, title, slug, body_markdown, frontmatter_json,
+          //   status, source, obsidian_path, created_at, updated_at
+          // - edges[]: id, source_human_node_id, target_human_node_id, type,
+          //   source (created_by), created_at
           version: '0.10.3',
           exported_at: new Date().toISOString(),
           project,
