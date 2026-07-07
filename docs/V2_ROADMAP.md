@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-07 for version 0.12.4.
+> Updated 2026-07-07 for version 0.12.5.
 
-## Current State (0.12.4)
+## Current State (0.12.5)
 
 ### ✅ Completed
 
@@ -64,8 +64,9 @@
 | Round 53 Claude Sonnet R8 audit | 0.12.1 | 8 fixes: D1 HIGH mirror --force-with-lease (prevents silent PR loss), D2 MEDIUM token via http.extraHeader (no token in URL), B1 CHANGELOG R47-R49 backfill, B2 CHANGELOG R51-R52 + version bump, B3 CONTRIBUTING.md GitLab label fix, Part C shared safeRealpath utility, Part E GraphTab C1 chain test. |
 | Round 54 CI pipeline fix | 0.12.1 | 3 CI fixes: R54 workflow:rules + mr-preflight job (MR pipelines were empty → "Pipelines must succeed" blocked MRs), R54b YAML block scalars (YAML parsed `: ` as mapping not string), R54c ls-remote + --force-with-lease=main:<sha> (--force-with-lease without explicit SHA fails on URL push). |
 | Round 55 Claude Sonnet R9 audit | 0.12.2 | 4 fixes: Part A HIGH safe-path.ts dead code wired up (vault.ts assertPathInsideVault → assertPathInsideRoot, server.ts routeBrowse → safeRealpath, routeIndex → safeRealpathStrict), D3 HIGH quota-report job-level permissions: actions: read override (workflow-level contents: read was silently 403ing /actions/runs API), D4 LOW removed unreachable v2/** push pattern, D5 LOW quota-report restricted to schedule-only. |
-| Round 56 self-audit + MAINTAINERS_GUIDE | 0.12.3 | 3 improvements: symlink escape test for assertPathInsideRoot (2 new tests — vault.test.ts now covers the actual SEC-5 attack vector, not just symlink loops), backup.ts version field clarified (10-line comment block — was ambiguous between schema version and package version), MAINTAINERS_GUIDE.md new file (workflow conventions, naming rules, required patterns, anti-patterns, CI/CD setup, audit etiquette — accumulated across 56 rounds). |
+| Round 56 self-audit + MAINTAINERS_GUIDE | 0.12.3 | 3 improvements: symlink escape test for assertPathInsideRoot (2 new tests — vault.test.ts now covers the actual SEC-5 attack vector, not just symlink loops), backup.ts version field clarified (10-line comment block — was ambiguous between schema version and package version), MAINTAINERS_GUIDE.md new file (workflow conventions, naming rules, required patterns, anti-patterns, CI/CD setup, audit etiquette — accumulated across 58 rounds). |
 | Round 57 doc cleanup + private notes | 0.12.4 | Doc consistency + maintainability (no code changes). 12 stale refs fixed across v2/README.md (test count 374→378, version refs 0.11.3→0.12.4, security section R51/R55), CONTRIBUTING.md (6→7 tools, 374→378 tests, 5→9 docs, npm ci→npm install, stale "planned: 0.4.0" removed, CI/CD section rewritten), MAINTAINERS_GUIDE.md (376→378 tests, R55→R56). MAINTAINERS_GUIDE.md enriched with Common pitfalls (9 items), Pre-commit checklist (12 items), Lessons learned (6 items). MAINTAINERS_NOTES.local.md created (gitignored) — operational reminders, env reset recovery, gotchas. |
+| Round 58 code quality + type safety + perf | 0.12.5 | No bugs fixed — code quality + type safety + perf in store.ts. 6 row type interfaces added (HumanNodeRow, HumanEdgeRow, IdRow, CountRow, LabelCountRow, HumanNodeWithCbmIdRow). 18 `as any` casts replaced with proper row types. deserializeNode/Edge typed properly. safeJsonParseArray: any[]→unknown[]. params: any[]→(string|number)[]. 3 hot-path prepared statements moved to constructor (getNodeById, getNodeBySlug, getNodeByObsidianPath). |
 
 ### 📊 Metrics
 
@@ -74,7 +75,7 @@
 | Source files (v2) | 38 |
 | Test files | 43 (32 backend + 11 frontend) |
 | Tests | 378 (355 backend + 23 frontend, all passing) |
-| Bugs fixed (57 rounds) | 565+ |
+| Bugs fixed (58 rounds) | 565+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -114,7 +115,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.12.4)
+### Phase 3: V1 Complete (0.12.5)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -197,6 +198,7 @@
 | R55 (Claude Sonnet R9 audit: Part A + D3 + D4 + D5) | 0.12.2 | 4 | 0 | 376 |
 | R56 (self-audit + MAINTAINERS_GUIDE: symlink escape test, backup version clarify, MAINTAINERS_GUIDE.md) | 0.12.3 | 0 | 2 | 378 |
 | R57 (doc cleanup: 12 stale refs fixed, MAINTAINERS_GUIDE pitfalls+checklist+lessons, private notes) | 0.12.4 | 0 | 0 | 378 |
+| R58 (code quality: 18 as any→row types, 3 hot-path prepared statements, deserialize typed) | 0.12.5 | 0 | 0 | 378 |
 | **Total** | | **565+** | **513+** | **378** |
 
 ## Performance Milestones
@@ -233,7 +235,7 @@
 | R41 | `Sidebar flattenSingleChild` | O(n²) on deep single-child chains | O(n) (use already-flattened sc.children) | -~n× on deep chains |
 | R42 | `searchHumanNodes` FTS5 query | Phrase-only (entire query in one pair of quotes — required exact adjacent phrase) | AND-of-terms (each term individually quoted, implicit AND) | Matches scattered/reordered words, not just adjacent phrases |
 
-## API Endpoints (0.12.4)
+## API Endpoints (0.12.5)
 
 | Endpoint | Method | Description |
 |---|---|---|

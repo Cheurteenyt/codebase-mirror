@@ -64,6 +64,73 @@ export interface CreateHumanEdgeInput {
   source_file?: string | null;
 }
 
+// ── Row types (what SQLite actually returns, before deserialization) ───────
+// R58: these replace the previous `as any` casts on every .get()/.all() call.
+// The raw DB row has cbm_node_ids and tags as JSON strings (not number[]/string[]),
+// which is why deserializeNode() exists to bridge the gap. Typing the row
+// directly catches column-name typos at compile time and documents the schema.
+
+/** Raw row from `SELECT * FROM human_nodes` — JSON columns are still strings. */
+interface HumanNodeRow {
+  id: number;
+  project: string;
+  label: string;
+  title: string;
+  slug: string;
+  body_markdown: string;
+  frontmatter_json: string;
+  status: string;
+  source: string;
+  obsidian_path: string | null;
+  cbm_node_ids: string;  // JSON array string, deserialized to number[]
+  tags: string;           // JSON array string, deserialized to string[]
+  provenance: string;
+  confidence: number;
+  source_file: string | null;
+  author: string | null;
+  created_at: string;
+  updated_at: string;
+  last_synced_at: string | null;
+}
+
+/** Raw row from `SELECT * FROM human_edges`. */
+interface HumanEdgeRow {
+  id: number;
+  project: string;
+  source_human_node_id: number;
+  target_kind: string;
+  target_cbm_node_id: number | null;
+  target_human_node_id: number | null;
+  type: string;
+  properties_json: string;
+  provenance: string;
+  confidence: number;
+  source_file: string | null;
+  created_at: string;
+}
+
+/** Row from `SELECT id FROM ...` (slug collision check). */
+interface IdRow {
+  id: number;
+}
+
+/** Row from `SELECT COUNT(*) AS c FROM ...`. */
+interface CountRow {
+  c: number;
+}
+
+/** Row from `SELECT label, COUNT(*) AS c ... GROUP BY label`. */
+interface LabelCountRow {
+  label: string;
+  c: number;
+}
+
+/** Row from the bulk-neighbor query: human_nodes.* + junction table's cbm_id. */
+interface HumanNodeWithCbmIdRow extends HumanNodeRow {
+  cbm_id: number;
+  rn?: number;
+}
+
 function expandTilde(p: string): string {
   if (p.startsWith('~/') || p === '~') {
     return join(homedir(), p.slice(2));
@@ -82,6 +149,16 @@ export class HumanMemoryStore {
   private notifyHub: { notify: (project: string, type: string, data?: Record<string, unknown>) => void } | null = null;
   private projectName: string | null = null;
 
+  // R58: hot-path prepared statements, prepared once in the constructor.
+  // better-sqlite3 caches prepared statements internally, but holding the
+  // Statement object directly avoids the cache lookup + JS wrapper allocation
+  // on every call. These methods (getNodeById, getNodeBySlug, getNodeByObsidianPath)
+  // are called on every MCP tool invocation, every UI dashboard load, and every
+  // sync cycle — so the savings compound.
+  private stmtGetNodeById!: Database.Statement;
+  private stmtGetNodeBySlug!: Database.Statement;
+  private stmtGetNodeByObsidianPath!: Database.Statement;
+
   constructor(dbPath: string) {
     const expanded = expandTilde(dbPath);
     const dir = dirname(expanded);
@@ -97,6 +174,12 @@ export class HumanMemoryStore {
     this.db.pragma('temp_store = MEMORY');
     this.db.pragma('cache_size = -65536');
     runMigrations(this.db);
+    // R58: prepare hot-path statements once. These are the 3 single-row lookups
+    // called on every MCP/UI/sync request — preparing them here means each call
+    // is just .get(params) with no SQL compilation or cache lookup.
+    this.stmtGetNodeById = this.db.prepare('SELECT * FROM human_nodes WHERE id = ?');
+    this.stmtGetNodeBySlug = this.db.prepare('SELECT * FROM human_nodes WHERE project = ? AND slug = ?');
+    this.stmtGetNodeByObsidianPath = this.db.prepare('SELECT * FROM human_nodes WHERE project = ? AND obsidian_path = ?');
   }
 
   /**
@@ -132,8 +215,16 @@ export class HumanMemoryStore {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
     db.pragma('temp_store = MEMORY');
+    // R58: prepare the same hot-path statements as the file-based constructor.
+    // Uses `as any` to assign to private fields from a static method — the
+    // alternative would be a private helper called by both constructors, but
+    // openMemory() intentionally bypasses the file-DB constructor entirely.
     (store as any).db = db;
     runMigrations(db);
+    // R58: prepare AFTER migrations — the tables must exist before prepare().
+    (store as any).stmtGetNodeById = db.prepare('SELECT * FROM human_nodes WHERE id = ?');
+    (store as any).stmtGetNodeBySlug = db.prepare('SELECT * FROM human_nodes WHERE project = ? AND slug = ?');
+    (store as any).stmtGetNodeByObsidianPath = db.prepare('SELECT * FROM human_nodes WHERE project = ? AND obsidian_path = ?');
     return store;
   }
 
@@ -198,7 +289,7 @@ export class HumanMemoryStore {
     const checkSlug = this.db.prepare('SELECT id FROM human_nodes WHERE project = ? AND slug = ?');
     while (attempt < 100) {
       const candidate = attempt === 0 ? slug : `${slug}-${attempt + 1}`;
-      const existing = checkSlug.get(input.project, candidate) as any;
+      const existing = checkSlug.get(input.project, candidate) as IdRow | undefined;
       if (!existing) {
         finalSlug = candidate;
         // Recompute obsidianPath if slug changed and user didn't supply an explicit path.
@@ -256,23 +347,17 @@ export class HumanMemoryStore {
   }
 
   getNodeById(id: number): HumanNode | null {
-    const row = this.db
-      .prepare('SELECT * FROM human_nodes WHERE id = ?')
-      .get(id) as any;
+    const row = this.stmtGetNodeById.get(id) as HumanNodeRow | undefined;
     return row ? deserializeNode(row) : null;
   }
 
   getNodeBySlug(project: string, slug: string): HumanNode | null {
-    const row = this.db
-      .prepare('SELECT * FROM human_nodes WHERE project = ? AND slug = ?')
-      .get(project, slug) as any;
+    const row = this.stmtGetNodeBySlug.get(project, slug) as HumanNodeRow | undefined;
     return row ? deserializeNode(row) : null;
   }
 
   getNodeByObsidianPath(project: string, path: string): HumanNode | null {
-    const row = this.db
-      .prepare('SELECT * FROM human_nodes WHERE project = ? AND obsidian_path = ?')
-      .get(project, path) as any;
+    const row = this.stmtGetNodeByObsidianPath.get(project, path) as HumanNodeRow | undefined;
     return row ? deserializeNode(row) : null;
   }
 
@@ -283,7 +368,7 @@ export class HumanMemoryStore {
     offset?: number;
   } = {}): HumanNode[] {
     const conditions: string[] = ['project = ?'];
-    const params: any[] = [project];
+    const params: (string | number)[] = [project];
     if (opts.label) {
       conditions.push('label = ?');
       params.push(opts.label);
@@ -295,7 +380,7 @@ export class HumanMemoryStore {
     const limit = opts.limit ?? 200;
     const offset = opts.offset ?? 0;
     const sql = `SELECT * FROM human_nodes WHERE ${conditions.join(' AND ')} ORDER BY updated_at DESC, id ASC LIMIT ? OFFSET ?`;
-    const rows = this.db.prepare(sql).all(...params, limit, offset) as any[];
+    const rows = this.db.prepare(sql).all(...params, limit, offset) as HumanNodeRow[];
     return rows.map(deserializeNode);
   }
 
@@ -310,7 +395,7 @@ export class HumanMemoryStore {
          ORDER BY n.updated_at DESC, n.id ASC
          LIMIT ?`
       )
-      .all(project, cbmNodeId, limit) as any[];
+      .all(project, cbmNodeId, limit) as HumanNodeRow[];
     return rows.map(deserializeNode);
   }
 
@@ -349,7 +434,7 @@ export class HumanMemoryStore {
                WHERE n.project = ? AND l.cbm_node_id IN (${placeholders})
              ) WHERE rn <= ?`
           )
-          .all(project, ...chunk, limit) as any[];
+          .all(project, ...chunk, limit) as HumanNodeWithCbmIdRow[];
         for (const row of rows) {
           const cbmId = Number(row.cbm_id);
           if (!result.has(cbmId)) continue;
@@ -367,7 +452,7 @@ export class HumanMemoryStore {
                WHERE n.project = ? AND l.cbm_node_id IN (${placeholders})
                ORDER BY n.updated_at DESC, n.id ASC`
             )
-            .all(project, ...chunk) as any[];
+            .all(project, ...chunk) as HumanNodeWithCbmIdRow[];
           for (const row of rows) {
             const cbmId = Number(row.cbm_id);
             if (!result.has(cbmId)) continue;
@@ -389,7 +474,7 @@ export class HumanMemoryStore {
     if (!existing) return null;
 
     const sets: string[] = [];
-    const params: any[] = [];
+    const params: (string | number | null)[] = [];
 
     if (input.title !== undefined) {
       if (!input.title.trim()) {
@@ -618,7 +703,7 @@ export class HumanMemoryStore {
         input.target_kind === 'code' ? input.target_cbm_node_id! : null,
         input.target_kind === 'human' ? input.target_human_node_id! : null,
         input.type
-      ) as any;
+      ) as HumanEdgeRow | undefined;
     if (existingEdge) {
       return deserializeEdge(existingEdge);
     }
@@ -683,14 +768,14 @@ export class HumanMemoryStore {
   getEdgeById(id: number): HumanEdge | null {
     const row = this.db
       .prepare('SELECT * FROM human_edges WHERE id = ?')
-      .get(id) as any;
+      .get(id) as HumanEdgeRow | undefined;
     return row ? deserializeEdge(row) : null;
   }
 
   listEdgesFromNode(humanNodeId: number, limit = 200): HumanEdge[] {
     const rows = this.db
       .prepare('SELECT * FROM human_edges WHERE source_human_node_id = ? LIMIT ?')
-      .all(humanNodeId, limit) as any[];
+      .all(humanNodeId, limit) as HumanEdgeRow[];
     return rows.map(deserializeEdge);
   }
 
@@ -701,7 +786,7 @@ export class HumanMemoryStore {
   listAllEdges(project: string, limit = 1000000): HumanEdge[] {
     const rows = this.db
       .prepare('SELECT * FROM human_edges WHERE project = ? LIMIT ?')
-      .all(project, limit) as any[];
+      .all(project, limit) as HumanEdgeRow[];
     return rows.map(deserializeEdge);
   }
 
@@ -712,7 +797,7 @@ export class HumanMemoryStore {
          WHERE project = ? AND target_kind = 'code' AND target_cbm_node_id = ?
          LIMIT ?`
       )
-      .all(project, cbmNodeId, limit) as any[];
+      .all(project, cbmNodeId, limit) as HumanEdgeRow[];
     return rows.map(deserializeEdge);
   }
 
@@ -723,7 +808,7 @@ export class HumanMemoryStore {
          WHERE target_kind = 'human' AND target_human_node_id = ?
          LIMIT ?`
       )
-      .all(humanNodeId, limit) as any[];
+      .all(humanNodeId, limit) as HumanEdgeRow[];
     return rows.map(deserializeEdge);
   }
 
@@ -734,13 +819,13 @@ export class HumanMemoryStore {
       return (
         this.db
           .prepare('SELECT COUNT(*) AS c FROM human_nodes WHERE project = ? AND label = ?')
-          .get(project, label) as any
+          .get(project, label) as CountRow
       ).c;
     }
     return (
       this.db
         .prepare('SELECT COUNT(*) AS c FROM human_nodes WHERE project = ?')
-        .get(project) as any
+        .get(project) as CountRow
     ).c;
   }
 
@@ -754,7 +839,7 @@ export class HumanMemoryStore {
       .prepare(
         `SELECT label, COUNT(*) AS c FROM human_nodes WHERE project = ? GROUP BY label`
       )
-      .all(project) as any[];
+      .all(project) as LabelCountRow[];
     const result: Record<string, number> = {};
     let total = 0;
     for (const row of rows) {
@@ -820,7 +905,7 @@ export class HumanMemoryStore {
            ORDER BY rank
            LIMIT ?`
         )
-        .all(project, andQuery, limit) as any[];
+        .all(project, andQuery, limit) as HumanNodeRow[];
       if (rows.length > 0) return rows.map(deserializeNode);
       // 0 hits from FTS5 — fall through to LIKE which does substring matching
       // (broader than FTS5's token matching — might catch a typo or a word
@@ -846,7 +931,7 @@ export class HumanMemoryStore {
          ORDER BY updated_at DESC
          LIMIT ?`
       )
-      .all(project, likePattern, likePattern, likePattern, likePattern, likePattern, limit) as any[];
+      .all(project, likePattern, likePattern, likePattern, likePattern, likePattern, limit) as HumanNodeRow[];
     return rows.map(deserializeNode);
   }
 
@@ -855,13 +940,13 @@ export class HumanMemoryStore {
       return (
         this.db
           .prepare('SELECT COUNT(*) AS c FROM human_edges WHERE project = ? AND type = ?')
-          .get(project, type) as any
+          .get(project, type) as CountRow
       ).c;
     }
     return (
       this.db
         .prepare('SELECT COUNT(*) AS c FROM human_edges WHERE project = ?')
-        .get(project) as any
+        .get(project) as CountRow
     ).c;
   }
 
@@ -937,7 +1022,7 @@ export class HumanMemoryStore {
   }
 }
 
-function safeJsonParseArray(s: string | null | undefined): any[] {
+function safeJsonParseArray(s: string | null | undefined): unknown[] {
   if (!s) return [];
   try {
     const v = JSON.parse(s);
@@ -948,19 +1033,22 @@ function safeJsonParseArray(s: string | null | undefined): any[] {
   }
 }
 
-function deserializeNode(row: any): HumanNode {
+function deserializeNode(row: HumanNodeRow): HumanNode {
   return {
     id: row.id,
     project: row.project,
-    label: row.label,
+    // Cast: the DB CHECK constraint guarantees these match the union types,
+    // but TypeScript can't know that from the raw `string` column type.
+    label: row.label as HumanNodeLabel,
     title: row.title,
     slug: row.slug,
     body_markdown: row.body_markdown,
     frontmatter_json: row.frontmatter_json,
-    status: row.status,
-    source: row.source,
+    status: row.status as HumanNodeStatus,
+    source: row.source as HumanNodeSource,
     obsidian_path: row.obsidian_path,
-    cbm_node_ids: safeJsonParseArray(row.cbm_node_ids).filter((x) => typeof x === "number" && Number.isFinite(x) && x > 0),
+    cbm_node_ids: safeJsonParseArray(row.cbm_node_ids)
+      .filter((x): x is number => typeof x === "number" && Number.isFinite(x) && x > 0),
     tags: safeJsonParseArray(row.tags).map((x) => String(x)),
     provenance: row.provenance,
     confidence: row.confidence,
@@ -972,15 +1060,15 @@ function deserializeNode(row: any): HumanNode {
   };
 }
 
-function deserializeEdge(row: any): HumanEdge {
+function deserializeEdge(row: HumanEdgeRow): HumanEdge {
   return {
     id: row.id,
     project: row.project,
     source_human_node_id: row.source_human_node_id,
-    target_kind: row.target_kind,
+    target_kind: row.target_kind as 'code' | 'human',
     target_cbm_node_id: row.target_cbm_node_id,
     target_human_node_id: row.target_human_node_id,
-    type: row.type,
+    type: row.type as HumanEdgeType,
     properties_json: row.properties_json,
     provenance: row.provenance,
     confidence: row.confidence,
