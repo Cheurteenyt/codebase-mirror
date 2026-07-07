@@ -1,5 +1,40 @@
 # Changelog — Codebase Memory V2
 
+## 0.13.4 — Round 67 (2026-07-07) V1+V2 combined benchmark — real data
+
+Built V1 from source and indexed the V2 codebase to get real performance
+numbers. Full report: docs/V1_V2_BENCHMARK_R67.md.
+
+### V1 indexation benchmark (real data)
+
+- Built V1 binary from source: 562 source files, 259MB binary
+- Indexed V2 codebase: 35 files, 460 nodes, 1499 edges in **305ms**
+- Throughput: ~115 files/second (tree-sitter + arena + slab + 12 workers)
+- Pipeline: configlink(0ms) → route_match(0ms) → complexity(0ms) → dump(5ms) → total 284ms
+
+### V2 query benchmark (same DB, real data)
+
+- getNodeById: 0.006ms (183K ops/sec)
+- searchCode LIKE: 0.077ms (13K ops/sec)
+- countNodes: 0.013ms (74K ops/sec)
+- countAll: 0.050ms (20K ops/sec)
+- getBulkNodeDegrees(100): 0.219ms (4.6K ops/sec)
+- listNodes(200): 1.195ms (837 ops/sec)
+
+### V1 vs V2 comparison
+
+- SQLite query overhead: V1 ~0.001ms vs V2 ~0.006ms (+0.005ms JS binding, negligible)
+- CLI startup: V1 ~25ms per invocation vs V2 0ms (already running)
+- Application cache: V1 none vs V2 SWR (0.0003ms for hits) — V2 faster for repeated
+- V1 can do code analysis V2 cannot (tree-sitter, complexity, similarity, cross-repo)
+- V2 can do human context V1 cannot (ADRs, bugs, Obsidian sync, MCP, React UI)
+
+### Key insight
+
+V2 depends entirely on V1 for code graph creation. Without the `cbm` binary,
+V2 has no code graph to serve. This is the biggest architectural gap:
+V2 has no fallback when V1 is unavailable.
+
 ## 0.13.3 — Round 66 (2026-07-07) performance benchmark suite
 
 Created a comprehensive benchmark suite measuring V2 sidecar performance
