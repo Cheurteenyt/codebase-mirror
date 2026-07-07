@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 67 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across 68 audit rounds. Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R67). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R68). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -182,7 +182,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.13.4 (R67).
+  - Currently 0.14.0 (R68).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes. Currently `0.10.3` (frozen
   since R36 — the schema hasn't changed).
@@ -215,8 +215,9 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R65 | 0.13.2 | V1 C engine audit (65K LOC, reference read-only) — 1 HIGH strcat overflow, 2 MEDIUM unchecked malloc + slab_owns O(n), docs/V1_AUDIT_R65.md |
 | R66 | 0.13.3 | performance benchmark suite — 19 benchmarks, all excellent. SWR 0.0003ms, prepared 0.006ms, bulk 88x speedup. docs/PERFORMANCE_BENCHMARK_R66.md |
 | R67 | 0.13.4 | V1+V2 combined benchmark — V1 index 305ms (460 nodes), V2 query 0.006ms. Key gap: V2 depends entirely on V1 for code analysis. docs/V1_V2_BENCHMARK_R67.md |
+| R68 | 0.14.0 | **native TS/JS indexer** — V2 can index without V1 `cbm` binary. ts-morph, 48 files→352 nodes→1070 edges, 1833ms. New `cbm-v2 index` CLI. Schema-compatible with V1. |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R67).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R68).
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.13.4",
+  "version": "0.14.0",
   "description": "Codebase Memory V2 sidecar \u2014 human memory graph + Obsidian sync",
   "type": "module",
   "main": "dist/cli/index.js",
@@ -19,6 +19,7 @@
   "dependencies": {
     "better-sqlite3": "^11.3.0",
     "commander": "^12.1.0",
+    "ts-morph": "^28.0.0",
     "ws": "^8.21.0",
     "yaml": "^2.5.1"
   },

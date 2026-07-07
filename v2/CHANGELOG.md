@@ -1,5 +1,65 @@
 # Changelog — Codebase Memory V2
 
+## 0.14.0 — Round 68 (2026-07-07) native TypeScript/JavaScript indexer
+
+**Minor version bump** — new feature: V2 can now index TS/JS projects without
+the V1 `cbm` binary. This gives V2 partial autonomy for TypeScript/JavaScript
+projects.
+
+### New feature: native indexer (HIGH)
+
+Created `v2/src/indexer/` module with 3 files:
+
+- **`schema.ts`** — SQLite schema compatible with V1 (nodes, edges, file_hashes,
+  projects tables + indexes). V2's `sqlite-ro.ts` reads the DB transparently
+  whether it was created by V1 (C, 158 languages) or V2 (TS/JS only).
+- **`extractor.ts`** — uses `ts-morph` (TypeScript compiler API wrapper) to
+  extract nodes (File, Class, Function, Method, Variable) and edges (CONTAINS,
+  IMPORTS, CALLS) from .ts/.tsx/.js/.jsx/.mjs/.cjs files. Includes:
+  - Incremental indexing (content hash comparison, skip unchanged files)
+  - Complexity estimation (cyclomatic — counts if/while/for/case/catch/&&/||)
+  - Import resolution (relative imports → file path → IMPORTS edge)
+  - Call resolution (CallExpression → callee name → CALLS edge)
+- **`indexer.ts`** — orchestrator: opens DB → init schema → discover files →
+  extract → update stats. Returns ExtractionResult with counts + errors.
+
+New CLI command: `cbm-v2 index --project <name> --root <path> [--incremental] [--dry-run]`
+
+New dependency: `ts-morph` (TypeScript compiler API wrapper).
+
+### Benchmark: V2 native indexer vs V1 C engine
+
+Same codebase (v2/src, 48 TS files):
+
+| Metric | V1 (C, tree-sitter) | V2 (native, ts-morph) |
+|---|---|---|
+| Files indexed | 35 | 48 (includes .js) |
+| Nodes extracted | 460 | 352 |
+| Edges extracted | 1,499 | 1,070 |
+| Duration | 305ms | 1,833ms |
+| Languages | 158 | 1 (TS/JS) |
+
+V2 is 6x slower and extracts fewer nodes/edges (V1's tree-sitter is more
+thorough — extracts types, interfaces, enums, etc.). But V2 works without
+the `cbm` binary, which was the #1 architectural gap identified in R67.
+
+### Limitations vs V1
+
+- Only TS/JS (V1 supports 158 languages)
+- No simhash/minhash similarity detection
+- No cross-repo intelligence
+- No git history analysis
+- No trace ingestion
+- No LSP-based call resolution (static analysis only)
+- No parallel pipeline (single-threaded)
+
+### When to use native indexer vs V1
+
+- **Use V1 (`cbm index_repository`)** when: the `cbm` binary is available,
+  you need multi-language support, or you need maximum accuracy/performance.
+- **Use V2 native (`cbm-v2 index`)** when: the `cbm` binary is NOT available,
+  your project is TS/JS only, or you want a quick index without building V1.
+
 ## 0.13.4 — Round 67 (2026-07-07) V1+V2 combined benchmark — real data
 
 Built V1 from source and indexed the V2 codebase to get real performance

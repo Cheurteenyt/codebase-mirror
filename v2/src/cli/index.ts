@@ -10,6 +10,7 @@ import { registerStatsCommand } from './commands/stats.js';
 import { registerBackupCommand } from './commands/backup.js';
 import { registerDemoCommand } from './commands/demo.js';
 import { registerWatchCommand } from './commands/watch.js';
+import { registerIndexCommand } from './commands/index.js';
 import { McpServer } from '../mcp/server.js';
 import { UiServer } from '../ui/server.js';
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
@@ -36,6 +37,7 @@ registerStatsCommand(program);
 registerBackupCommand(program);
 registerDemoCommand(program);
 registerWatchCommand(program);
+registerIndexCommand(program);
 
 program
   .command('mcp')
