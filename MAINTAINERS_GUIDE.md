@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 69 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across 70 audit rounds. Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R69). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R70). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -49,6 +49,13 @@ targetPath) MUST go through `v2/src/utils/safe-path.ts`:
 - `safeRealpathStrict(absPath)` — throws on missing path (routeIndex 404).
 - `assertPathInsideRoot(rootPath, relPath)` — vault containment check
   (readNote, writeNote, deleteNote).
+
+**CRITICAL**: `assertPathInsideRoot` returns the resolved, symlink-safe real
+path. You MUST capture and use this return value for the actual file operation
+(readFileSync, writeFileSync, renameSync) — don't just call the check and
+discard it. Using the unresolved `join(rootPath, relPath)` would operate on
+the symlink, not its target, defeating the containment check. See `routeBrowse`
+in `routes/system.ts` for the correct pattern (`targetPath = realTargetPath`).
 
 **Don't** write inline `realpathSync` try/catch blocks. **Don't** use
 `resolve()` alone for containment checks — it doesn't follow symlinks.
@@ -182,7 +189,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.15.1 (R69).
+  - Currently 0.15.2 (R70).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes. Currently `0.10.3` (frozen
   since R36 — the schema hasn't changed).
@@ -218,7 +225,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R68 | 0.14.0 | **native TS/JS indexer** — V2 can index without V1 `cbm` binary. ts-morph, 48 files→352 nodes→1070 edges, 1833ms. New `cbm-v2 index` CLI. Schema-compatible with V1. |
 | R69 | 0.15.0 | **WASM tree-sitter** — 112 languages, 5.4x faster than R68 (340ms vs 1833ms). Within 12% of V1 C speed. No binary dependency. New deps: web-tree-sitter + tree-sitter-wasm. |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R69).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R70).
 
 ---
 

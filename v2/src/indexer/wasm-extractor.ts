@@ -193,7 +193,12 @@ function getDeclName(node: TSNode): string {
     const child = node.child(i);
     if (child && child.type === 'identifier') return child.text;
   }
-  return 'anonymous';
+  // R70 (Part B): disambiguate anonymous functions with line number.
+  // Without this, every anonymous callback in the same scope gets the same
+  // qualified name (${parentQn}::anonymous), causing qnToId.set() to
+  // silently overwrite previous entries. Using the line number ensures
+  // each anonymous function gets a unique qualified name.
+  return `anonymous@${node.startPosition.row + 1}`;
 }
 
 /**

@@ -1,5 +1,53 @@
 # Changelog — Codebase Memory V2
 
+## 0.15.2 — Round 70 (2026-07-07) Claude Sonnet R10 audit — 3 fixes
+
+Implements 3 fixes from Claude Sonnet 5 Round 10 audit report.
+
+### Part A (MEDIUM) — vault.ts path safety fix (carryover from R9)
+
+- **Bug**: `readNote`, `writeNote`, `deleteNote` called `assertPathInsideRoot()`
+  but discarded the return value (the resolved, symlink-safe real path). The
+  actual file operations used `join(vaultPath, relPath)` — the unresolved path.
+  This meant a symlink inside the vault pointing outside could pass the
+  containment check but the file operation would operate on the symlink, not
+  its resolved target.
+- **Fix**: all three functions now capture the return value of
+  `assertPathInsideRoot()` and use it for the actual file operation
+  (`readFileSync`, `writeFileSync`, `renameSync`). This matches the pattern
+  already used correctly in `routeBrowse` (`routes/system.ts`).
+- **MAINTAINERS_GUIDE.md** updated: added CRITICAL note to the "Path safety"
+  section explaining that the return value MUST be captured and used, with
+  a cross-reference to `routeBrowse` as the correct pattern.
+
+### Part B (MEDIUM) — WASM extractor anonymous function name collision
+
+- **Bug**: `getDeclName()` in `wasm-extractor.ts` returned the literal string
+  `'anonymous'` for all unnamed functions. Every anonymous callback in the
+  same scope got the same qualified name (`${parentQn}::anonymous`), causing
+  `qnToId.set()` to silently overwrite previous entries — the map only
+  remembered the last anonymous function in each scope.
+- **Fix**: `getDeclName()` now returns `` `anonymous@${node.startPosition.row + 1}` ``
+  — the line number ensures each anonymous function gets a unique qualified name.
+  This prevents the silent overwrite and makes future features that look up
+  specific anonymous functions by QN reliable.
+
+### Part C (LOW) — benchmark precision caveat
+
+- **Issue**: the "2.2x more nodes" figure in the R69 benchmark was framed as
+  "more complete extraction" but V2 counts each inline anonymous callback as
+  a separate node while V1 does not — a methodological difference, not
+  necessarily a thoroughness win.
+- **Fix**: added a "Caveat on node counts" section to `docs/V1_V2_BENCHMARK_R67.md`
+  explaining that node counts are not directly comparable as a measure of
+  extraction thoroughness.
+
+### Verified clean (from audit)
+
+- R69b `package.json` fix: confirmed complete (all deps present)
+- R63 `server.ts` → `routes/*.ts` decomposition: 15 routes, all accounted for
+- `MAINTAINERS_GUIDE.md`: well-executed, correct public/private split
+
 ## 0.15.1 — Round 69b (2026-07-07) fix: package.json dependencies restored
 
 Fix: the R69 commit accidentally lost the original `package.json` dependencies

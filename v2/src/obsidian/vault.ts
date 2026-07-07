@@ -41,10 +41,14 @@ export function ensureVaultDirs(vaultPath: string): void {
 }
 
 export function readNote(vaultPath: string, relPath: string): string | null {
-  assertPathInsideRoot(vaultPath, relPath);
-  const absPath = join(vaultPath, relPath);
-  if (!existsSync(absPath)) return null;
-  return readFileSync(absPath, 'utf-8');
+  // R70 (Part A): capture and use the resolved real path for the actual
+  // file operation — don't just call the check and discard it. The return
+  // value of assertPathInsideRoot is the symlink-resolved path; using the
+  // unresolved join(vaultPath, relPath) would operate on the symlink, not
+  // its target, defeating the purpose of the containment check.
+  const realPath = assertPathInsideRoot(vaultPath, relPath);
+  if (!existsSync(realPath)) return null;
+  return readFileSync(realPath, 'utf-8');
 }
 
 /**
@@ -57,8 +61,8 @@ export function writeNote(
   content: string,
   opts: { backupBeforeWrite?: boolean } = {}
 ): { written: boolean; backupPath: string | null } {
-  assertPathInsideRoot(vaultPath, relPath);
-  const absPath = join(vaultPath, relPath);
+  // R70 (Part A): use the resolved real path, same as readNote.
+  const absPath = assertPathInsideRoot(vaultPath, relPath);
   let backupPath: string | null = null;
 
   if (existsSync(absPath)) {
@@ -204,8 +208,10 @@ export function hashContent(content: string): string {
 }
 
 export function deleteNote(vaultPath: string, relPath: string): boolean {
-  assertPathInsideRoot(vaultPath, relPath);
-  const absPath = join(vaultPath, relPath);
+  // R70 (Part A): use the resolved real path. deleteNote is the most
+  // consequential of the three — renameSync on an unresolved symlink path
+  // could rename the symlink itself rather than the target file.
+  const absPath = assertPathInsideRoot(vaultPath, relPath);
   if (!existsSync(absPath)) return false;
   // Soft delete: rename to .deleted.<ts>
   const deletedPath = `${absPath}.deleted.${Date.now()}`;

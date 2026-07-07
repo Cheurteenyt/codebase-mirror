@@ -289,7 +289,7 @@ Tous les tools V2 vivent dans `v2/src/mcp/tools/`. Ils sont exposés via le
 serveur MCP TypeScript qui tourne en parallèle du moteur C.
 
 > **Note**: L'architecture cible prévoyait 15 tools. Actuellement 7 sont implémentés
-> (version 0.15.1). Les 8 restants sont planifiés pour les phases 2-3 (voir V2_ROADMAP.md).
+> (version 0.15.2). Les 8 restants sont planifiés pour les phases 2-3 (voir V2_ROADMAP.md).
 
 | # | Tool | Type | Statut | Description |
 |---|---|---|---|---|

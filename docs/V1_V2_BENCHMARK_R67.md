@@ -94,3 +94,13 @@ V1 and V2 are **complementary, not competitive**:
 
 The benchmark confirms: V1 indexes in 305ms, V2 serves in 0.006ms. Together they
 form a complete system. Neither is "better" — they are two halves of a whole.
+
+## Caveat on node counts (R70 / Round 10 audit)
+
+Node counts between V1 and V2 are **not directly comparable** as a measure of
+extraction thoroughness. V2 (WASM, R69) counts each inline anonymous callback
+(arrow functions, `.map(x => ...)`, `.then(...)`) as a separate Function node,
+while V1 does not extract anonymous callbacks as standalone nodes. This means
+V2's higher node count (784 vs 460) is partly a methodological difference in
+what counts as an extractable unit, not necessarily a difference in completeness
+or accuracy.
