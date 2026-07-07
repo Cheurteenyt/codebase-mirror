@@ -89,8 +89,8 @@ export function registerBackupCommand(program: Command): void {
         writeFileSync(outputPath, JSON.stringify(backup, null, 2), 'utf-8');
         console.log(`✅ Backup exported: ${outputPath}`);
         console.log(`   ${backup.notes.length} notes, ${backup.edges.length} edges`);
-      } catch (e: any) {
-        console.error(`Error: ${e.message}`);
+      } catch (e: unknown) {
+        console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
         process.exitCode = 1;
       } finally {
         humanStore.close();
@@ -185,8 +185,8 @@ export function registerBackupCommand(program: Command): void {
                 author: note.author || undefined,
               });
               importedNotes++;
-            } catch (e: any) {
-              console.error(`  Warning: skipped note "${note.slug}": ${e.message}`);
+            } catch (e: unknown) {
+              console.error(`  Warning: skipped note "${note.slug}": ${(e instanceof Error ? e.message : String(e))}`);
               skippedNotes++;
             }
           }
@@ -225,8 +225,8 @@ export function registerBackupCommand(program: Command): void {
                   properties: safeJsonParse(edge.properties_json, {}),
                 });
                 importedEdges++;
-              } catch (e: any) {
-                console.error(`  Warning: skipped edge: ${e.message}`);
+              } catch (e: unknown) {
+                console.error(`  Warning: skipped edge: ${(e instanceof Error ? e.message : String(e))}`);
               }
             }
           }
@@ -238,8 +238,8 @@ export function registerBackupCommand(program: Command): void {
         } finally {
           humanStore.close();
         }
-      } catch (e: any) {
-        console.error(`Error: ${e.message}`);
+      } catch (e: unknown) {
+        console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
         process.exitCode = 1;
       }
     });

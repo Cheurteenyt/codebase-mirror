@@ -154,8 +154,8 @@ export function registerWatchCommand(program: Command): void {
               console.log(`[cbm-v2 watch] Export: ${result.created.length} created, ${result.updated.length} updated`);
             }
           }
-        } catch (e: any) {
-          console.error(`[cbm-v2 watch] Error during sync: ${e.message}`);
+        } catch (e: unknown) {
+          console.error(`[cbm-v2 watch] Error during sync: ${(e instanceof Error ? e.message : String(e))}`);
         }
       }
 
@@ -188,8 +188,8 @@ export function registerWatchCommand(program: Command): void {
           if (result.created.length > 0 || result.updated.length > 0) {
             console.log(`[cbm-v2 watch] Export (DB change): ${result.created.length} created, ${result.updated.length} updated`);
           }
-        } catch (e: any) {
-          console.error(`[cbm-v2 watch] Error during export: ${e.message}`);
+        } catch (e: unknown) {
+          console.error(`[cbm-v2 watch] Error during export: ${(e instanceof Error ? e.message : String(e))}`);
         }
       }
 
@@ -236,8 +236,8 @@ export function registerWatchCommand(program: Command): void {
             runSync();
           }, debounceMs);
         });
-      } catch (e: any) {
-        console.error(`[cbm-v2 watch] Failed to watch vault: ${e.message}`);
+      } catch (e: unknown) {
+        console.error(`[cbm-v2 watch] Failed to watch vault: ${(e instanceof Error ? e.message : String(e))}`);
         console.error('       Recursive watch may not be supported on this platform.');
         console.error('       Use "cbm-v2 obsidian sync" for manual sync.');
         humanStore.close();

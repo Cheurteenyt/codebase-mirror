@@ -109,8 +109,8 @@ export function loadConfig(cwd: string = process.cwd()): V2Config {
   if (existsSync(configPath)) {
     try {
       userConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
-    } catch (e: any) {
-      process.stderr.write(`[cbm-v2] Warning: .codebase-memory.json is malformed (${e.message}). Using defaults.\n`);
+    } catch (e: unknown) {
+      process.stderr.write(`[cbm-v2] Warning: .codebase-memory.json is malformed (${(e instanceof Error ? e.message : String(e))}). Using defaults.\n`);
       userConfig = {};
     }
   }

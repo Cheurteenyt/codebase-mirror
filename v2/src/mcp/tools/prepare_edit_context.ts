@@ -256,8 +256,8 @@ export class PrepareEditContextTool extends BaseTool {
         graph_freshness: freshness,
         recommendation,
       });
-    } catch (e: any) {
-      return this.error(e.message);
+    } catch (e: unknown) {
+      return this.error((e instanceof Error ? e.message : String(e)));
     }
   }
 

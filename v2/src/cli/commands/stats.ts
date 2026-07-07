@@ -70,8 +70,8 @@ export function registerStatsCommand(program: Command): void {
         } else {
           printPrettyStats(stats);
         }
-      } catch (e: any) {
-        console.error('Error: ' + e.message);
+      } catch (e: unknown) {
+        console.error('Error: ' + (e instanceof Error ? e.message : String(e)));
         process.exitCode = 1;
       } finally {
         humanStore.close();

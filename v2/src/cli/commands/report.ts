@@ -29,7 +29,7 @@ function withProjectStores<T>(
   try {
     try {
       codeReader = new CodeGraphReader(defaultCodeDbPath(project));
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Code graph not available — the report functions all accept an
       // undefined codeReader and degrade gracefully (human-only mode).
       // We DON'T early-return here (that was the leak) — we fall through
@@ -38,8 +38,8 @@ function withProjectStores<T>(
     }
     const result = fn(humanStore, codeReader);
     return { ok: true, result };
-  } catch (e: any) {
-    return { ok: false, error: e.message };
+  } catch (e: unknown) {
+    return { ok: false, error: (e instanceof Error ? e.message : String(e)) };
   } finally {
     humanStore.close();
     codeReader?.close();

@@ -75,8 +75,8 @@ export function registerObsidianCommand(program: Command): void {
       let direction: Direction;
       try {
         direction = parseDirection(opts.direction);
-      } catch (e: any) {
-        console.error(`Error: ${e.message}`);
+      } catch (e: unknown) {
+        console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
         process.exitCode = 1;
         return;
       }
@@ -89,8 +89,8 @@ export function registerObsidianCommand(program: Command): void {
         humanStore = new HumanMemoryStore(defaultHumanDbPath(project));
         try {
           codeReader = new CodeGraphReader(defaultCodeDbPath(project));
-        } catch (e: any) {
-          console.warn(`⚠️  Code graph not available: ${e.message}`);
+        } catch (e: unknown) {
+          console.warn(`⚠️  Code graph not available: ${(e instanceof Error ? e.message : String(e))}`);
           console.warn('    Sync will work in human-only mode (no auto module/route notes).');
         }
 
@@ -311,8 +311,8 @@ export function registerObsidianCommand(program: Command): void {
           }
           console.log(`✅ ADR created: id=${node.id}, slug=${node.slug}, path=${node.obsidian_path}`);
           console.log('Run `cbm-v2 obsidian sync --direction export` to materialize the file in the vault.');
-        } catch (e: any) {
-          console.error(`Error creating ADR: ${e.message}`);
+        } catch (e: unknown) {
+          console.error(`Error creating ADR: ${(e instanceof Error ? e.message : String(e))}`);
           process.exitCode = 1;
           return;
         }
@@ -375,8 +375,8 @@ export function registerObsidianCommand(program: Command): void {
             obsidian_path: obsidianPath,
           });
           console.log(`✅ ModuleNote created: id=${node.id}, path=${node.obsidian_path}`);
-        } catch (e: any) {
-          console.error(`Error: ${e.message}`);
+        } catch (e: unknown) {
+          console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
           process.exitCode = 1;
           return;
         }
@@ -438,8 +438,8 @@ export function registerObsidianCommand(program: Command): void {
             obsidian_path: obsidianPath,
           });
           console.log(`✅ RouteNote created: id=${node.id}, path=${node.obsidian_path}`);
-        } catch (e: any) {
-          console.error(`Error: ${e.message}`);
+        } catch (e: unknown) {
+          console.error(`Error: ${(e instanceof Error ? e.message : String(e))}`);
           process.exitCode = 1;
           return;
         }

@@ -157,8 +157,8 @@ export class GetModuleContextTool extends BaseTool {
       };
 
       return this.json(result);
-    } catch (e: any) {
-      return this.error(e.message);
+    } catch (e: unknown) {
+      return this.error((e instanceof Error ? e.message : String(e)));
     }
   }
 }

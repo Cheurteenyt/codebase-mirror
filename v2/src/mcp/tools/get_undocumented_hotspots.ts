@@ -68,8 +68,8 @@ export class GetUndocumentedHotspotsTool extends BaseTool {
         by_label: report.by_label,
         undocumented_hotspots: top,
       });
-    } catch (e: any) {
-      return this.error(e.message);
+    } catch (e: unknown) {
+      return this.error((e instanceof Error ? e.message : String(e)));
     }
   }
 }

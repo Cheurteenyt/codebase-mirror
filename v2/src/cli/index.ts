@@ -93,7 +93,7 @@ program
     if (existsSync(path)) {
       try {
         existing = JSON.parse(readFileSync(path, 'utf-8'));
-      } catch (e: any) {
+      } catch (e: unknown) {
         // Malformed config — back it up and start fresh.
         const backupPath = `${path}.bak.${Date.now()}`;
         writeFileSync(backupPath, readFileSync(path));
@@ -143,8 +143,8 @@ program
       const count = humanStore.countNodes(project);
       console.log(`✅ Human memory DB: ${defaultHumanDbPath(project)} (${count} notes)`);
       humanStore.close();
-    } catch (e: any) {
-      console.log(`❌ Human memory DB error: ${e.message}`);
+    } catch (e: unknown) {
+      console.log(`❌ Human memory DB error: ${(e instanceof Error ? e.message : String(e))}`);
       allOk = false;
     }
 
@@ -155,8 +155,8 @@ program
       const edgeCount = codeReader.countEdges(project);
       console.log(`✅ Code graph DB: ${defaultCodeDbPath(project)} (${nodeCount} nodes, ${edgeCount} edges)`);
       codeReader.close();
-    } catch (e: any) {
-      console.log(`❌ Code graph DB not available: ${e.message.split('\n')[0]}`);
+    } catch (e: unknown) {
+      console.log(`❌ Code graph DB not available: ${(e instanceof Error ? e.message : String(e)).split('\n')[0]}`);
       console.log(`   (MCP tools will work in human-only mode)`);
     }
 
@@ -166,8 +166,8 @@ program
       const { ensureVaultDirs } = await import('../obsidian/vault.js');
       ensureVaultDirs(vaultPath);
       console.log(`✅ Vault path writable: ${vaultPath}`);
-    } catch (e: any) {
-      console.log(`❌ Vault path not writable: ${vaultPath} (${e.message})`);
+    } catch (e: unknown) {
+      console.log(`❌ Vault path not writable: ${vaultPath} (${(e instanceof Error ? e.message : String(e))})`);
       allOk = false;
     }
 

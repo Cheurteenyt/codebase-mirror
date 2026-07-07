@@ -1,5 +1,46 @@
 # Changelog — Codebase Memory V2
 
+## 0.13.1 — Round 64 (2026-07-07) deep audit — bug fix + 36 catch(any) removed
+
+Deep audit of the entire codebase. 1 bug found and fixed, 36 `catch (e: any)`
+removed across MCP tools, CLI commands, and graph-ui.
+
+### Bug fix (MEDIUM) — routeIndex status race
+
+- **routeIndex**: if `spawn()` threw synchronously (e.g. ENOENT when `cbm`
+  binary is missing), the job status was set to `'failed'` but the HTTP
+  response was still `202 Accepted` — semantically misleading. The client
+  received "accepted, processing" for a job that already failed. Now returns
+  `500` with `{ job_id, status: 'failed', error }` when spawn fails to start.
+  Pre-existing bug (not a R63 regression), but caught during R64 deep audit.
+
+### Type safety (MEDIUM) — 36 `catch (e: any)` → `catch (e: unknown)`
+
+- **17 v2 files**: mcp/server.ts (2), 7 MCP tools (1 each), cli/index.ts (4),
+  8 CLI command files (20 total), config.ts (1). All `e.message` accesses
+  replaced with `e instanceof Error ? e.message : String(e)` — safe against
+  non-Error throws (`throw "string"`, `throw { code: 42 }`).
+- **graph-ui/api/client.ts** (2): same fix + `e?.name` → `e instanceof Error
+  && e.name` (optional chaining on `unknown` is a TS error).
+- **schema.ts:341**: `r: any` → `r: unknown` with cast `{ version: number }`.
+
+### Audit summary
+
+Full codebase audited for:
+- Race conditions (found 1: routeIndex status — fixed)
+- Memory leaks (none — WeakMap for ws filters, timers cleared in finally)
+- Unhandled rejections (none — all async routes wrapped in handleRequest try/catch)
+- Type safety gaps (found 36 catch(any) + 1 r:any — all fixed)
+- Security (all R51 fixes still in place, safe-path utility used correctly)
+- Performance (prepared statements, SWR cache, bulk queries all intact)
+
+Remaining `any` usage is either:
+- `openMemory()` (4 `as any` — accessing private fields from static method, documented)
+- `config.ts deepMerge` (generic deep merge, inherently dynamic)
+- `mcp/server.ts` JSON-RPC types (protocol-level, `params?: any` is the JSON-RPC spec)
+- `mcp/tools/index.ts` `null as any` (singleton initialization pattern)
+- Test files (mocks — `as any` on vi.fn() is standard vitest pattern)
+
 ## 0.13.0 — Round 63 (2026-07-07) server.ts architecture refactor
 
 **Minor version bump** — significant architecture change (no breaking API
