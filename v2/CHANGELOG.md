@@ -1,5 +1,28 @@
 # Changelog — Codebase Memory V2
 
+## 0.12.2 — Round 55 (2026-07-07) Claude Sonnet 5 R9 audit
+
+4 issues fixed from Claude Sonnet 5 Round 9 audit report (1 HIGH, 1 LOW, 2 LOW cleanup).
+
+### HIGH fix (dead code + duplication risk)
+
+- **Part A**: `v2/src/utils/safe-path.ts` was created in R53 (Part C of Round 8 audit) to de-duplicate the symlink-safe path resolution logic between `vault.ts` and `server.ts`, but neither call site was actually wired up to use it — both kept their own inline `realpathSync` implementations. The utility file's docstring claimed the wiring existed when it didn't. Round 8 specifically warned about this duplication risk. Fixed: `vault.ts`'s `assertPathInsideVault` replaced by the shared `assertPathInsideRoot` (3 call sites: `readNote`, `writeNote`, `deleteNote`); `server.ts`'s `routeBrowse` now uses `safeRealpath`, `routeIndex` now uses the new `safeRealpathStrict` (added to the utility for the strict 404-on-missing-path semantics `routeIndex` needs). The inline `realpathSync` import was removed from `server.ts`. `vault.ts`'s `walkVaultIter` keeps its own `realpathSync` call for symlink-loop detection (different semantics — `safeRealpath`'s fallback would defeat the skip-on-broken-symlink behaviour).
+
+### HIGH fix (CI silently broken)
+
+- **D3**: Round 52's workflow-level `permissions: contents: read` hardened `backend`/`frontend` correctly, but silently broke `quota-report`'s `/repos/.../actions/runs` API call — once any `permissions:` key is set at workflow level, every unlisted scope becomes `none`. The job's `total_count` parsing fell back to `0` instead of surfacing the 403. Fixed: `quota-report` now has its own job-level `permissions: { contents: read, actions: read }` override. `backend`/`frontend` stay at the workflow-level default (least-privilege preserved).
+
+### LOW fixes (CI cleanup)
+
+- **D4**: removed unreachable `'v2/**'` pattern from `on.push.branches` — only the GitLab mirror pushes to this repo, and it only pushes to `main`.
+- **D5**: restricted `quota-report` to `schedule`-only (was `schedule || push to main`). Running it on every merge to `main` added noise without value: rate limits reset hourly, the weekly schedule is the actual trend signal.
+
+### Notes
+
+- **D2 residual (acknowledged, not fixed)**: the `http.extraHeader` fix from R53 closes the cited leak vector (git echoing a credential-bearing URL in error output), but the base64 token is still passed in argv via `git -c http.extraHeader=...`, visible via `/proc/[pid]/cmdline` during the push. On GitLab.com shared runners (ephemeral, single-job) this is a much narrower risk than the original leak. A `GIT_ASKPASS` script reading from an env var would close the residual gap if it ever becomes a real concern.
+- **Part B (Round 8 backfill)**: confirmed complete — Round 49's "1 CRITICAL merge" is now explained in the changelog, all rounds 47-52 have itemized entries.
+- **Part C (D1/D2 mirror fix)**: confirmed correct, including the `ls-remote` + `--force-with-lease=main:<sha>` refinement from R54c that handles the URL-push edge case.
+
 ## 0.12.1 — Round 52 (2026-07-07) CI
 
 6 CI quality + security fixes.

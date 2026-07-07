@@ -6,12 +6,23 @@
 # R50: added quota-report job that uses the automatic GITHUB_TOKEN
 # R52: security hardening (least-privilege permissions), perf (npm ci),
 #      quality (single-parse API calls, no redundant build).
+# R55 (D3): added job-level `permissions: actions: read` override for
+#      quota-report — the workflow-level `permissions: contents: read`
+#      was silently breaking its /repos/.../actions/runs API call
+#      (every unlisted scope becomes `none` once any `permissions:` key
+#      is set at workflow level).
+# R55 (D4): removed unreachable `'v2/**'` pattern from on.push.branches —
+#      only the GitLab mirror pushes to this repo, and it only pushes to
+#      `main`.
+# R55 (D5): restricted quota-report to schedule-only — running it on every
+#      push to main added noise without value (rate limits reset hourly;
+#      the weekly schedule is the actual trend signal).
 
 name: CI
 
 on:
   push:
-    branches: [main, 'v2/**']
+    branches: [main]
   pull_request:
     branches: [main]
   schedule:
@@ -24,6 +35,9 @@ concurrency:
 
 # R52: least-privilege — the default GITHUB_TOKEN has write permissions
 # we don't need. Restrict to read-only for all jobs.
+# R55 (D3): quota-report needs `actions: read` for its /actions/runs API
+# call — it gets its own job-level override below. backend/frontend stay
+# at this workflow-level default (contents: read only).
 permissions:
   contents: read
 
@@ -86,13 +100,21 @@ jobs:
       - name: Test
         run: npx vitest run
 
-  # ── Quota Report (R50, R52) ───────────────────────────────────
+  # ── Quota Report (R50, R52, R55) ──────────────────────────────
   # Uses the automatic GITHUB_TOKEN — no manual configuration needed.
   # R52: single API call + single parse, least-privilege permissions.
+  # R55 (D3): job-level permissions override — needs `actions: read` for
+  #      the /repos/.../actions/runs API call (workflow-level `contents: read`
+  #      alone would 403 it). backend/frontend stay at the workflow-level
+  #      default (no actions: read for them).
+  # R55 (D5): schedule-only — see workflow header comment.
   quota-report:
     name: Quota Report
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'schedule'
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Generate quota report
         env:

@@ -1,60 +1,23 @@
 // v2/src/obsidian/vault.ts
 // Vault filesystem helpers — walk, ensure dirs, read/write notes.
 // All path-taking functions validate against path traversal.
+//
+// R55 (Part A): the path-traversal validation is now delegated to the shared
+// `assertPathInsideRoot` utility in utils/safe-path.ts. Before R55, this file
+// had its own inline implementation (assertPathInsideVault) duplicating the
+// same realpathSync-based logic as server.ts — exactly the duplication risk
+// Round 8 warned about. The two implementations were functionally equivalent
+// but a future fix in one would not have propagated to the other.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, lstatSync, realpathSync, copyFileSync, renameSync, unlinkSync } from 'node:fs';
-import { join, dirname, basename, relative, extname, resolve, sep } from 'node:path';
+import { join, dirname, basename, relative, extname, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { MAX_VAULT_DEPTH, MAX_BACKUPS_PER_FILE } from '../constants.js';
+import { assertPathInsideRoot } from '../utils/safe-path.js';
 
 
 
 const SKIP_DIRS = new Set(['.obsidian', '.git', '.trash', 'node_modules', '.cache', '.DS_Store']);
-
-/**
- * Validate that a relative path stays inside the vault. Rejects path traversal.
- * R51 (SEC-5): uses realpathSync to resolve symlinks before containment check.
- * Without this, a symlink inside the vault pointing outside (e.g. ~/.ssh) could
- * be used to read/write arbitrary files via import/export sync.
- */
-function assertPathInsideVault(vaultPath: string, relPath: string): void {
-  if (relPath.includes('..')) {
-    throw new Error(`Path traversal rejected: "${relPath}" contains "..".`);
-  }
-  if (/[\\]/.test(relPath)) {
-    throw new Error(`Path traversal rejected: "${relPath}" contains backslashes.`);
-  }
-  // R51 (SEC-5): resolve vault root symlinks. Fall back to resolve() if the
-  // vault doesn't exist yet (e.g., readNote called before ensureVaultDirs).
-  let absVault: string;
-  try {
-    absVault = realpathSync(vaultPath);
-  } catch {
-    absVault = resolve(vaultPath);
-  }
-  const absPath = resolve(join(absVault, relPath));
-  // R51 (SEC-5): resolve symlinks on the target path. For existing files,
-  // realpathSync follows the full chain. For non-existent files (writeNote
-  // creating a new file), resolve the parent directory.
-  let realPath: string;
-  try {
-    realPath = realpathSync(absPath);
-  } catch {
-    // File doesn't exist yet — resolve the parent dir and re-append basename.
-    try {
-      const realParent = realpathSync(dirname(absPath));
-      realPath = join(realParent, basename(absPath));
-    } catch {
-      // Parent doesn't exist either — fall back to string-based check.
-      realPath = absPath;
-    }
-  }
-  if (realPath !== absVault && !realPath.startsWith(absVault + sep)) {
-    throw new Error(
-      `Path traversal rejected: "${relPath}" resolves outside the vault root "${absVault}".`
-    );
-  }
-}
 
 export const VAULT_DIRS = [
   'Architecture',
@@ -78,7 +41,7 @@ export function ensureVaultDirs(vaultPath: string): void {
 }
 
 export function readNote(vaultPath: string, relPath: string): string | null {
-  assertPathInsideVault(vaultPath, relPath);
+  assertPathInsideRoot(vaultPath, relPath);
   const absPath = join(vaultPath, relPath);
   if (!existsSync(absPath)) return null;
   return readFileSync(absPath, 'utf-8');
@@ -94,7 +57,7 @@ export function writeNote(
   content: string,
   opts: { backupBeforeWrite?: boolean } = {}
 ): { written: boolean; backupPath: string | null } {
-  assertPathInsideVault(vaultPath, relPath);
+  assertPathInsideRoot(vaultPath, relPath);
   const absPath = join(vaultPath, relPath);
   let backupPath: string | null = null;
 
@@ -241,7 +204,7 @@ export function hashContent(content: string): string {
 }
 
 export function deleteNote(vaultPath: string, relPath: string): boolean {
-  assertPathInsideVault(vaultPath, relPath);
+  assertPathInsideRoot(vaultPath, relPath);
   const absPath = join(vaultPath, relPath);
   if (!existsSync(absPath)) return false;
   // Soft delete: rename to .deleted.<ts>

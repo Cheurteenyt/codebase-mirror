@@ -21,13 +21,13 @@ Codebase Memory V2 adds the **human context**:
 
 It syncs everything to an **Obsidian-compatible Markdown vault** so you can read and edit notes in your favorite editor, with backlinks and tags.
 
-## Current version: 0.12.1
+## Current version: 0.12.2
 
-- **374 tests** (353 backend + 21 frontend, all passing)
+- **376 tests** (353 backend + 23 frontend, all passing)
 - **7 MCP tools** (including the flagship `prepare_edit_context`)
 - **16+ CLI commands** across 7 command groups (including `watch` daemon)
 - **15 API endpoints** (6 original + 9 R17)
-- **509+ bugs fixed across 48 audit rounds
+- **561+ bugs fixed across 55 audit rounds**
 - **Graph UI** with 2D d3-force canvas, dashboard, filters, **real-time WebSocket**, ARIA tablist, stale-while-revalidate refetch, AbortController timeouts
 - **Watch daemon** — auto-sync when vault files change (fs.watch recursive)
 - **FTS5 full-text search** on human notes (BM25 ranking, AND-of-terms, migration V4)
@@ -43,7 +43,7 @@ It syncs everything to an **Obsidian-compatible Markdown vault** so you can read
 cd v2
 npm install
 npm run build
-npm test                    # 374 tests
+npm test                    # 376 tests
 
 # Try the demo (no V1 needed)
 node dist/cli/index.js demo

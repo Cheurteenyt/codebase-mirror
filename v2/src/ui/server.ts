@@ -11,7 +11,7 @@ import { WebSocketServer, WebSocket } from "ws";
 // cache but still resolve a Promise per call (~50-100µs overhead). The line
 // `const { readdirSync } = await import('node:fs')` at line 399 was also pure
 // dead code — it shadowed the top-level static import.
-import { existsSync, readFileSync, statSync, readdirSync, unlinkSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, statSync, readdirSync, unlinkSync } from "node:fs";
 import { spawn, execSync } from "node:child_process";
 import { join, extname, resolve, sep, dirname } from "node:path";
 import { homedir } from 'node:os';
@@ -21,6 +21,10 @@ import { getGraphStatus, getFreshnessScore, freshnessLabel, invalidateGraphStatu
 import { computeRiskScore } from '../reports/risk.js';
 import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
 import { getNotifyHub } from './notify-hub.js';
+// R55 (Part A): use the shared symlink-safe path utility instead of inline
+// realpathSync calls. routeBrowse uses safeRealpath (path may not exist yet),
+// routeIndex uses safeRealpathStrict (must 404 on non-existent root_path).
+import { safeRealpath, safeRealpathStrict } from '../utils/safe-path.js';
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -769,15 +773,12 @@ export class UiServer {
     // normalizes `..` but does NOT follow symlinks — a symlink inside home
     // pointing to /etc would pass the string-prefix check. `realpathSync`
     // resolves the full symlink chain so we compare the actual on-disk path.
-    let realTargetPath: string;
-    try {
-      realTargetPath = realpathSync(targetPath);
-    } catch {
-      // Path doesn't exist or is inaccessible — let the existsSync check
-      // below handle the 404. We don't 403 here because the path might be
-      // legitimately inside home but not yet created.
-      realTargetPath = targetPath;
-    }
+    //
+    // R55 (Part A): use the shared safeRealpath helper instead of an inline
+    // try/catch. The fallback (parent + basename, then resolve()) matches the
+    // previous behaviour: a path that doesn't exist yet is still checked
+    // against home, then the existsSync check below returns 404.
+    const realTargetPath = safeRealpath(targetPath);
     if (!realTargetPath.startsWith(home + sep) && realTargetPath !== home) {
       this.sendJson(res, 403, { error: 'Browse is restricted to the user home directory' });
       return;
@@ -865,9 +866,12 @@ export class UiServer {
       return;
     }
     const home = homedir();
+    // R55 (Part A): use safeRealpathStrict so a non-existent root_path throws
+    // and we map it to 404. Previously this was an inline try/catch around
+    // realpathSync — same semantics, now centralized in the shared utility.
     let realRootPath: string;
     try {
-      realRootPath = realpathSync(resolve(rootPath));
+      realRootPath = safeRealpathStrict(resolve(rootPath));
     } catch {
       this.sendJson(res, 404, { error: `root_path not found: ${rootPath}` });
       return;
