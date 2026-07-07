@@ -1,5 +1,64 @@
 # Changelog — Codebase Memory V2
 
+## 0.15.0 — Round 69 (2026-07-07) web-tree-sitter WASM — 112 languages
+
+**Minor version bump** — V2 indexer upgraded from ts-morph (1 language, 1833ms)
+to web-tree-sitter WASM (112 languages, 340ms). This is a **5.4x speedup**
+and **112x language coverage increase**.
+
+### New feature: WASM multi-language extractor (HIGH)
+
+Created `v2/src/indexer/wasm-extractor.ts` — uses `web-tree-sitter` (WASM)
+with `tree-sitter-wasm` (pre-built WASM grammars for 112 languages).
+
+**Supported languages (24 key ones):**
+TypeScript, TSX, JavaScript, Python, Go, Rust, Java, C, C++, Ruby, PHP,
+Swift, Kotlin, Scala, Dart, Lua, Bash, YAML, JSON, HTML, CSS, SQL,
+Dockerfile, Markdown — plus 88 more niche languages.
+
+**What it extracts:**
+- Nodes: File, Class, Function, Method (+ complexity estimation)
+- Edges: CONTAINS (parent→child), CALLS (function→function)
+- Incremental indexing (content hash, skip unchanged files)
+
+### Benchmark: V1 C vs V2 WASM vs V2 ts-morph
+
+Same codebase (v2/src, 49 TS files):
+
+| Metric | V1 (C, tree-sitter) | V2 WASM (R69) | V2 ts-morph (R68) |
+|---|---|---|---|
+| Duration | 305ms | **340ms** | 1,833ms |
+| Nodes | 460 | **784** | 352 |
+| Edges | 1,499 | **1,252** | 1,070 |
+| Languages | 158 | 112 | 1 |
+| Binary needed | yes (cbm) | **no** | no |
+
+V2 WASM is **5.4x faster** than V2 ts-morph and extracts **2.2x more nodes**.
+It's within 12% of V1 C speed (340ms vs 305ms) while requiring **no binary**.
+
+### Multi-language benchmarks
+
+| Codebase | Files | Nodes | Edges | Duration | Languages |
+|---|---|---|---|---|---|
+| v2/src (TS) | 49 | 784 | 1,252 | 340ms | typescript |
+| v1-reference/src (C) | 122 | 2,479 | 2,392 | 1,233ms | c |
+| graph-ui/src (TSX) | 43 | 537 | 549 | 243ms | tsx, typescript, css |
+
+### New dependencies
+
+- `web-tree-sitter` (0.26.10) — tree-sitter bindings for Node.js/WASM
+- `tree-sitter-wasm` (1.1.2) — pre-built WASM grammars for 112 languages
+
+### Limitations vs V1
+
+- 112 languages (V1 supports 158 — but all 24 key languages are covered)
+- No simhash/minhash similarity detection
+- No cross-repo intelligence
+- No git history analysis
+- No trace ingestion
+- No LSP-based call resolution (static analysis only)
+- No parallel pipeline (single-threaded — future: worker_threads)
+
 ## 0.14.0 — Round 68 (2026-07-07) native TypeScript/JavaScript indexer
 
 **Minor version bump** — new feature: V2 can now index TS/JS projects without
