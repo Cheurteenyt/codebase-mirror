@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 64 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across 65 audit rounds. Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R64). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R65). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -182,7 +182,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.13.1 (R64).
+  - Currently 0.13.2 (R65).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes. Currently `0.10.3` (frozen
   since R36 — the schema hasn't changed).
@@ -212,8 +212,9 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R62 | 0.12.9 | code quality in importer.ts + generator.ts (importAllFiles dedup, 4 catch(any)→catch(unknown), existingBySlug typed) |
 | R63 | 0.13.0 | **architecture refactor** — server.ts 1212→290 lines, split into 7 files (types, helpers, routes/{graph,project,human,index,system}), RouteContext abstraction |
 | R64 | 0.13.1 | deep audit — 1 bug fixed (routeIndex 202→500 on spawn ENOENT), 36 catch(any)→catch(unknown) across MCP+CLI+graph-ui, schema r:any typed |
+| R65 | 0.13.2 | V1 C engine audit (65K LOC, reference read-only) — 1 HIGH strcat overflow, 2 MEDIUM unchecked malloc + slab_owns O(n), docs/V1_AUDIT_R65.md |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R64).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R65).
 
 ---
 

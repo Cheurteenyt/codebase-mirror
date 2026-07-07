@@ -1,5 +1,39 @@
 # Changelog — Codebase Memory V2
 
+## 0.13.2 — Round 65 (2026-07-07) V1 C engine audit (reference, read-only)
+
+Deep audit of the V1 C engine (65,620 LOC, 71 .c files). V1 is kept intact
+as a reference — this round documents findings without modifying V1 code.
+
+### Audit report (docs/V1_AUDIT_R65.md)
+
+Full audit report created at `docs/V1_AUDIT_R65.md` documenting:
+
+**Findings:**
+- 🔴 HIGH: `strcat` buffer overflow in store.c:4479-4484 (512B buffer, unbounded path segments)
+- 🟡 MEDIUM: 5 unchecked `malloc` returns in store.c list functions (NULL deref on OOM)
+- 🟡 MEDIUM: `slab_owns()` O(n) scan per free/realloc (slab_alloc.c)
+- 🔵 LOW: `slab_realloc` promotion ordering (safe but fragile)
+
+**What V1 does right (excellent patterns):**
+- Arena + slab + string interning + mimalloc (production-grade memory management)
+- Thread-local slab allocator (eliminates ptmalloc2 fragmentation, was 321GB VSZ)
+- Atomic work-stealing worker pool (zero contention)
+- SQLite PRAGMAs: WAL, 64MB cache, mmap, temp_store=MEMORY
+- Prepared statement caching (same pattern V2 adopted in R58)
+- Verstable hash table (2024 state-of-the-art, 4-bit hash fragment metadata)
+- Back-pressure mechanism (RSS budget, worker naps)
+- Cypher engine: SQL injection safe (snprintf + bind_text)
+
+**V1 vs V2 comparison:**
+- V1's strcat bug is impossible in V2 (TypeScript strings are bounds-safe)
+- V1's unchecked malloc is impossible in V2 (V8 GC, no manual allocation)
+- V1's slab allocator has no V2 equivalent (V8 handles allocation)
+- Both use the same SQLite PRAGMA patterns and prepared statement caching
+
+**Verdict:** V1 is production-grade C. The architecture split (C for CPU-bound
+analysis, TypeScript for I/O-bound sidecar) is the right choice.
+
 ## 0.13.1 — Round 64 (2026-07-07) deep audit — bug fix + 36 catch(any) removed
 
 Deep audit of the entire codebase. 1 bug found and fixed, 36 `catch (e: any)`
