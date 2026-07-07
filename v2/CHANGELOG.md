@@ -1,5 +1,53 @@
 # Changelog — Codebase Memory V2
 
+## 0.13.0 — Round 63 (2026-07-07) server.ts architecture refactor
+
+**Minor version bump** — significant architecture change (no breaking API
+changes, but the internal file structure of the UI module is reorganized).
+
+### Architecture refactor (HIGH) — server.ts split into 7 files
+
+`server.ts` was 1212 lines with 16 route handlers, WebSocket management,
+static file serving, and helpers all in one file. R63 splits it into a
+clean module structure:
+
+```
+v2/src/ui/
+├── server.ts          (290 lines, was 1212) — thin coordinator
+├── types.ts           (59 lines) — RouteContext, RouteHandler, IndexJob
+├── helpers.ts         (140 lines) — sendJson, errorMessage, parseJsonBody, MIME_TYPES
+└── routes/
+    ├── graph.ts       (173 lines) — routeLayout, routeDashboard, routeGraphStatus
+    ├── project.ts     (157 lines) — routeProjects, routeProjectHealth, routeProjectDelete
+    ├── human.ts       (133 lines) — routeHumanNotes, routeAdrGet, routeAdrPost
+    ├── index.ts       (132 lines) — routeIndex, routeIndexStatus
+    └── system.ts      (243 lines) — routeBrowse, routeProcesses, routeProcessKill, routeLogs
+```
+
+**Key abstraction: `RouteContext`** — every route handler now receives a
+context object with its dependencies (humanStore, codeReader, project,
+indexJobs, logBuffer, log(), sendJson()) instead of accessing `this.*` on
+the UiServer instance. This means:
+- Routes can be unit-tested with a mock context (no need to spin up a server)
+- Dependencies are explicit — the compiler catches missing fields
+- Routes can be moved/renamed without touching server.ts
+- server.ts is now a thin coordinator: constructor, start/stop, request
+  handling, route table, WebSocket, static file serving
+
+**No functional changes** — every route handler is the exact same logic,
+just moved to a standalone function that receives RouteContext. All 378
+tests pass with 0 regressions. The route table in server.ts is unchanged
+(same 15 endpoints, same order, same handler signatures).
+
+### Helpers extracted (MEDIUM)
+
+- `parseJsonBody` moved from UiServer method to standalone helper in helpers.ts.
+- `sendJson` moved from UiServer method to standalone helper.
+- `errorMessage` moved from UiServer static method to standalone helper.
+- `colorForLabel` moved from UiServer method to standalone helper.
+- `MIME_TYPES`, `DEFAULT_PORT`, `LOG_BUFFER_MAX` constants moved to helpers.ts.
+- `MAX_BODY_SIZE`, `BODY_TIMEOUT_MS` new named constants (were inline magic numbers).
+
 ## 0.12.9 — Round 62 (2026-07-07) code quality in importer.ts + generator.ts
 
 No bugs fixed — type safety + deduplication in the Obsidian sync engine

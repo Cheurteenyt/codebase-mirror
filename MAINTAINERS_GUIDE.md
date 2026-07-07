@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 62 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across 63 audit rounds. Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R62). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R63). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -182,7 +182,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.12.9 (R62).
+  - Currently 0.13.0 (R63).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes. Currently `0.10.3` (frozen
   since R36 — the schema hasn't changed).
@@ -210,8 +210,9 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R60 | 0.12.7 | code quality in swr-cache.ts (dead ternary, evictOne extracted, defensive iteration, typed events) |
 | R61 | 0.12.8 | code quality in server.ts (7 catch(any)→catch(unknown), 2 ws as any→WeakMap, errorMessage helper) |
 | R62 | 0.12.9 | code quality in importer.ts + generator.ts (importAllFiles dedup, 4 catch(any)→catch(unknown), existingBySlug typed) |
+| R63 | 0.13.0 | **architecture refactor** — server.ts 1212→290 lines, split into 7 files (types, helpers, routes/{graph,project,human,index,system}), RouteContext abstraction |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R62).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R63).
 
 ---
 

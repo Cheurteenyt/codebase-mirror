@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-07 for version 0.12.9.
+> Updated 2026-07-07 for version 0.13.0.
 
-## Current State (0.12.9)
+## Current State (0.13.0)
 
 ### ✅ Completed
 
@@ -64,13 +64,14 @@
 | Round 53 Claude Sonnet R8 audit | 0.12.1 | 8 fixes: D1 HIGH mirror --force-with-lease (prevents silent PR loss), D2 MEDIUM token via http.extraHeader (no token in URL), B1 CHANGELOG R47-R49 backfill, B2 CHANGELOG R51-R52 + version bump, B3 CONTRIBUTING.md GitLab label fix, Part C shared safeRealpath utility, Part E GraphTab C1 chain test. |
 | Round 54 CI pipeline fix | 0.12.1 | 3 CI fixes: R54 workflow:rules + mr-preflight job (MR pipelines were empty → "Pipelines must succeed" blocked MRs), R54b YAML block scalars (YAML parsed `: ` as mapping not string), R54c ls-remote + --force-with-lease=main:<sha> (--force-with-lease without explicit SHA fails on URL push). |
 | Round 55 Claude Sonnet R9 audit | 0.12.2 | 4 fixes: Part A HIGH safe-path.ts dead code wired up (vault.ts assertPathInsideVault → assertPathInsideRoot, server.ts routeBrowse → safeRealpath, routeIndex → safeRealpathStrict), D3 HIGH quota-report job-level permissions: actions: read override (workflow-level contents: read was silently 403ing /actions/runs API), D4 LOW removed unreachable v2/** push pattern, D5 LOW quota-report restricted to schedule-only. |
-| Round 56 self-audit + MAINTAINERS_GUIDE | 0.12.3 | 3 improvements: symlink escape test for assertPathInsideRoot (2 new tests — vault.test.ts now covers the actual SEC-5 attack vector, not just symlink loops), backup.ts version field clarified (10-line comment block — was ambiguous between schema version and package version), MAINTAINERS_GUIDE.md new file (workflow conventions, naming rules, required patterns, anti-patterns, CI/CD setup, audit etiquette — accumulated across 62 rounds). |
+| Round 56 self-audit + MAINTAINERS_GUIDE | 0.12.3 | 3 improvements: symlink escape test for assertPathInsideRoot (2 new tests — vault.test.ts now covers the actual SEC-5 attack vector, not just symlink loops), backup.ts version field clarified (10-line comment block — was ambiguous between schema version and package version), MAINTAINERS_GUIDE.md new file (workflow conventions, naming rules, required patterns, anti-patterns, CI/CD setup, audit etiquette — accumulated across 63 rounds). |
 | Round 57 doc cleanup + private notes | 0.12.4 | Doc consistency + maintainability (no code changes). 12 stale refs fixed across v2/README.md (test count 374→378, version refs 0.11.3→0.12.4, security section R51/R55), CONTRIBUTING.md (6→7 tools, 374→378 tests, 5→9 docs, npm ci→npm install, stale "planned: 0.4.0" removed, CI/CD section rewritten), MAINTAINERS_GUIDE.md (376→378 tests, R55→R56). MAINTAINERS_GUIDE.md enriched with Common pitfalls (9 items), Pre-commit checklist (12 items), Lessons learned (6 items). MAINTAINERS_NOTES.local.md created (gitignored) — operational reminders, env reset recovery, gotchas. |
 | Round 58 code quality + type safety + perf | 0.12.5 | No bugs fixed — code quality + type safety + perf in store.ts. 6 row type interfaces added (HumanNodeRow, HumanEdgeRow, IdRow, CountRow, LabelCountRow, HumanNodeWithCbmIdRow). 18 `as any` casts replaced with proper row types. deserializeNode/Edge typed properly. safeJsonParseArray: any[]→unknown[]. params: any[]→(string|number)[]. 3 hot-path prepared statements moved to constructor (getNodeById, getNodeBySlug, getNodeByObsidianPath). |
 | Round 59 code quality + type safety in sqlite-ro.ts | 0.12.6 | No bugs fixed — same pattern as R58 applied to code graph reader. 11 row type interfaces added (CodeNodeRow, NeighborRow, DegreeCountRow, CountRow, CountAllRow, LabelCountRow, TypeCountRow, EdgeTripleRow, BulkEdgeRow, ProjectNameRow, ProjectRow). 30 `as any` casts replaced. deserializeCodeNode/makeEdge/tryPush typed properly. Null safety: NeighborRow.node_properties coalesced with ?? '{}'. 2 hot-path prepared statements moved to constructor (getNodeById, findNodeByQualifiedName). |
 | Round 60 code quality in swr-cache.ts | 0.12.7 | No bugs fixed — dead code + duplication + fragility in SWR cache. effectiveMaxEntries dead ternary removed (both branches identical). evictOne() extracted from evictToFit() (pattern was duplicated 2×). invalidatePrefix() now collects keys before iterating (defensive — avoids modifying Map during iteration). catch (e: any)→catch (e: unknown) in background refresh. on() method typed with SwrCacheRefreshEvent<K> interface (was ...args: any[]). |
 | Round 61 code quality in server.ts | 0.12.8 | No bugs fixed — type safety in UI server. 7 `catch (e: any)` → `catch (e: unknown)` with new `UiServer.errorMessage(e: unknown)` static helper (replaces `e.message` access on `any`-typed value — would throw if `e` was not an Error). 2 `(ws as any)._projectFilter` removed → `WeakMap<WebSocket, string | undefined>` (type-safe, auto-GC, no field-name typos). |
 | Round 62 code quality in importer.ts + generator.ts | 0.12.9 | No bugs fixed — type safety + deduplication in Obsidian sync engine. importer.ts: duplicated import loop extracted into `importAllFiles` helper (was verbatim in both dry-run and transaction branches). 2 `catch (e: any)` → `catch (e: unknown)`. `existingBySlug` explicitly typed `HumanNode | null` (was inferred as `null` only). generator.ts: 2 `catch (e: any)` → `catch (e: unknown)`. |
+| Round 63 server.ts architecture refactor | 0.13.0 | **Minor version bump** — server.ts split from 1212 lines into 7 files. New structure: `server.ts` (290 lines, thin coordinator), `types.ts` (RouteContext, RouteHandler, IndexJob), `helpers.ts` (sendJson, errorMessage, parseJsonBody, MIME_TYPES), `routes/graph.ts` (layout, dashboard, graphStatus), `routes/project.ts` (projects, projectHealth, projectDelete), `routes/human.ts` (humanNotes, adrGet, adrPost), `routes/index.ts` (index, indexStatus), `routes/system.ts` (browse, processes, processKill, logs). Key abstraction: `RouteContext` — routes receive dependencies explicitly instead of accessing `this.*`. No functional changes, 378 tests pass. |
 
 ### 📊 Metrics
 
@@ -79,7 +80,7 @@
 | Source files (v2) | 38 |
 | Test files | 43 (32 backend + 11 frontend) |
 | Tests | 378 (355 backend + 23 frontend, all passing) |
-| Bugs fixed (62 rounds) | 565+ |
+| Bugs fixed (63 rounds) | 565+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -119,7 +120,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.12.9)
+### Phase 3: V1 Complete (0.13.0)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -207,6 +208,7 @@
 | R60 (code quality: dead ternary removed, evictOne extracted, defensive iteration, typed events) | 0.12.7 | 0 | 0 | 378 |
 | R61 (code quality: 7 catch(any)→catch(unknown), 2 ws as any→WeakMap, errorMessage helper) | 0.12.8 | 0 | 0 | 378 |
 | R62 (code quality: importer dedup importAllFiles, 4 catch(any)→catch(unknown), existingBySlug typed) | 0.12.9 | 0 | 0 | 378 |
+| R63 (architecture: server.ts 1212→290 lines, split into 7 files, RouteContext abstraction) | 0.13.0 | 0 | 0 | 378 |
 | **Total** | | **565+** | **513+** | **378** |
 
 ## Performance Milestones
@@ -243,7 +245,7 @@
 | R41 | `Sidebar flattenSingleChild` | O(n²) on deep single-child chains | O(n) (use already-flattened sc.children) | -~n× on deep chains |
 | R42 | `searchHumanNodes` FTS5 query | Phrase-only (entire query in one pair of quotes — required exact adjacent phrase) | AND-of-terms (each term individually quoted, implicit AND) | Matches scattered/reordered words, not just adjacent phrases |
 
-## API Endpoints (0.12.9)
+## API Endpoints (0.13.0)
 
 | Endpoint | Method | Description |
 |---|---|---|
