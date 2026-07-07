@@ -37,3 +37,7 @@ Thumbs.db
 
 # Local config overrides
 .codebase-memory.local.json
+
+# Local maintainers notes (private, not committed)
+*.local.md
+MAINTAINERS_NOTES.local.md

@@ -1,5 +1,26 @@
 # Changelog — Codebase Memory V2
 
+## 0.12.4 — Round 57 (2026-07-07) doc cleanup + private maintainers notes
+
+Doc consistency + maintainability improvements (no code changes).
+
+### Documentation cleanup (MEDIUM)
+
+- **12 stale refs fixed** across v2/README.md, CONTRIBUTING.md, MAINTAINERS_GUIDE.md:
+  - v2/README.md: test count 374→378 (355+23), version refs 0.11.3→0.12.4, security section updated to mention R51/R55 symlink-safe realpath protection.
+  - CONTRIBUTING.md: "6 tools"→"7 tools", "374 tests"→"378 tests", "5 docs files"→"9 files", "npm ci"→"npm install --no-audit --no-fund", removed stale "planned: 0.4.0" tag (we're at 0.12.4), rewrote CI/CD section to describe the actual GitLab→GitHub mirror workflow + required checks + cross-ref to MAINTAINERS_GUIDE.md.
+  - MAINTAINERS_GUIDE.md: test count 376→378, round range R55→R56, commit message example updated.
+
+### MAINTAINERS_GUIDE.md enriched (MEDIUM)
+
+- **Common pitfalls** section (9 items): "FIXED" claims that weren't fixed, stale version/test counts, YAML `: ` parsing, `--force-with-lease` URL push, workflow-level permissions, MR pipelines with zero jobs, unconditional setLoading, npm ci vs npm install, committing in wrong repo.
+- **Pre-commit checklist** section (12 items): build, tests, version bump, CHANGELOG, doc consistency, YAML validation, regression test, commit message format, push options.
+- **Lessons learned** section (6 items): environment reset recovery, GitLab API 403, paramiko slowness, sed over-replacement, branch protection, cd persistence.
+
+### Private maintainers notes (LOW)
+
+- **MAINTAINERS_NOTES.local.md** (gitignored via `*.local.md`): operational reminders, environment setup, env reset recovery steps, operational gotchas, token/variable locations (names only, not values), pre-session checklist. No actual secrets — just paths, URLs, and "things I keep forgetting". The SSH key PATH is mentioned (it's just a path), but the key VALUE never leaves the machine.
+
 ## 0.12.3 — Round 56 (2026-07-07) self-audit + MAINTAINERS_GUIDE
 
 3 improvements from GLM self-audit (no external audit report this round).

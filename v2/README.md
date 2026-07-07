@@ -27,7 +27,7 @@ It syncs everything to an **Obsidian-compatible Markdown vault** so you can read
 cd v2
 npm install
 npm run build
-npm test                    # 374 tests (353 backend + 21 frontend)
+npm test                    # 378 tests (355 backend + 23 frontend)
 
 # Try the demo (no V1 needed)
 node dist/cli/index.js demo
@@ -223,7 +223,7 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 ### Design Documents
 - [V2 Audit](../docs/V2_AUDIT.md) — Analysis of V1 (C11 codebase, 65K LOC)
 - [V2 Architecture](../docs/V2_ARCHITECTURE.md) — Sidecar TypeScript design
-- [V2 Roadmap](../docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.11.3)
+- [V2 Roadmap](../docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.12.3)
 - [Obsidian Integration](../docs/OBSIDIAN_INTEGRATION.md) — Vault format and sync
 - [Human Memory Schema](../docs/HUMAN_MEMORY_GRAPH_SCHEMA.md) — SQL schema
 
@@ -235,14 +235,14 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 
 ### Project
 - [Contributing](../CONTRIBUTING.md) — How to contribute
-- [Changelog](CHANGELOG.md) — Version history (0.1.0 → 0.11.3)
+- [Changelog](CHANGELOG.md) — Version history (0.1.0 → 0.12.3)
 - [License](../LICENSE) — MIT
 
 ## Security
 
 - **Local-first**: no network calls, no telemetry
 - **HUMAN NOTES preserved**: the `## HUMAN NOTES` section is never overwritten (regression-tested)
-- **Path traversal protection**: `obsidian_path` validated against `..` and backslashes
+- **Path traversal protection**: `obsidian_path` validated against `..` and backslashes, plus symlink-safe `realpathSync` containment check (R51 SEC-5, R55 Part A — shared `safe-path.ts` utility)
 - **Backup rotation**: max 5 `.bak` files per note
 - **Dry-run**: available on `obsidian sync`, `obsidian export`, `obsidian import`, `backup import`
 

@@ -1,9 +1,9 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 55 audit rounds. Public doc (no sensitive info) — for SSH key paths,
-> runner IPs, or other secrets, see your local `MAINTAINERS_NOTES.local.md`
-> (gitignored).
+> across 56 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> runner IPs, or other operational reminders, see your local
+> `MAINTAINERS_NOTES.local.md` (gitignored).
 
 ## Workflow: audit → implement → test → docs → commit → push → MR
 
@@ -16,12 +16,12 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 2. **Implement** — make the minimal change that fixes the issue. Don't
    refactor unrelated code in the same commit.
 3. **Test** — run `npm run build && npx vitest run` in both `v2/` and
-   `graph-ui/`. The full suite (376 tests: 353 backend + 23 frontend) must
+   `graph-ui/`. The full suite (378 tests: 355 backend + 23 frontend) must
    pass with 0 regressions before committing.
 4. **Docs** — update in parallel: CHANGELOG.md entry, version bump in
    package.json, README/docs version refs, V2_ROADMAP round entry + metrics.
-5. **Commit** — one commit per round (e.g. R55). Message format:
-   `fix(v2): 0.12.2 R55 Claude Sonnet R9 audit (4 fixes, Part A + D3 + D4 + D5)`
+5. **Commit** — one commit per round (e.g. R56). Message format:
+   `docs(v2): 0.12.3 R56 self-audit + MAINTAINERS_GUIDE (3 improvements)`
 6. **Push** — `git push origin v2/r<n>-<short-name> -o merge_request.create
    -o merge_request.target=main -o merge_request.title="..."` (single line,
    no newlines in push options).
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R55). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R56). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -203,5 +203,157 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R53 | 0.12.1 | Claude Sonnet R8 audit (D1/D2/B1-B3/Part C/Part E) |
 | R54 | 0.12.1 | CI pipeline fix (workflow:rules + block scalars + lease SHA) |
 | R55 | 0.12.2 | Claude Sonnet R9 audit (Part A + D3 + D4 + D5) |
+| R56 | 0.12.3 | self-audit + MAINTAINERS_GUIDE (symlink escape test, backup version clarify) |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R55).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R56).
+
+---
+
+## Common pitfalls (things that have caused bugs before)
+
+These are the recurring mistakes that audit rounds keep catching. Read this
+before every change to avoid re-introducing them.
+
+### 1. "FIXED" claims in previous rounds that weren't actually fixed
+**Pattern**: A previous round's summary says something is fixed, but the fix
+was never wired up. R55 Part A found exactly this: `safe-path.ts` existed
+with a docstring claiming "Used by both vault.ts and server.ts" — but neither
+file imported it. The duplication risk R8 warned about was still fully present.
+
+**Prevention**: Before claiming "fixed", grep for actual usage. Don't trust
+the previous round's summary — re-verify directly against the code.
+
+### 2. Stale version/test/bug counts in docs
+**Pattern**: After a round, `package.json` version is bumped but docs still
+reference the old version. Test counts in README/CONTRIBUTING/V2_ROADMAP drift.
+R56 caught 12 stale refs across v2/README.md, CONTRIBUTING.md, and
+MAINTAINERS_GUIDE.md.
+
+**Prevention**: After every version bump, grep for the old version across all
+`.md` files: `grep -rn "0\.<old-version>" *.md docs/*.md v2/*.md`. Same for
+test counts: `grep -rn "<old-count> tests" *.md docs/*.md`.
+
+### 3. YAML `: ` in script blocks parsed as mapping
+**Pattern**: `echo "Source branch: $VAR"` in a YAML `script:` list is parsed
+as a mapping `{'echo "Source branch': '$VAR"'}`, not a string. GitLab CI
+rejects it with "script config should be a string or a nested array of strings".
+R54b fixed this.
+
+**Prevention**: Always use block scalars (`|`) for multi-line scripts in YAML.
+Never put unquoted `: ` in a `- echo "..."` line.
+
+### 4. `--force-with-lease` fails on URL push without explicit SHA
+**Pattern**: `git push --force-with-lease "$URL" HEAD:main` fails with "stale
+info" on the 2nd+ run because git has no remote-tracking ref for a bare URL.
+R54c fixed this.
+
+**Prevention**: Always `ls-remote` first to get the expected SHA, then
+`--force-with-lease=main:<sha>`. For first-time mirror (empty ls-remote),
+fall back to `--force`.
+
+### 5. Workflow-level `permissions:` silently breaks job-specific API calls
+**Pattern**: Setting `permissions: contents: read` at workflow level makes
+every unlisted scope `none`. A job that calls `/repos/.../actions/runs` needs
+`actions: read` — without a job-level override, it 403s silently and the
+`.get('total_count', 0)` fallback masks the error. R55 D3 fixed this.
+
+**Prevention**: Any job that makes GitHub API calls must have its own
+job-level `permissions:` override listing ALL scopes it needs.
+
+### 6. MR pipelines with zero jobs = "Pipelines must succeed" blocked
+**Pattern**: If all jobs have `if: $CI_COMMIT_BRANCH == "main"` and the
+pipeline is a `merge_request_event`, `$CI_COMMIT_BRANCH` is undefined → all
+jobs filtered out → empty pipeline → "Pipelines must succeed" blocks the MR.
+R54 fixed this.
+
+**Prevention**: Always have `workflow:rules` + at least one job that runs on
+`merge_request_event` (the `mr-preflight` job).
+
+### 7. Unconditional `setLoading(true)` unmounts components on refetch
+**Pattern**: `useEffect(() => { setLoading(true); fetch(...) }, [trigger])`
+sets loading=true on every WebSocket-triggered refetch, which unmounts
+`<GraphCanvas>` and destroys the d3-force simulation. This was the C1
+regression that lasted 3 rounds (R43-R45).
+
+**Prevention**: Use project-aware stale-while-revalidate: only set
+`setLoading(true); setData(null)` on project SWITCH, not on same-project
+refetch. Plus the `if (loading && !data)` gate (not just `if (loading)`)
+as defense-in-depth.
+
+### 8. `npm ci` fails because `package-lock.json` is gitignored
+**Pattern**: Dockerfile or CI uses `npm ci` but `.gitignore` excludes
+`package-lock.json` (platform-specific lockfiles). The build fails on fresh
+clone.
+
+**Prevention**: Always use `npm install --no-audit --no-fund`. Never `npm ci`
+unless you commit the lockfile.
+
+### 9. Committing in the wrong repo
+**Pattern**: The shell doesn't persist `cd`, so `git add -A` runs in the
+wrong directory. R51 had a commit land in `/home/z/my-project` instead of
+`/home/z/my-project/work/cbm-r18`, losing all the fixes.
+
+**Prevention**: Always use `git -C /path/to/repo` for git commands, or
+verify `pwd` before any git operation. Never rely on `cd` persisting across
+bash invocations.
+
+---
+
+## Pre-commit checklist
+
+Before committing any change, verify:
+
+- [ ] `cd v2 && npm run build` succeeds (0 TypeScript errors)
+- [ ] `cd v2 && npx vitest run` passes (355 backend tests, 0 failures)
+- [ ] `cd graph-ui && npx tsc --noEmit` succeeds (0 TypeScript errors)
+- [ ] `cd graph-ui && npx vitest run` passes (23 frontend tests, 0 failures)
+- [ ] Total: 378 tests, 0 regressions
+- [ ] `v2/package.json` version bumped
+- [ ] `v2/CHANGELOG.md` has a new entry for the round
+- [ ] All `.md` files have consistent version refs (`grep -rn "<old-version>" *.md docs/*.md v2/*.md` returns nothing)
+- [ ] Test/bug/round counts in README.md, CONTRIBUTING.md, V2_ROADMAP.md, MAINTAINERS_GUIDE.md are up to date
+- [ ] If touching CI: YAML validated (`python3 -c "import yaml; yaml.safe_load(open('<file>'))"`)
+- [ ] If touching security: regression test added that would FAIL if the fix were reverted
+- [ ] Commit message follows the format: `<type>(v2): <version> R<n> <short-description> (<n> fixes, <details>)`
+- [ ] Push with MR options on a SINGLE LINE (no newlines in push options)
+
+---
+
+## Lessons learned (things that have broken before)
+
+A running list of "gotchas" that caused real incidents. Add to this list
+when you discover a new one.
+
+### Environment resets
+The development environment has been reset multiple times (lost SSH keys,
+paramiko, cloned repos). Recovery steps:
+1. Reinstall paramiko: `/home/z/.venv/bin/python3 -m pip install paramiko cryptography`
+2. Regenerate SSH key: use Python `cryptography` library (Ed25519)
+3. Recreate `/home/z/.config/cbm/ssh-wrapper.py` (paramiko-based, shebang `/home/z/.venv/bin/python3`)
+4. `git config --global core.sshCommand /home/z/.config/cbm/ssh-wrapper.py`
+5. Re-add deploy key (project-scoped, write access) on GitLab + GitHub
+6. Re-clone from GitHub (faster than GitLab via paramiko for deep fetches)
+
+See `MAINTAINERS_NOTES.local.md` for the actual key path and deploy key value.
+
+### GitLab API 403 from this environment
+The GitLab API returns 403 from this IP (Cloudflare blocks HK region, private
+project). Use `ls-remote` for sync verification, not the API. GitHub API
+works but rate-limits to 60 req/hr unauthenticated.
+
+### Paramiko SSH wrapper is slow for deep fetches
+`git fetch` via the paramiko wrapper times out for deep history (50+ commits).
+Workarounds:
+- Use `git ls-remote` for quick sync checks (just compares SHAs)
+- Clone from GitHub (HTTPS, no paramiko) instead of GitLab (SSH, paramiko)
+- Use `--depth=N` for shallow fetches when possible
+
+### `sed -i` over-replaces version strings
+Using `sed -i 's/0.12.2/0.12.3/g'` across all docs also changes the R55
+entry in V2_ROADMAP (which was at version 0.12.2). Always verify after sed:
+`grep -rn "<new-version>" docs/V2_ROADMAP.md` and fix historical entries
+that shouldn't have been changed.
+
+### Branch protection blocks remote branch deletion
+`git push origin --delete v2/round50` fails silently if branch protection
+is enabled on GitLab. Delete via GitLab UI instead.
