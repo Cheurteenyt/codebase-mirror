@@ -22,12 +22,13 @@
 //   4. Walk AST: extract edges (CONTAINS, CALLS)
 //   5. Write to SQLite (compatible with V1 schema)
 
-import { Parser, Language, type Node as TSNode } from 'web-tree-sitter';
+import { Parser, Language } from 'web-tree-sitter';
 import type Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { relative, extname, basename, dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+import { extractFast } from './fast-walker.js';
 const require2 = createRequire(import.meta.url);
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -154,243 +155,6 @@ function getWasmPath(lang: string): string {
 
 // (getLanguage is defined above, used by preloadGrammars)
 
-// ── AST extraction ─────────────────────────────────────────────────────
-
-/**
- * Node types that represent declarations we want to extract.
- * These are common across tree-sitter grammars for most languages.
- */
-const FUNCTION_TYPES = new Set([
-  'function_declaration', 'function_definition', 'function',
-  'arrow_function', 'generator_function_declaration', 'generator_function',
-]);
-
-const CLASS_TYPES = new Set([
-  'class_declaration', 'class_definition', 'class',
-  'interface_declaration', 'struct_specifier',
-]);
-
-const METHOD_TYPES = new Set([
-  'method_definition', 'method_declaration', 'function_definition',
-  'constructor_declaration', 'getter_definition', 'setter_definition',
-]);
-
-// (VARIABLE_TYPES reserved for future use — not all grammars expose variable declarations consistently)
-
-const CALL_TYPES = new Set([
-  'call_expression', 'call',
-]);
-
-/**
- * Get the name of a declaration node.
- * Tree-sitter grammars typically use 'name' as the field name.
- */
-function getDeclName(node: TSNode): string {
-  const nameNode = node.childForFieldName('name');
-  if (nameNode) return nameNode.text;
-  // Fallback: first identifier child
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (child && child.type === 'identifier') return child.text;
-  }
-  // R70 (Part B): disambiguate anonymous functions with line number.
-  // Without this, every anonymous callback in the same scope gets the same
-  // qualified name (${parentQn}::anonymous), causing qnToId.set() to
-  // silently overwrite previous entries. Using the line number ensures
-  // each anonymous function gets a unique qualified name.
-  return `anonymous@${node.startPosition.row + 1}`;
-}
-
-/**
- * Walk a tree-sitter AST and extract nodes + edges.
- */
-function walkAST(
-  node: TSNode,
-  db: Database.Database,
-  project: string,
-  relPath: string,
-  fileQn: string,
-  fileNodeId: number,
-  parentNodeId: number | null,
-  qnToId: Map<string, number>,
-  nameToQns: Map<string, string[]>,
-  insertNode: Database.Statement,
-  insertEdge: Database.Statement,
-  nextId: { value: number },
-  nextEdgeId: { value: number },
-  result: WasmExtractionResult,
-  parentQn: string,
-): void {
-  const nodeType = node.type;
-
-  // ── Function declaration ─────────────────────────────────────────
-  if (FUNCTION_TYPES.has(nodeType)) {
-    const name = getDeclName(node);
-    const qn = `${parentQn}::${name}`;
-    const nodeId = nextId.value++;
-    const startLine = node.startPosition.row + 1;
-    const endLine = node.endPosition.row + 1;
-
-    insertNode.run(
-      project, 'Function', name, qn, relPath, startLine, endLine,
-      JSON.stringify({ language: 'tree-sitter', complexity: estimateComplexityWasm(node) })
-    );
-    qnToId.set(qn, nodeId);
-    addToNameMap(nameToQns, name, qn);
-
-    // Edge: parent CONTAINS this function
-    if (parentNodeId !== null) {
-      insertEdge.run(project, parentNodeId, nodeId, 'CONTAINS', '{}');
-      nextEdgeId.value++;
-      result.edges++;
-    } else {
-      // Top-level function — File contains it
-      insertEdge.run(project, fileNodeId, nodeId, 'CONTAINS', '{}');
-      nextEdgeId.value++;
-      result.edges++;
-    }
-    result.nodes++;
-
-    // Recurse into the function body for nested declarations + calls
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child) {
-        walkAST(child, db, project, relPath, fileQn, fileNodeId, nodeId, qnToId, nameToQns,
-          insertNode, insertEdge, nextId, nextEdgeId, result, qn);
-      }
-    }
-    return;
-  }
-
-  // ── Class declaration ────────────────────────────────────────────
-  if (CLASS_TYPES.has(nodeType)) {
-    const name = getDeclName(node);
-    const qn = `${parentQn}::${name}`;
-    const nodeId = nextId.value++;
-    const startLine = node.startPosition.row + 1;
-    const endLine = node.endPosition.row + 1;
-
-    insertNode.run(
-      project, 'Class', name, qn, relPath, startLine, endLine,
-      JSON.stringify({ language: 'tree-sitter' })
-    );
-    qnToId.set(qn, nodeId);
-    addToNameMap(nameToQns, name, qn);
-
-    if (parentNodeId !== null) {
-      insertEdge.run(project, parentNodeId, nodeId, 'CONTAINS', '{}');
-      nextEdgeId.value++;
-      result.edges++;
-    } else {
-      insertEdge.run(project, fileNodeId, nodeId, 'CONTAINS', '{}');
-      nextEdgeId.value++;
-      result.edges++;
-    }
-    result.nodes++;
-
-    // Recurse into class body for methods
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child) {
-        walkAST(child, db, project, relPath, fileQn, fileNodeId, nodeId, qnToId, nameToQns,
-          insertNode, insertEdge, nextId, nextEdgeId, result, qn);
-      }
-    }
-    return;
-  }
-
-  // ── Method (inside class body) ───────────────────────────────────
-  if (METHOD_TYPES.has(nodeType)) {
-    const name = getDeclName(node);
-    const qn = `${parentQn}::${name}`;
-    const nodeId = nextId.value++;
-    const startLine = node.startPosition.row + 1;
-    const endLine = node.endPosition.row + 1;
-
-    insertNode.run(
-      project, 'Method', name, qn, relPath, startLine, endLine,
-      JSON.stringify({ language: 'tree-sitter', complexity: estimateComplexityWasm(node) })
-    );
-    qnToId.set(qn, nodeId);
-    addToNameMap(nameToQns, name, qn);
-
-    if (parentNodeId !== null) {
-      insertEdge.run(project, parentNodeId, nodeId, 'CONTAINS', '{}');
-      nextEdgeId.value++;
-      result.edges++;
-    }
-    result.nodes++;
-
-    // Recurse for nested calls
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child) {
-        walkAST(child, db, project, relPath, fileQn, fileNodeId, nodeId, qnToId, nameToQns,
-          insertNode, insertEdge, nextId, nextEdgeId, result, qn);
-      }
-    }
-    return;
-  }
-
-  // ── Call expression (edge: CALLS) ────────────────────────────────
-  if (CALL_TYPES.has(nodeType)) {
-    const funcNode = node.childForFieldName('function');
-    if (funcNode) {
-      const calleeName = funcNode.text;
-      // Try to resolve the call target
-      const candidates = nameToQns.get(calleeName) || nameToQns.get(calleeName.split('.').pop() || '');
-      if (candidates && candidates.length > 0 && parentNodeId !== null) {
-        const targetId = qnToId.get(candidates[0]);
-        if (targetId && targetId !== parentNodeId) {
-          insertEdge.run(project, parentNodeId, targetId, 'CALLS',
-            JSON.stringify({ callee: calleeName, inferred: true }));
-          nextEdgeId.value++;
-          result.edges++;
-        }
-      }
-    }
-  }
-
-  // ── Recurse into children ────────────────────────────────────────
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (child) {
-      walkAST(child, db, project, relPath, fileQn, fileNodeId, parentNodeId, qnToId, nameToQns,
-        insertNode, insertEdge, nextId, nextEdgeId, result, parentQn);
-    }
-  }
-}
-
-/**
- * Estimate cyclomatic complexity by counting decision points in the AST.
- */
-function estimateComplexityWasm(node: TSNode): number {
-  let complexity = 1;
-  const decisionTypes = new Set([
-    'if_statement', 'if', 'while_statement', 'while', 'for_statement',
-    'for', 'for_in_statement', 'for_each', 'case', 'catch_clause',
-    'catch', 'conditional_expression', 'ternary',
-  ]);
-
-  function walk(n: TSNode): void {
-    if (decisionTypes.has(n.type)) complexity++;
-    // && and || in binary expressions
-    if (n.type === 'binary_expression' || n.type === 'boolean_operator_expression') {
-      const op = n.child(1);
-      if (op && (op.type === '&&' || op.type === '||' || op.type === 'and' || op.type === 'or')) {
-        complexity++;
-      }
-    }
-    for (let i = 0; i < n.childCount; i++) {
-      const child = n.child(i);
-      if (child) walk(child);
-    }
-  }
-
-  walk(node);
-  return complexity;
-}
-
 // ── Main extraction function ───────────────────────────────────────────
 
 /**
@@ -412,7 +176,6 @@ export async function extractFromFilesWasm(
 
   const parser = new Parser();
   const qnToId = new Map<string, number>();
-  const nameToQns = new Map<string, string[]>();
   const nextId = { value: 1 };
   const nextEdgeId = { value: 1 };
 
@@ -475,22 +238,33 @@ export async function extractFromFilesWasm(
 
         // Create File node
         const fileQn = `${project}::${relPath}`;
-        const fileNodeId = nextId.value++;
-        insertNode.run(
-          project, 'File', basename(relPath), fileQn, relPath,
-          1, source.split('\n').length,
-          JSON.stringify({ language: lang, size: source.length })
-        );
-        qnToId.set(fileQn, fileNodeId);
-        addToNameMap(nameToQns, basename(relPath), fileQn);
-        result.nodes++;
 
-        // Walk the AST
-        walkAST(
-          tree.rootNode, db, project, relPath, fileQn, fileNodeId, null,
-          qnToId, nameToQns, insertNode, insertEdge, nextId, nextEdgeId,
-          result, fileQn,
-        );
+        // R72: use fast-walker (descendantsOfType) instead of recursive walkAST.
+        // This is ~3x faster because the WASM runtime does the tree traversal
+        // in C speed, eliminating JavaScript function call overhead.
+        const extracted = extractFast(tree.rootNode, project, relPath, fileQn);
+
+        // Insert extracted nodes
+        for (const node of extracted.nodes) {
+          const nodeId = nextId.value++;
+          insertNode.run(
+            project, node.label, node.name, node.qualifiedName, node.filePath,
+            node.startLine, node.endLine, node.properties
+          );
+          qnToId.set(node.qualifiedName, nodeId);
+          result.nodes++;
+        }
+
+        // Insert extracted edges
+        for (const edge of extracted.edges) {
+          const sourceId = qnToId.get(edge.sourceQn);
+          const targetId = qnToId.get(edge.targetQn);
+          if (sourceId && targetId) {
+            insertEdge.run(project, sourceId, targetId, edge.type, edge.properties);
+            nextEdgeId.value++;
+            result.edges++;
+          }
+        }
 
         result.files++;
         tree.delete();
@@ -541,8 +315,3 @@ function getLanguageSync(lang: string): Language | null {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function addToNameMap(map: Map<string, string[]>, name: string, qn: string): void {
-  const existing = map.get(name);
-  if (existing) existing.push(qn);
-  else map.set(name, [qn]);
-}
