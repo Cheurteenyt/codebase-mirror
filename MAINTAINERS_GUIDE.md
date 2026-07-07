@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 75 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across 76 audit rounds. Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -30,7 +30,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 
 ## Naming conventions
 
-- **R<n>** — round number (R44, R45, ..., R75). One per audit/fix cycle.
+- **R<n>** — round number (R44, R45, ..., R76). One per audit/fix cycle.
 - **SEC-<n>** — security finding number (SEC-5, SEC-6, ..., SEC-15).
   Numbered sequentially within a security round.
 - **D<n>** — design/deployment finding (D1, D2, D3, D4, D5).
@@ -189,7 +189,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.15.7 (R75).
+  - Currently 0.15.8 (R76).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes. Currently `0.10.3` (frozen
   since R36 — the schema hasn't changed).
@@ -231,8 +231,9 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R73 | 0.15.5 | micro-optimizations — no descendantCount/text.length, pre-built JSON, Map O(1) parent. V2 9% faster than V1 C (277ms vs 305ms). |
 | R74 | 0.15.6 | two-phase extraction — Phase 1 extract all (no SQLite), Phase 2 write all (1 transaction). Skip tree.delete (WASM GC). Architectural consistency. |
 | R75 | 0.15.7 | pre-read files, skip setLanguage, multi-row batch INSERT. V2 **10% faster than V1 C** (273ms vs 305ms). |
+| R76 | 0.15.8 | single-pass complexity + skip anonymous. V2 **12% faster than V1 C** (267ms vs 305ms). |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R75).
+See `docs/V2_ROADMAP.md` for the full history (R1 → R76).
 
 ---
 

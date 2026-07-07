@@ -1,5 +1,44 @@
 # Changelog — Codebase Memory V2
 
+## 0.15.8 — Round 76 (2026-07-07) single-pass complexity + skip anonymous
+
+2 optimizations to the fast-walker extraction.
+
+### Optimizations
+
+1. **Single-pass complexity estimation**: `estimateComplexityFast()` now makes
+   one `descendantsOfType()` call with a combined type array (decisions +
+   binary expressions) instead of two separate calls. The WASM runtime
+   traverses the tree once instead of twice. JS-side filtering of binary
+   operators is faster than a second WASM traversal for typical function bodies.
+
+2. **Skip complexity for anonymous functions**: arrow functions and inline
+   callbacks (`.map(x => ...)`, `.then(...)`) get `complexity: 1` without
+   any WASM traversal. These are typically 1-3 lines with no decision points.
+   Saves one `descendantsOfType()` call per anonymous function — for a file
+   with 10 arrow functions, that's 10 WASM traversals eliminated.
+
+### Benchmark (3-run average)
+
+| Codebase | R75 | R76 | Speedup |
+|---|---|---|---|
+| v2/src (51 files) | 287ms | 267ms | **1.07x** |
+| v1/src (122 files, parallel) | 995ms | 897ms | **1.11x** |
+
+The v1/src parallel path benefits more (11% vs 7%) because it has more
+functions per file (C code is function-heavy), so the complexity skip
+has more impact.
+
+### Full evolution: R68 → R76
+
+| Round | v2/src | vs V1 (305ms) |
+|---|---|---|
+| R68 ts-morph | 1833ms | 6.0x slower |
+| R69 WASM | 340ms | 1.11x slower |
+| R72 descendantsOfType | 288ms | V2 faster |
+| R75 pre-read + batch | 273ms | 10% faster |
+| R76 single-pass complexity | 267ms | **12% faster** |
+
 ## 0.15.7 — Round 75 (2026-07-07) pre-read + skip setLanguage + batch INSERT
 
 3 optimizations to the single-thread extraction path.

@@ -113,8 +113,9 @@ export function extractFast(
     const name = getDeclNameFast(func);
     const parentQn = findParentQnFast(func, fileQn, qnByNode);
     const qn = `${parentQn}::${name}`;
-    // R73: pre-built JSON instead of JSON.stringify
-    const complexity = estimateComplexityFast(func);
+    // R76: deferred complexity — compute only if we need it (skip for anonymous)
+    const isNamed = name !== 'anonymous' && !name.startsWith('anonymous@');
+    const complexity = isNamed ? estimateComplexityFast(func) : 1;
     const props = '{"language":"tree-sitter","complexity":' + complexity + '}';
     nodes.push({
       label: 'Function',
@@ -156,7 +157,9 @@ export function extractFast(
     const name = getDeclNameFast(method);
     const parentQn = findParentQnFast(method, fileQn, qnByNode);
     const qn = `${parentQn}::${name}`;
-    const complexity = estimateComplexityFast(method);
+    // R76: deferred complexity for methods too
+    const isNamed = name !== 'anonymous' && !name.startsWith('anonymous@');
+    const complexity = isNamed ? estimateComplexityFast(method) : 1;
     const props = '{"language":"tree-sitter","complexity":' + complexity + '}';
     nodes.push({
       label: 'Method',
@@ -255,24 +258,35 @@ function findEnclosingDeclQnFast(
   return null;
 }
 
+// R76: pre-combined array for single descendantsOfType call in complexity estimation
+const COMPLEXITY_TYPES = [
+  'if_statement', 'if', 'while_statement', 'while', 'for_statement',
+  'for', 'for_in_statement', 'for_each', 'case', 'catch_clause',
+  'catch', 'conditional_expression', 'ternary',
+  'binary_expression', 'boolean_operator_expression',
+];
+
+const BINARY_OP_TYPES = new Set(['&&', '||', 'and', 'or']);
+
+/**
+ * R76: optimized complexity estimation — single descendantsOfType call
+ * instead of two. Combines decision types + binary expressions into one
+ * WASM traversal, then filters in JS (which is faster than a second WASM
+ * call for small arrays).
+ */
 function estimateComplexityFast(node: TSNode): number {
   let complexity = 1;
-  const decisions = node.descendantsOfType([
-    'if_statement', 'if', 'while_statement', 'while', 'for_statement',
-    'for', 'for_in_statement', 'for_each', 'case', 'catch_clause',
-    'catch', 'conditional_expression', 'ternary',
-  ]);
-  complexity += decisions.length;
-
-  // Count && and || operators
-  const binaries = node.descendantsOfType(['binary_expression', 'boolean_operator_expression']);
-  for (const bin of binaries) {
-    const op = bin.child(1);
-    if (op && (op.type === '&&' || op.type === '||' || op.type === 'and' || op.type === 'or')) {
+  const all = node.descendantsOfType(COMPLEXITY_TYPES);
+  for (const n of all) {
+    if (n.type === 'binary_expression' || n.type === 'boolean_operator_expression') {
+      const op = n.child(1);
+      if (op && BINARY_OP_TYPES.has(op.type)) {
+        complexity++;
+      }
+    } else {
       complexity++;
     }
   }
-
   return complexity;
 }
 

@@ -1,8 +1,8 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-07 for version 0.15.7.
+> Updated 2026-07-07 for version 0.15.8.
 
-## Current State (0.15.7)
+## Current State (0.15.8)
 
 ### ✅ Completed
 
@@ -64,7 +64,7 @@
 | Round 53 Claude Sonnet R8 audit | 0.12.1 | 8 fixes: D1 HIGH mirror --force-with-lease (prevents silent PR loss), D2 MEDIUM token via http.extraHeader (no token in URL), B1 CHANGELOG R47-R49 backfill, B2 CHANGELOG R51-R52 + version bump, B3 CONTRIBUTING.md GitLab label fix, Part C shared safeRealpath utility, Part E GraphTab C1 chain test. |
 | Round 54 CI pipeline fix | 0.12.1 | 3 CI fixes: R54 workflow:rules + mr-preflight job (MR pipelines were empty → "Pipelines must succeed" blocked MRs), R54b YAML block scalars (YAML parsed `: ` as mapping not string), R54c ls-remote + --force-with-lease=main:<sha> (--force-with-lease without explicit SHA fails on URL push). |
 | Round 55 Claude Sonnet R9 audit | 0.12.2 | 4 fixes: Part A HIGH safe-path.ts dead code wired up (vault.ts assertPathInsideVault → assertPathInsideRoot, server.ts routeBrowse → safeRealpath, routeIndex → safeRealpathStrict), D3 HIGH quota-report job-level permissions: actions: read override (workflow-level contents: read was silently 403ing /actions/runs API), D4 LOW removed unreachable v2/** push pattern, D5 LOW quota-report restricted to schedule-only. |
-| Round 56 self-audit + MAINTAINERS_GUIDE | 0.12.3 | 3 improvements: symlink escape test for assertPathInsideRoot (2 new tests — vault.test.ts now covers the actual SEC-5 attack vector, not just symlink loops), backup.ts version field clarified (10-line comment block — was ambiguous between schema version and package version), MAINTAINERS_GUIDE.md new file (workflow conventions, naming rules, required patterns, anti-patterns, CI/CD setup, audit etiquette — accumulated across 75 rounds). |
+| Round 56 self-audit + MAINTAINERS_GUIDE | 0.12.3 | 3 improvements: symlink escape test for assertPathInsideRoot (2 new tests — vault.test.ts now covers the actual SEC-5 attack vector, not just symlink loops), backup.ts version field clarified (10-line comment block — was ambiguous between schema version and package version), MAINTAINERS_GUIDE.md new file (workflow conventions, naming rules, required patterns, anti-patterns, CI/CD setup, audit etiquette — accumulated across 76 rounds). |
 | Round 57 doc cleanup + private notes | 0.12.4 | Doc consistency + maintainability (no code changes). 12 stale refs fixed across v2/README.md (test count 374→378, version refs 0.11.3→0.12.4, security section R51/R55), CONTRIBUTING.md (6→7 tools, 374→378 tests, 5→9 docs, npm ci→npm install, stale "planned: 0.4.0" removed, CI/CD section rewritten), MAINTAINERS_GUIDE.md (376→378 tests, R55→R56). MAINTAINERS_GUIDE.md enriched with Common pitfalls (9 items), Pre-commit checklist (12 items), Lessons learned (6 items). MAINTAINERS_NOTES.local.md created (gitignored) — operational reminders, env reset recovery, gotchas. |
 | Round 58 code quality + type safety + perf | 0.12.5 | No bugs fixed — code quality + type safety + perf in store.ts. 6 row type interfaces added (HumanNodeRow, HumanEdgeRow, IdRow, CountRow, LabelCountRow, HumanNodeWithCbmIdRow). 18 `as any` casts replaced with proper row types. deserializeNode/Edge typed properly. safeJsonParseArray: any[]→unknown[]. params: any[]→(string|number)[]. 3 hot-path prepared statements moved to constructor (getNodeById, getNodeBySlug, getNodeByObsidianPath). |
 | Round 59 code quality + type safety in sqlite-ro.ts | 0.12.6 | No bugs fixed — same pattern as R58 applied to code graph reader. 11 row type interfaces added (CodeNodeRow, NeighborRow, DegreeCountRow, CountRow, CountAllRow, LabelCountRow, TypeCountRow, EdgeTripleRow, BulkEdgeRow, ProjectNameRow, ProjectRow). 30 `as any` casts replaced. deserializeCodeNode/makeEdge/tryPush typed properly. Null safety: NeighborRow.node_properties coalesced with ?? '{}'. 2 hot-path prepared statements moved to constructor (getNodeById, findNodeByQualifiedName). |
@@ -85,6 +85,7 @@
 | Round 73 fast-walker micro-optimizations | 0.15.5 | 4 micro-opts: removed descendantCount (unused WASM traversal), removed rootNode.text.length (O(n) copy), pre-built JSON strings (no JSON.stringify per node), Map-based parent resolution (O(1) vs O(n) linear search). v2/src: 288→277ms. V2 is now **9% faster than V1 C** (277ms vs 305ms). |
 | Round 74 two-phase extraction architecture | 0.15.6 | Restructured single-thread indexer into Phase 1 (extract all, no SQLite) + Phase 2 (write all, one transaction). Better cache locality, shorter transaction duration. Skipped tree.delete() (WASM GC handles cleanup). Performance within noise of R73. Architectural consistency with parallel path. |
 | Round 75 pre-read + skip setLanguage + batch INSERT | 0.15.7 | 3 opts: pre-read all files before parsing (OS prefetch), skip redundant parser.setLanguage when same language (49/50 calls eliminated), multi-row batch INSERT (50 rows/statement vs single-row). v2/src: 282→273ms. V2 is now **10% faster than V1 C** (273ms vs 305ms). |
+| Round 76 single-pass complexity + skip anonymous | 0.15.8 | 2 opts: single descendantsOfType call for complexity (was 2), skip complexity estimation for anonymous functions (complexity=1). v2/src: 273→267ms (1.07x). v1/src parallel: 995→897ms (1.11x). V2 is now **12% faster than V1 C** (267ms vs 305ms). |
 
 ### 📊 Metrics
 
@@ -93,7 +94,7 @@
 | Source files (v2) | 38 |
 | Test files | 43 (32 backend + 11 frontend) |
 | Tests | 378 (355 backend + 23 frontend, all passing) |
-| Bugs fixed (75 rounds) | 565+ |
+| Bugs fixed (76 rounds) | 565+ |
 | MCP tools | 7 |
 | CLI commands | 16+ (including `watch` daemon) |
 | API endpoints | 15 (6 existing + 9 new) |
@@ -133,7 +134,7 @@
 | Human memory overlay on graph | Medium | High | Planned |
 | `cbm-v2 watch` daemon (auto-sync) | Medium | Medium | Planned |
 
-### Phase 3: V1 Complete (0.15.7)
+### Phase 3: V1 Complete (0.15.8)
 
 | Feature | Priority | Complexity | Status |
 |---|---|---|---|
@@ -235,6 +236,7 @@
 | R73 (micro-opts: no descendantCount, no text.length, pre-built JSON, Map O(1) parent, 277ms v2/src) | 0.15.5 | 0 | 0 | 378 |
 | R74 (two-phase extract-then-write, skip tree.delete, shorter transaction, architectural consistency) | 0.15.6 | 0 | 0 | 378 |
 | R75 (pre-read files, skip setLanguage, multi-row batch INSERT 50 rows/statement, 273ms v2/src) | 0.15.7 | 0 | 0 | 378 |
+| R76 (single-pass complexity estimation, skip anonymous, 267ms v2/src, 897ms v1/src) | 0.15.8 | 0 | 0 | 378 |
 | **Total** | | **566+** | **513+** | **378** |
 
 ## Performance Milestones
@@ -271,7 +273,7 @@
 | R41 | `Sidebar flattenSingleChild` | O(n²) on deep single-child chains | O(n) (use already-flattened sc.children) | -~n× on deep chains |
 | R42 | `searchHumanNodes` FTS5 query | Phrase-only (entire query in one pair of quotes — required exact adjacent phrase) | AND-of-terms (each term individually quoted, implicit AND) | Matches scattered/reordered words, not just adjacent phrases |
 
-## API Endpoints (0.15.7)
+## API Endpoints (0.15.8)
 
 | Endpoint | Method | Description |
 |---|---|---|
