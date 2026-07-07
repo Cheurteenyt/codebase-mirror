@@ -1,5 +1,43 @@
 # Changelog — Codebase Memory V2
 
+## 0.12.9 — Round 62 (2026-07-07) code quality in importer.ts + generator.ts
+
+No bugs fixed — type safety + deduplication in the Obsidian sync engine
+(`v2/src/obsidian/importer.ts` + `v2/src/obsidian/generator.ts`). Zero
+functional changes, zero test regressions.
+
+### importer.ts (MEDIUM) — deduplication + type safety
+
+- **Duplicated import loop extracted**: the `for (const relPath of files) {
+  try { importSingleFile } catch (e) { result.errors.push } }` block was
+  duplicated verbatim in both the dry-run branch and the transaction branch.
+  Extracted into a local `importAllFiles` helper, which is now passed directly
+  to `db.transaction()` (better-sqlite3 accepts a function directly — no need
+  to wrap it in an anonymous arrow). The dry-run branch calls it directly.
+- **2 `catch (e: any)` → `catch (e: unknown)`**: now uses
+  `e instanceof Error ? e.message : String(e)` instead of accessing `.message`
+  on an `any`-typed value.
+- **`existingBySlug` typed**: was `let existingBySlug = null` (inferred as
+  `null` only, then assigned a `HumanNode`). Now explicitly
+  `let existingBySlug: HumanNode | null = null`. The compiler will catch any
+  future assignment of a non-HumanNode value.
+
+### generator.ts (LOW) — type safety
+
+- **2 `catch (e: any)` → `catch (e: unknown)`** in `syncHumanNodesToVault`
+  and `autoGenerateModuleNotes`. Same pattern as importer.ts — uses
+  `e instanceof Error ? e.message : String(e)`.
+
+### Why this matters
+
+The importer and generator are the two halves of the Obsidian vault sync
+engine — importer reads vault files into the DB, generator writes DB nodes
+back to vault files. Every sync cycle runs both. The duplicated import loop
+was a maintenance hazard (a fix in one branch could be missed in the other);
+the `catch (e: any)` pattern could throw on non-Error values (e.g. if
+`importSingleFile` ever did `throw "invalid frontmatter"` instead of
+`throw new Error("invalid frontmatter")`).
+
 ## 0.12.8 — Round 61 (2026-07-07) code quality in server.ts
 
 No bugs fixed — type safety and WebSocket state management in the UI server

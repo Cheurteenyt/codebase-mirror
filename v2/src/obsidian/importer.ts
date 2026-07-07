@@ -83,31 +83,31 @@ export function importVault(opts: ImportOptions): ImportResult {
 
   const files = walkVault(opts.vaultPath);
 
-  // R36: wrap all DB writes in a single transaction for performance.
-  // The transaction is only opened if we're not in dry-run mode.
-  if (opts.dryRun) {
-    // Dry-run: no transaction needed, no DB writes.
+  // R62: extract the per-file import loop into a helper to avoid duplicating
+  // the try/catch + skip-template logic between dry-run and transaction paths.
+  // The previous code had the same `for (const relPath of files) { ... try
+  // { importSingleFile } catch (e: any) { result.errors.push } }` block
+  // duplicated verbatim in both branches.
+  const importAllFiles = () => {
     for (const relPath of files) {
       if (relPath === '00_Index.md' || relPath.endsWith('ADR-000-template.md')) continue;
       try {
         importSingleFile(relPath, opts, result);
-      } catch (e: any) {
-        result.errors.push({ path: relPath, error: e.message });
+      } catch (e: unknown) {
+        result.errors.push({ path: relPath, error: e instanceof Error ? e.message : String(e) });
       }
     }
+  };
+
+  // R36: wrap all DB writes in a single transaction for performance.
+  // The transaction is only opened if we're not in dry-run mode.
+  if (opts.dryRun) {
+    // Dry-run: no transaction needed, no DB writes.
+    importAllFiles();
   } else {
     // R36: batch all writes in a single transaction.
     const db = opts.humanStore.getRawDb();
-    const tx = db.transaction(() => {
-      for (const relPath of files) {
-        if (relPath === '00_Index.md' || relPath.endsWith('ADR-000-template.md')) continue;
-        try {
-          importSingleFile(relPath, opts, result);
-        } catch (e: any) {
-          result.errors.push({ path: relPath, error: e.message });
-        }
-      }
-    });
+    const tx = db.transaction(importAllFiles);
     tx();
   }
 
@@ -261,7 +261,7 @@ function resolveExistingNode(
   slug: string,
 ): HumanNode | null {
   const existingByPath = opts.humanStore.getNodeByObsidianPath(opts.project, relPath);
-  let existingBySlug = null;
+  let existingBySlug: HumanNode | null = null;
   if (!existingByPath && slug) {
     const slugMatch = opts.humanStore.getNodeBySlug(opts.project, slug);
     if (slugMatch) {
