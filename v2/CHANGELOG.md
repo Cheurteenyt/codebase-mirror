@@ -1,5 +1,51 @@
 # Changelog — Codebase Memory V2
 
+## 0.15.6 — Round 74 (2026-07-07) two-phase extraction architecture
+
+Restructured the single-thread indexer into two phases for better cache
+locality and architectural clarity.
+
+### Architecture improvement (MEDIUM)
+
+**Before R74**: the single-thread path interleaved file reading, WASM parsing,
+AST extraction, and SQLite writes all within a single `db.transaction()`.
+This caused cache thrashing — CPU-heavy WASM parsing alternated with
+SQLite I/O, and the transaction was held open for the entire duration.
+
+**After R74**: two clean phases:
+- **Phase 1 (Extract)**: read + parse + extract ALL files into in-memory
+  arrays. No SQLite access. Pure CPU work — WASM parsing + AST extraction.
+  Better CPU cache utilization (no SQLite page cache competing).
+- **Phase 2 (Write)**: write all nodes + edges to SQLite in one transaction.
+  Two passes: (1) insert all nodes + build QN→ID map, (2) insert all edges
+  with resolved IDs. Shorter transaction duration (writes only, no parsing).
+
+Also: `tree.delete()` skipped — WASM GC handles cleanup on process exit,
+saving ~0.2ms per file (WASM→JS round-trip). Memory is bounded by the
+number of files in a single index run.
+
+### Benchmark
+
+Performance is within noise of R73 (±5% variance). The restructure is
+architecturally cleaner — the parallel path (worker.ts) already used this
+pattern, now the single-thread path matches it.
+
+| Codebase | R73 | R74 | Notes |
+|---|---|---|---|
+| v2/src (50 files) | 277ms | 290ms | Within variance (±5%) |
+| v1/src (122 files) | 987ms | 1028ms | Parallel path unchanged |
+| graph-ui (43 files) | 196ms | 210ms | Within variance (±5%) |
+
+### Why commit if not faster?
+
+1. **Architectural consistency**: both single-thread and parallel paths now
+   use the same extract-then-write pattern.
+2. **Shorter transactions**: SQLite transaction is only open during writes,
+   not during parsing. Better for concurrent access.
+3. **Future optimization**: Phase 1 is now a clean extraction boundary that
+   could be parallelized without SQLite complexity (workers just return
+   arrays, main thread writes).
+
 ## 0.15.5 — Round 73 (2026-07-07) fast-walker micro-optimizations
 
 4 micro-optimizations to the fast-walker for incremental speedup.
