@@ -41,7 +41,7 @@ function runIndexer(project: string, root: string, cacheDir: string, incremental
     env: { ...process.env, XDG_CACHE_HOME: cacheDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  return { exitCode: res.status ?? 0, output: res.stdout ?? '' };
+  return { exitCode: res.status ?? (res.error || res.signal ? 1 : 0), output: res.stdout ?? '' };
 }
 
 function getDbStats(dbPath: string, project: string): {

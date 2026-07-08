@@ -1,5 +1,64 @@
 # Changelog — Codebase Memory V2
 
+## 0.31.0 — Round 93 (2026-07-08) Legacy mtime_ns Runtime Fix + Test Harness Correctness
+
+**19th round (GPT 5.5 external audit R93).** 1 bug fixed + test harness fixes.
+GPT 5.5 found that R91's estimation-pass fix for `mtime_ns = NULL` was
+incomplete — the extraction paths still fell back to `Math.floor(mtimeMs)`,
+allowing the false-skip risk to persist on legacy DBs.
+
+### Bug fixed (1, from GPT 5.5 R93 audit)
+
+33. **`mtime_ns = NULL` still fast-skips on `Math.floor(mtimeMs)` in extraction paths** (`wasm-extractor.ts` + `indexer.ts`) — R91 fixed the estimation pass (`estimatedFilesToIndex++` when `mtime_ns` is NULL), but the actual extraction paths (`wasm-extractor.ts` and `indexParallel()`) still had the old fallback: `existing.mtime_ns ? existing.mtime_ns === fileMtimeNs : existing.mtime === fileMtime`. So the estimation forced entry into the pipeline, but the pipeline itself could still fast-skip on `mtime` integer, never backfilling `mtime_ns`. Fixed: removed the `mtime` integer fallback entirely. Now: if `mtime_ns` exists and matches → fast-skip. If `mtime_ns` is NULL or mismatches → read+hash → metadata-only update (backfills `mtime_ns`) or re-index.
+
+### Test harness fixes (3, from GPT 5.5 R93 audit)
+
+1. **`XDG_CACHE_HOME` set before first `indexProjectWasm()` call** (`r92-real-failure-injection.test.ts`) — Previously `XDG_CACHE_HOME` was set after the full index, so full index wrote to `~/.cache/...` and incremental wrote to `tmpDir/cache/...`. The test verified the wrong DB. Fixed: `XDG_CACHE_HOME` is now set in `beforeEach()` before any indexer call. Added `expect(result2.dbPath).toBe(result1.dbPath)` assertion.
+
+2. **Hash assertion added** (`r92-real-failure-injection.test.ts`) — Previously `aHash` was read but never asserted. Now: `aHashAfter.content_hash` is compared to `aHashBefore.content_hash`, proving the hash was NOT updated for the failed file.
+
+3. **`CBM_TEST_FAIL_ON_FILE` gated by `NODE_ENV === 'test'`** (`wasm-extractor.ts` + `worker.ts`) — The failure injection was active whenever the env var was set, even in production. Now gated: `process.env.NODE_ENV === 'test' && process.env.CBM_TEST_FAIL_ON_FILE === relPath`. Production code can never trigger it.
+
+### Benchmark hardening (1)
+
+- **`spawnSync` status handling** (`incremental-benchmark-r87.ts`) — `res.status ?? 0` could return 0 when `status` is null (signal/error). Now: `res.status ?? (res.error || res.signal ? 1 : 0)`. Also captures stderr for debugging.
+
+### Verification
+
+```
+Test Files  36 passed (36)
+     Tests  377 passed (377)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/wasm-extractor.ts` (Bug 33: removed mtime integer fallback)
+- Modified: `v2/src/indexer/indexer.ts` (Bug 33: same fix in indexParallel)
+- Modified: `v2/src/indexer/worker.ts` (NODE_ENV gating for CBM_TEST_FAIL_ON_FILE)
+- Modified: `v2/tests/indexer/r92-real-failure-injection.test.ts` (XDG_CACHE_HOME + hash assertion)
+- Modified: `v2/scripts/incremental-benchmark-r87.ts` (spawnSync status hardening)
+- Modified: `v2/package.json` (version 0.31.0)
+
+### Total: 33 bugs + 10 optimizations + 22 tests across 19 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78-R82 (1-4) | bugs | 23 |
+| R83-R84 (9-10) | optimizations + bugs | 3 opt + 2 bugs + portability |
+| R85-R86 (11-12) | bugs | 4 + 6 tests |
+| R87 (13) | tests + benchmark | 7 failure tests + incremental benchmark |
+| R88-R89 (14-15) | bugs + benchmark | 2 bugs + CI lock |
+| R90 (16) | optimizations | smoke mode + parallel assertion + prepared statements + CI wiring |
+| R91 (17) | bug + benchmark + docs | 1 (legacy mtime_ns NULL estimation) + exitCode lock + 3 docs cleanup |
+| R92 (18) | tests + portability | 3 real failure injection tests + spawnSync |
+| R93 (19) | bug + test harness | 1 (mtime_ns NULL runtime fix) + XDG_CACHE_HOME + hash assertion + NODE_ENV gating + spawnSync hardening |
+
+### Next steps
+
+1. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds. This is the #1 remaining functional gap. All incremental safety is now locked.
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Benchmark cold vs warm process** — separate CLI cold from persistent process
+
 ## 0.30.0 — Round 92 (2026-07-08) Real Failure Injection + Benchmark Portability
 
 **18th round (GPT 5.5 external audit R91B).** 0 new bugs — this round closes

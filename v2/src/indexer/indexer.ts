@@ -264,19 +264,17 @@ async function indexParallel(
         const existing = getHashMetaParallel.get(project, relPath) as { content_hash: string; mtime: number; mtime_ns: string | null; size: number } | undefined;
 
         if (existing) {
-          // R85: use mtime_ns if available, fall back to mtime for pre-R85 DBs
-          const mtimeMatches = existing.mtime_ns
-            ? existing.mtime_ns === fileMtimeNs
-            : existing.mtime === fileMtime;
-          if (mtimeMatches && existing.size === fileSize) {
+          // R93: Bug 33 fix — never fast-skip on mtime integer alone when
+          // mtime_ns is NULL. Force read+hash to backfill mtime_ns.
+          if (existing.mtime_ns && existing.mtime_ns === fileMtimeNs && existing.size === fileSize) {
             totalSkipped++;
             continue;
           }
-          // mtime or size changed — must read+hash to confirm
+          // mtime_ns is NULL or mismatch — must read+hash to confirm
           const content = readFileSync(f, 'utf-8');
           const hash = createHash('sha256').update(content).digest('hex');
           if (existing.content_hash === hash) {
-            // R84: content unchanged, update metadata only
+            // R84/R93: content unchanged, update metadata only (backfills mtime_ns if NULL)
             totalSkipped++;
             allMetadataOnlyHashUpdates.push({ relPath, hash, mtime: fileMtime, mtimeNs: fileMtimeNs, size: fileSize, indexedAt: new Date().toISOString() });
             continue;

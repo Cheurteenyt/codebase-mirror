@@ -18,12 +18,14 @@ describe('R92: Real Failure Injection Tests', () => {
   let projectName: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'r92-fail-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'r93-fail-'));
     projectDir = join(tmpDir, 'project');
     cacheDir = join(tmpDir, 'cache');
     mkdirSync(projectDir, { recursive: true });
     mkdirSync(join(cacheDir, 'codebase-memory-mcp'), { recursive: true });
-    projectName = `r92fail-${Date.now()}`;
+    projectName = `r93fail-${Date.now()}`;
+    // R93: set XDG_CACHE_HOME BEFORE any indexProjectWasm call
+    process.env.XDG_CACHE_HOME = cacheDir;
 
     // Create test files
     writeFileSync(join(projectDir, 'a.ts'), 'export function funcA() { return 1; }\n');
@@ -55,7 +57,7 @@ describe('R92: Real Failure Injection Tests', () => {
     const db1 = new Database(dbPath, { readonly: true });
     const nodes1 = (db1.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(projectName) as { c: number }).c;
     const hashes1 = (db1.prepare('SELECT COUNT(*) AS c FROM file_hashes WHERE project = ?').get(projectName) as { c: number }).c;
-    db1.close();
+    // R93: keep db1 open for hash comparison later
     expect(nodes1).toBeGreaterThan(0);
     expect(hashes1).toBe(2);
 
@@ -64,7 +66,6 @@ describe('R92: Real Failure Injection Tests', () => {
 
     // Step 3: Incremental with injected failure on a.ts
     process.env.CBM_TEST_FAIL_ON_FILE = 'a.ts';
-    process.env.XDG_CACHE_HOME = cacheDir;
 
     const result2 = await indexProjectWasm({
       project: projectName,
@@ -79,18 +80,23 @@ describe('R92: Real Failure Injection Tests', () => {
     expect(result2.errors[0].file).toBe('a.ts');
     expect(result2.errors[0].error).toContain('Injected test failure');
 
+    // R93: assert DB path is the same for both runs
+    expect(result2.dbPath).toBe(result1.dbPath);
+
     // Verify DB still has old nodes (a.ts graph preserved)
     const db2 = new Database(dbPath, { readonly: true });
     const nodes2 = (db2.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(projectName) as { c: number }).c;
-    const hashes2 = (db2.prepare('SELECT COUNT(*) AS c FROM file_hashes WHERE project = ?').get(projectName) as { c: number }).c;
-    
+
     // Nodes should be the same (old graph preserved for a.ts)
     expect(nodes2).toBe(nodes1);
-    
-    // Hash for a.ts should NOT be updated (failure means no hash update)
-    const aHash = db2.prepare('SELECT content_hash FROM file_hashes WHERE project = ? AND file_path = ?')
+
+    // R93: assert hash for a.ts is NOT updated (failure means no hash update)
+    const aHashBefore = db1.prepare('SELECT content_hash FROM file_hashes WHERE project = ? AND file_path = ?')
       .get(projectName, 'a.ts') as { content_hash: string };
-    
+    const aHashAfter = db2.prepare('SELECT content_hash FROM file_hashes WHERE project = ? AND file_path = ?')
+      .get(projectName, 'a.ts') as { content_hash: string };
+    expect(aHashAfter.content_hash).toBe(aHashBefore.content_hash);
+
     // Orphan edges should be 0
     const orphanEdges = (db2.prepare(`
       SELECT COUNT(*) AS c FROM edges e
@@ -99,7 +105,8 @@ describe('R92: Real Failure Injection Tests', () => {
       WHERE e.project = ? AND (s.id IS NULL OR t.id IS NULL)
     `).get(projectName) as { c: number }).c;
     expect(orphanEdges).toBe(0);
-    
+
+    db1.close();
     db2.close();
   });
 
@@ -118,7 +125,6 @@ describe('R92: Real Failure Injection Tests', () => {
 
     // Incremental with failure
     process.env.CBM_TEST_FAIL_ON_FILE = 'a.ts';
-    process.env.XDG_CACHE_HOME = cacheDir;
 
     const result = await indexProjectWasm({
       project: projectName,
@@ -148,7 +154,6 @@ describe('R92: Real Failure Injection Tests', () => {
 
     // Incremental with failure
     process.env.CBM_TEST_FAIL_ON_FILE = 'a.ts';
-    process.env.XDG_CACHE_HOME = cacheDir;
 
     await indexProjectWasm({
       project: projectName,

@@ -314,21 +314,18 @@ export async function extractFromFilesWasm(
           'SELECT content_hash, mtime, mtime_ns, size FROM file_hashes WHERE project = ? AND file_path = ?'
         ).get(project, relPath) as { content_hash: string; mtime: number; mtime_ns: string | null; size: number } | undefined;
         if (existing) {
-          // R85: if mtime_ns is available, use it (nanosecond precision).
-          // If mtime_ns is null (pre-R85 DB), fall back to mtime+size.
-          const mtimeMatches = existing.mtime_ns
-            ? existing.mtime_ns === fileMtimeNs
-            : existing.mtime === fileMtime;
-          if (mtimeMatches && existing.size === fileSize) {
-            // mtime+size match — skip without read/hash
+          // R93: Bug 33 fix — never fast-skip on mtime integer alone when
+          // mtime_ns is NULL. Force read+hash to backfill mtime_ns.
+          if (existing.mtime_ns && existing.mtime_ns === fileMtimeNs && existing.size === fileSize) {
+            // mtime_ns + size match — skip without read/hash
             result.skipped++;
             continue;
           }
-          // mtime or size changed — must read+hash to confirm
+          // mtime_ns is NULL or mismatch — must read+hash to confirm
           const content = readFileSync(filePath, 'utf-8');
           const hash = createHash('sha256').update(content).digest('hex');
           if (existing.content_hash === hash) {
-            // R84: content unchanged, update metadata only (mtime/size/mtime_ns)
+            // R84/R93: content unchanged, update metadata only (backfills mtime_ns if NULL)
             result.skipped++;
             metadataOnlyHashUpdates.push({
               project, relPath, hash,
@@ -376,7 +373,7 @@ export async function extractFromFilesWasm(
       // R78: use try/finally to guarantee tree.delete() even if extractFast throws.
       try {
         // R92: test-only failure injection for real failure tests
-        if (process.env.CBM_TEST_FAIL_ON_FILE === relPath) {
+        if (process.env.NODE_ENV === 'test' && process.env.CBM_TEST_FAIL_ON_FILE === relPath) {
           throw new Error(`Injected test failure for ${relPath}`);
         }
         const fileQn = `${project}::${relPath}`;
