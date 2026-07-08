@@ -87,19 +87,24 @@ export function initIndexerSchema(db: Database.Database): void {
  * doesn't migrate existing tables, so old DBs keep the old constraint and
  * ON CONFLICT(project, file_path) fails with "does not match any constraint".
  *
- * Detection: check sqlite_master.sql for the old UNIQUE(file_path) without
- * the new UNIQUE(project, file_path). If found, rebuild the table.
+ * R82: Bug 23 fix — use PRAGMA index_list/index_info instead of string matching
+ * on sqlite_master.sql. More robust against whitespace/case/named-constraint
+ * variations. Also cleans up any leftover file_hashes_new from interrupted migration.
  */
 function migrateFileHashesSchema(db: Database.Database): void {
-  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='file_hashes'").get() as { sql: string } | undefined;
-  if (!row || !row.sql) return; // table doesn't exist yet (CREATE IF NOT EXISTS will make it)
+  // Clean up any leftover temp table from an interrupted migration
+  db.exec('DROP TABLE IF EXISTS file_hashes_new');
 
-  const oldSchema = row.sql;
-  const hasOldUnique = /file_path\s+TEXT\s+NOT\s+UNIQUE/i.test(oldSchema) ||
-                       (oldSchema.includes('UNIQUE') && oldSchema.includes('file_path') && !oldSchema.includes('UNIQUE(project, file_path)'));
-  const hasNewUnique = oldSchema.includes('UNIQUE(project, file_path)');
+  // R82: use PRAGMA to check if a UNIQUE index exists on (project, file_path)
+  if (hasUniqueIndexOn(db, 'file_hashes', ['project', 'file_path'])) {
+    return; // already has the correct unique constraint
+  }
 
-  if (!hasOldUnique || hasNewUnique) return; // already correct or unknown shape
+  // Check if table exists at all
+  const tableExists = db.prepare(
+    "SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='file_hashes'"
+  ).get() as { c: number };
+  if (tableExists.c === 0) return; // CREATE IF NOT EXISTS will make it with correct schema
 
   // Migrate: create new table, copy data deduped by (project, file_path),
   // drop old, rename, recreate index.
@@ -135,6 +140,23 @@ function migrateFileHashesSchema(db: Database.Database): void {
     db.exec('CREATE INDEX IF NOT EXISTS idx_file_hashes_path ON file_hashes(project, file_path)');
   });
   tx();
+}
+
+/**
+ * R82: Check if a table has a UNIQUE index on exactly the given columns.
+ * Uses PRAGMA index_list + index_info for robust detection.
+ */
+function hasUniqueIndexOn(db: Database.Database, table: string, columns: string[]): boolean {
+  const indexes = db.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string; unique: number }>;
+  for (const idx of indexes) {
+    if (!idx.unique) continue;
+    const cols = db.prepare(`PRAGMA index_info(${idx.name})`).all() as Array<{ name: string }>;
+    const colNames = cols.map(c => c.name);
+    if (colNames.length === columns.length && colNames.every((c, i) => c === columns[i])) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

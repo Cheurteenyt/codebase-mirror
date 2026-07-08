@@ -283,14 +283,28 @@ async function indexParallel(
   `);
 
   const tx = db.transaction(() => {
+    // R82: Bug 21 fix — filter changedRelPaths and hashUpdates to only successful
+    // files. Previously (R81), all changed files were scheduled for delete+hash
+    // update BEFORE workers ran. A worker failure would still delete old nodes
+    // and update the hash, causing silent corruption.
+    const successfulRelPaths = new Set<string>();
+    for (const batchResult of results) {
+      for (const fileResult of batchResult.results) {
+        if (!fileResult.error) {
+          successfulRelPaths.add(fileResult.filePath);
+        }
+      }
+    }
+    const changedToApply = allPendingChangedRelPaths.filter(p => successfulRelPaths.has(p));
+    const hashesToApply = allPendingHashUpdates.filter(h => successfulRelPaths.has(h.relPath));
+
     // R80: Bug 11 fix — for incremental mode, delete old nodes/edges for changed
-    // files BEFORE inserting new ones. This prevents duplicate QNs and orphan edges.
-    if (incremental && allPendingChangedRelPaths.length > 0) {
-      // Delete edges that reference nodes from changed files
-      const ph = allPendingChangedRelPaths.map(() => '?').join(',');
+    // files BEFORE inserting new ones. R82: only for SUCCESSFUL files.
+    if (incremental && changedToApply.length > 0) {
+      const ph = changedToApply.map(() => '?').join(',');
       const oldNodeIds = db.prepare(
         `SELECT id FROM nodes WHERE project = ? AND file_path IN (${ph})`
-      ).all(project, ...allPendingChangedRelPaths) as Array<{ id: number }>;
+      ).all(project, ...changedToApply) as Array<{ id: number }>;
       if (oldNodeIds.length > 0) {
         const idPh = oldNodeIds.map(() => '?').join(',');
         const idParams = oldNodeIds.map(r => r.id);
@@ -298,10 +312,9 @@ async function indexParallel(
           `DELETE FROM edges WHERE project = ? AND (source_id IN (${idPh}) OR target_id IN (${idPh}))`
         ).run(project, ...idParams, ...idParams);
       }
-      // Delete old nodes for changed files
       db.prepare(
         `DELETE FROM nodes WHERE project = ? AND file_path IN (${ph})`
-      ).run(project, ...allPendingChangedRelPaths);
+      ).run(project, ...changedToApply);
     }
 
     // R80: Bug 10 fix — get real MAX(id) so explicit IDs match SQLite reality.
@@ -345,10 +358,9 @@ async function indexParallel(
       }
     }
 
-    // R80: Bug 11 fix — upsert file hashes ONLY after all nodes/edges are
-    // successfully inserted. If the transaction rolls back, hashes stay stale
-    // (correct behavior — next run will re-index).
-    for (const h of allPendingHashUpdates) {
+    // R82: Bug 21 fix — upsert file hashes ONLY for successful files.
+    // R80: only after all nodes/edges are inserted.
+    for (const h of hashesToApply) {
       db.prepare(`
         INSERT INTO file_hashes (project, file_path, content_hash, mtime, indexed_at)
         VALUES (?, ?, ?, ?, ?)

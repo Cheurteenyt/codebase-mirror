@@ -18,6 +18,7 @@ export function registerIndexCommand(program: Command): void {
     .option('--root <path>', 'Root directory to index (default: current directory)')
     .option('--incremental', 'Skip files whose content hash has not changed')
     .option('--dry-run', 'Report what would be indexed without writing to DB')
+    .option('--allow-partial', 'R82: exit 0 even if some files fail extraction (default: exit 1 on any error)')
     .action(async (opts) => {
       const project = opts.project || deriveProjectName();
       const rootPath = resolve(opts.root || '.');
@@ -73,7 +74,11 @@ export function registerIndexCommand(program: Command): void {
           console.log(`  Run "cbm-v2 stats --project ${project}" to see the graph.`);
         }
 
-        process.exitCode = result.errors.length > 0 && result.nodes === 0 ? 1 : 0;
+        // R82: Bug 22 fix — exit non-zero if ANY extraction errors, unless --allow-partial.
+        // Previously, exit was 0 if result.nodes > 0, masking partial failures.
+        // This is critical for CI/benchmarks — a partial index must not look successful.
+        const allowPartial = (opts as any).allowPartial ?? false;
+        process.exitCode = (result.errors.length > 0 && !allowPartial) ? 1 : 0;
       } catch (e: unknown) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exitCode = 1;

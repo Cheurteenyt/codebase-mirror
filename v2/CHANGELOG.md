@@ -1,5 +1,53 @@
 # Changelog — Codebase Memory V2
 
+## 0.20.0 — Round 82 (2026-07-08) Incremental Safety Lock — 4 bugs fixed
+
+**8th audit round (GPT 5.5 external audit R81).** 4 bugs fixed. R81 was a
+good correctness step but had 2 P0 gaps: hash/delete were still scheduled
+BEFORE parse success (silent corruption on extraction failure), and the
+CLI masked partial errors. R82 closes these gaps.
+
+### Bugs fixed (4, from GPT 5.5 R81 audit)
+
+20. **CRITICAL: Single-thread incremental schedules hash/delete before extract success** (`wasm-extractor.ts`) — `changedRelPaths.push()` and `pendingHashUpdates.push()` happened BEFORE `extractFast()`. If extract failed, the transaction would still delete old nodes and update the hash, causing silent corruption (next run skips the file that never extracted). Fixed: push to mutation lists ONLY after `extractFast()` succeeds.
+
+21. **CRITICAL: Parallel incremental same bug** (`indexer.ts`) — `allPendingChangedRelPaths` and `allPendingHashUpdates` were populated before workers ran. Worker failures would still delete old nodes and update hashes. Fixed: filter `changedToApply` and `hashesToApply` to only files where `fileResult.error === null`.
+
+22. **CLI masks partial extraction errors** (`cli/commands/index.ts`) — `exitCode = errors > 0 && nodes === 0 ? 1 : 0` meant exit 0 if ANY nodes extracted, even with 100 errors. Dangerous for CI/benchmarks. Fixed: `exitCode = errors > 0 && !allowPartial ? 1 : 0`. Added `--allow-partial` flag for interactive use.
+
+23. **Migration relies on string matching `sqlite_master.sql`** (`schema.ts`) — Fragile against whitespace/case/named-constraint variations. Fixed: use `PRAGMA index_list` + `PRAGMA index_info` for robust UNIQUE index detection. Also cleans up leftover `file_hashes_new` from interrupted migrations.
+
+### Verification
+
+```
+Test Files  33 passed (33)
+     Tests  361 passed (361)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/wasm-extractor.ts` (Bug 20: hash/delete after extract success)
+- Modified: `v2/src/indexer/indexer.ts` (Bug 21: filter to successful files only)
+- Modified: `v2/src/cli/commands/index.ts` (Bug 22: strict exit code + --allow-partial)
+- Modified: `v2/src/indexer/schema.ts` (Bug 23: PRAGMA-based migration detection)
+
+### Total bugs fixed across 8 audit rounds: 23
+
+| Round | Bugs |
+|---|---|
+| R78 (1-4) | 8 bugs |
+| R79 (5) | 1 bug |
+| R80 (6) | 5 bugs |
+| R81 (7) | 5 bugs |
+| R82 (8) | 4 bugs (hash/delete timing ×2, CLI exit, migration robustness) |
+
+### Next steps
+
+1. **Tests d'échec réel** — tests that inject extractFast failure and verify old graph/hash preserved
+2. **Benchmark portable** — remove hardcoded paths, add incremental scenarios
+3. **mtime+size fast skip** — avoid hashing unchanged files
+4. **Docs sync** — README version, V2_ROADMAP, test counts
+
 ## 0.19.0 — Round 81 (2026-07-08) Migration + Incremental Atomicity + Stats Fix
 
 **7th audit round (GPT 5.5 external audit R80).** 5 bugs fixed. R80 was a

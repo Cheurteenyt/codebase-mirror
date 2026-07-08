@@ -314,10 +314,14 @@ export async function extractFromFilesWasm(
           result.skipped++;
           continue;
         }
-        // R81: don't delete here — collect for the transaction phase
-        changedRelPaths.push(relPath);
+        // R82: Bug 20 fix — do NOT push to changedRelPaths or pendingHashUpdates yet.
+        // Previously (R81), these were pushed BEFORE parse/extract, so a parse
+        // failure would still delete old nodes and update the hash, causing
+        // silent corruption (next run skips the file that never extracted).
+        // Now we collect the hash info but only push to the mutation lists
+        // AFTER extractFast succeeds.
       }
-      pendingHashUpdates.push({ project, relPath, hash, mtime: Math.floor(stat.mtimeMs), indexedAt: new Date().toISOString() });
+      const hashInfo = { project, relPath, hash, mtime: Math.floor(stat.mtimeMs), indexedAt: new Date().toISOString() };
 
       // R75: skip setLanguage if language hasn't changed (common case: all files same lang)
       if (currentLang !== lang) {
@@ -334,13 +338,20 @@ export async function extractFromFilesWasm(
       }
 
       // R78: use try/finally to guarantee tree.delete() even if extractFast throws.
-      // Without this, a parse error in extractFast would leak the WASM tree.
       try {
         const fileQn = `${project}::${relPath}`;
         const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
 
         allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges });
         result.files++;
+
+        // R82: Bug 20 fix — ONLY after extractFast succeeds, schedule the mutations.
+        // If extractFast threw (caught by outer catch), changedRelPaths and
+        // pendingHashUpdates stay empty for this file — old graph preserved.
+        if (incremental) {
+          changedRelPaths.push(relPath);
+        }
+        pendingHashUpdates.push(hashInfo);
       } finally {
         // R78: free WASM tree memory immediately after extraction.
         // Without this, every parsed tree stays in the WASM heap until GC,
