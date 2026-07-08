@@ -27,7 +27,7 @@ It syncs everything to an **Obsidian-compatible Markdown vault** so you can read
 cd v2
 npm install
 npm run build
-npm test                    # 378 tests (355 backend + 23 frontend)
+npm test                    # see CHANGELOG.md for current test count
 
 # Try the demo (no V1 needed)
 node dist/cli/index.js demo
