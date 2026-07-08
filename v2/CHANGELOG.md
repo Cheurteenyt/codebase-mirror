@@ -1,5 +1,62 @@
 # Changelog — Codebase Memory V2
 
+## 0.22.0 — Round 84 (2026-07-08) Fast Skip Safety + Parallel Port + Docs
+
+**10th round (GPT 5.5 external audit R83).** 2 bugs fixed. R83's mtime+size
+fast skip had two critical gaps: (1) it didn't update mtime/size when content
+was unchanged, so the fast skip never activated on subsequent runs; (2) the
+parallel path didn't use the fast skip at all. Both are now fixed.
+
+### Bugs fixed (2, from GPT 5.5 R83 audit)
+
+24. **Fast skip doesn't update mtime/size when hash identical** (`wasm-extractor.ts`) — When mtime/size changed but content_hash was the same, the code skipped re-indexing but didn't update `file_hashes.mtime/size`. Next run would still see mtime/size mismatch and re-hash. The fast skip never activated. Especially critical for migrated DBs where `size=0` after migration. Fixed: added `metadataOnlyHashUpdates` list — updates mtime/size/hash without touching nodes/edges.
+
+25. **Fast skip not applied to parallel path** (`indexer.ts`) — The parallel path always `readFileSync` + `createHash` for every file before comparing, defeating the fast skip. Fixed: ported the same 3-tier logic as single-thread: (1) mtime+size match → skip without read; (2) mtime/size mismatch → hash to confirm → metadata-only update if same; (3) content changed → re-index.
+
+### Benchmark improvement
+
+- **V1_BINARY auto-detection** (`rigorous-benchmark-r78.ts`) — Instead of hardcoded fallback path, now auto-detects via: env var > repo-relative > `which codebase-memory-mcp` > `which cbm` > fail. Fully portable now.
+
+### Docs sync
+
+- **Root README.md** — Updated from stale `0.15.9 / 378 tests / 565+ bugs / 77 rounds` to `0.21.0 / 361 tests / 23 bugs + 6 optimizations / 9 rounds`. Replaced hardcoded test count with reference to CHANGELOG.
+- **`npm test` comment** — Now says "see v2/CHANGELOG.md for current test count" instead of a hardcoded number that goes stale.
+
+### Verification
+
+```
+Test Files  33 passed (33)
+     Tests  361 passed (361)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/wasm-extractor.ts` (Bug 24: metadataOnlyHashUpdates)
+- Modified: `v2/src/indexer/indexer.ts` (Bug 25: fast skip + metadata-only in parallel)
+- Modified: `v2/scripts/rigorous-benchmark-r78.ts` (V1_BINARY auto-detection)
+- Modified: `README.md` (docs sync: version, tests, rounds, bugs)
+- Modified: `v2/package.json` (version 0.22.0)
+
+### Total: 25 bugs + 6 optimizations across 10 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78 (1-4) | bugs | 8 |
+| R79 (5) | bugs | 1 |
+| R80 (6) | bugs | 5 |
+| R81 (7) | bugs | 5 |
+| R82 (8) | bugs | 4 |
+| R83 (9) | optimizations | 3 + portability |
+| R84 (10) | bugs | 2 (metadata-only update, parallel fast skip) + docs sync |
+
+### Next steps
+
+1. **Tests d'échec réel** — inject extractFast failure, verify old graph/hash preserved (still pending)
+2. **Tests fast skip** — size migration, metadata-only update, second-run fast skip, parallel fast skip
+3. **mtime precision** — use mtimeNs instead of Math.floor(mtimeMs) to avoid same-millisecond false skips
+4. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+5. **Worker pool persistant** — for MCP/UI/watch daemon mode
+
 ## 0.21.0 — Round 83 (2026-07-08) Performance + Portability + Docs
 
 **9th round.** Implements remaining GPT 5.5 recommendations: mtime+size fast

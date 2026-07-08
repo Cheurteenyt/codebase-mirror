@@ -258,6 +258,12 @@ export async function extractFromFilesWasm(
   // R81: Bug 16 — changed file paths (incremental mode). Old nodes/edges for
   // these paths are deleted in the transaction AFTER parse succeeds.
   const changedRelPaths: string[] = [];
+  // R84: Bug 24 — metadata-only hash updates. When mtime/size changed but
+  // content_hash is identical, we skip re-indexing but must still update
+  // mtime/size in file_hashes so the next run can fast-skip without hashing.
+  // Without this, the fast skip never activates for files whose mtime
+  // changed but content didn't (common after git checkout, touch, etc.).
+  const metadataOnlyHashUpdates: Array<{ project: string; relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
 
   // R75: pre-read all file contents before parsing.
   // This allows the OS to prefetch file pages into the page cache while
@@ -323,8 +329,14 @@ export async function extractFromFilesWasm(
           // mtime or size changed — hash to confirm
           const hash = createHash('sha256').update(content).digest('hex');
           if (existing.content_hash === hash) {
-            // Content unchanged (mtime changed but content same)
+            // R84: Bug 24 fix — content unchanged but mtime/size changed.
+            // Skip re-indexing, but update mtime/size so next run fast-skips.
             result.skipped++;
+            metadataOnlyHashUpdates.push({
+              project, relPath, hash,
+              mtime: fileMtime, size: fileSize,
+              indexedAt: new Date().toISOString(),
+            });
             continue;
           }
           // Content changed — will re-index
@@ -421,6 +433,11 @@ export async function extractFromFilesWasm(
 
     // Update file hashes (only for files that were successfully parsed+extracted)
     for (const h of pendingHashUpdates) {
+      upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
+    }
+    // R84: Bug 24 — update mtime/size for metadata-only changes (content unchanged
+    // but mtime/size changed). This ensures the next run can fast-skip without hashing.
+    for (const h of metadataOnlyHashUpdates) {
       upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
     }
 
