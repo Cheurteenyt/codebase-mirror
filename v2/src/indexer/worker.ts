@@ -16,9 +16,10 @@
 
 import { parentPort, workerData } from 'node:worker_threads';
 import { Parser, Language } from 'web-tree-sitter';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { relative, join, dirname } from 'node:path';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { extractFast } from './fast-walker.js';
 
 const require2 = createRequire(import.meta.url);
@@ -48,6 +49,9 @@ export interface WorkerFileResult {
   nodes: WorkerNode[];
   edges: WorkerEdge[];
   error: string | null;
+  // R86: hash info returned by worker so main thread can store file_hashes
+  // in full mode without reading files twice.
+  hashInfo: { hash: string; mtime: number; mtimeNs: string; size: number } | null;
 }
 
 export interface WorkerBatchResult {
@@ -101,9 +105,19 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
       const relPath = relative(batch.rootPath, filePath);
       try {
         const source = readFileSync(filePath, 'utf-8');
+        // R86: compute hash + stat in the worker so main thread doesn't need
+        // to re-read files just for hash storage in full mode.
+        const stat = statSync(filePath, { bigint: true });
+        const hash = createHash('sha256').update(source).digest('hex');
+        const hashInfo = {
+          hash,
+          mtime: Math.floor(Number(stat.mtimeMs)),
+          mtimeNs: stat.mtimeNs.toString(),
+          size: Number(stat.size),
+        };
         const tree = p.parse(source);
         if (!tree) {
-          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null' });
+          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null });
           continue;
         }
 
@@ -122,6 +136,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
             nodes: extracted.nodes,
             edges: extracted.edges,
             error: null,
+            hashInfo,
           });
         } finally {
           tree.delete();
@@ -130,6 +145,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         results.push({
           filePath: relPath, language: batch.language, nodes: [], edges: [],
           error: e instanceof Error ? e.message : String(e),
+          hashInfo: null,
         });
       }
     }
@@ -138,7 +154,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
     for (const filePath of batch.files) {
       results.push({
         filePath: relative(batch.rootPath, filePath), language: batch.language,
-        nodes: [], edges: [], error: errMsg,
+        nodes: [], edges: [], error: errMsg, hashInfo: null,
       });
     }
   }

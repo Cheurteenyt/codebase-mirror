@@ -1,5 +1,53 @@
 # Changelog — Codebase Memory V2
 
+## 0.24.0 — Round 86 (2026-07-08) Parallel Hash Persistence + Threshold Fix
+
+**12th round (GPT 5.5 external audit R85).** 2 bugs fixed. R85 fixed mtimeNs
+and pre-read, but the parallel path still had two critical gaps: (1) full
+mode parallel didn't store `file_hashes`, so the first incremental re-indexed
+everything; (2) `useParallel` was based on total files, not files to index,
+so 1 file changed out of 10000 still spawned workers.
+
+### Bugs fixed (2, from GPT 5.5 R85 audit)
+
+28. **`useParallel` based on total files, not files to index** (`indexer.ts`) — `useParallel = files.length > 80` meant that in incremental mode with 1 file changed out of 10000, the code still spawned workers. Fixed: in incremental mode, do a quick stat+lookup pass to estimate `filesToIndex`, then decide `useParallel` based on `estimatedFilesToIndex > 20`. Full mode uses `files.length` as before.
+
+29. **Parallel full index doesn't store `file_hashes`** (`worker.ts` + `indexer.ts`) — `allPendingHashUpdates` was only populated inside `if (incremental)`. In full mode parallel, no hashes were stored, so the first incremental after a full parallel index re-indexed everything. Fixed: workers now return `hashInfo` (hash, mtime, mtimeNs, size) in `WorkerFileResult`. The main thread upserts hashes for all successful files in full mode using this info — no double file reads needed.
+
+### Verification
+
+```
+Test Files  34 passed (34)
+     Tests  367 passed (367)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/worker.ts` (Bug 29: return hashInfo in WorkerFileResult)
+- Modified: `v2/src/indexer/indexer.ts` (Bug 28: estimate filesToIndex; Bug 29: upsert hashes in full mode from worker hashInfo)
+- Modified: `v2/package.json` (version 0.24.0)
+
+### Total: 29 bugs + 6 optimizations across 12 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78 (1-4) | bugs | 8 |
+| R79 (5) | bugs | 1 |
+| R80 (6) | bugs | 5 |
+| R81 (7) | bugs | 5 |
+| R82 (8) | bugs | 4 |
+| R83 (9) | optimizations | 3 + portability |
+| R84 (10) | bugs | 2 + docs sync |
+| R85 (11) | bugs | 2 (mtimeNs, no-pre-read) + 6 tests + docs sync |
+| R86 (12) | bugs | 2 (parallel hash persistence, threshold fix) |
+
+### Next steps
+
+1. **Tests d'échec réel** — inject extractFast failure, verify old graph/hash preserved
+2. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+3. **Worker pool persistant** — for MCP/UI/watch daemon mode
+4. **Benchmark incremental scenarios** — noop, 1-file, 10% with invariants
+
 ## 0.23.0 — Round 85 (2026-07-08) mtimeNs Precision + No-Pre-Read Incremental
 
 **11th round (GPT 5.5 external audit R84).** 2 bugs fixed. R84's fast skip had

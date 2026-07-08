@@ -107,10 +107,38 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     }
   }
 
+  // R86: Bug 28 fix — useParallel should be based on filesToIndex (after fast-skip),
+  // not files.length (total). In incremental mode with 1 file changed out of 10000,
+  // spawning workers is wasteful. We do a quick stat+lookup pass to estimate.
+  let estimatedFilesToIndex = files.length;
+  if (opts.incremental) {
+    estimatedFilesToIndex = 0;
+    for (const f of files) {
+      const relPath = nodeRelative(opts.rootPath, f);
+      const stat = statSync(f, { bigint: true });
+      const fileMtimeNs = stat.mtimeNs.toString();
+      const fileSize = Number(stat.size);
+      const existing = db.prepare(
+        'SELECT mtime_ns, mtime, size FROM file_hashes WHERE project = ? AND file_path = ?'
+      ).get(opts.project, relPath) as { mtime_ns: string | null; mtime: number; size: number } | undefined;
+      if (!existing) {
+        estimatedFilesToIndex++;
+      } else {
+        const mtimeMatches = existing.mtime_ns
+          ? existing.mtime_ns === fileMtimeNs
+          : existing.mtime === Math.floor(Number(stat.mtimeMs));
+        if (!mtimeMatches || existing.size !== fileSize) {
+          estimatedFilesToIndex++;
+        }
+      }
+    }
+  }
+
   // R81: Bug 17 fix — compute useParallel BEFORE preloadGrammars. In parallel
   // mode, workers load their own grammars, so the main thread doesn't need
   // to preload. This saves Parser.init() + Language.load() cost on LARGE.
-  const useParallel = numWorkers > 1 && files.length > 80;
+  // R86: Bug 28 fix — use estimatedFilesToIndex, not files.length
+  const useParallel = numWorkers > 1 && estimatedFilesToIndex > 20;
 
   if (!useParallel) {
     // Single-thread: main thread needs the grammars
@@ -396,10 +424,28 @@ async function indexParallel(
       ON CONFLICT(project, file_path) DO UPDATE SET
         content_hash = excluded.content_hash, mtime = excluded.mtime, mtime_ns = excluded.mtime_ns, size = excluded.size, indexed_at = excluded.indexed_at
     `);
-    for (const h of hashesToApply) {
-      upsertHash.run(project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
+    // R86: Bug 29 fix — in full mode, allPendingHashUpdates is empty because
+    // hashes were only collected in the `if (incremental)` block. Now workers
+    // return hashInfo, so we can store hashes for all successful files in full
+    // mode too. This is critical: without it, the first incremental after a
+    // full parallel index re-indexes everything (no hashes to compare against).
+    if (!incremental) {
+      // Full mode: use hashInfo from workers for all successful files
+      for (const batchResult of results) {
+        for (const fileResult of batchResult.results) {
+          if (fileResult.error || !fileResult.hashInfo) continue;
+          upsertHash.run(project, fileResult.filePath, fileResult.hashInfo.hash,
+            fileResult.hashInfo.mtime, fileResult.hashInfo.mtimeNs,
+            fileResult.hashInfo.size, new Date().toISOString());
+        }
+      }
+    } else {
+      // Incremental mode: only upsert hashes for changed files that succeeded
+      for (const h of hashesToApply) {
+        upsertHash.run(project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
+      }
     }
-    // R84: Bug 25 — metadata-only updates for parallel path
+    // R84: Bug 25 — metadata-only updates for parallel path (incremental only)
     for (const h of allMetadataOnlyHashUpdates) {
       upsertHash.run(project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
     }
