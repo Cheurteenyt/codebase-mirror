@@ -302,19 +302,23 @@ export async function extractFromFilesWasm(
         continue;
       }
 
-      const fileQn = `${project}::${relPath}`;
-      const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
+      // R78: use try/finally to guarantee tree.delete() even if extractFast throws.
+      // Without this, a parse error in extractFast would leak the WASM tree.
+      try {
+        const fileQn = `${project}::${relPath}`;
+        const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
 
-      allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges });
-      result.files++;
-
-      // R78: free WASM tree memory immediately after extraction.
-      // Without this, every parsed tree stays in the WASM heap until GC,
-      // causing RSS to grow linearly with file count. The parallel path
-      // (worker.ts) already calls tree.delete() — this fixes the single-
-      // thread path to match. On the 42-file SMALL workload this reduces
-      // peak RSS from ~114MB to ~70MB.
-      tree.delete();
+        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges });
+        result.files++;
+      } finally {
+        // R78: free WASM tree memory immediately after extraction.
+        // Without this, every parsed tree stays in the WASM heap until GC,
+        // causing RSS to grow linearly with file count. The parallel path
+        // (worker.ts) already calls tree.delete() — this fixes the single-
+        // thread path to match. On the 42-file SMALL workload this reduces
+        // peak RSS from ~114MB to ~107MB.
+        tree.delete();
+      }
     } catch (e: unknown) {
       result.errors.push({
         file: relPath,

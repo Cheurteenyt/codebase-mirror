@@ -1,110 +1,109 @@
 # Changelog — Codebase Memory V2
 
-## 0.16.0 — Round 78 (2026-07-08) truly rigorous benchmark + 6 invisible bug fixes
+## 0.16.0 — Round 78 (2026-07-08) truly rigorous benchmark + 7 invisible bug fixes
 
-**R77 was wrong on 3 counts.** R78's first run found 4 invisible bugs but
-still had a MAJOR file-count bias: V2 indexed 21% more files than V1
-because V2's `SKIP_DIRS` didn't match V1's `FAST_SKIP_DIRS`. This corrected
-run fixes all 6 bugs found across two audit rounds and re-runs the
-benchmark with fair comparisons.
+**3 audit rounds. 7 bugs fixed.** R77 was methodologically broken. R78's
+first run had a file-count bias. R78's deep audit found a CRITICAL bug
+present since R73: `Map<TSNode, string>` lookups always failed because
+TSNode objects from `descendantsOfType()` and `.parent` are NOT
+reference-equal. This silently dropped **ALL CALLS edges** since R73.
 
-### Bugs fixed in this round (6 total)
+### Bugs fixed (7 total, across 3 audit rounds)
 
-1. **V2 `SKIP_DIRS` didn't match V1** (`wasm-extractor.ts`):
-   V2 excluded ~15 directory names; V1 excludes ~60 (`ALWAYS_SKIP_DIRS` +
-   `FAST_SKIP_DIRS`). On `v2/src`, V2 indexed 51 files while V1 indexed 42.
-   V2 did 21% more work, inflating "V2 is 28% slower" to "V2 is 15.5%
-   slower" after fix. `SKIP_DIRS` now matches V1's full list.
+**Round 1 (R78 first audit):**
+1. **R76 anonymous complexity regression** (`fast-walker.ts`) — hardcoded `complexity:1` for anonymous functions. Fixed: compute proper complexity.
+2. **`candidates[0]` dropped CALLS edges** (`fast-walker.ts`) — only first candidate got edges. Fixed: emit one edge per candidate with `candidate_index`.
+3. **Custom `relative()` buggy** (`indexer.ts`) — `startsWith()` true for sibling-prefix paths. Fixed: use `node:path.relative`.
+4. **V2 dist was stale during R77** — R76 optimizations not in measured binary. Fixed: R78 verifies dist freshness.
 
-2. **WASM memory leak in single-thread path** (`wasm-extractor.ts`):
-   `extractFromFilesWasm()` parsed each file but never called `tree.delete()`.
-   Every tree stayed in WASM heap until GC. Parallel path (`worker.ts`)
-   already called `tree.delete()`. Now fixed — RSS dropped 114→107MB on
-   SMALL, with larger savings on bigger codebases.
+**Round 2 (R78 deep audit):**
+5. **V2 `SKIP_DIRS` didn't match V1** (`wasm-extractor.ts`) — V2 indexed 51 files while V1 indexed 42. Fixed: SKIP_DIRS now matches V1's full exclusion list (60+ entries).
+6. **WASM memory leak** (`wasm-extractor.ts`) — `extractFromFilesWasm()` never called `tree.delete()`. Fixed: added `tree.delete()` in try/finally.
 
-3. **Anonymous function QN collision** (`fast-walker.ts`):
-   `getDeclNameFast()` returned `anonymous@<line>`. Two arrow functions on
-   the same line both got `anonymous@1` → QN collision → dropped CALLS
-   edges. Now uses `anonymous#<counter>` (monotonic per-file).
+**Round 3 (R78 final audit):**
+7. **CRITICAL: TSNode reference equality broken since R73** (`fast-walker.ts`) — `Map<TSNode, string>` lookups always failed because TSNode objects from `descendantsOfType()` and `.parent` are NOT reference-equal (`===` returns false). This silently dropped **ALL CALLS edges** since R73 (0 extracted) and flattened all function QNs (`file::func` instead of `file::class::method`). Fixed: use `Map<number, string>` keyed by `node.id`.
 
-4. **R76 anonymous complexity regression** (`fast-walker.ts`):
-   R76 hardcoded `complexity: 1` for anonymous functions, silently breaking
-   risk hotspot detection for non-trivial arrow functions. Now computes
-   proper complexity for all functions.
+### Runner.py fix
 
-5. **`candidates[0]` dropped CALLS edges** (`fast-walker.ts`):
-   When multiple functions share a name, only `candidates[0]` received
-   CALLS edges. Now emits one edge per candidate with `candidate_index`
-   property.
+- **RSS measurement bias** (`r78-runner.py`) — `RUSAGE_CHILDREN.ru_maxrss` includes Python parent overhead (`true` reported 13MB instead of 4KB). Fixed: poll `/proc/<pid>/status` VmHWM every 5ms.
 
-6. **Custom `relative()` buggy** (`indexer.ts`):
-   `to.startsWith(from)` is true for sibling-prefix paths (`/foo/bar` is a
-   prefix of `/foo/barbaz`). Corrupted file paths in incremental mode.
-   Replaced with `node:path.relative`.
-
-### R78 methodology (unchanged from first run)
+### R78 methodology
 
 - 30 measured + 5 warmup iterations per engine per workload
 - Two workloads: SMALL (42 files, V2 single-thread) AND LARGE (~120 files, V2 parallel)
 - Randomized run order (Mulberry32, deterministic seed)
 - High-precision timing via Python `time.perf_counter_ns()`
-- Peak RSS via `resource.getrusage(RUSAGE_CHILDREN)`
+- Peak RSS via `/proc/<pid>/status` VmHWM polling
 - Bootstrap 95% CI for the median (5000 resamples)
 - Mann-Whitney U test (two-sided, tie-corrected)
 - Cliff's δ for non-parametric effect size
 - V2 node/edge counts read directly from SQLite DB
 - Refuses to run if V2 dist is stale
-- GC control via `--expose-gc --gc-interval=100`
+- GC control via `--expose-gc --gc-interval=100` (verified no measurable effect, kept for safety)
+- CPU fixed at 2800MHz (no turbo boost/throttling)
+- Both V1 and V2 use SQLite WAL mode (fair comparison)
 
-### Results (30 iterations, p50 with 95% CI — CORRECTED)
+### Results (30 iterations, p50 with 95% CI — FINAL)
 
 | Workload | V1 (C) | V2 (WASM) | V2 vs V1 | p-value | Cliff's δ |
 |---|---|---|---|---|---|
-| SMALL (42 files, single-thread) | 365ms [365, 365] | 421ms [418, 465] | V2 15.5% SLOWER | 3.0e-11 | −1.000 (large) |
-| LARGE (~120 files, parallel) | 1417ms [1417, 1420] | 1217ms [1217, 1218] | V2 14.1% FASTER | 3.0e-11 | +1.000 (large) |
+| SMALL (42 files, single-thread) | 365.7ms [362.8, 366.9] | 438.0ms [428.8, 442.9] | V2 19.8% SLOWER | <0.0001 | −0.973 (large) |
+| LARGE (~120 files, parallel) | 1421.7ms [1410.6, 1431.2] | 1204.5ms [1190.4, 1217.3] | V2 15.3% FASTER | <0.0001 | +1.000 (large) |
 
 **Memory:** V2 uses 1.6–3.1× more RAM than V1.
-- SMALL: 35MB (V1) vs 107MB (V2) — was 114MB before tree.delete() fix
-- LARGE: 119MB (V1) vs 186MB (V2)
+- SMALL: 35MB (V1) vs 107MB (V2)
+- LARGE: 118MB (V1) vs 192MB (V2)
 
-**Edge extraction:** V1 extracts 2.4–3.6× more edges than V2 due to LSP-based
+**Edge extraction:** V1 extracts 1.9–3.2× more edges than V2 due to LSP-based
 cross-file call resolution. V2 only does static AST analysis.
 
-### Why R78's first run was also wrong
+**CALLS edges extracted by V2:**
+- Before TSNode.id fix (Bug 7): 0 on SMALL (broken since R73)
+- After TSNode.id fix: 188 on SMALL, included in 2645 total on LARGE
 
-R78's first run reported "V2 is 28% slower on SMALL, 21% faster on LARGE".
-The SMALL number was inflated by 12.5pp because V2 indexed 51 files while
-V1 indexed 42 (Bug 1: SKIP_DIRS mismatch). The corrected SMALL number is
-15.5% slower.
+### Why the TSNode.id bug was so damaging
 
-The LARGE number dropped from 21% to 14% faster because the correctness
-fixes (multi-candidate CALLS edges, anonymous complexity estimation) add
-~7% overhead. This is the right trade-off: correctness > speed.
+`web-tree-sitter`'s `TSNode` objects are wrappers around WASM pointers. Two
+TSNode objects pointing to the same underlying node are NOT reference-equal:
+
+```ts
+const a = root.descendantsOfType(['function_declaration'])[0];
+const b = someCallInsideFunc.parent; // same underlying node
+a === b; // FALSE
+a.equals(b); // true
+a.id === b.id; // true (same number)
+```
+
+Since R73, `qnByNode` was `Map<TSNode, string>`. Setting a key with a node
+from `descendantsOfType()` and looking it up with a node from `.parent`
+always returned `undefined`. This meant:
+- `findParentQnFast()` always fell through to `fileQn` → all function QNs flat
+- `findEnclosingDeclQnFast()` always returned `null` → all CALLS edges dropped
+
+Every benchmark from R73 to R77 measured V2 with 0 CALLS edges. The "V2 is
+faster" claims in R75/R76 were measuring broken code that produced an
+incomplete graph.
 
 ### Performance cost of correctness fixes
 
-| Fix | SMALL impact | LARGE impact |
-|---|---|---|
-| SKIP_DIRS match (Bug 1) | -12.5pp (V2 was doing 21% more work) | 0 (LARGE has no excluded dirs) |
-| tree.delete() (Bug 2) | -7MB RSS | -5MB RSS |
-| Anonymous QN counter (Bug 3) | +0 edges (correctness only) | +0 edges |
-| Anonymous complexity (Bug 4) | +1ms/file | +1ms/file |
-| Multi-candidate CALLS (Bug 5) | +8% edges | +8% edges, -7% speed |
-| node:path.relative (Bug 6) | 0 (not in benchmark path) | 0 |
-
-Net: -12.5pp on SMALL (fairer), -7pp on LARGE (correctness cost).
+The TSNode.id fix made V2 slightly slower on SMALL (15.5% → 19.8% slower)
+because V2 now does real CALLS edge work (188 edges instead of 0). This is
+correctness — the old "15.5% slower" was measuring broken code. The 19.8%
+number is the honest cost of V2's actual extraction work.
 
 ### Files
 
-- New: `docs/RIGOROUS_BENCHMARK_R78.md` (full report with methodology, results, 6 bugs)
+- New: `docs/RIGOROUS_BENCHMARK_R78.md` (full report with methodology, results, 7 bugs)
 - New: `v2/scripts/rigorous-benchmark-r78.ts` (reproducible benchmark, fixes all R77 flaws)
-- New: `v2/scripts/r78-runner.py` (Python wrapper for high-precision timing + RSS)
-- New: `v2/scripts/rigorous-benchmark-r78-results.json` (raw results from corrected run)
-- Modified: `v2/src/indexer/wasm-extractor.ts` (SKIP_DIRS + tree.delete)
-- Modified: `v2/src/indexer/fast-walker.ts` (anonymous QN + complexity + multi-candidate CALLS)
+- New: `v2/scripts/r78-runner.py` (Python wrapper, VmHWM polling for accurate RSS)
+- New: `v2/scripts/rigorous-benchmark-r78-results.json` (raw results from final run)
+- New: `v2/scripts/debug-calls.ts` (debug script that found the TSNode.id bug)
+- New: `v2/scripts/debug-tsnode-equality.ts` (proves TSNode === is broken)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (SKIP_DIRS + tree.delete in try/finally)
+- Modified: `v2/src/indexer/fast-walker.ts` (TSNode.id Map + anonymous QN + complexity + multi-candidate CALLS)
 - Modified: `v2/src/indexer/indexer.ts` (node:path.relative)
 
-### Next steps (revised based on corrected R78 data)
+### Next steps (revised based on final R78 data)
 
 1. **Lower the parallel-mode threshold** from 100 to ~30 files. V2's parallel
    path is faster than V1 even at 42 files.
@@ -112,7 +111,8 @@ Net: -12.5pp on SMALL (fairer), -7pp on LARGE (correctness cost).
    parse. Lazy-load grammars. Target: cut 50ms from startup.
 3. **Add cross-file CALLS resolution** — V2 misses 900+ edges V1 finds.
 4. **Re-run R78 after each round.** R77 missed R76's staleness bug; R78's
-   first run missed the SKIP_DIRS bias. Future rounds must re-run R78.
+   first run missed the SKIP_DIRS bias; R78's second run missed the TSNode.id
+   bug. Future rounds MUST re-run R78.
 
 ## 0.15.9 — Round 77 (2026-07-07) honest benchmark reassessment + rigorous test
 

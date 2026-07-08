@@ -109,8 +109,15 @@ export function extractFast(
   const nodes: FastNode[] = [];
   const edges: FastEdge[] = [];
   const nameToQns = new Map<string, string[]>();
-  // R73: QN lookup map for O(1) parent resolution (was O(n) linear search)
-  const qnByNode = new Map<TSNode, string>();
+  // R78: CRITICAL FIX — use node.id (number) as Map key instead of TSNode object.
+  // TSNode objects from descendantsOfType() and .parent are NOT reference-equal
+  // (=== returns false) even when they point to the same underlying node.
+  // This broke findParentQnFast and findEnclosingDeclQnFast since R73,
+  // causing ALL CALLS edges to be dropped (0 CALLS edges extracted) and
+  // ALL function QNs to be flat (file::func instead of file::class::method).
+  // node.id is a stable numeric identifier that's the same regardless of
+  // which TSNode wrapper you use.
+  const qnByNode = new Map<number, string>();
 
   // ── Extract File node ────────────────────────────────────────────────
   const fileName = relPath.split('/').pop() || relPath;
@@ -149,7 +156,7 @@ export function extractFast(
       properties: props,
     });
     addToMap(nameToQns, name, qn);
-    qnByNode.set(func, qn);
+    qnByNode.set(func.id, qn);
     edges.push({ sourceQn: parentQn, targetQn: qn, type: 'CONTAINS', properties: '{}' });
   }
 
@@ -169,7 +176,7 @@ export function extractFast(
       properties: '{"language":"tree-sitter"}',
     });
     addToMap(nameToQns, name, qn);
-    qnByNode.set(cls, qn);
+    qnByNode.set(cls.id, qn);
     edges.push({ sourceQn: parentQn, targetQn: qn, type: 'CONTAINS', properties: '{}' });
   }
 
@@ -192,7 +199,7 @@ export function extractFast(
       properties: props,
     });
     addToMap(nameToQns, name, qn);
-    qnByNode.set(method, qn);
+    qnByNode.set(method.id, qn);
     edges.push({ sourceQn: parentQn, targetQn: qn, type: 'CONTAINS', properties: '{}' });
   }
 
@@ -249,14 +256,15 @@ function getDeclNameFast(node: TSNode): string {
 }
 
 /**
- * R73: Find parent QN using Map lookup (O(1)) instead of linear search (O(n)).
+ * R78: Find parent QN using Map lookup (O(1)) instead of linear search (O(n)).
  * Walks up the AST to find the nearest enclosing declaration, then looks
- * it up in the qnByNode map.
+ * it up in the qnByNode map (keyed by node.id — NOT by TSNode reference,
+ * which is broken in web-tree-sitter).
  */
 function findParentQnFast(
   node: TSNode,
   fileQn: string,
-  qnByNode: Map<TSNode, string>,
+  qnByNode: Map<number, string>,
 ): string {
   let parent = node.parent;
   while (parent) {
@@ -264,7 +272,7 @@ function findParentQnFast(
     if (FUNCTION_TYPES.includes(parentType) ||
         CLASS_TYPES.includes(parentType) ||
         METHOD_TYPES.includes(parentType)) {
-      const qn = qnByNode.get(parent);
+      const qn = qnByNode.get(parent.id);
       if (qn) return qn;
     }
     parent = parent.parent;
@@ -273,18 +281,18 @@ function findParentQnFast(
 }
 
 /**
- * R73: Find enclosing declaration QN using Map lookup.
+ * R78: Find enclosing declaration QN using Map lookup (keyed by node.id).
  */
 function findEnclosingDeclQnFast(
   node: TSNode,
-  qnByNode: Map<TSNode, string>,
+  qnByNode: Map<number, string>,
 ): string | null {
   let parent = node.parent;
   while (parent) {
     const parentType = parent.type;
     if (FUNCTION_TYPES.includes(parentType) ||
         METHOD_TYPES.includes(parentType)) {
-      const qn = qnByNode.get(parent);
+      const qn = qnByNode.get(parent.id);
       if (qn) return qn;
     }
     parent = parent.parent;
