@@ -126,11 +126,17 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       if (!existing) {
         estimatedFilesToIndex++;
       } else {
-        const mtimeMatches = existing.mtime_ns
-          ? existing.mtime_ns === fileMtimeNs
-          : existing.mtime === Math.floor(Number(stat.mtimeMs));
-        if (!mtimeMatches || existing.size !== fileSize) {
+        // R91: Bug 32 fix — if mtime_ns is NULL (legacy pre-R85 DB), don't
+        // fast-skip on mtime+size alone. Force a re-hash to backfill mtime_ns.
+        // Without this, mtime_ns stays NULL forever for unchanged files,
+        // keeping them exposed to the old Math.floor(mtimeMs) false-skip risk.
+        if (!existing.mtime_ns) {
           estimatedFilesToIndex++;
+        } else {
+          const mtimeMatches = existing.mtime_ns === fileMtimeNs;
+          if (!mtimeMatches || existing.size !== fileSize) {
+            estimatedFilesToIndex++;
+          }
         }
       }
     }

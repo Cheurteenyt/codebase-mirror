@@ -1,8 +1,11 @@
 # V2 Roadmap — Codebase Memory V2
 
-> Updated 2026-07-07 for version 0.15.9.
+> **Historical roadmap, archived at 0.15.9.** For the current version, test
+> counts, and bug/optimization history, see `v2/CHANGELOG.md`. The table below
+> is kept for historical reference. R78-R90 (31 bugs, 8 optimizations, 374
+> tests) are documented in the changelog, not here.
 
-## Current State (0.15.9)
+## Current State (0.15.9 — archived)
 
 ### ✅ Completed
 
