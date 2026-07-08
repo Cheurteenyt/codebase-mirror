@@ -1,5 +1,77 @@
 # Changelog — Codebase Memory V2
 
+## 0.27.0 — Round 89 (2026-07-08) Benchmark CI Lock + No-Op Early Return
+
+**15th round (GPT 5.5 external audit R90).** 1 bug fixed + benchmark hardening.
+The GPT 5.5 audit found that the benchmark had gaps: some `✗` branches didn't
+set `allOk = false`, `errors` and `hashCount` weren't checked for all scenarios,
+and the benchmark wasn't wired to npm scripts/CI. Also fixed a perf debt: no-op
+incremental did a double stat+DB pass.
+
+### Bug fixed (1, from GPT 5.5 R90 audit)
+
+31. **No-op incremental does double stat+DB pass** (`indexer.ts`) — The estimation pass (`estimatedFilesToIndex`) and the extraction pass (`extractFromFilesWasm`) both do `statSync` + DB lookup for every file. On a 50k-file repo with no changes, this doubles the metadata I/O. Fixed: if `opts.incremental && estimatedFilesToIndex === 0`, skip the extraction phase entirely and return early after `updateProjectStats`.
+
+### Benchmark hardening (4 improvements)
+
+1. **All `✗` branches now set `allOk = false`** — Previously the single-thread no-op check printed `✗` but didn't fail the benchmark. Now every `✗` branch sets `allOk = false`, ensuring `process.exitCode = 1`.
+
+2. **`errors` checked for all scenarios** — If any scenario has `errors > 0`, the benchmark now fails. Previously extraction errors could pass if DB stats were still consistent.
+
+3. **`hashCount` checked for all scenarios** — Previously only `parallel-full-cold` verified hash coverage. Now all scenarios verify `hashCount === expectedHashCount` (20 for single-thread, 64 for parallel).
+
+4. **npm scripts added** — `bench:incremental` and `bench:incremental:smoke` scripts added to `package.json` so the benchmark can be run via `npm run bench:incremental` and wired to CI.
+
+### Benchmark results (all pass)
+
+```
+Scenario                         Wall   Idx   Skp  Nodes  Edges  Orph  DupQN  Hash  StatOK  Errors
+full-cold                        309ms    20     0     60     40     0      0    20    true    0
+incremental-noop                 200ms     0    20     60     40     0      0    20    true    0
+incremental-metadata-only        229ms     0    20     60     40     0      0    20    true    0
+incremental-1-file               238ms     1    19     60     40     0      0    20    true    0
+incremental-10pct                238ms     2    18     60     40     0      0    20    true    0
+parallel-full-cold               489ms    64     0    192    128     0      0    64    true    0
+parallel-incremental-noop        212ms     0    64    192    128     0      0    64    true    0
+parallel-metadata-only           199ms     0    64    192    128     0      0    64    true    0
+parallel-noop-after-meta         201ms     0    64    192    128     0      0    64    true    0
+
+✓ All invariants pass: orphan_edges=0, stats match, no duplicate QNs, errors=0, hash coverage
+BENCHMARK PASSED — all invariants met
+```
+
+### Verification
+
+```
+Test Files  35 passed (35)
+     Tests  374 passed (374)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/indexer.ts` (Bug 31: early return no-op incremental)
+- Modified: `v2/scripts/incremental-benchmark-r87.ts` (all ✗ → allOk=false, errors check, hashCount check)
+- Modified: `v2/package.json` (version 0.27.0 + bench:incremental scripts)
+
+### Total: 31 bugs + 6 optimizations + 19 tests across 15 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78-R82 (1-4) | bugs | 23 |
+| R83 (9) | optimizations | 3 + portability |
+| R84 (10) | bugs | 2 + docs sync |
+| R85 (11) | bugs | 2 + 6 tests + docs sync |
+| R86 (12) | bugs | 2 |
+| R87 (13) | tests + benchmark | 7 failure tests + incremental benchmark |
+| R88 (14) | bug + benchmark | 1 + parallel scenarios + CI exit code |
+| R89 (15) | bug + benchmark | 1 (no-op early return) + CI lock hardening + npm scripts |
+
+### Next steps
+
+1. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Benchmark cold vs warm process** — separate CLI cold from persistent process
+
 ## 0.26.0 — Round 88 (2026-07-08) Parallel Metadata Fix + Benchmark CI Lock
 
 **14th round (GPT 5.5 external audit R89).** 1 bug fixed + benchmark improvements.

@@ -319,9 +319,20 @@ try {
       console.log(`  ✗ ${r.scenario}: duplicate QNs=${r.duplicateQNs}`);
       allOk = false;
     }
+    // R89: verify errors === 0 for all scenarios
+    if (r.errors > 0) {
+      console.log(`  ✗ ${r.scenario}: errors=${r.errors} (must be 0)`);
+      allOk = false;
+    }
+    // R89: verify hashCount for all scenarios
+    const expectedHashCount = r.scenario.startsWith('parallel-') ? PARALLEL_FILE_COUNT : FILE_COUNT;
+    if (r.hashCount !== expectedHashCount) {
+      console.log(`  ✗ ${r.scenario}: hashCount=${r.hashCount}, expected=${expectedHashCount}`);
+      allOk = false;
+    }
   }
   if (allOk) {
-    console.log('  ✓ All invariants pass: orphan_edges=0, stats match, no duplicate QNs');
+    console.log('  ✓ All invariants pass: orphan_edges=0, stats match, no duplicate QNs, errors=0, hash coverage');
   }
 
   // Incremental correctness checks
@@ -332,6 +343,7 @@ try {
     console.log(`  ✓ No-op incremental: 0 indexed, ${FILE_COUNT} skipped`);
   } else {
     console.log(`  ✗ No-op incremental: indexed=${noop?.filesIndexed}, skipped=${noop?.filesSkipped} (expected 0/${FILE_COUNT})`);
+    allOk = false;
   }
 
   const metaOnly = results.find(r => r.scenario === 'incremental-metadata-only');
