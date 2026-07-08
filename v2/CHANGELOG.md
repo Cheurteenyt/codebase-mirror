@@ -1,5 +1,73 @@
 # Changelog — Codebase Memory V2
 
+## 0.32.0 — Round 94 (2026-07-08) Proof Lock — Parallel Failure + Legacy mtime_ns + CI Debug
+
+**20th round (GPT 5.5 external audit R94).** 0 new bugs — this round closes the
+last proof gaps: parallel worker failure injection test, legacy `mtime_ns = NULL`
+backfill tests, benchmark stderr capture, and docs process cleanup.
+
+### Tests added (3 new, real runtime)
+
+New file: `v2/tests/indexer/r94-parallel-and-legacy.test.ts`
+
+1. **`parallel: incremental with injected worker failure preserves old graph/hash`** — Creates 24 files, full index, modifies file5.ts, injects `CBM_TEST_FAIL_ON_FILE=file5.ts`, verifies: error reported, old nodes preserved, hash not updated, orphan_edges=0, self-heal on retry. Falls back to single-thread if vitest worker env can't load WASM grammars.
+
+2. **`single-thread: mtime_ns NULL gets backfilled without touching nodes`** — Creates file, full index, manually sets `mtime_ns = NULL` in DB (simulating legacy), runs incremental, verifies `mtime_ns` is backfilled and nodes are unchanged.
+
+3. **`second incremental after backfill fast-skips without hashing`** — After backfill, second incremental fast-skips via `mtime_ns` (proving the backfill worked).
+
+### Benchmark improvement (1)
+
+- **`stderr` captured and displayed** (`incremental-benchmark-r87.ts`) — `runIndexer()` now returns `{ exitCode, output, stderr }`. If `exitCode !== 0`, stderr is printed to console for CI debugging.
+
+### Docs process fix (1)
+
+- **`MAINTAINERS_GUIDE.md` V2_ROADMAP contradiction resolved** — Replaced all "update V2_ROADMAP round entry + metrics" with "update CHANGELOG.md entry + version bump". V2_ROADMAP is explicitly marked as archived; maintainers no longer need to update it.
+
+### Verification
+
+```
+Test Files  37 passed (37)
+     Tests  380 passed (380)
+```
+
+### Files
+
+- New: `v2/tests/indexer/r94-parallel-and-legacy.test.ts` (3 real runtime tests)
+- Modified: `v2/scripts/incremental-benchmark-r87.ts` (stderr capture + display)
+- Modified: `MAINTAINERS_GUIDE.md` (V2_ROADMAP archived, CHANGELOG is source of truth)
+- Modified: `v2/package.json` (version 0.32.0)
+
+### Total: 33 bugs + 10 optimizations + 25 tests across 20 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78-R82 (1-4) | bugs | 23 |
+| R83-R84 (9-10) | optimizations + bugs | 3 opt + 2 bugs + portability |
+| R85-R86 (11-12) | bugs | 4 + 6 tests |
+| R87 (13) | tests + benchmark | 7 failure tests + incremental benchmark |
+| R88-R89 (14-15) | bugs + benchmark | 2 bugs + CI lock |
+| R90 (16) | optimizations | smoke mode + parallel assertion + prepared statements + CI wiring |
+| R91 (17) | bug + benchmark + docs | 1 (legacy mtime_ns NULL) + exitCode lock + docs cleanup |
+| R92 (18) | tests + portability | 3 real failure injection tests + spawnSync |
+| R93 (19) | bug + test harness | 1 (mtime_ns NULL runtime fix) + XDG_CACHE_HOME + hash assertion + NODE_ENV gating |
+| R94 (20) | proof lock | 3 tests (parallel failure + legacy backfill) + stderr + docs process |
+
+### Next steps
+
+**All 14 GPT 5.5 audit reports are now fully closed.** The incremental indexer is
+locked with:
+- 33 bugs fixed
+- 10 optimizations
+- 25 versioned tests (7 failure simulation + 3 real failure injection + 3 parallel/legacy + 6 fast-skip + 6 correctness)
+- 9-scenario benchmark with 6 invariants, CI-wired, smoke mode
+- Real failure injection (CBM_TEST_FAIL_ON_FILE)
+- Legacy mtime_ns NULL backfill verified
+
+1. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds. This is the #1 remaining functional gap.
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Benchmark cold vs warm process** — separate CLI cold from persistent process
+
 ## 0.31.0 — Round 93 (2026-07-08) Legacy mtime_ns Runtime Fix + Test Harness Correctness
 
 **19th round (GPT 5.5 external audit R93).** 1 bug fixed + test harness fixes.

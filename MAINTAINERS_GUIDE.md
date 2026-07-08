@@ -19,7 +19,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
    `graph-ui/`. The full suite (see v2/CHANGELOG.md for current test count) must
    pass with 0 regressions before committing.
 4. **Docs** — update in parallel: CHANGELOG.md entry, version bump in
-   package.json, README/docs version refs, V2_ROADMAP round entry + metrics.
+   package.json, README/docs version refs, CHANGELOG.md entry + version bump in package.json.
 5. **Commit** — one commit per round (e.g. R56). Message format:
    `docs(v2): 0.12.3 R56 self-audit + MAINTAINERS_GUIDE (3 improvements)`
 6. **Push** — `git push origin v2/r<n>-<short-name> -o merge_request.create
@@ -180,7 +180,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 3. **Document what you DIDN'T fix** — if a finding is acknowledged but
    not fixed (e.g. D2 residual in R55), say so explicitly in the CHANGELOG.
 4. **Update docs in parallel** — CHANGELOG, package.json version, README
-   test/bug counts, V2_ROADMAP round entry + metrics. A fix without docs
+   test/bug counts, CHANGELOG.md entry + version bump in package.json. A fix without docs
    is incomplete.
 5. **Conservative scope** — only flag real issues in your own audits, not
    stylistic preferences. If something looks fine, don't flag it.
@@ -234,7 +234,7 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 | R76 | 0.15.8 | single-pass complexity + skip anonymous. V2 **12% faster than V1 C** (267ms vs 305ms). |
 | R77 | 0.15.9 | **honest benchmark** — V2 is 11% SLOWER in wall time (401ms vs 361ms) but 20% faster in extraction only (267ms vs 335ms). V1 extracts 2.2x more edges (LSP). Previous "V2 faster" claims corrected. |
 
-See `docs/V2_ROADMAP.md` for the full history (R1 → R77).
+See `v2/CHANGELOG.md` for the full history (R1 → current). `docs/V2_ROADMAP.md` is archived at 0.15.9.
 
 ---
 
@@ -254,7 +254,7 @@ the previous round's summary — re-verify directly against the code.
 
 ### 2. Stale version/test/bug counts in docs
 **Pattern**: After a round, `package.json` version is bumped but docs still
-reference the old version. Test counts in README/CONTRIBUTING/V2_ROADMAP drift.
+reference the old version. Test counts in README/CHANGELOG drift (V2_ROADMAP is archived).
 R56 caught 12 stale refs across v2/README.md, CONTRIBUTING.md, and
 MAINTAINERS_GUIDE.md.
 
@@ -341,7 +341,7 @@ Before committing any change, verify:
 - [ ] `v2/package.json` version bumped
 - [ ] `v2/CHANGELOG.md` has a new entry for the round
 - [ ] All `.md` files have consistent version refs (`grep -rn "<old-version>" *.md docs/*.md v2/*.md` returns nothing)
-- [ ] Test/bug/round counts in README.md, CONTRIBUTING.md, V2_ROADMAP.md, MAINTAINERS_GUIDE.md are up to date
+- [ ] Test/bug/round counts in CHANGELOG.md are up to date (V2_ROADMAP.md is archived)
 - [ ] If touching CI: YAML validated (`python3 -c "import yaml; yaml.safe_load(open('<file>'))"`)
 - [ ] If touching security: regression test added that would FAIL if the fix were reverted
 - [ ] Commit message follows the format: `<type>(v2): <version> R<n> <short-description> (<n> fixes, <details>)`
@@ -380,8 +380,8 @@ Workarounds:
 
 ### `sed -i` over-replaces version strings
 Using `sed -i 's/0.12.2/0.12.3/g'` across all docs also changes the R55
-entry in V2_ROADMAP (which was at version 0.12.2). Always verify after sed:
-`grep -rn "<new-version>" docs/V2_ROADMAP.md` and fix historical entries
+entry in CHANGELOG.md. Always verify after sed:
+`grep -rn "<new-version>" v2/CHANGELOG.md` and fix historical entries
 that shouldn't have been changed.
 
 ### Branch protection blocks remote branch deletion

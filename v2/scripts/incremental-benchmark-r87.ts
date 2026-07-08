@@ -29,7 +29,7 @@ interface BenchResult {
   errors: number;
 }
 
-function runIndexer(project: string, root: string, cacheDir: string, incremental: boolean, allowPartial: boolean = false): { exitCode: number; output: string } {
+function runIndexer(project: string, root: string, cacheDir: string, incremental: boolean, allowPartial: boolean = false): { exitCode: number; output: string; stderr: string } {
   // R92: use spawnSync instead of execSync(args.join(' ')) for portability
   // (handles paths with spaces, no shell injection risk, Windows-compatible)
   const args = [V2_DIST, 'index', '--project', project, '--root', root];
@@ -41,7 +41,12 @@ function runIndexer(project: string, root: string, cacheDir: string, incremental
     env: { ...process.env, XDG_CACHE_HOME: cacheDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  return { exitCode: res.status ?? (res.error || res.signal ? 1 : 0), output: res.stdout ?? '' };
+  const exitCode = res.status ?? (res.error || res.signal ? 1 : 0);
+  // R94: capture stderr for CI debugging
+  if (exitCode !== 0 && res.stderr) {
+    console.error(`  [stderr] ${res.stderr.slice(0, 500)}`);
+  }
+  return { exitCode, output: res.stdout ?? '', stderr: res.stderr ?? '' };
 }
 
 function getDbStats(dbPath: string, project: string): {
