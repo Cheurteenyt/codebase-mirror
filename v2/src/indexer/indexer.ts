@@ -59,7 +59,7 @@ export interface IndexResult {
 export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult> {
   const start = Date.now();
   const dbPath = defaultCodeDbPath(opts.project);
-  // R71: use at least 2 workers for parallelism, even on 2-core machines.
+  // R79: use at least 2 workers for parallelism, even on 2-core machines.
   // WASM parsing is CPU-bound but also has I/O (file reads), so 2 workers
   // on a 2-core machine still provides overlap. On 1-core machines (CI),
   // falls back to single-threaded.
@@ -80,7 +80,17 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
 
   const db = new Database(dbPath);
   initIndexerSchema(db);
-  clearProjectData(db, opts.project);
+  // R79: Bug 9 fix — incremental mode preserves nodes/edges for unchanged files.
+  // Previously clearProjectData deleted everything, then incremental skipped
+  // unchanged files, losing their nodes. Now:
+  // - Full mode: clear everything (as before)
+  // - Incremental mode: don't clear; per-file deletes happen in extractFromFilesWasm
+  //   for files that have changed (identified by hash mismatch)
+  if (!opts.incremental) {
+    clearProjectData(db, opts.project);
+  }
+  // In incremental mode, we do NOT clear nodes/edges here. The extractor
+  // will delete old nodes for changed files before re-inserting.
 
   const files = discoverSourceFilesWasm(opts.rootPath);
 
@@ -101,11 +111,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // to have them ready if needed)
   await preloadGrammars(allLangs);
 
-  // R71: use parallel mode for large codebases (100+ files). Below that,
-  // worker thread overhead (spawning, WASM init, serialization) exceeds
-  // the parallelism gain. On 8+ core machines, the threshold could be
-  // lower — but 100 is a safe default that doesn't regress small projects.
-  const useParallel = numWorkers > 1 && files.length > 100;
+  // R79: parallel threshold tuned to 80 files. R78 benchmark showed V2's
+  // parallel path is faster on 120+ files but SLOWER on 42 files due to
+  // worker thread spawning overhead (~100ms). The deferred Parser.init()
+  // makes single-thread much faster now (215ms vs 438ms), so the crossover
+  // point is higher than initially expected. 80 is the sweet spot.
+  const useParallel = numWorkers > 1 && files.length > 80;
 
   let result;
   if (useParallel) {
