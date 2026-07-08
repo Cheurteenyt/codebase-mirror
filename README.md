@@ -24,8 +24,6 @@ It syncs everything to an **Obsidian-compatible Markdown vault** so you can read
 ## Current version
 
 See `v2/package.json` and `v2/CHANGELOG.md` for the authoritative version, test counts, and bug/optimization history.
-
-Current audited line: R85 / 0.23.0 at the time of this README update.
 - **Graph UI** with 2D d3-force canvas, dashboard, filters, **real-time WebSocket**, ARIA tablist, stale-while-revalidate refetch, AbortController timeouts
 - **Watch daemon** — auto-sync when vault files change (fs.watch recursive)
 - **FTS5 full-text search** on human notes (BM25 ranking, AND-of-terms, migration V4)

@@ -17,6 +17,7 @@ const V2_DIST = process.env.CBM_V2_DIST ?? resolve(V2_ROOT, 'dist/cli/index.js')
 interface BenchResult {
   scenario: string;
   wallMs: number;
+  exitCode: number;
   filesIndexed: number;
   filesSkipped: number;
   nodes: number;
@@ -144,7 +145,7 @@ try {
   const s1 = getDbStats(dbPath, projectName);
   const p1 = parseOutput(r1.output);
   results.push({
-    scenario: 'full-cold', wallMs: t1Wall,
+    scenario: 'full-cold', wallMs: t1Wall, exitCode: r1.exitCode,
     filesIndexed: p1.filesIndexed, filesSkipped: p1.filesSkipped,
     nodes: s1.nodes, edges: s1.edges, orphanEdges: s1.orphanEdges,
     duplicateQNs: s1.duplicateQNs, hashCount: s1.hashCount,
@@ -160,7 +161,7 @@ try {
   const s2 = getDbStats(dbPath, projectName);
   const p2 = parseOutput(r2.output);
   results.push({
-    scenario: 'incremental-noop', wallMs: t2Wall,
+    scenario: 'incremental-noop', wallMs: t2Wall, exitCode: r2.exitCode,
     filesIndexed: p2.filesIndexed, filesSkipped: p2.filesSkipped,
     nodes: s2.nodes, edges: s2.edges, orphanEdges: s2.orphanEdges,
     duplicateQNs: s2.duplicateQNs, hashCount: s2.hashCount,
@@ -178,7 +179,7 @@ try {
   const s3 = getDbStats(dbPath, projectName);
   const p3 = parseOutput(r3.output);
   results.push({
-    scenario: 'incremental-metadata-only', wallMs: t3Wall,
+    scenario: 'incremental-metadata-only', wallMs: t3Wall, exitCode: r3.exitCode,
     filesIndexed: p3.filesIndexed, filesSkipped: p3.filesSkipped,
     nodes: s3.nodes, edges: s3.edges, orphanEdges: s3.orphanEdges,
     duplicateQNs: s3.duplicateQNs, hashCount: s3.hashCount,
@@ -195,7 +196,7 @@ try {
   const s4 = getDbStats(dbPath, projectName);
   const p4 = parseOutput(r4.output);
   results.push({
-    scenario: 'incremental-1-file', wallMs: t4Wall,
+    scenario: 'incremental-1-file', wallMs: t4Wall, exitCode: r4.exitCode,
     filesIndexed: p4.filesIndexed, filesSkipped: p4.filesSkipped,
     nodes: s4.nodes, edges: s4.edges, orphanEdges: s4.orphanEdges,
     duplicateQNs: s4.duplicateQNs, hashCount: s4.hashCount,
@@ -215,7 +216,7 @@ try {
   const s5 = getDbStats(dbPath, projectName);
   const p5 = parseOutput(r5.output);
   results.push({
-    scenario: 'incremental-10pct', wallMs: t5Wall,
+    scenario: 'incremental-10pct', wallMs: t5Wall, exitCode: r5.exitCode,
     filesIndexed: p5.filesIndexed, filesSkipped: p5.filesSkipped,
     nodes: s5.nodes, edges: s5.edges, orphanEdges: s5.orphanEdges,
     duplicateQNs: s5.duplicateQNs, hashCount: s5.hashCount,
@@ -237,7 +238,7 @@ try {
   const p6 = parseOutput(r6.output);
   const isParallel6 = r6.output.includes('Parallel') || r6.output.includes('workers');
   results.push({
-    scenario: 'parallel-full-cold', wallMs: t6Wall,
+    scenario: 'parallel-full-cold', wallMs: t6Wall, exitCode: r6.exitCode,
     filesIndexed: p6.filesIndexed, filesSkipped: p6.filesSkipped,
     nodes: s6.nodes, edges: s6.edges, orphanEdges: s6.orphanEdges,
     duplicateQNs: s6.duplicateQNs, hashCount: s6.hashCount,
@@ -258,7 +259,7 @@ try {
   const s7 = getDbStats(parallelDbPath, parallelProjectName);
   const p7 = parseOutput(r7.output);
   results.push({
-    scenario: 'parallel-incremental-noop', wallMs: t7Wall,
+    scenario: 'parallel-incremental-noop', wallMs: t7Wall, exitCode: r7.exitCode,
     filesIndexed: p7.filesIndexed, filesSkipped: p7.filesSkipped,
     nodes: s7.nodes, edges: s7.edges, orphanEdges: s7.orphanEdges,
     duplicateQNs: s7.duplicateQNs, hashCount: s7.hashCount,
@@ -277,7 +278,7 @@ try {
   const s8 = getDbStats(parallelDbPath, parallelProjectName);
   const p8 = parseOutput(r8.output);
   results.push({
-    scenario: 'parallel-metadata-only', wallMs: t8Wall,
+    scenario: 'parallel-metadata-only', wallMs: t8Wall, exitCode: r8.exitCode,
     filesIndexed: p8.filesIndexed, filesSkipped: p8.filesSkipped,
     nodes: s8.nodes, edges: s8.edges, orphanEdges: s8.orphanEdges,
     duplicateQNs: s8.duplicateQNs, hashCount: s8.hashCount,
@@ -293,7 +294,7 @@ try {
   const s9 = getDbStats(parallelDbPath, parallelProjectName);
   const p9 = parseOutput(r9.output);
   results.push({
-    scenario: 'parallel-noop-after-meta', wallMs: t9Wall,
+    scenario: 'parallel-noop-after-meta', wallMs: t9Wall, exitCode: r9.exitCode,
     filesIndexed: p9.filesIndexed, filesSkipped: p9.filesSkipped,
     nodes: s9.nodes, edges: s9.edges, orphanEdges: s9.orphanEdges,
     duplicateQNs: s9.duplicateQNs, hashCount: s9.hashCount,
@@ -331,6 +332,11 @@ try {
     // R89: verify errors === 0 for all scenarios
     if (r.errors > 0) {
       console.log(`  ✗ ${r.scenario}: errors=${r.errors} (must be 0)`);
+      allOk = false;
+    }
+    // R91: verify exitCode === 0 for all scenarios
+    if (r.exitCode !== 0) {
+      console.log(`  ✗ ${r.scenario}: exitCode=${r.exitCode} (must be 0)`);
       allOk = false;
     }
     // R89: verify hashCount for all scenarios

@@ -1,7 +1,7 @@
 # Maintainers Guide — Codebase Memory V2
 
 > Internal conventions, workflow patterns, and "do/don't" rules accumulated
-> across 77 audit rounds. Public doc (no sensitive info) — for SSH key paths,
+> across multiple audit rounds (see v2/CHANGELOG.md). Public doc (no sensitive info) — for SSH key paths,
 > runner IPs, or other operational reminders, see your local
 > `MAINTAINERS_NOTES.local.md` (gitignored).
 
@@ -16,7 +16,7 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 2. **Implement** — make the minimal change that fixes the issue. Don't
    refactor unrelated code in the same commit.
 3. **Test** — run `npm run build && npx vitest run` in both `v2/` and
-   `graph-ui/`. The full suite (378 tests: 355 backend + 23 frontend) must
+   `graph-ui/`. The full suite (see v2/CHANGELOG.md for current test count) must
    pass with 0 regressions before committing.
 4. **Docs** — update in parallel: CHANGELOG.md entry, version bump in
    package.json, README/docs version refs, V2_ROADMAP round entry + metrics.
@@ -333,10 +333,11 @@ bash invocations.
 Before committing any change, verify:
 
 - [ ] `cd v2 && npm run build` succeeds (0 TypeScript errors)
-- [ ] `cd v2 && npx vitest run` passes (355 backend tests, 0 failures)
+- [ ] `cd v2 && npx vitest run` passes (0 failures — see CHANGELOG for count)
 - [ ] `cd graph-ui && npx tsc --noEmit` succeeds (0 TypeScript errors)
+   - [ ] `cd v2 && npm run bench:incremental:smoke` passes (incremental invariants)
 - [ ] `cd graph-ui && npx vitest run` passes (23 frontend tests, 0 failures)
-- [ ] Total: 378 tests, 0 regressions
+- [ ] Total: 0 regressions (see CHANGELOG for test count)
 - [ ] `v2/package.json` version bumped
 - [ ] `v2/CHANGELOG.md` has a new entry for the round
 - [ ] All `.md` files have consistent version refs (`grep -rn "<old-version>" *.md docs/*.md v2/*.md` returns nothing)

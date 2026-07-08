@@ -1,5 +1,62 @@
 # Changelog — Codebase Memory V2
 
+## 0.29.0 — Round 91 (2026-07-08) ExitCode Lock + Legacy mtime_ns Backfill + Docs
+
+**17th round (GPT 5.5 external audit R91).** 1 bug fixed + benchmark hardening
++ docs cleanup. The GPT 5.5 audit found that the benchmark didn't check
+`exitCode`, legacy DBs with `mtime_ns = NULL` could fast-skip incorrectly,
+and several docs were stale.
+
+### Bug fixed (1, from GPT 5.5 R91 audit)
+
+32. **Legacy `mtime_ns = NULL` fast-skips on `Math.floor(mtimeMs)` indefinitely** (`indexer.ts`) — Pre-R85 DBs have `mtime_ns = NULL` after migration. The estimation pass fell back to `existing.mtime === Math.floor(Number(stat.mtimeMs))`, which has the same false-skip risk that R85 was supposed to fix. And since `estimatedFilesToIndex` could be 0 (all files "match" on mtime+size), the R89 early return prevented the extractor from ever backfilling `mtime_ns`. Fixed: if `existing.mtime_ns` is NULL, treat the file as needing re-indexing (`estimatedFilesToIndex++`), which forces a hash+metadata-only update that backfills `mtime_ns`.
+
+### Benchmark hardening (1)
+
+- **`exitCode` added to `BenchResult` and checked as invariant** — Previously `runIndexer()` returned `exitCode` but it wasn't stored or verified. Now every scenario stores `exitCode` and the invariant loop checks `r.exitCode !== 0` → `allOk = false`. This catches CLI crashes that produce no `Errors:` line.
+
+### Docs cleanup (3 files)
+
+1. **Root `README.md`** — Removed stale `Current audited line: R85 / 0.23.0` line. Now only references `v2/CHANGELOG.md`.
+2. **`docs/V2_ROADMAP.md`** — Added archive banner: "Historical roadmap, archived at 0.15.9. For current version, see v2/CHANGELOG.md."
+3. **`MAINTAINERS_GUIDE.md`** — Replaced stale `77 audit rounds`, `378 tests`, `355 backend` with references to `v2/CHANGELOG.md`. Added `npm run bench:incremental:smoke` to the pre-merge checklist.
+
+### Verification
+
+```
+Test Files  35 passed (35)
+     Tests  374 passed (374)
+```
+
+Smoke benchmark: all 9 invariants pass (including exitCode check).
+
+### Files
+
+- Modified: `v2/src/indexer/indexer.ts` (Bug 32: mtime_ns NULL → estimatedFilesToIndex++)
+- Modified: `v2/scripts/incremental-benchmark-r87.ts` (exitCode in BenchResult + invariant check)
+- Modified: `README.md` (removed stale audited line)
+- Modified: `docs/V2_ROADMAP.md` (archive banner)
+- Modified: `MAINTAINERS_GUIDE.md` (stale counts → CHANGELOG refs + bench step)
+- Modified: `v2/package.json` (version 0.29.0)
+
+### Total: 32 bugs + 8 optimizations across 17 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78-R82 (1-4) | bugs | 23 |
+| R83-R84 (9-10) | optimizations + bugs | 3 opt + 2 bugs + portability |
+| R85-R86 (11-12) | bugs | 4 + 6 tests |
+| R87 (13) | tests + benchmark | 7 failure tests + incremental benchmark |
+| R88-R89 (14-15) | bugs + benchmark | 2 bugs + CI lock |
+| R90 (16) | optimizations | smoke mode + parallel assertion + prepared statements + CI wiring |
+| R91 (17) | bug + benchmark + docs | 1 (legacy mtime_ns NULL) + exitCode lock + 3 docs cleanup |
+
+### Next steps
+
+1. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Real failure injection tests** — inject extractFast/worker failure at runtime
+
 ## 0.28.0 — Round 90 (2026-07-08) CI Benchmark Lock + Smoke Mode + Prepared Statements
 
 **16th round (GPT 5.5 external audit R90).** 0 new bugs — this round hardens
