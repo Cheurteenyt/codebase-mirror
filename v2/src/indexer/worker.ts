@@ -109,17 +109,23 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
 
         const fileQn = `${batch.project}::${relPath}`;
 
-        // R72: use fast-walker (descendantsOfType) instead of recursive walkAST
-        const extracted = extractFast(tree.rootNode, batch.project, relPath, fileQn, source.length);
+        // R78: use try/finally to guarantee tree.delete() even if extractFast throws.
+        // Without this, a parse error in extractFast would leak the WASM tree
+        // (same bug that was fixed in wasm-extractor.ts).
+        try {
+          // R72: use fast-walker (descendantsOfType) instead of recursive walkAST
+          const extracted = extractFast(tree.rootNode, batch.project, relPath, fileQn, source.length);
 
-        results.push({
-          filePath: relPath,
-          language: batch.language,
-          nodes: extracted.nodes,
-          edges: extracted.edges,
-          error: null,
-        });
-        tree.delete();
+          results.push({
+            filePath: relPath,
+            language: batch.language,
+            nodes: extracted.nodes,
+            edges: extracted.edges,
+            error: null,
+          });
+        } finally {
+          tree.delete();
+        }
       } catch (e: unknown) {
         results.push({
           filePath: relPath, language: batch.language, nodes: [], edges: [],
