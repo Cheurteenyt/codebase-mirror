@@ -67,6 +67,8 @@ const SCHEMA_SQL = `
 /**
  * Initialize the SQLite schema for the native indexer.
  * Idempotent — uses CREATE IF NOT EXISTS.
+ * R81: also migrates pre-R80 file_hashes tables from UNIQUE(file_path) to
+ * UNIQUE(project, file_path) so old DBs don't break with the new ON CONFLICT.
  */
 export function initIndexerSchema(db: Database.Database): void {
   db.pragma('journal_mode = WAL');
@@ -75,6 +77,64 @@ export function initIndexerSchema(db: Database.Database): void {
   db.pragma('temp_store = MEMORY');
   db.pragma('cache_size = -65536');
   db.exec(SCHEMA_SQL);
+  // R81: Bug 15 — migrate old file_hashes schema if needed
+  migrateFileHashesSchema(db);
+}
+
+/**
+ * R81: Bug 15 — Migrate file_hashes from pre-R80 schema (UNIQUE(file_path))
+ * to R80+ schema (UNIQUE(project, file_path)). CREATE TABLE IF NOT EXISTS
+ * doesn't migrate existing tables, so old DBs keep the old constraint and
+ * ON CONFLICT(project, file_path) fails with "does not match any constraint".
+ *
+ * Detection: check sqlite_master.sql for the old UNIQUE(file_path) without
+ * the new UNIQUE(project, file_path). If found, rebuild the table.
+ */
+function migrateFileHashesSchema(db: Database.Database): void {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='file_hashes'").get() as { sql: string } | undefined;
+  if (!row || !row.sql) return; // table doesn't exist yet (CREATE IF NOT EXISTS will make it)
+
+  const oldSchema = row.sql;
+  const hasOldUnique = /file_path\s+TEXT\s+NOT\s+UNIQUE/i.test(oldSchema) ||
+                       (oldSchema.includes('UNIQUE') && oldSchema.includes('file_path') && !oldSchema.includes('UNIQUE(project, file_path)'));
+  const hasNewUnique = oldSchema.includes('UNIQUE(project, file_path)');
+
+  if (!hasOldUnique || hasNewUnique) return; // already correct or unknown shape
+
+  // Migrate: create new table, copy data deduped by (project, file_path),
+  // drop old, rename, recreate index.
+  const tx = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE file_hashes_new (
+        id INTEGER PRIMARY KEY,
+        project TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        indexed_at TEXT NOT NULL,
+        UNIQUE(project, file_path)
+      );
+    `);
+    // Copy with dedup: keep the row with the latest indexed_at per (project, file_path)
+    db.exec(`
+      INSERT INTO file_hashes_new (project, file_path, content_hash, mtime, indexed_at)
+      SELECT project, file_path, content_hash, mtime, indexed_at
+      FROM file_hashes
+      WHERE id IN (
+        SELECT id FROM file_hashes fh1
+        WHERE NOT EXISTS (
+          SELECT 1 FROM file_hashes fh2
+          WHERE fh2.project = fh1.project
+            AND fh2.file_path = fh1.file_path
+            AND (fh2.indexed_at > fh1.indexed_at OR (fh2.indexed_at = fh1.indexed_at AND fh2.id > fh1.id))
+        )
+      );
+    `);
+    db.exec('DROP TABLE file_hashes');
+    db.exec('ALTER TABLE file_hashes_new RENAME TO file_hashes');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_file_hashes_path ON file_hashes(project, file_path)');
+  });
+  tx();
 }
 
 /**

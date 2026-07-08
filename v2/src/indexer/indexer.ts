@@ -107,16 +107,16 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     }
   }
 
-  // Preload grammars (needed for single-thread mode, and for the main thread
-  // to have them ready if needed)
-  await preloadGrammars(allLangs);
-
-  // R79: parallel threshold tuned to 80 files. R78 benchmark showed V2's
-  // parallel path is faster on 120+ files but SLOWER on 42 files due to
-  // worker thread spawning overhead (~100ms). The deferred Parser.init()
-  // makes single-thread much faster now (215ms vs 438ms), so the crossover
-  // point is higher than initially expected. 80 is the sweet spot.
+  // R81: Bug 17 fix — compute useParallel BEFORE preloadGrammars. In parallel
+  // mode, workers load their own grammars, so the main thread doesn't need
+  // to preload. This saves Parser.init() + Language.load() cost on LARGE.
   const useParallel = numWorkers > 1 && files.length > 80;
+
+  if (!useParallel) {
+    // Single-thread: main thread needs the grammars
+    await preloadGrammars(allLangs);
+  }
+  // Parallel: workers will load grammars themselves; skip main-thread preload
 
   let result;
   if (useParallel) {
@@ -127,7 +127,15 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     );
   }
 
-  updateProjectStats(db, opts.project, opts.rootPath, result.nodes, result.edges);
+  // R81: Bug 18 fix — after incremental, projects.node_count/edge_count must
+  // reflect the TOTAL in the DB, not just the nodes/edges inserted in this run.
+  // Previously, a no-op incremental would set node_count=0 (result.nodes=0).
+  const totals = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
+      (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
+  `).get(opts.project, opts.project) as { nodes: number; edges: number };
+  updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges);
   db.close();
 
   return {
@@ -238,6 +246,21 @@ async function indexParallel(
   }
 
   await Promise.all(workerPromises);
+
+  // R81: Bug 19 fix — sort worker results by batch order and file path for
+  // deterministic node IDs. Without this, worker scheduling order determines
+  // which batch gets IDs 1..N vs N+1..2N, making benchmarks non-reproducible.
+  results.sort((a, b) => {
+    // Sort by language first (batches are per-language), then by first file path
+    const langCmp = a.language.localeCompare(b.language);
+    if (langCmp !== 0) return langCmp;
+    const aFirst = a.results[0]?.filePath ?? '';
+    const bFirst = b.results[0]?.filePath ?? '';
+    return aFirst.localeCompare(bFirst);
+  });
+  for (const batchResult of results) {
+    batchResult.results.sort((a, b) => a.filePath.localeCompare(b.filePath));
+  }
 
   // Collect all results and write to SQLite in a single transaction
   let nodeCount = 0;

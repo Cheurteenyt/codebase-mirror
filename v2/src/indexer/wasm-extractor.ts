@@ -255,6 +255,9 @@ export async function extractFromFilesWasm(
   const allExtracts: FileExtract[] = [];
   // R74: deferred hash updates for incremental mode (written in Phase 2 transaction)
   const pendingHashUpdates: Array<{ project: string; relPath: string; hash: string; mtime: number; indexedAt: string }> = [];
+  // R81: Bug 16 — changed file paths (incremental mode). Old nodes/edges for
+  // these paths are deleted in the transaction AFTER parse succeeds.
+  const changedRelPaths: string[] = [];
 
   // R75: pre-read all file contents before parsing.
   // This allows the OS to prefetch file pages into the page cache while
@@ -290,13 +293,17 @@ export async function extractFromFilesWasm(
       }
       result.languages.add(lang);
 
-      // R79: Bug 9 fix — always compute and store file hashes, not just in
-      // incremental mode. Previously, full mode never stored hashes, so the
-      // first incremental run had nothing to compare against and re-indexed
-      // everything. Now both modes store hashes; incremental mode also does
-      // the comparison to skip unchanged files.
+      // R81: Bug 16 fix — PLANNING PHASE. Do NOT delete old nodes/edges yet.
+      // Previously, the code deleted old nodes BEFORE parsing, so a parse
+      // failure would lose the old graph. Now we collect changed files and
+      // do all mutations in the transaction AFTER parse succeeds.
       const stat = statSync(filePath);
-      const content = fileContents.get(filePath) ?? '';
+      // R81: use fileContents.has() to distinguish empty file from read failure
+      if (!fileContents.has(filePath)) {
+        result.errors.push({ file: relPath, error: 'file read failed (not in pre-read cache)' });
+        continue;
+      }
+      const content = fileContents.get(filePath)!;
       const hash = createHash('sha256').update(content).digest('hex');
       
       if (incremental) {
@@ -307,22 +314,8 @@ export async function extractFromFilesWasm(
           result.skipped++;
           continue;
         }
-        // R79: Bug 9 fix — file has changed (or is new). Delete its old nodes/edges
-        // before re-indexing. In incremental mode we don't clear the whole DB,
-        // so we must clean up per-file to avoid stale/duplicate nodes.
-        const deleteStmt = db.prepare('DELETE FROM nodes WHERE project = ? AND file_path = ?');
-        deleteStmt.run(project, relPath);
-        // Edges referencing deleted nodes will be orphaned — delete them too.
-        // This requires finding node IDs first, but for simplicity we delete
-        // edges where source or target is no longer in nodes (handled by
-        // foreign key cascade if enabled, or we do it explicitly).
-        // SQLite doesn't cascade by default in this schema, so:
-        db.prepare(`
-          DELETE FROM edges WHERE project = ? AND (
-            source_id NOT IN (SELECT id FROM nodes WHERE project = ?)
-            OR target_id NOT IN (SELECT id FROM nodes WHERE project = ?)
-          )
-        `).run(project, project, project);
+        // R81: don't delete here — collect for the transaction phase
+        changedRelPaths.push(relPath);
       }
       pendingHashUpdates.push({ project, relPath, hash, mtime: Math.floor(stat.mtimeMs), indexedAt: new Date().toISOString() });
 
@@ -333,11 +326,7 @@ export async function extractFromFilesWasm(
       }
 
       // R75: read from pre-read cache instead of readFileSync
-      const source = fileContents.get(filePath);
-      if (!source) {
-        result.errors.push({ file: relPath, error: 'file read failed' });
-        continue;
-      }
+      const source = content;
       const tree = parser.parse(source);
       if (!tree) {
         result.errors.push({ file: relPath, error: 'parse returned null' });
@@ -377,6 +366,27 @@ export async function extractFromFilesWasm(
   const BATCH_SIZE = 50;
 
   const tx = db.transaction(() => {
+    // R81: Bug 16 fix — delete old nodes/edges for changed files BEFORE inserting
+    // new ones. This happens INSIDE the transaction, so if anything fails the
+    // old graph is preserved. Previously (R79), deletes happened in Phase 1
+    // before parsing — a parse failure would lose the old graph.
+    if (changedRelPaths.length > 0) {
+      const ph = changedRelPaths.map(() => '?').join(',');
+      const oldNodeIds = db.prepare(
+        `SELECT id FROM nodes WHERE project = ? AND file_path IN (${ph})`
+      ).all(project, ...changedRelPaths) as Array<{ id: number }>;
+      if (oldNodeIds.length > 0) {
+        const idPh = oldNodeIds.map(() => '?').join(',');
+        const idParams = oldNodeIds.map(r => r.id);
+        db.prepare(
+          `DELETE FROM edges WHERE project = ? AND (source_id IN (${idPh}) OR target_id IN (${idPh}))`
+        ).run(project, ...idParams, ...idParams);
+      }
+      db.prepare(
+        `DELETE FROM nodes WHERE project = ? AND file_path IN (${ph})`
+      ).run(project, ...changedRelPaths);
+    }
+
     // R80: Bug 10 fix — get the real MAX(id) from the nodes table so we can
     // assign explicit IDs that match what SQLite will actually use.
     const maxNodeRow = db.prepare('SELECT COALESCE(MAX(id), 0) AS max_id FROM nodes').get() as { max_id: number };
@@ -384,7 +394,7 @@ export async function extractFromFilesWasm(
     const maxEdgeRow = db.prepare('SELECT COALESCE(MAX(id), 0) AS max_id FROM edges').get() as { max_id: number };
     let nextEdgeId = maxEdgeRow.max_id + 1;
 
-    // Update file hashes (incremental mode)
+    // Update file hashes (only for files that were successfully parsed+extracted)
     for (const h of pendingHashUpdates) {
       upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.indexedAt);
     }

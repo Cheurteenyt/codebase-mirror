@@ -1,5 +1,67 @@
 # Changelog — Codebase Memory V2
 
+## 0.19.0 — Round 81 (2026-07-08) Migration + Incremental Atomicity + Stats Fix
+
+**7th audit round (GPT 5.5 external audit R80).** 5 bugs fixed. R80 was a
+good correctness lock but had 3 P0 gaps: missing schema migration, non-atomic
+single-thread incremental, and false project stats after incremental. R81
+closes these gaps and adds versioned tests.
+
+### Bugs fixed (5, from GPT 5.5 R80 audit)
+
+15. **Missing migration for `file_hashes` UNIQUE change** (`schema.ts`) — R80 changed `UNIQUE(file_path)` to `UNIQUE(project, file_path)` but `CREATE TABLE IF NOT EXISTS` doesn't migrate existing tables. Old DBs keep the old constraint, causing `ON CONFLICT(project, file_path)` to fail with "does not match any constraint". Fixed: `migrateFileHashesSchema()` detects old schema via `sqlite_master.sql`, rebuilds the table with dedup by `(project, file_path)`, all in a transaction.
+
+16. **Incremental single-thread non-atomic** (`wasm-extractor.ts`) — Old nodes/edges for changed files were DELETEd in Phase 1 (before parse). If parse/extract failed, the old graph was lost. Fixed: collect `changedRelPaths` in Phase 1, do all deletes INSIDE the transaction in Phase 2 (after parse succeeds). Also fixed empty-file vs read-failure confusion using `fileContents.has()` instead of `?? ''`.
+
+17. **Main thread preloads grammars even in parallel mode** (`indexer.ts`) — `preloadGrammars()` ran before `useParallel` was computed. In parallel mode, workers load their own grammars, so the main thread preload was wasted work (~50ms on LARGE). Fixed: compute `useParallel` first, only preload if `!useParallel`.
+
+18. **`projects.node_count/edge_count` false after incremental** (`indexer.ts`) — `updateProjectStats()` used `result.nodes/edges` (run counts), not DB totals. A no-op incremental would set `node_count=0`. Fixed: compute actual totals from DB with `SELECT COUNT(*)` after each run.
+
+19. **Non-deterministic ordering in parallel mode** (`indexer.ts`) — Workers pushed results in completion order, so node IDs varied between runs. Fixed: sort `results` by language then first file path, sort inner `batchResult.results` by `filePath`. IDs are now deterministic.
+
+### Tests added (6 new, versioned in repo)
+
+New file: `v2/tests/indexer/r81-correctness.test.ts`
+
+- `migrates pre-R80 schema to UNIQUE(project, file_path)` — creates old schema DB, runs migration, verifies two projects with same `file_path` coexist
+- `does not migrate if schema is already correct` — idempotency check
+- `keeps project stats equal to actual DB totals after no-op incremental` — Bug 18 regression test
+- `sorts results by language then file path` — Bug 19 determinism test
+- `no orphan edges after full index simulation` — invariant check
+- `two projects with same file_path have isolated file_hashes` — multi-project isolation
+
+### Verification
+
+```
+Test Files  33 passed (33)
+     Tests  361 passed (361)
+```
+
+(355 existing + 6 new R81 tests)
+
+### Files
+
+- Modified: `v2/src/indexer/schema.ts` (Bug 15: migration `migrateFileHashesSchema`)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (Bug 16: atomic incremental, empty-file fix)
+- Modified: `v2/src/indexer/indexer.ts` (Bug 17: skip preload in parallel; Bug 18: DB totals for stats; Bug 19: deterministic sort)
+- New: `v2/tests/indexer/r81-correctness.test.ts` (6 versioned tests)
+
+### Total bugs fixed across 7 audit rounds: 19
+
+| Round | Bugs |
+|---|---|
+| R78 (1-4) | 8 bugs |
+| R79 (5) | 1 bug |
+| R80 (6) | 5 bugs |
+| R81 (7) | 5 bugs (migration, atomicity, preload, stats, determinism) |
+
+### Next steps
+
+1. **Make benchmark portable** — remove hardcoded `/home/z/my-project/` paths (P1-6 from audit)
+2. **Add incremental benchmark scenarios** — noop, one-file-change, 10% change (P1-6)
+3. **mtime+size fast skip** — avoid hashing unchanged files (perf P1 from audit)
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode (perf P4.3)
+
 ## 0.18.0 — Round 80 (2026-07-08) Correctness Lock — 5 P0 bugs fixed
 
 **6th audit round (GPT 5.5 external audit).** 5 critical correctness bugs
