@@ -1,5 +1,63 @@
 # Changelog — Codebase Memory V2
 
+## 0.30.0 — Round 92 (2026-07-08) Real Failure Injection + Benchmark Portability
+
+**18th round (GPT 5.5 external audit R91B).** 0 new bugs — this round closes
+the last two items from the GPT 5.5 audit: real failure injection tests
+(the "biggest hole" identified since R87) and benchmark portability fix.
+
+### Improvements (2, from GPT 5.5 R91B audit)
+
+1. **`CBM_TEST_FAIL_ON_FILE` failure injection** (`wasm-extractor.ts` + `worker.ts`) — Added a test-only env var that throws an error when the indexer processes a specific file. Placed just before `extractFast()` in both single-thread and worker paths. Only active when the env var is set (production code is unaffected). This enables real runtime failure tests instead of SQL simulations.
+
+2. **Benchmark uses `spawnSync` instead of `execSync(args.join(' '))`** (`incremental-benchmark-r87.ts`) — The old `execSync` was fragile: paths with spaces, shell injection risk, Windows incompatibility. Now uses `spawnSync(process.execPath, args, ...)` which passes arguments directly without shell interpretation.
+
+### Tests added (3 new, real runtime injection)
+
+New file: `v2/tests/indexer/r92-real-failure-injection.test.ts`
+
+- **`single-thread: full index succeeds, then incremental with injected failure preserves old graph`** — Calls `indexProjectWasm()` with `CBM_TEST_FAIL_ON_FILE=a.ts`. Verifies: error reported, old nodes preserved, old hash not updated, orphan_edges=0. This is a **real runtime test**, not a simulation.
+- **`single-thread: incremental without --allow-partial reports errors`** — Verifies the error is surfaced in `result.errors`.
+- **`single-thread: after failure, retry without injection succeeds and updates graph`** — Verifies the system self-heals: after a failed incremental, retrying without the failure injection re-indexes the file correctly.
+
+### Verification
+
+```
+Test Files  36 passed (36)
+     Tests  377 passed (377)
+```
+
+(374 existing + 3 new real failure injection tests)
+
+Smoke benchmark: all 9 invariants pass (with spawnSync).
+
+### Files
+
+- Modified: `v2/src/indexer/wasm-extractor.ts` (CBM_TEST_FAIL_ON_FILE injection point)
+- Modified: `v2/src/indexer/worker.ts` (CBM_TEST_FAIL_ON_FILE injection point)
+- Modified: `v2/scripts/incremental-benchmark-r87.ts` (spawnSync instead of execSync)
+- New: `v2/tests/indexer/r92-real-failure-injection.test.ts` (3 real failure tests)
+- Modified: `v2/package.json` (version 0.30.0)
+
+### Total: 32 bugs + 10 optimizations + 22 tests across 18 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78-R82 (1-4) | bugs | 23 |
+| R83-R84 (9-10) | optimizations + bugs | 3 opt + 2 bugs + portability |
+| R85-R86 (11-12) | bugs | 4 + 6 tests |
+| R87 (13) | tests + benchmark | 7 failure tests + incremental benchmark |
+| R88-R89 (14-15) | bugs + benchmark | 2 bugs + CI lock |
+| R90 (16) | optimizations | smoke mode + parallel assertion + prepared statements + CI wiring |
+| R91 (17) | bug + benchmark + docs | 1 (legacy mtime_ns NULL) + exitCode lock + 3 docs cleanup |
+| R92 (18) | tests + portability | 3 real failure injection tests + spawnSync |
+
+### Next steps
+
+1. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds. This is the #1 remaining functional gap.
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Benchmark cold vs warm process** — separate CLI cold from persistent process
+
 ## 0.29.0 — Round 91 (2026-07-08) ExitCode Lock + Legacy mtime_ns Backfill + Docs
 
 **17th round (GPT 5.5 external audit R91).** 1 bug fixed + benchmark hardening
