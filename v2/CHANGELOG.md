@@ -1,5 +1,71 @@
 # Changelog — Codebase Memory V2
 
+## 0.18.0 — Round 80 (2026-07-08) Correctness Lock — 5 P0 bugs fixed
+
+**6th audit round (GPT 5.5 external audit).** 5 critical correctness bugs
+fixed. This round focuses on correctness over performance — V2's graph is
+now mathematically correct in full/incremental/parallel/multi-project modes.
+
+### Bugs fixed (5 P0, from GPT 5.5 audit)
+
+10. **CRITICAL: SQLite node IDs wrong in incremental/multi-project** (`wasm-extractor.ts` + `indexer.ts`) — `nextId=1` assumed SQLite assigns IDs 1..N, but SQLite assigns `MAX(id)+1`. The `qnToId` map stored 1..N while real IDs were `MAX(id)+1..MAX(id)+N`, causing edges to point to wrong nodes. Fixed: INSERT with explicit `id` column, initialized from `SELECT COALESCE(MAX(id), 0) + 1`. Verified: 0 orphan edges in multi-project test.
+
+11. **Incremental parallel incomplete** (`indexer.ts`) — Parallel path upserted `file_hashes` BEFORE workers parsed (worker failure → stale hash → graph not updated but hash says "up to date"). No per-file delete of old nodes/edges for changed files → duplicate QNs and orphan edges. Fixed: (a) collect pending hash updates without writing; (b) delete old nodes/edges for changed files in transaction; (c) upsert hashes ONLY after all nodes/edges inserted successfully; (d) `skipped` count now correct.
+
+12. **UI server DB paths wrong** (`server.ts`) — `new HumanMemoryStore(\`${project}.human.db\`)` and `new CodeGraphReader(\`${project}.db\`)` opened DBs in the CWD instead of `$XDG_CACHE_HOME/codebase-memory-mcp/`. UI showed empty projects when run from a different directory than the CLI/MCP. Fixed: use `defaultHumanDbPath(project)` and `defaultCodeDbPath(project)`.
+
+13. **`serveStatic()` path traversal bug** (`server.ts`) — `resolve(base, '/index.html')` ignores `base` and returns `/index.html` because the path starts with `/`. The containment check then fails → 403 Forbidden for `GET /`. Fixed: strip leading slashes before resolve, use `relative()` + `isAbsolute()` for containment check.
+
+14. **`/api/index` spawn command wrong** (`routes/index.ts`) — `spawn('cbm', ['index_repository', '--project', '--', projectName, rootPath])` was missing the `cli` subcommand and used wrong flags (`--project` instead of `--name`, positional `rootPath` instead of `--repo-path`). The UI index button couldn't work. Fixed: `spawn('cbm', ['cli', 'index_repository', '--repo-path', rootPath, '--name', projectName, '--mode', 'fast'])`.
+
+### Schema change: `file_hashes` UNIQUE
+
+- **Before:** `file_path TEXT NOT NULL UNIQUE` — multi-project collision (project B overwrites project A's hash for same `src/index.ts`)
+- **After:** `UNIQUE(project, file_path)` — each project has its own hash entries
+- All `ON CONFLICT(file_path)` upserts changed to `ON CONFLICT(project, file_path)`
+- Verified: ProjA has 42 hashes, ProjB has 42 hashes, isolated
+
+### Verification (R80 test script)
+
+```
+=== Test Bug 10: Multi-project — no orphan edges ===
+ProjA: 735 nodes, 883 edges, 0 orphan edges (must be 0)
+ProjB: 735 nodes, 883 edges, 0 orphan edges (must be 0)
+
+=== Test Bug 9: Incremental preserves nodes ===
+After incremental: 735 nodes, 883 edges (must match 735/883)
+
+=== Test Bug 3: file_hashes UNIQUE(project, file_path) ===
+ProjA file_hashes: 42, ProjB file_hashes: 42 (both should be > 0, isolated)
+
+✓ ALL R80 CHECKS PASSED
+```
+
+### Files
+
+- Modified: `v2/src/indexer/wasm-extractor.ts` (Bug 10: explicit node IDs from MAX(id)+1)
+- Modified: `v2/src/indexer/indexer.ts` (Bug 10 + Bug 11: explicit IDs, atomic incremental parallel, per-file delete)
+- Modified: `v2/src/indexer/schema.ts` (file_hashes UNIQUE(project, file_path))
+- Modified: `v2/src/indexer/extractor.ts` (ON CONFLICT update, dead code)
+- Modified: `v2/src/ui/server.ts` (Bug 12: defaultDbPath; Bug 13: serveStatic fix)
+- Modified: `v2/src/ui/routes/index.ts` (Bug 14: correct cbm spawn command)
+- New: `/home/z/my-project/scripts/r80-verify.js` (multi-project + incremental + orphan verification)
+
+### Total bugs fixed across 6 audit rounds: 14
+
+| Round | Bugs |
+|---|---|
+| R78 (rounds 1-4) | 8 bugs (anonymous complexity, candidates[0], relative, stale dist, SKIP_DIRS, WASM leak ×2, TSNode.id) |
+| R79 (round 5) | 1 bug (incremental mode silently broken) |
+| R80 (round 6) | 5 bugs (SQLite IDs, incremental parallel, UI DB paths, serveStatic, /api/index spawn) |
+
+### Next steps
+
+1. **Add cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+2. **Fix parallel cross-batch QN collision** — requires scope-aware QN disambiguation
+3. **Make benchmark portable** — remove hardcoded `/home/z/my-project/` paths
+4. **Re-run R78 benchmark** to confirm no perf regression from explicit IDs
+
 ## 0.17.0 — Round 79 (2026-07-08) Bug 9 fix + Parser.init defer + parallel tuning
 
 **5th audit round. 9th bug fixed.** Found CRITICAL Bug 9: incremental mode

@@ -12,9 +12,9 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve, extname, sep } from "node:path";
-import { HumanMemoryStore } from '../human/store.js';
-import { CodeGraphReader } from '../bridge/sqlite-ro.js';
+import { resolve, extname, relative, isAbsolute } from "node:path";
+import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
+import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { getNotifyHub } from './notify-hub.js';
 import { DEFAULT_PORT, LOG_BUFFER_MAX, MIME_TYPES, sendJson } from './helpers.js';
 import type { RouteContext, RouteHandler, IndexJob } from './types.js';
@@ -73,13 +73,15 @@ export class UiServer {
     this.port = opts.port ?? DEFAULT_PORT;
     this.project = opts.project;
     this.graphUiPath = opts.graphUiPath ?? resolve(process.cwd(), '..', 'graph-ui', 'dist');
-    this.humanStore = new HumanMemoryStore(`${this.project}.human.db`);
+    this.humanStore = new HumanMemoryStore(defaultHumanDbPath(this.project));
     this.humanStore.attachNotifyHub(getNotifyHub(), this.project);
     // Try to open the code graph reader. If the DB doesn't exist (project
     // not yet indexed), codeReader stays undefined — routes that need it
     // return 404 'Code graph not available'.
+    // R80: Bug 12 fix — use defaultCodeDbPath (XDG_CACHE_HOME) instead of
+    // relative `${project}.db` which opened DBs in the CWD.
     try {
-      this.codeReader = new CodeGraphReader(`${this.project}.db`);
+      this.codeReader = new CodeGraphReader(defaultCodeDbPath(this.project));
     } catch {
       this.codeReader = undefined;
     }
@@ -271,9 +273,15 @@ export class UiServer {
   }
 
   private serveStatic(path: string, res: ServerResponse): void {
-    const filePath = resolve(this.graphUiPath, path === '/' ? 'index.html' : path);
+    // R80: Bug 13 fix — resolve() ignores the base path when the second arg
+    // starts with '/'. So resolve(base, '/index.html') returns '/index.html',
+    // not base/index.html. Strip leading slashes first, then resolve.
+    const normalized = path === '/' ? 'index.html' : path.replace(/^\/+/, '');
+    const root = resolve(this.graphUiPath);
+    const filePath = resolve(root, normalized);
     // Defense-in-depth: verify the resolved path stays within the graphUiPath.
-    if (!filePath.startsWith(resolve(this.graphUiPath) + sep)) {
+    const rel = relative(root, filePath);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
       sendJson(res, 403, { error: "Forbidden" });
       return;
     }

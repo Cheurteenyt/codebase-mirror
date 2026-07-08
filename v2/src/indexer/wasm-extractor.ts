@@ -225,14 +225,17 @@ export async function extractFromFilesWasm(
   await ensureParserInitialized();
   const parser = new Parser();
   const qnToId = new Map<string, number>();
-  const nextId = { value: 1 };
-  const nextEdgeId = { value: 1 };
+  // R80: Bug 10 fix — nextId is now initialized from MAX(id) in the transaction,
+  // not hardcoded to 1. Previously, incremental mode and multi-project would
+  // produce wrong edge IDs because SQLite assigns MAX(id)+1 to auto-increment
+  // INSERTs, not 1..N. The qnToId map stored 1..N while the real IDs were
+  // MAX(id)+1..MAX(id)+N, causing edges to point to wrong nodes.
 
   // R75: prepared statements replaced by batch INSERT in Phase 2
   const upsertFileHash = db.prepare(`
     INSERT INTO file_hashes (project, file_path, content_hash, mtime, indexed_at)
     VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(file_path) DO UPDATE SET
+    ON CONFLICT(project, file_path) DO UPDATE SET
       content_hash = excluded.content_hash, mtime = excluded.mtime, indexed_at = excluded.indexed_at
   `);
 
@@ -374,6 +377,13 @@ export async function extractFromFilesWasm(
   const BATCH_SIZE = 50;
 
   const tx = db.transaction(() => {
+    // R80: Bug 10 fix — get the real MAX(id) from the nodes table so we can
+    // assign explicit IDs that match what SQLite will actually use.
+    const maxNodeRow = db.prepare('SELECT COALESCE(MAX(id), 0) AS max_id FROM nodes').get() as { max_id: number };
+    let nextNodeId = maxNodeRow.max_id + 1;
+    const maxEdgeRow = db.prepare('SELECT COALESCE(MAX(id), 0) AS max_id FROM edges').get() as { max_id: number };
+    let nextEdgeId = maxEdgeRow.max_id + 1;
+
     // Update file hashes (incremental mode)
     for (const h of pendingHashUpdates) {
       upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.indexedAt);
@@ -387,13 +397,13 @@ export async function extractFromFilesWasm(
 
     for (let i = 0; i < allNodes.length; i += BATCH_SIZE) {
       const batch = allNodes.slice(i, i + BATCH_SIZE);
-      // Build multi-row INSERT: INSERT INTO nodes VALUES (?,?,?,?,...),(?,?,?,?),...
-      const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
-      const stmt = db.prepare(`INSERT INTO nodes (project, label, name, qualified_name, file_path, start_line, end_line, properties_json) VALUES ${placeholders}`);
+      // R80: Bug 10 fix — INSERT with explicit id column so qnToId matches reality.
+      const placeholders = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+      const stmt = db.prepare(`INSERT INTO nodes (id, project, label, name, qualified_name, file_path, start_line, end_line, properties_json) VALUES ${placeholders}`);
       const params: unknown[] = [];
       for (const node of batch) {
-        const nodeId = nextId.value++;
-        params.push(project, node.label, node.name, node.qualifiedName, node.filePath, node.startLine, node.endLine, node.properties);
+        const nodeId = nextNodeId++;
+        params.push(nodeId, project, node.label, node.name, node.qualifiedName, node.filePath, node.startLine, node.endLine, node.properties);
         qnToId.set(node.qualifiedName, nodeId);
         result.nodes++;
       }
@@ -419,7 +429,7 @@ export async function extractFromFilesWasm(
       const params: unknown[] = [];
       for (const edge of batch) {
         params.push(project, parseInt(edge.sourceQn), parseInt(edge.targetQn), edge.type, edge.properties);
-        nextEdgeId.value++;
+        nextEdgeId++;
         result.edges++;
       }
       stmt.run(...params);

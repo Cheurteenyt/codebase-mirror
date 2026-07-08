@@ -68,9 +68,12 @@ export async function routeIndex(
   ctx.log(`Index job started: id=${jobId} project="${projectName}" root="${rootPath}"`);
 
   try {
-    // R44 (B1): insert '--' before projectName so the V1 cbm binary treats
-    // it as a positional argument, not a flag — defense-in-depth.
-    const child = spawn('cbm', ['index_repository', '--project', '--', projectName, rootPath], {
+    // R80: Bug 14 fix — align with the V1 command format used in benchmarks
+    // and CLI reference: `cbm cli index_repository --repo-path <root> --name <project> --mode fast`.
+    // The old command `cbm index_repository --project -- <name> <root>` was
+    // missing the `cli` subcommand and used wrong flags (--project instead of
+    // --name, positional rootPath instead of --repo-path).
+    const child = spawn('cbm', ['cli', 'index_repository', '--repo-path', rootPath, '--name', projectName, '--mode', 'fast'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
     });

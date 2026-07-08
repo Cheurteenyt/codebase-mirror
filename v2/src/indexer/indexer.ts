@@ -164,11 +164,16 @@ async function indexParallel(
   // Build batches: group files by language, then split into worker-sized chunks
   const batches: WorkerBatch[] = [];
   const languages = new Set<string>();
+  // R80: Bug 11 fix — collect pending hash updates and changed paths here,
+  // write them atomically in the transaction AFTER workers succeed.
+  const allPendingChangedRelPaths: string[] = [];
+  const allPendingHashUpdates: Array<{ relPath: string; hash: string; mtime: number; indexedAt: string }> = [];
+  let totalSkipped = 0;
 
   for (const [lang, langFiles] of langGroups) {
     languages.add(lang);
-    // Skip unchanged files for incremental mode
     const filesToIndex: string[] = [];
+
     for (const f of langFiles) {
       if (incremental) {
         const relPath = nodeRelative(rootPath, f);
@@ -178,14 +183,12 @@ async function indexParallel(
         const existing = db.prepare(
           'SELECT content_hash FROM file_hashes WHERE project = ? AND file_path = ?'
         ).get(project, relPath) as { content_hash: string } | undefined;
-        if (existing && existing.content_hash === hash) continue;
-        // Update hash
-        db.prepare(`
-          INSERT INTO file_hashes (project, file_path, content_hash, mtime, indexed_at)
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(file_path) DO UPDATE SET
-            content_hash = excluded.content_hash, mtime = excluded.mtime, indexed_at = excluded.indexed_at
-        `).run(project, relPath, hash, Math.floor(stat.mtimeMs), new Date().toISOString());
+        if (existing && existing.content_hash === hash) {
+          totalSkipped++;
+          continue;
+        }
+        allPendingChangedRelPaths.push(relPath);
+        allPendingHashUpdates.push({ relPath, hash, mtime: Math.floor(stat.mtimeMs), indexedAt: new Date().toISOString() });
       }
       filesToIndex.push(f);
     }
@@ -203,7 +206,7 @@ async function indexParallel(
   }
 
   if (batches.length === 0) {
-    return { nodes: 0, edges: 0, files: 0, skipped: 0, errors: [], languages };
+    return { nodes: 0, edges: 0, files: 0, skipped: totalSkipped, errors: [], languages };
   }
 
   // Dispatch batches to workers
@@ -240,15 +243,16 @@ async function indexParallel(
   let nodeCount = 0;
   let edgeCount = 0;
   let fileCount = 0;
-  let nextNodeId = 1;
-  let nextEdgeId = 1;
 
   // Build a global QN→ID map for edge resolution
   const qnToId = new Map<string, number>();
 
+  // R80: Bug 10 fix — INSERT with explicit id. The old code used
+  // nextNodeId=1 and relied on SQLite auto-assigning 1..N, which only works
+  // on an empty table. In incremental/multi-project, real IDs are MAX(id)+1.
   const insertNode = db.prepare(`
-    INSERT INTO nodes (project, label, name, qualified_name, file_path, start_line, end_line, properties_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO nodes (id, project, label, name, qualified_name, file_path, start_line, end_line, properties_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertEdge = db.prepare(`
     INSERT INTO edges (project, source_id, target_id, type, properties_json)
@@ -256,6 +260,31 @@ async function indexParallel(
   `);
 
   const tx = db.transaction(() => {
+    // R80: Bug 11 fix — for incremental mode, delete old nodes/edges for changed
+    // files BEFORE inserting new ones. This prevents duplicate QNs and orphan edges.
+    if (incremental && allPendingChangedRelPaths.length > 0) {
+      // Delete edges that reference nodes from changed files
+      const ph = allPendingChangedRelPaths.map(() => '?').join(',');
+      const oldNodeIds = db.prepare(
+        `SELECT id FROM nodes WHERE project = ? AND file_path IN (${ph})`
+      ).all(project, ...allPendingChangedRelPaths) as Array<{ id: number }>;
+      if (oldNodeIds.length > 0) {
+        const idPh = oldNodeIds.map(() => '?').join(',');
+        const idParams = oldNodeIds.map(r => r.id);
+        db.prepare(
+          `DELETE FROM edges WHERE project = ? AND (source_id IN (${idPh}) OR target_id IN (${idPh}))`
+        ).run(project, ...idParams, ...idParams);
+      }
+      // Delete old nodes for changed files
+      db.prepare(
+        `DELETE FROM nodes WHERE project = ? AND file_path IN (${ph})`
+      ).run(project, ...allPendingChangedRelPaths);
+    }
+
+    // R80: Bug 10 fix — get real MAX(id) so explicit IDs match SQLite reality.
+    const maxNodeRow = db.prepare('SELECT COALESCE(MAX(id), 0) AS max_id FROM nodes').get() as { max_id: number };
+    let nextNodeId = maxNodeRow.max_id + 1;
+
     // First pass: insert all nodes and build QN→ID map
     for (const batchResult of results) {
       for (const fileResult of batchResult.results) {
@@ -267,7 +296,7 @@ async function indexParallel(
         for (const node of fileResult.nodes) {
           const nodeId = nextNodeId++;
           insertNode.run(
-            project, node.label, node.name, node.qualifiedName, node.filePath,
+            nodeId, project, node.label, node.name, node.qualifiedName, node.filePath,
             node.startLine, node.endLine, node.properties
           );
           qnToId.set(node.qualifiedName, nodeId);
@@ -287,16 +316,27 @@ async function indexParallel(
           const targetId = qnToId.get(edge.targetQn);
           if (sourceId && targetId) {
             insertEdge.run(project, sourceId, targetId, edge.type, edge.properties);
-            nextEdgeId++;
             edgeCount++;
           }
         }
       }
     }
+
+    // R80: Bug 11 fix — upsert file hashes ONLY after all nodes/edges are
+    // successfully inserted. If the transaction rolls back, hashes stay stale
+    // (correct behavior — next run will re-index).
+    for (const h of allPendingHashUpdates) {
+      db.prepare(`
+        INSERT INTO file_hashes (project, file_path, content_hash, mtime, indexed_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(project, file_path) DO UPDATE SET
+          content_hash = excluded.content_hash, mtime = excluded.mtime, indexed_at = excluded.indexed_at
+      `).run(project, h.relPath, h.hash, h.mtime, h.indexedAt);
+    }
   });
   tx();
 
-  return { nodes: nodeCount, edges: edgeCount, files: fileCount, skipped: 0, errors, languages };
+  return { nodes: nodeCount, edges: edgeCount, files: fileCount, skipped: totalSkipped, errors, languages };
 }
 
 /**

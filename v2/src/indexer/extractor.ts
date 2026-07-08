@@ -146,7 +146,7 @@ export function extractFromFiles(
   const upsertFileHash = db.prepare(`
     INSERT INTO file_hashes (project, file_path, content_hash, mtime, indexed_at)
     VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(file_path) DO UPDATE SET
+    ON CONFLICT(project, file_path) DO UPDATE SET
       content_hash = excluded.content_hash,
       mtime = excluded.mtime,
       indexed_at = excluded.indexed_at

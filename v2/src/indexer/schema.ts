@@ -38,10 +38,11 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS file_hashes (
     id INTEGER PRIMARY KEY,
     project TEXT NOT NULL,
-    file_path TEXT NOT NULL UNIQUE,
+    file_path TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     mtime INTEGER NOT NULL,
-    indexed_at TEXT NOT NULL
+    indexed_at TEXT NOT NULL,
+    UNIQUE(project, file_path)
   );
 
   CREATE TABLE IF NOT EXISTS projects (
