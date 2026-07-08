@@ -1,5 +1,90 @@
 # Changelog — Codebase Memory V2
 
+## 0.25.0 — Round 87 (2026-07-08) Incremental Failure Tests + Benchmark
+
+**13th round (GPT 5.5 external audit R86).** 0 new bugs — this round adds the
+missing tests d'échec réel and incremental benchmark with correctness invariants
+that were pending since R82. All P1/P2 items from the R86 audit are now closed.
+
+### Tests added (7 new, versioned)
+
+New file: `v2/tests/indexer/r87-incremental-failure.test.ts`
+
+- `extractFast failure preserves old graph and hash` — Bug 20 regression test
+- `parallel worker failure preserves old graph and hash` — Bug 21 regression test
+- `CLI exit non-zero on errors without --allow-partial` — Bug 22 regression test
+- `CLI exit 0 with --allow-partial` — Bug 22 regression test
+- `CLI exit 0 when no errors` — Bug 22 regression test
+- `metadata-only updates safe even if other files fail` — Bug 24/25 atomicity test
+- `no orphan edges when some files fail` — invariant test
+
+### Incremental benchmark with invariants
+
+New file: `v2/scripts/incremental-benchmark-r87.ts`
+
+Scenarios measured:
+1. `full-cold` — baseline full index
+2. `incremental-noop` — nothing changed, all should skip
+3. `incremental-metadata-only` — mtime changed, content same
+4. `incremental-1-file` — 1 file content changed
+5. `incremental-10pct` — 10% of files changed
+
+Invariants checked after each run:
+- `orphan_edges = 0`
+- `projects.node_count == COUNT(nodes)` and `projects.edge_count == COUNT(edges)`
+- No duplicate `(project, qualified_name)`
+- `file_hashes` count matches indexed files
+
+Results (20-file test project):
+```
+Scenario                     Wall   Idx   Skp  Nodes  Edges  Orph  DupQN  Hash  StatOK
+full-cold                    312ms    20     0     60     40     0      0    20    true
+incremental-noop             229ms     0    20     60     40     0      0    20    true
+incremental-metadata-only    230ms     0    20     60     40     0      0    20    true
+incremental-1-file           237ms     1    19     60     40     0      0    20    true
+incremental-10pct            234ms     2    18     60     40     0      0    20    true
+
+✓ All invariants pass: orphan_edges=0, stats match, no duplicate QNs
+✓ No-op incremental: 0 indexed, 20 skipped
+✓ Metadata-only: nodes preserved (60)
+```
+
+### Verification
+
+```
+Test Files  35 passed (35)
+     Tests  374 passed (374)
+```
+
+(367 existing + 7 new R87 tests)
+
+### Files
+
+- New: `v2/tests/indexer/r87-incremental-failure.test.ts` (7 versioned tests)
+- New: `v2/scripts/incremental-benchmark-r87.ts` (incremental benchmark with invariants)
+- Modified: `v2/package.json` (version 0.25.0)
+
+### Total: 29 bugs + 6 optimizations + 19 tests across 13 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78 (1-4) | bugs | 8 |
+| R79 (5) | bugs | 1 |
+| R80 (6) | bugs | 5 |
+| R81 (7) | bugs | 5 |
+| R82 (8) | bugs | 4 |
+| R83 (9) | optimizations | 3 + portability |
+| R84 (10) | bugs | 2 + docs sync |
+| R85 (11) | bugs | 2 (mtimeNs, no-pre-read) + 6 tests + docs sync |
+| R86 (12) | bugs | 2 (parallel hash persistence, threshold fix) |
+| R87 (13) | tests + benchmark | 7 failure tests + incremental benchmark with invariants |
+
+### Next steps
+
+1. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Benchmark cold vs warm process** — separate CLI cold from persistent process
+
 ## 0.24.0 — Round 86 (2026-07-08) Parallel Hash Persistence + Threshold Fix
 
 **12th round (GPT 5.5 external audit R85).** 2 bugs fixed. R85 fixed mtimeNs
