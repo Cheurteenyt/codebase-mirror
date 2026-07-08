@@ -140,6 +140,31 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // R86: Bug 28 fix — use estimatedFilesToIndex, not files.length
   const useParallel = numWorkers > 1 && estimatedFilesToIndex > 20;
 
+  // R89: Bug 31 fix — early return for no-op incremental. If estimatedFilesToIndex
+  // is 0, no files need parsing. Skip the entire extraction phase and just update
+  // project stats. This avoids the double stat+DB pass (estimation + extraction).
+  if (opts.incremental && estimatedFilesToIndex === 0) {
+    const totals = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
+        (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
+    `).get(opts.project, opts.project) as { nodes: number; edges: number };
+    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges);
+    db.close();
+    return {
+      dbPath,
+      durationMs: Date.now() - start,
+      nodes: 0,
+      edges: 0,
+      files: 0,
+      skipped: files.length,
+      errors: [],
+      languages: allLangs,
+      parallel: false,
+      workerCount: 0,
+    };
+  }
+
   if (!useParallel) {
     // Single-thread: main thread needs the grammars
     await preloadGrammars(allLangs);
