@@ -1,6 +1,13 @@
 // v2/src/indexer/extractor.ts
 // R68: TypeScript/JavaScript code extractor using ts-morph.
 //
+// ⚠️ DEPRECATED (R69): Replaced by wasm-extractor.ts (WASM tree-sitter, 112 languages).
+// This file is kept for historical reference only. It is NOT imported by any
+// module. Its SKIP_DIRS does not match V1's FAST_SKIP_DIRS and would cause
+// unfair file-count comparisons if used.
+//
+// To remove: delete this file and its test (if any). Safe to remove — no imports.
+//
 // Extracts nodes (Function, Method, Class, Module, File) and edges
 // (CALLS, IMPORTS, CONTAINS) from .ts/.tsx/.js files. Writes to a
 // SQLite DB compatible with V1's schema.
