@@ -504,6 +504,53 @@ async function indexParallel(
     for (const h of allMetadataOnlyHashUpdates) {
       upsertHash.run(project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
     }
+
+    // R98: Cross-file CALLS resolution — Phase 3 (parallel path)
+    // Build global symbol index from all successfully inserted nodes
+    const globalSymbolIndex = new Map<string, string[]>();
+    for (const batchResult of results) {
+      for (const fileResult of batchResult.results) {
+        if (fileResult.error) continue;
+        for (const node of fileResult.nodes) {
+          if (node.name.startsWith('anonymous#')) continue;
+          const existing = globalSymbolIndex.get(node.name);
+          if (existing) existing.push(node.qualifiedName);
+          else globalSymbolIndex.set(node.name, [node.qualifiedName]);
+        }
+      }
+    }
+
+    // Resolve unresolved call-sites from workers
+    const crossFileEdges: Array<{ sourceId: number; targetId: number; type: string; properties: string }> = [];
+    for (const batchResult of results) {
+      for (const fileResult of batchResult.results) {
+        if (fileResult.error || !fileResult.unresolvedCalls) continue;
+        for (const call of fileResult.unresolvedCalls) {
+          const candidates = globalSymbolIndex.get(call.calleeName) || globalSymbolIndex.get(call.lastSegment);
+          if (!candidates || candidates.length === 0) continue;
+          const capped = candidates.slice(0, 5);
+          const confidence = capped.length === 1 ? 1.0 : (1.0 / capped.length);
+          for (let ci = 0; ci < capped.length; ci++) {
+            if (capped[ci] === call.sourceQn) continue;
+            const sourceId = qnToId.get(call.sourceQn);
+            const targetId = qnToId.get(capped[ci]);
+            if (sourceId && targetId) {
+              const resolution = capped.length === 1 ? 'cross_file_exact' : 'cross_file_ambiguous';
+              crossFileEdges.push({
+                sourceId, targetId, type: 'CALLS',
+                properties: '{"callee":"' + call.calleeName + '","inferred":true,"resolution":"' + resolution + '","confidence":' + confidence.toFixed(2) + ',"candidate_count":' + capped.length + ',"candidate_index":' + ci + '}',
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Insert cross-file CALLS edges
+    for (const edge of crossFileEdges) {
+      insertEdge.run(project, edge.sourceId, edge.targetId, edge.type, edge.properties);
+      edgeCount++;
+    }
   });
   tx();
 
