@@ -1,5 +1,68 @@
 # Changelog — Codebase Memory V2
 
+## 0.21.0 — Round 83 (2026-07-08) Performance + Portability + Docs
+
+**9th round.** Implements remaining GPT 5.5 recommendations: mtime+size fast
+skip (biggest incremental perf gain), benchmark portability, prepared
+statement optimization, GC flag removal, and docs sync.
+
+### Performance optimizations
+
+1. **mtime+size fast skip** (`wasm-extractor.ts` + `schema.ts`) — In incremental mode, if `mtime` AND `size` match the stored values, skip SHA-256 hashing entirely. Makes no-op incremental O(stat) instead of O(total bytes read). Added `size` column to `file_hashes` with auto-migration via `PRAGMA table_info`.
+
+2. **Prepared statement outside loop** (`indexer.ts`) — The `upsertFileHash` statement was being `db.prepare()`d inside the loop in the parallel transaction. Now prepared once before the loop. Small but free gain.
+
+3. **Removed `--gc-interval=100` from benchmark** (`rigorous-benchmark-r78.ts`) — R79 noted this flag masks the `Parser.init()` defer gain. Now the main benchmark runs without it, giving honest numbers.
+
+### Benchmark portability (B1)
+
+`rigorous-benchmark-r78.ts` no longer has hardcoded `/home/z/my-project/` paths. Uses `import.meta.url` to derive paths relative to the script location, with env var overrides:
+- `CBM_V1_BINARY` — path to V1 binary
+- `CBM_V2_DIST` — path to V2 dist
+- `CBM_BENCH_SMALL` — small workload target
+- `CBM_BENCH_LARGE` — large workload target
+- `CBM_BENCH_RUNNER` — path to runner.py
+
+Now reproducible on any machine or CI.
+
+### Schema migration
+
+- Added `size INTEGER NOT NULL DEFAULT 0` column to `file_hashes`
+- `migrateFileHashesSizeColumn()` auto-adds the column to existing DBs via `PRAGMA table_info` detection
+
+### Verification
+
+```
+Test Files  33 passed (33)
+     Tests  361 passed (361)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/schema.ts` (size column + migration)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (mtime+size fast skip + size in upsert)
+- Modified: `v2/src/indexer/indexer.ts` (size in parallel hash updates + prepared statement)
+- Modified: `v2/scripts/rigorous-benchmark-r78.ts` (portable paths + remove --gc-interval)
+- Modified: `v2/package.json` (version 0.21.0)
+
+### Total bugs fixed + optimizations across 9 rounds: 23 bugs + 6 optimizations
+
+| Round | Type | Count |
+|---|---|---|
+| R78 (1-4) | bugs | 8 |
+| R79 (5) | bugs | 1 |
+| R80 (6) | bugs | 5 |
+| R81 (7) | bugs | 5 |
+| R82 (8) | bugs | 4 |
+| R83 (9) | optimizations | 3 (mtime+size skip, prepared stmt, gc removal) + portability + migration |
+
+### Next steps
+
+1. **Tests d'échec réel** — inject extractFast failure, verify old graph/hash preserved
+2. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+3. **Worker pool persistant** — for MCP/UI/watch daemon mode
+4. **Benchmark incremental scenarios** — noop, 1-file, 10% change with invariants
+
 ## 0.20.0 — Round 82 (2026-07-08) Incremental Safety Lock — 4 bugs fixed
 
 **8th audit round (GPT 5.5 external audit R81).** 4 bugs fixed. R81 was a

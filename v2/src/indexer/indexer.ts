@@ -175,7 +175,7 @@ async function indexParallel(
   // R80: Bug 11 fix — collect pending hash updates and changed paths here,
   // write them atomically in the transaction AFTER workers succeed.
   const allPendingChangedRelPaths: string[] = [];
-  const allPendingHashUpdates: Array<{ relPath: string; hash: string; mtime: number; indexedAt: string }> = [];
+  const allPendingHashUpdates: Array<{ relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
   let totalSkipped = 0;
 
   for (const [lang, langFiles] of langGroups) {
@@ -196,7 +196,7 @@ async function indexParallel(
           continue;
         }
         allPendingChangedRelPaths.push(relPath);
-        allPendingHashUpdates.push({ relPath, hash, mtime: Math.floor(stat.mtimeMs), indexedAt: new Date().toISOString() });
+        allPendingHashUpdates.push({ relPath, hash, mtime: Math.floor(stat.mtimeMs), size: stat.size, indexedAt: new Date().toISOString() });
       }
       filesToIndex.push(f);
     }
@@ -360,13 +360,15 @@ async function indexParallel(
 
     // R82: Bug 21 fix — upsert file hashes ONLY for successful files.
     // R80: only after all nodes/edges are inserted.
+    // R83: P3 perf — prepare statement once outside the loop
+    const upsertHash = db.prepare(`
+      INSERT INTO file_hashes (project, file_path, content_hash, mtime, size, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project, file_path) DO UPDATE SET
+        content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at
+    `);
     for (const h of hashesToApply) {
-      db.prepare(`
-        INSERT INTO file_hashes (project, file_path, content_hash, mtime, indexed_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(project, file_path) DO UPDATE SET
-          content_hash = excluded.content_hash, mtime = excluded.mtime, indexed_at = excluded.indexed_at
-      `).run(project, h.relPath, h.hash, h.mtime, h.indexedAt);
+      upsertHash.run(project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
     }
   });
   tx();

@@ -233,10 +233,10 @@ export async function extractFromFilesWasm(
 
   // R75: prepared statements replaced by batch INSERT in Phase 2
   const upsertFileHash = db.prepare(`
-    INSERT INTO file_hashes (project, file_path, content_hash, mtime, indexed_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO file_hashes (project, file_path, content_hash, mtime, size, indexed_at)
+    VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(project, file_path) DO UPDATE SET
-      content_hash = excluded.content_hash, mtime = excluded.mtime, indexed_at = excluded.indexed_at
+      content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at
   `);
 
   // R74: restructured into two phases for better cache locality:
@@ -254,7 +254,7 @@ export async function extractFromFilesWasm(
 
   const allExtracts: FileExtract[] = [];
   // R74: deferred hash updates for incremental mode (written in Phase 2 transaction)
-  const pendingHashUpdates: Array<{ project: string; relPath: string; hash: string; mtime: number; indexedAt: string }> = [];
+  const pendingHashUpdates: Array<{ project: string; relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
   // R81: Bug 16 — changed file paths (incremental mode). Old nodes/edges for
   // these paths are deleted in the transaction AFTER parse succeeds.
   const changedRelPaths: string[] = [];
@@ -304,24 +304,38 @@ export async function extractFromFilesWasm(
         continue;
       }
       const content = fileContents.get(filePath)!;
-      const hash = createHash('sha256').update(content).digest('hex');
-      
+
       if (incremental) {
+        // R83: mtime+size fast skip — avoid SHA-256 hashing if mtime AND size
+        // match the stored values. This makes no-op incremental O(stat) instead
+        // of O(total bytes read). Only hash if mtime or size changed.
         const existing = db.prepare(
-          'SELECT content_hash FROM file_hashes WHERE project = ? AND file_path = ?'
-        ).get(project, relPath) as { content_hash: string } | undefined;
-        if (existing && existing.content_hash === hash) {
-          result.skipped++;
-          continue;
+          'SELECT content_hash, mtime, size FROM file_hashes WHERE project = ? AND file_path = ?'
+        ).get(project, relPath) as { content_hash: string; mtime: number; size: number } | undefined;
+        if (existing) {
+          const fileSize = stat.size;
+          const fileMtime = Math.floor(stat.mtimeMs);
+          if (existing.mtime === fileMtime && existing.size === fileSize) {
+            // mtime+size match — skip without hashing
+            result.skipped++;
+            continue;
+          }
+          // mtime or size changed — hash to confirm
+          const hash = createHash('sha256').update(content).digest('hex');
+          if (existing.content_hash === hash) {
+            // Content unchanged (mtime changed but content same)
+            result.skipped++;
+            continue;
+          }
+          // Content changed — will re-index
+        } else {
+          // New file — no hash to compare
         }
         // R82: Bug 20 fix — do NOT push to changedRelPaths or pendingHashUpdates yet.
-        // Previously (R81), these were pushed BEFORE parse/extract, so a parse
-        // failure would still delete old nodes and update the hash, causing
-        // silent corruption (next run skips the file that never extracted).
-        // Now we collect the hash info but only push to the mutation lists
-        // AFTER extractFast succeeds.
       }
-      const hashInfo = { project, relPath, hash, mtime: Math.floor(stat.mtimeMs), indexedAt: new Date().toISOString() };
+      // R83: always compute hash for full mode (stored for future incremental)
+      const hash = createHash('sha256').update(content).digest('hex');
+      const hashInfo = { project, relPath, hash, mtime: Math.floor(stat.mtimeMs), size: stat.size, indexedAt: new Date().toISOString() };
 
       // R75: skip setLanguage if language hasn't changed (common case: all files same lang)
       if (currentLang !== lang) {
@@ -407,7 +421,7 @@ export async function extractFromFilesWasm(
 
     // Update file hashes (only for files that were successfully parsed+extracted)
     for (const h of pendingHashUpdates) {
-      upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.indexedAt);
+      upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
     }
 
     // Pass 1: batch-insert all nodes + build QN→ID map

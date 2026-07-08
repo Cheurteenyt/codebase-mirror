@@ -27,19 +27,24 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, statSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 
-// ── Configuration ──────────────────────────────────────────────────────
+// ── Configuration (R83: portable paths via import.meta.url + env vars) ─
 
-const V1_BINARY = '/home/z/my-project/work/codebase-memory-mcp/build/c/codebase-memory-mcp';
-const V2_DIST = '/home/z/my-project/work/cbm-r19/v2/dist/cli/index.js';
-const V2_SRC = '/home/z/my-project/work/cbm-r19/v2/src';
-const SMALL_TARGET = '/home/z/my-project/work/cbm-r19/v2/src';        // 42 files → single-thread path
-const LARGE_TARGET = '/home/z/my-project/work/cbm-r19/v1-reference/src'; // ~120 files → parallel path (V2)
-const RUNNER_PY = '/home/z/my-project/work/cbm-r19/v2/scripts/r78-runner.py';
+const HERE = dirname(fileURLToPath(import.meta.url));   // v2/scripts/
+const V2_ROOT = resolve(HERE, '..');                       // v2/
+const REPO_ROOT = resolve(V2_ROOT, '..');                  // cbm-r19/
+
+const V1_BINARY = process.env.CBM_V1_BINARY ?? '/home/z/my-project/work/codebase-memory-mcp/build/c/codebase-memory-mcp';
+const V2_DIST = process.env.CBM_V2_DIST ?? resolve(V2_ROOT, 'dist/cli/index.js');
+const V2_SRC = process.env.CBM_V2_SRC ?? resolve(V2_ROOT, 'src');
+const SMALL_TARGET = process.env.CBM_BENCH_SMALL ?? resolve(V2_ROOT, 'src');
+const LARGE_TARGET = process.env.CBM_BENCH_LARGE ?? resolve(REPO_ROOT, 'v1-reference/src');
+const RUNNER_PY = process.env.CBM_BENCH_RUNNER ?? resolve(V2_ROOT, 'scripts/r78-runner.py');
 
 const WARMUP = process.env.R78_SMOKE ? 1 : 5;
 const ITERATIONS = process.env.R78_SMOKE ? 2 : 30;
@@ -247,7 +252,7 @@ function runV2(target: string, projectName: string): RunResult {
   let runnerOut: string;
   try {
     runnerOut = execSync(
-      `python3 "${RUNNER_PY}" "${stdoutFile}" "${stderrFile}" XDG_CACHE_HOME=${CACHE_DIR} -- node --expose-gc --gc-interval=100 "${V2_DIST}" index --project "${projectName}" --root "${target}"`,
+      `python3 "${RUNNER_PY}" "${stdoutFile}" "${stderrFile}" XDG_CACHE_HOME=${CACHE_DIR} -- node "${V2_DIST}" index --project "${projectName}" --root "${target}"`,
       { encoding: 'utf-8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, XDG_CACHE_HOME: CACHE_DIR } }
     );
   } catch (e: any) {

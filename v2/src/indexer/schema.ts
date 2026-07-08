@@ -41,6 +41,7 @@ const SCHEMA_SQL = `
     file_path TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     mtime INTEGER NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0,
     indexed_at TEXT NOT NULL,
     UNIQUE(project, file_path)
   );
@@ -79,6 +80,8 @@ export function initIndexerSchema(db: Database.Database): void {
   db.exec(SCHEMA_SQL);
   // R81: Bug 15 — migrate old file_hashes schema if needed
   migrateFileHashesSchema(db);
+  // R83: add size column if missing (for mtime+size fast skip)
+  migrateFileHashesSizeColumn(db);
 }
 
 /**
@@ -157,6 +160,18 @@ function hasUniqueIndexOn(db: Database.Database, table: string, columns: string[
     }
   }
   return false;
+}
+
+/**
+ * R83: Add `size` column to file_hashes if missing. Enables mtime+size fast
+ * skip — if mtime AND size match, skip SHA-256 hashing entirely.
+ */
+function migrateFileHashesSizeColumn(db: Database.Database): void {
+  const cols = db.prepare('PRAGMA table_info(file_hashes)').all() as Array<{ name: string }>;
+  const hasSize = cols.some(c => c.name === 'size');
+  if (!hasSize) {
+    db.exec('ALTER TABLE file_hashes ADD COLUMN size INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 /**
