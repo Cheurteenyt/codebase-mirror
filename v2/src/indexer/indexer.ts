@@ -175,9 +175,9 @@ async function indexParallel(
   // R80: Bug 11 fix — collect pending hash updates and changed paths here,
   // write them atomically in the transaction AFTER workers succeed.
   const allPendingChangedRelPaths: string[] = [];
-  const allPendingHashUpdates: Array<{ relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
+  const allPendingHashUpdates: Array<{ relPath: string; hash: string; mtime: number; mtimeNs: string; size: number; indexedAt: string }> = [];
   // R84: Bug 25 — metadata-only hash updates for parallel path (same as single-thread Bug 24)
-  const allMetadataOnlyHashUpdates: Array<{ relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
+  const allMetadataOnlyHashUpdates: Array<{ relPath: string; hash: string; mtime: number; mtimeNs: string; size: number; indexedAt: string }> = [];
   let totalSkipped = 0;
 
   for (const [lang, langFiles] of langGroups) {
@@ -187,20 +187,23 @@ async function indexParallel(
     for (const f of langFiles) {
       if (incremental) {
         const relPath = nodeRelative(rootPath, f);
-        const stat = statSync(f);
-        const fileMtime = Math.floor(stat.mtimeMs);
-        const fileSize = stat.size;
+        // R85: use bigint stat for nanosecond mtime precision
+        const stat = statSync(f, { bigint: true });
+        const fileMtime = Math.floor(Number(stat.mtimeMs));
+        const fileMtimeNs = stat.mtimeNs.toString();
+        const fileSize = Number(stat.size);
 
-        // R84: Bug 25 fix — port mtime+size fast skip to parallel path.
-        // Previously (R83), the parallel path always read+hashed every file
-        // before comparing, defeating the fast skip optimization.
+        // R85: mtimeNs+size fast skip — nanosecond precision
         const existing = db.prepare(
-          'SELECT content_hash, mtime, size FROM file_hashes WHERE project = ? AND file_path = ?'
-        ).get(project, relPath) as { content_hash: string; mtime: number; size: number } | undefined;
+          'SELECT content_hash, mtime, mtime_ns, size FROM file_hashes WHERE project = ? AND file_path = ?'
+        ).get(project, relPath) as { content_hash: string; mtime: number; mtime_ns: string | null; size: number } | undefined;
 
         if (existing) {
-          if (existing.mtime === fileMtime && existing.size === fileSize) {
-            // mtime+size match — skip without read/hash
+          // R85: use mtime_ns if available, fall back to mtime for pre-R85 DBs
+          const mtimeMatches = existing.mtime_ns
+            ? existing.mtime_ns === fileMtimeNs
+            : existing.mtime === fileMtime;
+          if (mtimeMatches && existing.size === fileSize) {
             totalSkipped++;
             continue;
           }
@@ -210,18 +213,18 @@ async function indexParallel(
           if (existing.content_hash === hash) {
             // R84: content unchanged, update metadata only
             totalSkipped++;
-            allMetadataOnlyHashUpdates.push({ relPath, hash, mtime: fileMtime, size: fileSize, indexedAt: new Date().toISOString() });
+            allMetadataOnlyHashUpdates.push({ relPath, hash, mtime: fileMtime, mtimeNs: fileMtimeNs, size: fileSize, indexedAt: new Date().toISOString() });
             continue;
           }
           // Content changed — re-index
           allPendingChangedRelPaths.push(relPath);
-          allPendingHashUpdates.push({ relPath, hash, mtime: fileMtime, size: fileSize, indexedAt: new Date().toISOString() });
+          allPendingHashUpdates.push({ relPath, hash, mtime: fileMtime, mtimeNs: fileMtimeNs, size: fileSize, indexedAt: new Date().toISOString() });
         } else {
           // New file — read+hash
           const content = readFileSync(f, 'utf-8');
           const hash = createHash('sha256').update(content).digest('hex');
           allPendingChangedRelPaths.push(relPath);
-          allPendingHashUpdates.push({ relPath, hash, mtime: fileMtime, size: fileSize, indexedAt: new Date().toISOString() });
+          allPendingHashUpdates.push({ relPath, hash, mtime: fileMtime, mtimeNs: fileMtimeNs, size: fileSize, indexedAt: new Date().toISOString() });
         }
       }
       filesToIndex.push(f);
@@ -388,17 +391,17 @@ async function indexParallel(
     // R80: only after all nodes/edges are inserted.
     // R83: P3 perf — prepare statement once outside the loop
     const upsertHash = db.prepare(`
-      INSERT INTO file_hashes (project, file_path, content_hash, mtime, size, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO file_hashes (project, file_path, content_hash, mtime, mtime_ns, size, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project, file_path) DO UPDATE SET
-        content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at
+        content_hash = excluded.content_hash, mtime = excluded.mtime, mtime_ns = excluded.mtime_ns, size = excluded.size, indexed_at = excluded.indexed_at
     `);
     for (const h of hashesToApply) {
-      upsertHash.run(project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
+      upsertHash.run(project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
     }
     // R84: Bug 25 — metadata-only updates for parallel path
     for (const h of allMetadataOnlyHashUpdates) {
-      upsertHash.run(project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
+      upsertHash.run(project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
     }
   });
   tx();

@@ -1,5 +1,78 @@
 # Changelog — Codebase Memory V2
 
+## 0.23.0 — Round 85 (2026-07-08) mtimeNs Precision + No-Pre-Read Incremental
+
+**11th round (GPT 5.5 external audit R84).** 2 bugs fixed. R84's fast skip had
+two critical gaps: (1) `Math.floor(mtimeMs)` could cause false skips for
+same-millisecond same-size changes; (2) single-thread pre-read all files
+before fast-skip check, making no-op incremental O(bytes) not O(stat).
+
+### Bugs fixed (2, from GPT 5.5 R84 audit)
+
+26. **`Math.floor(stat.mtimeMs)` can cause false skips** (`wasm-extractor.ts` + `indexer.ts`) — If two versions of the same size are written in the same millisecond, `Math.floor(mtimeMs)` rounds to the same integer, and the fast skip incorrectly skips the changed file. Fixed: use `statSync(path, { bigint: true }).mtimeNs` (nanosecond precision) stored as TEXT in `file_hashes.mtime_ns`. Migration auto-adds the column. Falls back to `mtime` comparison for pre-R85 DBs where `mtime_ns` is null.
+
+27. **Single-thread pre-read breaks O(stat) incremental** (`wasm-extractor.ts`) — The single-thread path pre-read ALL files into `fileContents` before checking mtime+size, making no-op incremental O(total bytes read) instead of O(stat). Fixed: in incremental mode, files are read lazily — only when mtime+size mismatch. Full mode keeps pre-read for OS prefetch optimization.
+
+### Schema change
+
+- Added `mtime_ns TEXT` column to `file_hashes` (nullable for backward compat)
+- `migrateFileHashesMtimeNsColumn()` auto-adds column to existing DBs
+- All upserts now store `mtime_ns` alongside `mtime`
+- Fast-skip uses `mtime_ns` when available, falls back to `mtime` for old data
+
+### Tests added (6 new, versioned)
+
+New file: `v2/tests/indexer/r85-fast-skip.test.ts`
+
+- `adds mtime_ns column to old file_hashes table` — migration test
+- `does not re-add mtime_ns if already present` — idempotency
+- `fast-skip uses mtime_ns when available` — nanosecond precision
+- `falls back to mtime when mtime_ns is null` — backward compat
+- `metadata-only update does not touch nodes table` — correctness
+- `no orphan edges when metadata-only update skips re-indexing` — invariant
+
+### Docs sync
+
+- Root `README.md` — replaced stale hardcoded version/counts with reference to `v2/package.json` and `v2/CHANGELOG.md`. No more stale numbers.
+
+### Verification
+
+```
+Test Files  34 passed (34)
+     Tests  367 passed (367)
+```
+
+(361 existing + 6 new R85 tests)
+
+### Files
+
+- Modified: `v2/src/indexer/schema.ts` (mtime_ns column + migration)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (Bug 26: mtimeNs + Bug 27: no pre-read in incremental)
+- Modified: `v2/src/indexer/indexer.ts` (Bug 26: mtimeNs in parallel path)
+- Modified: `README.md` (docs sync: no more stale version numbers)
+- Modified: `v2/package.json` (version 0.23.0)
+- New: `v2/tests/indexer/r85-fast-skip.test.ts` (6 versioned tests)
+
+### Total: 27 bugs + 6 optimizations across 11 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78 (1-4) | bugs | 8 |
+| R79 (5) | bugs | 1 |
+| R80 (6) | bugs | 5 |
+| R81 (7) | bugs | 5 |
+| R82 (8) | bugs | 4 |
+| R83 (9) | optimizations | 3 + portability |
+| R84 (10) | bugs | 2 + docs sync |
+| R85 (11) | bugs | 2 (mtimeNs precision, no-pre-read incremental) + 6 tests + docs sync |
+
+### Next steps
+
+1. **Tests d'échec réel** — inject extractFast failure, verify old graph/hash preserved (still pending)
+2. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+3. **Worker pool persistant** — for MCP/UI/watch daemon mode
+4. **Benchmark incremental scenarios** — noop, 1-file, 10% with invariants
+
 ## 0.22.0 — Round 84 (2026-07-08) Fast Skip Safety + Parallel Port + Docs
 
 **10th round (GPT 5.5 external audit R83).** 2 bugs fixed. R83's mtime+size

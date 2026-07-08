@@ -233,10 +233,10 @@ export async function extractFromFilesWasm(
 
   // R75: prepared statements replaced by batch INSERT in Phase 2
   const upsertFileHash = db.prepare(`
-    INSERT INTO file_hashes (project, file_path, content_hash, mtime, size, indexed_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO file_hashes (project, file_path, content_hash, mtime, mtime_ns, size, indexed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project, file_path) DO UPDATE SET
-      content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at
+      content_hash = excluded.content_hash, mtime = excluded.mtime, mtime_ns = excluded.mtime_ns, size = excluded.size, indexed_at = excluded.indexed_at
   `);
 
   // R74: restructured into two phases for better cache locality:
@@ -254,7 +254,7 @@ export async function extractFromFilesWasm(
 
   const allExtracts: FileExtract[] = [];
   // R74: deferred hash updates for incremental mode (written in Phase 2 transaction)
-  const pendingHashUpdates: Array<{ project: string; relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
+  const pendingHashUpdates: Array<{ project: string; relPath: string; hash: string; mtime: number; mtimeNs: string; size: number; indexedAt: string }> = [];
   // R81: Bug 16 — changed file paths (incremental mode). Old nodes/edges for
   // these paths are deleted in the transaction AFTER parse succeeds.
   const changedRelPaths: string[] = [];
@@ -263,26 +263,28 @@ export async function extractFromFilesWasm(
   // mtime/size in file_hashes so the next run can fast-skip without hashing.
   // Without this, the fast skip never activates for files whose mtime
   // changed but content didn't (common after git checkout, touch, etc.).
-  const metadataOnlyHashUpdates: Array<{ project: string; relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
+  const metadataOnlyHashUpdates: Array<{ project: string; relPath: string; hash: string; mtime: number; mtimeNs: string; size: number; indexedAt: string }> = [];
 
-  // R75: pre-read all file contents before parsing.
-  // This allows the OS to prefetch file pages into the page cache while
-  // we're parsing the first files. On SSDs the gain is small (~2-5ms),
-  // but on HDDs or network filesystems it's significant.
-  // Also: track the current language to skip redundant setLanguage calls
-  // (saves ~0.1ms per file when all files are the same language).
+  // R85: Bug 26 fix — in incremental mode, do NOT pre-read all files. The old
+  // code pre-read every file into fileContents before checking mtime+size,
+  // making no-op incremental O(total bytes read) instead of O(stat). Now we
+  // only pre-read in full mode (where we know we'll parse everything anyway).
+  // In incremental mode, files are read lazily only when mtime+size mismatch.
   const fileContents = new Map<string, string>();
-  for (const filePath of files) {
-    try {
-      fileContents.set(filePath, readFileSync(filePath, 'utf-8'));
-    } catch {
-      // Will be reported as error in the parse loop
+  if (!incremental) {
+    // Full mode: pre-read all files for OS prefetch optimization
+    for (const filePath of files) {
+      try {
+        fileContents.set(filePath, readFileSync(filePath, 'utf-8'));
+      } catch {
+        // Will be reported as error in the parse loop
+      }
     }
   }
 
   let currentLang = '';
 
-  // ── Phase 1: Parse + Extract (no SQLite, files already read) ─────────
+  // ── Phase 1: Parse + Extract (no SQLite mutations) ───────────────────
   for (const filePath of files) {
     const relPath = relative(rootPath, filePath);
     const lang = detectLanguage(filePath);
@@ -299,55 +301,64 @@ export async function extractFromFilesWasm(
       }
       result.languages.add(lang);
 
-      // R81: Bug 16 fix — PLANNING PHASE. Do NOT delete old nodes/edges yet.
-      // Previously, the code deleted old nodes BEFORE parsing, so a parse
-      // failure would lose the old graph. Now we collect changed files and
-      // do all mutations in the transaction AFTER parse succeeds.
-      const stat = statSync(filePath);
-      // R81: use fileContents.has() to distinguish empty file from read failure
-      if (!fileContents.has(filePath)) {
-        result.errors.push({ file: relPath, error: 'file read failed (not in pre-read cache)' });
-        continue;
-      }
-      const content = fileContents.get(filePath)!;
+      // R85: use bigint stat for nanosecond mtime precision
+      const stat = statSync(filePath, { bigint: true });
+      const fileMtime = Math.floor(Number(stat.mtimeMs));
+      const fileMtimeNs = stat.mtimeNs.toString();
+      const fileSize = Number(stat.size);
 
       if (incremental) {
-        // R83: mtime+size fast skip — avoid SHA-256 hashing if mtime AND size
-        // match the stored values. This makes no-op incremental O(stat) instead
-        // of O(total bytes read). Only hash if mtime or size changed.
+        // R85: mtimeNs+size fast skip — nanosecond precision eliminates
+        // false skips from Math.floor(mtimeMs) rounding.
         const existing = db.prepare(
-          'SELECT content_hash, mtime, size FROM file_hashes WHERE project = ? AND file_path = ?'
-        ).get(project, relPath) as { content_hash: string; mtime: number; size: number } | undefined;
+          'SELECT content_hash, mtime, mtime_ns, size FROM file_hashes WHERE project = ? AND file_path = ?'
+        ).get(project, relPath) as { content_hash: string; mtime: number; mtime_ns: string | null; size: number } | undefined;
         if (existing) {
-          const fileSize = stat.size;
-          const fileMtime = Math.floor(stat.mtimeMs);
-          if (existing.mtime === fileMtime && existing.size === fileSize) {
-            // mtime+size match — skip without hashing
+          // R85: if mtime_ns is available, use it (nanosecond precision).
+          // If mtime_ns is null (pre-R85 DB), fall back to mtime+size.
+          const mtimeMatches = existing.mtime_ns
+            ? existing.mtime_ns === fileMtimeNs
+            : existing.mtime === fileMtime;
+          if (mtimeMatches && existing.size === fileSize) {
+            // mtime+size match — skip without read/hash
             result.skipped++;
             continue;
           }
-          // mtime or size changed — hash to confirm
+          // mtime or size changed — must read+hash to confirm
+          const content = readFileSync(filePath, 'utf-8');
           const hash = createHash('sha256').update(content).digest('hex');
           if (existing.content_hash === hash) {
-            // R84: Bug 24 fix — content unchanged but mtime/size changed.
-            // Skip re-indexing, but update mtime/size so next run fast-skips.
+            // R84: content unchanged, update metadata only (mtime/size/mtime_ns)
             result.skipped++;
             metadataOnlyHashUpdates.push({
               project, relPath, hash,
-              mtime: fileMtime, size: fileSize,
+              mtime: fileMtime, mtimeNs: fileMtimeNs, size: fileSize,
               indexedAt: new Date().toISOString(),
             });
             continue;
           }
-          // Content changed — will re-index
+          // Content changed — will re-index (content already read above)
+          fileContents.set(filePath, content);
         } else {
-          // New file — no hash to compare
+          // New file — read for hashing and parsing
+          fileContents.set(filePath, readFileSync(filePath, 'utf-8'));
         }
         // R82: Bug 20 fix — do NOT push to changedRelPaths or pendingHashUpdates yet.
       }
+
+      // R81: use fileContents.has() to distinguish empty file from read failure
+      if (!fileContents.has(filePath)) {
+        // R85: in incremental mode, file may not have been read if it was
+        // fast-skipped above. But if we reach here, it wasn't skipped.
+        // In full mode, pre-read should have populated it.
+        result.errors.push({ file: relPath, error: 'file read failed (not in cache)' });
+        continue;
+      }
+      const content = fileContents.get(filePath)!;
+
       // R83: always compute hash for full mode (stored for future incremental)
       const hash = createHash('sha256').update(content).digest('hex');
-      const hashInfo = { project, relPath, hash, mtime: Math.floor(stat.mtimeMs), size: stat.size, indexedAt: new Date().toISOString() };
+      const hashInfo = { project, relPath, hash, mtime: fileMtime, mtimeNs: fileMtimeNs, size: fileSize, indexedAt: new Date().toISOString() };
 
       // R75: skip setLanguage if language hasn't changed (common case: all files same lang)
       if (currentLang !== lang) {
@@ -355,7 +366,6 @@ export async function extractFromFilesWasm(
         currentLang = lang;
       }
 
-      // R75: read from pre-read cache instead of readFileSync
       const source = content;
       const tree = parser.parse(source);
       if (!tree) {
@@ -433,12 +443,12 @@ export async function extractFromFilesWasm(
 
     // Update file hashes (only for files that were successfully parsed+extracted)
     for (const h of pendingHashUpdates) {
-      upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
+      upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
     }
     // R84: Bug 24 — update mtime/size for metadata-only changes (content unchanged
     // but mtime/size changed). This ensures the next run can fast-skip without hashing.
     for (const h of metadataOnlyHashUpdates) {
-      upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
+      upsertFileHash.run(h.project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
     }
 
     // Pass 1: batch-insert all nodes + build QN→ID map

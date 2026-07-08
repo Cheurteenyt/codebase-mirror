@@ -41,6 +41,7 @@ const SCHEMA_SQL = `
     file_path TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     mtime INTEGER NOT NULL,
+    mtime_ns TEXT,
     size INTEGER NOT NULL DEFAULT 0,
     indexed_at TEXT NOT NULL,
     UNIQUE(project, file_path)
@@ -82,6 +83,8 @@ export function initIndexerSchema(db: Database.Database): void {
   migrateFileHashesSchema(db);
   // R83: add size column if missing (for mtime+size fast skip)
   migrateFileHashesSizeColumn(db);
+  // R85: add mtime_ns column if missing (for nanosecond precision fast skip)
+  migrateFileHashesMtimeNsColumn(db);
 }
 
 /**
@@ -171,6 +174,20 @@ function migrateFileHashesSizeColumn(db: Database.Database): void {
   const hasSize = cols.some(c => c.name === 'size');
   if (!hasSize) {
     db.exec('ALTER TABLE file_hashes ADD COLUMN size INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
+/**
+ * R85: Add `mtime_ns` column to file_hashes if missing. Enables nanosecond
+ * precision fast skip — Math.floor(mtimeMs) can cause false skips when two
+ * versions of the same size are written in the same millisecond. mtimeNs
+ * (from statSync bigint) gives nanosecond precision, eliminating this risk.
+ */
+function migrateFileHashesMtimeNsColumn(db: Database.Database): void {
+  const cols = db.prepare('PRAGMA table_info(file_hashes)').all() as Array<{ name: string }>;
+  const hasMtimeNs = cols.some(c => c.name === 'mtime_ns');
+  if (!hasMtimeNs) {
+    db.exec('ALTER TABLE file_hashes ADD COLUMN mtime_ns TEXT');
   }
 }
 
