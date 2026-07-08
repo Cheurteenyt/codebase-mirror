@@ -13,7 +13,7 @@ import { initIndexerSchema, clearProjectData, updateProjectStats } from './schem
 import { discoverSourceFilesWasm, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
 import { Worker } from 'node:worker_threads';
 import { cpus } from 'node:os';
-import { join } from 'node:path';
+import { join, relative as nodeRelative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import type { WorkerBatch, WorkerBatchResult } from './worker.js';
@@ -160,7 +160,7 @@ async function indexParallel(
     const filesToIndex: string[] = [];
     for (const f of langFiles) {
       if (incremental) {
-        const relPath = relative(rootPath, f);
+        const relPath = nodeRelative(rootPath, f);
         const stat = statSync(f);
         const content = readFileSync(f, 'utf-8');
         const hash = createHash('sha256').update(content).digest('hex');
@@ -216,7 +216,7 @@ async function indexParallel(
         } catch (e: unknown) {
           const errMsg = e instanceof Error ? e.message : String(e);
           for (const f of myBatch.files) {
-            errors.push({ file: relative(rootPath, f), error: errMsg });
+            errors.push({ file: nodeRelative(rootPath, f), error: errMsg });
           }
         }
       }
@@ -310,11 +310,8 @@ function runWorker(workerPath: string, batch: WorkerBatch): Promise<WorkerBatchR
   });
 }
 
-// Helper: relative path (avoid importing from node:path twice)
-function relative(from: string, to: string): string {
-  // Simple relative path implementation
-  if (to.startsWith(from)) {
-    return to.slice(from.length).replace(/^\//, '');
-  }
-  return to;
-}
+// R78: removed buggy custom relative() helper. It used startsWith() which
+// returns true for sibling-prefix paths (e.g. '/foo/bar' is a prefix of
+// '/foo/barbaz'), producing wrong relative paths in incremental mode.
+// Now using node:path.relative (imported as nodeRelative) everywhere.
+// See docs/RIGOROUS_BENCHMARK_R78.md Bug 4 for details.

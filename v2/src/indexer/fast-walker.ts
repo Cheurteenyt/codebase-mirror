@@ -58,6 +58,23 @@ const CALL_TYPES = ['call_expression', 'call'];
 
 // (DECISION_TYPES is used inside estimateComplexityFast via descendantsOfType)
 
+// R78: counter for unique anonymous function names. Previously, anonymous
+// functions got "anonymous@<line>" which collides when two arrow functions
+// appear on the same line (e.g. `[1,2].map(x => x*2).filter(x => x > 1)` —
+// two arrow functions on line 1, both named "anonymous@1"). This caused
+// QN collisions in the qnToId map, silently dropping CALLS edges.
+// Using a monotonic counter guarantees uniqueness within a file.
+let anonymousCounter = 0;
+
+/**
+ * R78: Reset the anonymous counter at the start of each file extraction.
+ * Called from extractFast(). The counter makes anonymous QNs unique within
+ * a file: "anonymous#1", "anonymous#2", etc.
+ */
+function resetAnonymousCounter(): void {
+  anonymousCounter = 0;
+}
+
 // ── Fast extraction ────────────────────────────────────────────────────
 
 /**
@@ -87,6 +104,8 @@ export function extractFast(
   fileQn: string,
   sourceLength: number,
 ): FastFileResult {
+  // R78: reset per-file anonymous counter so QNs are unique within this file.
+  resetAnonymousCounter();
   const nodes: FastNode[] = [];
   const edges: FastEdge[] = [];
   const nameToQns = new Map<string, string[]>();
@@ -113,9 +132,12 @@ export function extractFast(
     const name = getDeclNameFast(func);
     const parentQn = findParentQnFast(func, fileQn, qnByNode);
     const qn = `${parentQn}::${name}`;
-    // R76: deferred complexity — compute only if we need it (skip for anonymous)
-    const isNamed = name !== 'anonymous' && !name.startsWith('anonymous@');
-    const complexity = isNamed ? estimateComplexityFast(func) : 1;
+    // R78: always compute complexity — the R76 "skip anonymous" optimization
+    // saved ~1ms per file but silently broke risk hotspot detection for any
+    // codebase with non-trivial arrow functions (event handlers, RxJS
+    // pipelines, reducers). The WASM traversal is cheap enough; correctness
+    // matters more than 1ms.
+    const complexity = estimateComplexityFast(func);
     const props = '{"language":"tree-sitter","complexity":' + complexity + '}';
     nodes.push({
       label: 'Function',
@@ -157,9 +179,8 @@ export function extractFast(
     const name = getDeclNameFast(method);
     const parentQn = findParentQnFast(method, fileQn, qnByNode);
     const qn = `${parentQn}::${name}`;
-    // R76: deferred complexity for methods too
-    const isNamed = name !== 'anonymous' && !name.startsWith('anonymous@');
-    const complexity = isNamed ? estimateComplexityFast(method) : 1;
+    // R78: always compute complexity for methods (same reasoning as functions).
+    const complexity = estimateComplexityFast(method);
     const props = '{"language":"tree-sitter","complexity":' + complexity + '}';
     nodes.push({
       label: 'Method',
@@ -188,15 +209,23 @@ export function extractFast(
     const sourceQn = findEnclosingDeclQnFast(call, qnByNode);
     if (!sourceQn) continue;
 
-    const targetQn = candidates[0];
-    if (targetQn === sourceQn) continue;
-
-    edges.push({
-      sourceQn,
-      targetQn: targetQn,
-      type: 'CALLS',
-      properties: '{"callee":"' + calleeName + '","inferred":true}',
-    });
+    // R78: when multiple functions share a name (e.g. two `parse()` in different
+    // modules), the old `candidates[0]` shortcut emitted a CALLS edge to only
+    // the first declaration, making the second appear to have no callers.
+    // Now we emit one edge per candidate, with a `candidate_index` property
+    // so downstream tools can distinguish ambiguous from unambiguous calls.
+    // This increases edge count (matching V1's behavior more closely) at a
+    // small performance cost.
+    for (let ci = 0; ci < candidates.length; ci++) {
+      const targetQn = candidates[ci];
+      if (targetQn === sourceQn) continue; // skip self-calls
+      edges.push({
+        sourceQn,
+        targetQn,
+        type: 'CALLS',
+        properties: '{"callee":"' + calleeName + '","inferred":true,"candidate_index":' + ci + '}',
+      });
+    }
   }
 
   return { nodes, edges, astNodeCount: 0 };
@@ -211,7 +240,12 @@ function getDeclNameFast(node: TSNode): string {
     const child = node.child(i);
     if (child && child.type === 'identifier') return child.text;
   }
-  return `anonymous@${node.startPosition.row + 1}`;
+  // R78: use a monotonic counter instead of line number. Two arrow functions
+  // on the same line (e.g. `[1,2].map(x => x*2).filter(x => x > 1)`) previously
+  // both got "anonymous@1" → QN collision → dropped CALLS edges.
+  // Now they get "anonymous#1", "anonymous#2", etc. — unique within a file.
+  anonymousCounter++;
+  return `anonymous#${anonymousCounter}`;
 }
 
 /**

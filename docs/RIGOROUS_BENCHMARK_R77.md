@@ -1,5 +1,12 @@
 # Rigorous Benchmark Report — R77 (2026-07-07)
 
+> ⚠️ **SUPERSEDED by R78 (2026-07-08).** R77's conclusions are wrong on three
+> counts: (1) only 5 iterations with no significance test, (2) only the SMALL
+> workload (42 files, V2 single-thread path) — missed V2's 21% advantage on
+> large workloads, and (3) the V2 dist was stale during R77 measurement.
+> See `RIGOROUS_BENCHMARK_R78.md` for corrected numbers and methodology.
+> This document is kept for historical reference only.
+
 > **Honest reassessment.** Previous R72-R76 benchmarks compared V2's internal
 > extraction time (267ms) against V1's wall time (305ms from R67). This was
 > misleading — V2's wall time includes Node.js startup + WASM init that V1
