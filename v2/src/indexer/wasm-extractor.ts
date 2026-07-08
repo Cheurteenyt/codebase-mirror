@@ -28,7 +28,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { relative, extname, basename, dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
-import { extractFast } from './fast-walker.js';
+import { extractFast, type UnresolvedCallSite } from './fast-walker.js';
 const require2 = createRequire(import.meta.url);
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -250,6 +250,8 @@ export async function extractFromFilesWasm(
     relPath: string;
     nodes: Array<{ label: string; name: string; qualifiedName: string; filePath: string; startLine: number; endLine: number; properties: string }>;
     edges: Array<{ sourceQn: string; targetQn: string; type: string; properties: string }>;
+    // R98: unresolved call-sites for cross-file resolution
+    unresolvedCalls: UnresolvedCallSite[];
   }
 
   const allExtracts: FileExtract[] = [];
@@ -379,7 +381,7 @@ export async function extractFromFilesWasm(
         const fileQn = `${project}::${relPath}`;
         const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
 
-        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges });
+        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges, unresolvedCalls: extracted.unresolvedCalls });
         result.files++;
 
         // R82: Bug 20 fix — ONLY after extractFast succeeds, schedule the mutations.
@@ -497,10 +499,71 @@ export async function extractFromFilesWasm(
       }
       stmt.run(...params);
     }
+
+    // R98: Cross-file CALLS resolution — Phase 3
+    // After all nodes are inserted and qnToId is complete, build a global
+    // symbol index and resolve unresolved call-sites.
+    const globalSymbolIndex = new Map<string, string[]>();
+    for (const ext of allExtracts) {
+      for (const node of ext.nodes) {
+        // Index by simple name (not qualified name)
+        addToGlobalIndex(globalSymbolIndex, node.name, node.qualifiedName);
+      }
+    }
+
+    // Collect cross-file CALLS edges
+    const crossFileEdges: Array<{ sourceQn: string; targetQn: string; type: string; properties: string }> = [];
+    for (const ext of allExtracts) {
+      for (const call of ext.unresolvedCalls) {
+        // Try exact callee name first, then last segment (e.g. for obj.method)
+        const candidates = globalSymbolIndex.get(call.calleeName) || globalSymbolIndex.get(call.lastSegment);
+        if (!candidates || candidates.length === 0) continue;
+        // R98: cap at 5 candidates to avoid edge explosion
+        const capped = candidates.slice(0, 5);
+        const confidence = capped.length === 1 ? 1.0 : (1.0 / capped.length);
+        for (let ci = 0; ci < capped.length; ci++) {
+          if (capped[ci] === call.sourceQn) continue; // skip self-calls
+          const resolution = capped.length === 1 ? 'cross_file_exact' : 'cross_file_ambiguous';
+          crossFileEdges.push({
+            sourceQn: call.sourceQn,
+            targetQn: capped[ci],
+            type: 'CALLS',
+            properties: '{"callee":"' + call.calleeName + '","inferred":true,"resolution":"' + resolution + '","confidence":' + confidence.toFixed(2) + ',"candidate_count":' + capped.length + ',"candidate_index":' + ci + '}',
+          });
+        }
+      }
+    }
+
+    // Insert cross-file CALLS edges
+    for (let i = 0; i < crossFileEdges.length; i += BATCH_SIZE) {
+      const batch = crossFileEdges.slice(i, i + BATCH_SIZE);
+      const placeholders = batch.map(() => '(?, ?, ?, ?, ?)').join(', ');
+      const stmt = db.prepare(`INSERT INTO edges (project, source_id, target_id, type, properties_json) VALUES ${placeholders}`);
+      const params: unknown[] = [];
+      for (const edge of batch) {
+        const sourceId = qnToId.get(edge.sourceQn);
+        const targetId = qnToId.get(edge.targetQn);
+        if (sourceId && targetId) {
+          params.push(project, sourceId, targetId, edge.type, edge.properties);
+          nextEdgeId++;
+          result.edges++;
+        }
+      }
+      if (params.length > 0) stmt.run(...params);
+    }
   });
   tx();
 
   return result;
+}
+
+// R98: helper for building global symbol index
+function addToGlobalIndex(map: Map<string, string[]>, name: string, qn: string): void {
+  // Skip anonymous functions — they can't be called by name cross-file
+  if (name.startsWith('anonymous#')) return;
+  const existing = map.get(name);
+  if (existing) existing.push(qn);
+  else map.set(name, [qn]);
 }
 
 // ── Synchronous language loading (pre-load all needed grammars) ────────

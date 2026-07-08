@@ -20,7 +20,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { relative, join, dirname } from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { extractFast } from './fast-walker.js';
+import { extractFast, type UnresolvedCallSite } from './fast-walker.js';
 
 const require2 = createRequire(import.meta.url);
 
@@ -52,6 +52,8 @@ export interface WorkerFileResult {
   // R86: hash info returned by worker so main thread can store file_hashes
   // in full mode without reading files twice.
   hashInfo: { hash: string; mtime: number; mtimeNs: string; size: number } | null;
+  // R98: unresolved call-sites for cross-file resolution by main thread
+  unresolvedCalls: UnresolvedCallSite[];
 }
 
 export interface WorkerBatchResult {
@@ -117,7 +119,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         };
         const tree = p.parse(source);
         if (!tree) {
-          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null });
+          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null, unresolvedCalls: [] });
           continue;
         }
 
@@ -139,7 +141,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
             language: batch.language,
             nodes: extracted.nodes,
             edges: extracted.edges,
-            error: null,
+            error: null, unresolvedCalls: extracted.unresolvedCalls,
             hashInfo,
           });
         } finally {
@@ -147,7 +149,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         }
       } catch (e: unknown) {
         results.push({
-          filePath: relPath, language: batch.language, nodes: [], edges: [],
+          filePath: relPath, language: batch.language, nodes: [], edges: [], unresolvedCalls: [],
           error: e instanceof Error ? e.message : String(e),
           hashInfo: null,
         });
@@ -158,7 +160,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
     for (const filePath of batch.files) {
       results.push({
         filePath: relative(batch.rootPath, filePath), language: batch.language,
-        nodes: [], edges: [], error: errMsg, hashInfo: null,
+        nodes: [], edges: [], error: errMsg, hashInfo: null, unresolvedCalls: [],
       });
     }
   }

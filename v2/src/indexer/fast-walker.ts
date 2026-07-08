@@ -31,10 +31,20 @@ export interface FastEdge {
   properties: string;
 }
 
+export interface UnresolvedCallSite {
+  sourceQn: string;
+  calleeName: string;
+  lastSegment: string;
+  filePath: string;
+  line: number;
+}
+
 export interface FastFileResult {
   nodes: FastNode[];
   edges: FastEdge[];
   astNodeCount: number;
+  // R98: unresolved call-sites for cross-file resolution
+  unresolvedCalls: UnresolvedCallSite[];
 }
 
 // ── Node type sets (same as worker.ts) ─────────────────────────────────
@@ -205,16 +215,28 @@ export function extractFast(
 
   // ── Extract all calls and resolve to CALLS edges ─────────────────────
   const allCalls = rootNode.descendantsOfType(CALL_TYPES);
+  const unresolvedCalls: UnresolvedCallSite[] = [];
   for (const call of allCalls) {
     const funcNode = call.childForFieldName('function');
     if (!funcNode) continue;
     const calleeName = funcNode.text;
     const lastSegment = calleeName.split('.').pop() || calleeName;
     const candidates = nameToQns.get(calleeName) || nameToQns.get(lastSegment);
-    if (!candidates || candidates.length === 0) continue;
 
     const sourceQn = findEnclosingDeclQnFast(call, qnByNode);
     if (!sourceQn) continue;
+
+    if (!candidates || candidates.length === 0) {
+      // R98: collect unresolved call-sites for cross-file resolution
+      unresolvedCalls.push({
+        sourceQn,
+        calleeName,
+        lastSegment,
+        filePath: relPath,
+        line: call.startPosition.row + 1,
+      });
+      continue;
+    }
 
     // R78: when multiple functions share a name (e.g. two `parse()` in different
     // modules), the old `candidates[0]` shortcut emitted a CALLS edge to only
@@ -230,12 +252,12 @@ export function extractFast(
         sourceQn,
         targetQn,
         type: 'CALLS',
-        properties: '{"callee":"' + calleeName + '","inferred":true,"candidate_index":' + ci + '}',
+        properties: '{"callee":"' + calleeName + '","inferred":true,"candidate_index":' + ci + ',"resolution":"intra_file"}',
       });
     }
   }
 
-  return { nodes, edges, astNodeCount: 0 };
+  return { nodes, edges, astNodeCount: 0, unresolvedCalls };
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

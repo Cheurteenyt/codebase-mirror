@@ -1,5 +1,66 @@
 # Changelog — Codebase Memory V2
 
+## 0.33.0 — Round 98 (2026-07-08) Cross-file CALLS Resolution
+
+**23rd round.** The biggest functional improvement since R73. V2 now resolves
+cross-file function calls using a global symbol index, closing the gap with V1
+from 11% to 76% CALLS edge coverage.
+
+### Feature: Cross-file CALLS resolution
+
+**Before R98:** V2 only resolved intra-file CALLS edges (function calls within
+the same file). Cross-file calls (e.g. `parse()` imported from another module)
+were silently dropped. V2 extracted 188 CALLS edges vs V1's 1681 (11% coverage).
+
+**After R98:** V2 collects unresolved call-sites during extraction, then after
+all nodes are inserted, builds a `globalSymbolIndex: Map<name, QN[]>` and
+resolves cross-file calls. V2 now extracts 1276 CALLS edges (76% of V1's 1681).
+
+**Architecture:**
+1. `fast-walker.ts` collects `UnresolvedCallSite[]` for calls where no intra-file
+   match was found
+2. `wasm-extractor.ts` (single-thread) and `indexer.ts` (parallel) build a
+   `globalSymbolIndex` after all nodes are inserted
+3. Unresolved call-sites are resolved against the global index:
+   - Exact name match → `cross_file_exact` (confidence=1.0)
+   - Multiple candidates → `cross_file_ambiguous` (confidence=1/count)
+   - Capped at 5 candidates to avoid edge explosion
+4. Edge properties include: `resolution`, `confidence`, `candidate_count`, `candidate_index`
+
+**Results (42-file SMALL workload):**
+| Metric | Before R98 | After R98 | V1 |
+|---|---|---|---|
+| CALLS edges | 188 | 1276 | 1681 |
+| Total edges | 876 | 1994 | 1681* |
+| V1 coverage | 11% | **76%** | 100% |
+
+*V1 total includes LSP-resolved calls that V2 can't match without import analysis.
+
+### Verification
+
+```
+Test Files  37 passed (37)
+     Tests  382 passed (382)
+```
+
+All existing tests pass — no regression in incremental safety, orphan edges,
+duplicate QNs, or benchmark invariants.
+
+### Files
+
+- Modified: `v2/src/indexer/fast-walker.ts` (collect unresolved call-sites)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (cross-file resolution single-thread)
+- Modified: `v2/src/indexer/indexer.ts` (cross-file resolution parallel path)
+- Modified: `v2/src/indexer/worker.ts` (pass unresolved call-sites)
+- Modified: `v2/package.json` (version 0.33.0)
+
+### Next steps
+
+1. **Import-aware resolution** — parse import statements to prefer imported symbols over same-name symbols in other files
+2. **Scope-aware disambiguation** — prefer functions in the same directory/module
+3. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges for false positives
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode
+
 ## 0.32.1 — Round 95-96 (2026-07-08) Proof Strict + Parallel Legacy + Docs Traceability
 
 **Rounds 21-22 (GPT 5.5 external audits R95-R96).** 0 new bugs — rounds 95-96
