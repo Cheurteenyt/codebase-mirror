@@ -1,14 +1,14 @@
 # Changelog — Codebase Memory V2
 
-## 0.16.0 — Round 78 (2026-07-08) truly rigorous benchmark + 7 invisible bug fixes
+## 0.16.0 — Round 78 (2026-07-08) truly rigorous benchmark + 8 invisible bug fixes
 
-**3 audit rounds. 7 bugs fixed.** R77 was methodologically broken. R78's
+**4 audit rounds. 8 bugs fixed.** R77 was methodologically broken. R78's
 first run had a file-count bias. R78's deep audit found a CRITICAL bug
 present since R73: `Map<TSNode, string>` lookups always failed because
 TSNode objects from `descendantsOfType()` and `.parent` are NOT
 reference-equal. This silently dropped **ALL CALLS edges** since R73.
 
-### Bugs fixed (7 total, across 3 audit rounds)
+### Bugs fixed (8 total, across 4 audit rounds)
 
 **Round 1 (R78 first audit):**
 1. **R76 anonymous complexity regression** (`fast-walker.ts`) — hardcoded `complexity:1` for anonymous functions. Fixed: compute proper complexity.
@@ -18,10 +18,13 @@ reference-equal. This silently dropped **ALL CALLS edges** since R73.
 
 **Round 2 (R78 deep audit):**
 5. **V2 `SKIP_DIRS` didn't match V1** (`wasm-extractor.ts`) — V2 indexed 51 files while V1 indexed 42. Fixed: SKIP_DIRS now matches V1's full exclusion list (60+ entries).
-6. **WASM memory leak** (`wasm-extractor.ts`) — `extractFromFilesWasm()` never called `tree.delete()`. Fixed: added `tree.delete()` in try/finally.
+6. **WASM memory leak in single-thread path** (`wasm-extractor.ts`) — `extractFromFilesWasm()` never called `tree.delete()`. Fixed: added `tree.delete()` in try/finally.
 
 **Round 3 (R78 final audit):**
 7. **CRITICAL: TSNode reference equality broken since R73** (`fast-walker.ts`) — `Map<TSNode, string>` lookups always failed because TSNode objects from `descendantsOfType()` and `.parent` are NOT reference-equal (`===` returns false). This silently dropped **ALL CALLS edges** since R73 (0 extracted) and flattened all function QNs (`file::func` instead of `file::class::method`). Fixed: use `Map<number, string>` keyed by `node.id`.
+
+**Round 4 (R78 post-fix audit):**
+8. **WASM memory leak in parallel path** (`worker.ts`) — same as Bug 6 but in the parallel worker thread path. `tree.delete()` was outside try/finally; if `extractFast` threw, the WASM tree leaked. Fixed: wrapped in try/finally.
 
 ### Runner.py fix
 
@@ -93,15 +96,18 @@ number is the honest cost of V2's actual extraction work.
 
 ### Files
 
-- New: `docs/RIGOROUS_BENCHMARK_R78.md` (full report with methodology, results, 7 bugs)
+- New: `docs/RIGOROUS_BENCHMARK_R78.md` (full report with methodology, results, 8 bugs)
 - New: `v2/scripts/rigorous-benchmark-r78.ts` (reproducible benchmark, fixes all R77 flaws)
 - New: `v2/scripts/r78-runner.py` (Python wrapper, VmHWM polling for accurate RSS)
 - New: `v2/scripts/rigorous-benchmark-r78-results.json` (raw results from final run)
 - New: `v2/scripts/debug-calls.ts` (debug script that found the TSNode.id bug)
 - New: `v2/scripts/debug-tsnode-equality.ts` (proves TSNode === is broken)
+- New: `v2/scripts/bench-node-id.ts` (micro-benchmark proving Map<number> is 2.7× faster than Map<TSNode>)
 - Modified: `v2/src/indexer/wasm-extractor.ts` (SKIP_DIRS + tree.delete in try/finally)
 - Modified: `v2/src/indexer/fast-walker.ts` (TSNode.id Map + anonymous QN + complexity + multi-candidate CALLS)
 - Modified: `v2/src/indexer/indexer.ts` (node:path.relative)
+- Modified: `v2/src/indexer/worker.ts` (tree.delete in try/finally — parallel path)
+- Modified: `v2/src/indexer/extractor.ts` (marked DEPRECATED — dead code, not imported)
 
 ### Next steps (revised based on final R78 data)
 

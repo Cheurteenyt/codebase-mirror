@@ -1,12 +1,12 @@
-# Rigorous Benchmark Report — R78 (2026-07-08, final revision with TSNode.id fix)
+# Rigorous Benchmark Report — R78 (2026-07-08, final revision with all 8 bug fixes)
 
-> **3 audit rounds. 7 bugs fixed.** R77 was methodologically broken. R78's
+> **4 audit rounds. 8 bugs fixed.** R77 was methodologically broken. R78's
 > first run had a file-count bias. R78's deep audit found a CRITICAL bug
 > present since R73: `Map<TSNode, string>` lookups always failed because
 > TSNode objects from `descendantsOfType()` and `.parent` are NOT
 > reference-equal. This silently dropped **ALL CALLS edges** since R73.
 
-## Headline finding (final, with all 7 bug fixes)
+## Headline finding (final, with all 8 bug fixes)
 
 | Workload | V1 (C) | V2 (WASM) | V2 vs V1 | p-value | Cliff's δ |
 |---|---|---|---|---|---|
@@ -16,24 +16,37 @@
 V2 uses 3.1–1.6× more RAM (107MB vs 35MB on small; 192MB vs 118MB on large).
 V1 extracts 1.9–3.2× more edges (LSP-based cross-file resolution).
 
-## The 7 bugs found and fixed (across 3 audit rounds)
+## The 8 bugs found and fixed (across 4 audit rounds)
+
+> Bug numbering matches the CHANGELOG. Each bug has a unique number 1–8.
 
 ### Round 1 (R78 first audit) — 4 bugs
 
 | # | Bug | File | Impact |
 |---|---|---|---|
-| 1 | V2 dist was stale during R77 | — | R76 optimizations not in measured binary |
-| 2 | Anonymous complexity regression (R76) | `fast-walker.ts` | `complexity:1` hardcoded for anonymous functions |
-| 3 | `candidates[0]` dropped CALLS edges | `fast-walker.ts` | Only first candidate got edges |
-| 4 | Custom `relative()` buggy | `indexer.ts` | `startsWith()` true for sibling-prefix paths |
+| 1 | R76 anonymous complexity regression | `fast-walker.ts` | `complexity:1` hardcoded for anonymous functions |
+| 2 | `candidates[0]` dropped CALLS edges | `fast-walker.ts` | Only first candidate got edges when multiple functions shared a name |
+| 3 | Custom `relative()` buggy | `indexer.ts` | `startsWith()` true for sibling-prefix paths (`/foo/bar` vs `/foo/barbaz`) |
+| 4 | V2 dist was stale during R77 | — | R76 optimizations not in measured binary; R78 now verifies dist freshness |
 
-### Round 2 (R78 deep audit) — 3 more bugs
+### Round 2 (R78 deep audit) — 2 bugs
 
 | # | Bug | File | Impact |
 |---|---|---|---|
 | 5 | V2 `SKIP_DIRS` didn't match V1 | `wasm-extractor.ts` | V2 indexed 21% more files (51 vs 42) — major benchmark bias |
-| 6 | WASM memory leak (missing `tree.delete`) | `wasm-extractor.ts` | RSS inflated; grows linearly with file count |
-| 7 | **TSNode reference equality broken since R73** | `fast-walker.ts` | **ALL CALLS edges dropped since R73 (0 extracted)**; all QNs flat |
+| 6 | WASM memory leak in single-thread path | `wasm-extractor.ts` | `tree.delete()` missing; RSS grew linearly with file count |
+
+### Round 3 (R78 final audit) — 1 CRITICAL bug
+
+| # | Bug | File | Impact |
+|---|---|---|---|
+| 7 | **CRITICAL: TSNode reference equality broken since R73** | `fast-walker.ts` | **ALL CALLS edges dropped since R73 (0 extracted)**; all QNs flat (`file::func` instead of `file::class::method`) |
+
+### Round 4 (R78 post-fix audit) — 1 bug
+
+| # | Bug | File | Impact |
+|---|---|---|---|
+| 8 | WASM memory leak in parallel path | `worker.ts` | Same as Bug 6 but in parallel worker thread; `tree.delete()` outside try/finally |
 
 ### Bug 7 detail (CRITICAL)
 
@@ -194,17 +207,22 @@ npx tsx scripts/rigorous-benchmark-r78.ts
 cat scripts/rigorous-benchmark-r78-results.json | jq .workloads
 ```
 
-## Files changed in this round (all 7 bug fixes)
+## Files changed in this round (all 8 bug fixes)
 
 | File | Changes |
 |---|---|
-| `v2/src/indexer/fast-walker.ts` | TSNode.id Map fix (Bug 7); anonymous QN counter (Bug 3); removed R76 complexity shortcut (Bug 2); multi-candidate CALLS edges (Bug 4 from round 1) |
-| `v2/src/indexer/wasm-extractor.ts` | SKIP_DIRS matches V1 (Bug 5); tree.delete in try/finally (Bug 6) |
-| `v2/src/indexer/indexer.ts` | node:path.relative replaces custom relative() (Bug 4 round 2) |
+| `v2/src/indexer/fast-walker.ts` | Bug 1 (anonymous complexity); Bug 2 (multi-candidate CALLS); Bug 7 (TSNode.id Map); anonymous QN counter |
+| `v2/src/indexer/wasm-extractor.ts` | Bug 5 (SKIP_DIRS matches V1); Bug 6 (tree.delete in try/finally — single-thread) |
+| `v2/src/indexer/indexer.ts` | Bug 3 (node:path.relative replaces custom relative()) |
+| `v2/src/indexer/worker.ts` | Bug 8 (tree.delete in try/finally — parallel path) |
+| `v2/src/indexer/extractor.ts` | Marked DEPRECATED (dead code, not imported) |
 | `v2/scripts/r78-runner.py` | VmHWM polling instead of RUSAGE_CHILDREN (runner RSS bias) |
 | `v2/scripts/rigorous-benchmark-r78.ts` | Benchmark script (fixes all R77 flaws) |
 | `v2/scripts/rigorous-benchmark-r78-results.json` | Raw results from final run |
-| `v2/CHANGELOG.md` | R78 entry with corrected numbers and 7-bug list |
+| `v2/scripts/debug-calls.ts` | Debug script that found the TSNode.id bug |
+| `v2/scripts/debug-tsnode-equality.ts` | Proves TSNode === is broken |
+| `v2/scripts/bench-node-id.ts` | Micro-benchmark proving Map<number> is 2.7× faster than Map<TSNode> |
+| `v2/CHANGELOG.md` | R78 entry with corrected numbers and 8-bug list |
 | `v2/package.json` | Version 0.16.0 |
 | `docs/RIGOROUS_BENCHMARK_R77.md` | Superseded banner |
 | `docs/RIGOROUS_BENCHMARK_R78.md` | This file |
