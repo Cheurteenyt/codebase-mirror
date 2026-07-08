@@ -176,6 +176,8 @@ async function indexParallel(
   // write them atomically in the transaction AFTER workers succeed.
   const allPendingChangedRelPaths: string[] = [];
   const allPendingHashUpdates: Array<{ relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
+  // R84: Bug 25 — metadata-only hash updates for parallel path (same as single-thread Bug 24)
+  const allMetadataOnlyHashUpdates: Array<{ relPath: string; hash: string; mtime: number; size: number; indexedAt: string }> = [];
   let totalSkipped = 0;
 
   for (const [lang, langFiles] of langGroups) {
@@ -186,17 +188,41 @@ async function indexParallel(
       if (incremental) {
         const relPath = nodeRelative(rootPath, f);
         const stat = statSync(f);
-        const content = readFileSync(f, 'utf-8');
-        const hash = createHash('sha256').update(content).digest('hex');
+        const fileMtime = Math.floor(stat.mtimeMs);
+        const fileSize = stat.size;
+
+        // R84: Bug 25 fix — port mtime+size fast skip to parallel path.
+        // Previously (R83), the parallel path always read+hashed every file
+        // before comparing, defeating the fast skip optimization.
         const existing = db.prepare(
-          'SELECT content_hash FROM file_hashes WHERE project = ? AND file_path = ?'
-        ).get(project, relPath) as { content_hash: string } | undefined;
-        if (existing && existing.content_hash === hash) {
-          totalSkipped++;
-          continue;
+          'SELECT content_hash, mtime, size FROM file_hashes WHERE project = ? AND file_path = ?'
+        ).get(project, relPath) as { content_hash: string; mtime: number; size: number } | undefined;
+
+        if (existing) {
+          if (existing.mtime === fileMtime && existing.size === fileSize) {
+            // mtime+size match — skip without read/hash
+            totalSkipped++;
+            continue;
+          }
+          // mtime or size changed — must read+hash to confirm
+          const content = readFileSync(f, 'utf-8');
+          const hash = createHash('sha256').update(content).digest('hex');
+          if (existing.content_hash === hash) {
+            // R84: content unchanged, update metadata only
+            totalSkipped++;
+            allMetadataOnlyHashUpdates.push({ relPath, hash, mtime: fileMtime, size: fileSize, indexedAt: new Date().toISOString() });
+            continue;
+          }
+          // Content changed — re-index
+          allPendingChangedRelPaths.push(relPath);
+          allPendingHashUpdates.push({ relPath, hash, mtime: fileMtime, size: fileSize, indexedAt: new Date().toISOString() });
+        } else {
+          // New file — read+hash
+          const content = readFileSync(f, 'utf-8');
+          const hash = createHash('sha256').update(content).digest('hex');
+          allPendingChangedRelPaths.push(relPath);
+          allPendingHashUpdates.push({ relPath, hash, mtime: fileMtime, size: fileSize, indexedAt: new Date().toISOString() });
         }
-        allPendingChangedRelPaths.push(relPath);
-        allPendingHashUpdates.push({ relPath, hash, mtime: Math.floor(stat.mtimeMs), size: stat.size, indexedAt: new Date().toISOString() });
       }
       filesToIndex.push(f);
     }
@@ -368,6 +394,10 @@ async function indexParallel(
         content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at
     `);
     for (const h of hashesToApply) {
+      upsertHash.run(project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
+    }
+    // R84: Bug 25 — metadata-only updates for parallel path
+    for (const h of allMetadataOnlyHashUpdates) {
       upsertHash.run(project, h.relPath, h.hash, h.mtime, h.size, h.indexedAt);
     }
   });

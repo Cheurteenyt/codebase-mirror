@@ -39,7 +39,22 @@ const HERE = dirname(fileURLToPath(import.meta.url));   // v2/scripts/
 const V2_ROOT = resolve(HERE, '..');                       // v2/
 const REPO_ROOT = resolve(V2_ROOT, '..');                  // cbm-r19/
 
-const V1_BINARY = process.env.CBM_V1_BINARY ?? '/home/z/my-project/work/codebase-memory-mcp/build/c/codebase-memory-mcp';
+// R84: auto-detect V1 binary — env var > which > repo-relative > fail
+function detectV1Binary(): string {
+  if (process.env.CBM_V1_BINARY) return process.env.CBM_V1_BINARY;
+  // Try repo-relative path
+  const repoRelative = resolve(REPO_ROOT, '..', 'codebase-memory-mcp', 'build', 'c', 'codebase-memory-mcp');
+  if (existsSync(repoRelative)) return repoRelative;
+  // Try PATH
+  try {
+    const which = execSync('which codebase-memory-mcp 2>/dev/null || which cbm 2>/dev/null', { encoding: 'utf-8' }).trim();
+    if (which) return which;
+  } catch {}
+  // Fallback to original path (will fail with clear message if not found)
+  return '/home/z/my-project/work/codebase-memory-mcp/build/c/codebase-memory-mcp';
+}
+
+const V1_BINARY = detectV1Binary();
 const V2_DIST = process.env.CBM_V2_DIST ?? resolve(V2_ROOT, 'dist/cli/index.js');
 const V2_SRC = process.env.CBM_V2_SRC ?? resolve(V2_ROOT, 'src');
 const SMALL_TARGET = process.env.CBM_BENCH_SMALL ?? resolve(V2_ROOT, 'src');
