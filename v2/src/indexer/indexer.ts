@@ -505,7 +505,9 @@ async function indexParallel(
       upsertHash.run(project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
     }
 
-    // R98: Cross-file CALLS resolution — Phase 3 (parallel path)
+    // R98/R99: Cross-file CALLS resolution — Phase 3 (parallel path)
+    // R99: Only in full mode. See wasm-extractor.ts for explanation.
+    if (!incremental) {
     // Build global symbol index from all successfully inserted nodes
     const globalSymbolIndex = new Map<string, string[]>();
     for (const batchResult of results) {
@@ -530,15 +532,26 @@ async function indexParallel(
           if (!candidates || candidates.length === 0) continue;
           const capped = candidates.slice(0, 5);
           const confidence = capped.length === 1 ? 1.0 : (1.0 / capped.length);
+          // R99: member calls get lower confidence
+          const adjustedConfidence = call.callKind === 'member_call' ? Math.min(confidence, 0.3) : confidence;
           for (let ci = 0; ci < capped.length; ci++) {
             if (capped[ci] === call.sourceQn) continue;
             const sourceId = qnToId.get(call.sourceQn);
             const targetId = qnToId.get(capped[ci]);
             if (sourceId && targetId) {
-              const resolution = capped.length === 1 ? 'cross_file_exact' : 'cross_file_ambiguous';
+              const resolution = capped.length === 1 ? 'cross_file_name_exact' : 'cross_file_ambiguous';
+              // R99: use JSON.stringify
               crossFileEdges.push({
                 sourceId, targetId, type: 'CALLS',
-                properties: '{"callee":"' + call.calleeName + '","inferred":true,"resolution":"' + resolution + '","confidence":' + confidence.toFixed(2) + ',"candidate_count":' + capped.length + ',"candidate_index":' + ci + '}',
+                properties: JSON.stringify({
+                  callee: call.calleeName,
+                  inferred: true,
+                  resolution,
+                  confidence: parseFloat(adjustedConfidence.toFixed(2)),
+                  candidate_count: capped.length,
+                  candidate_index: ci,
+                  call_kind: call.callKind,
+                }),
               });
             }
           }
@@ -551,6 +564,7 @@ async function indexParallel(
       insertEdge.run(project, edge.sourceId, edge.targetId, edge.type, edge.properties);
       edgeCount++;
     }
+    } // end if (!incremental) — R99: cross-file only in full mode
   });
   tx();
 

@@ -500,9 +500,14 @@ export async function extractFromFilesWasm(
       stmt.run(...params);
     }
 
-    // R98: Cross-file CALLS resolution — Phase 3
-    // After all nodes are inserted and qnToId is complete, build a global
-    // symbol index and resolve unresolved call-sites.
+    // R98/R99: Cross-file CALLS resolution — Phase 3
+    // R99: Only run cross-file resolution in FULL mode. In incremental mode,
+    // the globalSymbolIndex would only contain changed files, missing unchanged
+    // files' symbols. This would drop cross-file edges to/from unchanged files.
+    // Instead, incremental mode keeps existing cross-file edges in DB and only
+    // deletes cross-file edges for changed files (done above in the changedRelPaths
+    // delete phase). A full reindex is needed to rebuild cross-file edges.
+    if (!incremental) {
     const globalSymbolIndex = new Map<string, string[]>();
     for (const ext of allExtracts) {
       for (const node of ext.nodes) {
@@ -521,14 +526,26 @@ export async function extractFromFilesWasm(
         // R98: cap at 5 candidates to avoid edge explosion
         const capped = candidates.slice(0, 5);
         const confidence = capped.length === 1 ? 1.0 : (1.0 / capped.length);
+        // R99: member calls get lower confidence — name match is less reliable
+        const adjustedConfidence = call.callKind === 'member_call' ? Math.min(confidence, 0.3) : confidence;
         for (let ci = 0; ci < capped.length; ci++) {
           if (capped[ci] === call.sourceQn) continue; // skip self-calls
-          const resolution = capped.length === 1 ? 'cross_file_exact' : 'cross_file_ambiguous';
+          // R99: rename cross_file_exact to cross_file_name_exact (not import-aware)
+          const resolution = capped.length === 1 ? 'cross_file_name_exact' : 'cross_file_ambiguous';
+          // R99: use JSON.stringify instead of string concatenation for safety
           crossFileEdges.push({
             sourceQn: call.sourceQn,
             targetQn: capped[ci],
             type: 'CALLS',
-            properties: '{"callee":"' + call.calleeName + '","inferred":true,"resolution":"' + resolution + '","confidence":' + confidence.toFixed(2) + ',"candidate_count":' + capped.length + ',"candidate_index":' + ci + '}',
+            properties: JSON.stringify({
+              callee: call.calleeName,
+              inferred: true,
+              resolution,
+              confidence: parseFloat(adjustedConfidence.toFixed(2)),
+              candidate_count: capped.length,
+              candidate_index: ci,
+              call_kind: call.callKind,
+            }),
           });
         }
       }
@@ -551,6 +568,7 @@ export async function extractFromFilesWasm(
       }
       if (params.length > 0) stmt.run(...params);
     }
+    } // end if (!incremental) — R99: cross-file only in full mode
   });
   tx();
 

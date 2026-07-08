@@ -1,5 +1,61 @@
 # Changelog — Codebase Memory V2
 
+## 0.34.0 — Round 99 (2026-07-08) Cross-file CALLS Correctness + Precision Lock
+
+**24th round (GPT 5.5 external audit R99).** 1 P1 bug fixed + 3 precision
+improvements. GPT 5.5 found that R98's cross-file CALLS resolver was broken
+in incremental mode and produced false positives from member calls.
+
+### Bug fixed (1, P1)
+
+34. **Cross-file CALLS broken in incremental mode** (`wasm-extractor.ts` + `indexer.ts`) — In incremental, `globalSymbolIndex` only contained changed files, not unchanged files in DB. Cross-file edges to/from unchanged files were silently lost. Fixed: cross-file resolution now only runs in **full mode**. In incremental mode, existing cross-file edges are preserved in DB; changed files' cross-file edges are deleted with the node delete phase. A full reindex is needed to rebuild all cross-file edges (documented limitation).
+
+### Precision improvements (3)
+
+1. **Member-call false positive filtering** (`fast-walker.ts`) — `console.log()`, `array.map()`, `db.prepare()` etc. were creating false CALLS edges to project functions with the same name. Fixed: `BUILTIN_METHOD_NAMES` denylist (90+ common method names) skips member calls to these names. Only `identifier_call` (e.g. `foo()`) and non-builtin `member_call` are collected for cross-file resolution.
+
+2. **Call kind tracking + adjusted confidence** (`fast-walker.ts` + `wasm-extractor.ts` + `indexer.ts`) — Each `UnresolvedCallSite` now carries `callKind: 'identifier_call' | 'member_call' | 'computed_call'`. Member calls get `confidence` capped at 0.3 (vs 1.0 for identifier calls). Edge properties now include `call_kind`.
+
+3. **JSON.stringify for edge properties** (`wasm-extractor.ts` + `indexer.ts`) — Edge properties were built by string concatenation (`'{"callee":"' + calleeName + '"}'`), which breaks if callee names contain quotes or special characters (computed calls like `obj["foo"]()`). Fixed: all cross-file edge properties now use `JSON.stringify()`.
+
+4. **Resolution renamed** — `cross_file_exact` → `cross_file_name_exact` (clarifies that "exact" means name match, not import-aware certainty).
+
+### Results comparison
+
+| Metric | R98 | R99 | Change |
+|---|---|---|---|
+| Total CALLS | 1276 | 742 | -42% (fewer false positives) |
+| Cross-file CALLS | 1081 | 547 | -49% (builtins filtered) |
+| Intra-file CALLS | 195 | 195 | unchanged |
+| Member-call CALLS | (not tracked) | 286 | new visibility |
+| Edge properties | concat (unsafe) | JSON.stringify (safe) | fixed |
+| Incremental | broken (silent loss) | disabled (honest) | fixed |
+
+The reduction from 1276 to 742 CALLS edges is **expected and correct** — R98
+included many false positives from builtins like `map`, `log`, `prepare`, `then`.
+R99 filters these out while keeping genuine cross-file calls.
+
+### Verification
+
+```
+Test Files  37 passed (37)
+     Tests  382 passed (382)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/fast-walker.ts` (call_kind, BUILTIN_METHOD_NAMES denylist)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (incremental guard, JSON.stringify, adjusted confidence)
+- Modified: `v2/src/indexer/indexer.ts` (same fixes for parallel path)
+- Modified: `v2/package.json` (version 0.34.0)
+
+### Next steps
+
+1. **Import-aware resolution** — parse import statements to prefer imported symbols
+2. **Call-sites persistent table** — enable cross-file CALLS in incremental mode
+3. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode
+
 ## 0.33.0 — Round 98 (2026-07-08) Cross-file CALLS Resolution
 
 **23rd round.** The biggest functional improvement since R73. V2 now resolves

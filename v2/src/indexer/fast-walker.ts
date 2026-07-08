@@ -37,6 +37,8 @@ export interface UnresolvedCallSite {
   lastSegment: string;
   filePath: string;
   line: number;
+  // R99: call kind for precision filtering
+  callKind: 'identifier_call' | 'member_call' | 'computed_call';
 }
 
 export interface FastFileResult {
@@ -65,6 +67,27 @@ const METHOD_TYPES = [
 ];
 
 const CALL_TYPES = ['call_expression', 'call'];
+
+// R99: builtin method names to skip for cross-file resolution.
+// These are extremely common in JS/TS and would create massive false positives
+// if matched against project functions with the same name (e.g. `log`, `map`).
+const BUILTIN_METHOD_NAMES = new Set([
+  'map', 'filter', 'foreach', 'reduce', 'reduceRight', 'find', 'findIndex',
+  'some', 'every', 'includes', 'indexOf', 'lastIndexOf', 'flat', 'flatMap',
+  'sort', 'reverse', 'join', 'slice', 'splice', 'concat', 'fill', 'keys',
+  'values', 'entries', 'from', 'isArray', 'of',
+  'then', 'catch', 'finally', 'resolve', 'reject', 'all', 'race', 'allSettled',
+  'push', 'pop', 'shift', 'unshift', 'get', 'set', 'has', 'delete', 'clear',
+  'add', 'entries', 'forEach',
+  'log', 'warn', 'error', 'info', 'debug', 'trace', 'dir', 'table',
+  'prepare', 'run', 'exec', 'all', 'get', 'transaction',
+  'toString', 'valueOf', 'toJSON', 'toFixed', 'toPrecision',
+  'call', 'apply', 'bind',
+  'startsWith', 'endsWith', 'includes', 'replace', 'replaceAll',
+  'split', 'match', 'matchAll', 'trim', 'trimStart', 'trimEnd',
+  'padStart', 'padEnd', 'repeat', 'substring', 'substr', 'toLowerCase', 'toUpperCase',
+  'parse', 'stringify', // JSON.parse/stringify — too common to match project functions
+]);
 
 // (DECISION_TYPES is used inside estimateComplexityFast via descendantsOfType)
 
@@ -228,12 +251,24 @@ export function extractFast(
 
     if (!candidates || candidates.length === 0) {
       // R98: collect unresolved call-sites for cross-file resolution
+      // R99: detect call kind and filter builtins
+      const callKind: 'identifier_call' | 'member_call' | 'computed_call' =
+        funcNode.type === 'identifier' ? 'identifier_call' :
+        funcNode.type === 'member_expression' ? 'member_call' : 'computed_call';
+
+      // R99: skip common builtins for member calls to reduce false positives
+      if (callKind === 'member_call') {
+        const seg = lastSegment.toLowerCase();
+        if (BUILTIN_METHOD_NAMES.has(seg)) continue;
+      }
+
       unresolvedCalls.push({
         sourceQn,
         calleeName,
         lastSegment,
         filePath: relPath,
         line: call.startPosition.row + 1,
+        callKind,
       });
       continue;
     }
