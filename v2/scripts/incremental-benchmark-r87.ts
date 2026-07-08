@@ -114,13 +114,17 @@ console.log('  R87 Incremental Benchmark — with correctness invariants');
 console.log('='.repeat(80));
 console.log();
 
-const tmpDir = mkdtempSync(join(tmpdir(), 'r87-bench-'));
+const tmpDir = mkdtempSync(join(tmpdir(), 'r88-bench-'));
 const projectDir = join(tmpDir, 'project');
+const parallelDir = join(tmpDir, 'parallel-project');
 const cacheDir = join(tmpDir, 'cache');
 mkdirSync(join(cacheDir, 'codebase-memory-mcp'), { recursive: true });
 const FILE_COUNT = 20; // small enough for single-thread
-const projectName = 'r87bench';
+const PARALLEL_FILE_COUNT = 64; // R88: >20 to force parallel path
+const projectName = 'r88bench';
+const parallelProjectName = 'r88parallel';
 const dbPath = join(cacheDir, 'codebase-memory-mcp', `${projectName}.db`);
+const parallelDbPath = join(cacheDir, 'codebase-memory-mcp', `${parallelProjectName}.db`);
 
 const results: BenchResult[] = [];
 
@@ -215,6 +219,79 @@ try {
   });
   console.log(`  ${t5Wall}ms | indexed=${p5.filesIndexed} skipped=${p5.filesSkipped} nodes=${s5.nodes}`);
 
+  // R88: Parallel scenarios (64 files to force parallel path)
+  console.log();
+  console.log('--- Parallel scenarios (64 files) ---');
+  createTestProject(parallelDir, PARALLEL_FILE_COUNT);
+
+  // Scenario 6: Parallel full cold index
+  console.log('Scenario 6: Parallel full cold index');
+  const t6Start = Date.now();
+  const r6 = runIndexer(parallelProjectName, parallelDir, cacheDir, false);
+  const t6Wall = Date.now() - t6Start;
+  const s6 = getDbStats(parallelDbPath, parallelProjectName);
+  const p6 = parseOutput(r6.output);
+  const isParallel6 = r6.output.includes('Parallel') || r6.output.includes('workers');
+  results.push({
+    scenario: 'parallel-full-cold', wallMs: t6Wall,
+    filesIndexed: p6.filesIndexed, filesSkipped: p6.filesSkipped,
+    nodes: s6.nodes, edges: s6.edges, orphanEdges: s6.orphanEdges,
+    duplicateQNs: s6.duplicateQNs, hashCount: s6.hashCount,
+    statsMatch: s6.statsMatch, errors: p6.errors,
+  });
+  console.log(`  ${t6Wall}ms | indexed=${p6.filesIndexed} parallel=${isParallel6} nodes=${s6.nodes} hashes=${s6.hashCount}`);
+
+  // Scenario 7: Parallel incremental no-op
+  console.log('Scenario 7: Parallel incremental no-op');
+  const t7Start = Date.now();
+  const r7 = runIndexer(parallelProjectName, parallelDir, cacheDir, true);
+  const t7Wall = Date.now() - t7Start;
+  const s7 = getDbStats(parallelDbPath, parallelProjectName);
+  const p7 = parseOutput(r7.output);
+  results.push({
+    scenario: 'parallel-incremental-noop', wallMs: t7Wall,
+    filesIndexed: p7.filesIndexed, filesSkipped: p7.filesSkipped,
+    nodes: s7.nodes, edges: s7.edges, orphanEdges: s7.orphanEdges,
+    duplicateQNs: s7.duplicateQNs, hashCount: s7.hashCount,
+    statsMatch: s7.statsMatch, errors: p7.errors,
+  });
+  console.log(`  ${t7Wall}ms | indexed=${p7.filesIndexed} skipped=${p7.filesSkipped} (expected 0/${PARALLEL_FILE_COUNT})`);
+
+  // Scenario 8: Parallel metadata-only (touch all files)
+  console.log('Scenario 8: Parallel metadata-only (touch all)');
+  for (let i = 0; i < PARALLEL_FILE_COUNT; i++) {
+    touchFile(parallelDir, i);
+  }
+  const t8Start = Date.now();
+  const r8 = runIndexer(parallelProjectName, parallelDir, cacheDir, true);
+  const t8Wall = Date.now() - t8Start;
+  const s8 = getDbStats(parallelDbPath, parallelProjectName);
+  const p8 = parseOutput(r8.output);
+  results.push({
+    scenario: 'parallel-metadata-only', wallMs: t8Wall,
+    filesIndexed: p8.filesIndexed, filesSkipped: p8.filesSkipped,
+    nodes: s8.nodes, edges: s8.edges, orphanEdges: s8.orphanEdges,
+    duplicateQNs: s8.duplicateQNs, hashCount: s8.hashCount,
+    statsMatch: s8.statsMatch, errors: p8.errors,
+  });
+  console.log(`  ${t8Wall}ms | indexed=${p8.filesIndexed} skipped=${p8.filesSkipped} nodes=${s8.nodes}`);
+
+  // Scenario 9: Parallel incremental no-op after metadata-only (should fast-skip)
+  console.log('Scenario 9: Parallel no-op after metadata-only (verify fast-skip)');
+  const t9Start = Date.now();
+  const r9 = runIndexer(parallelProjectName, parallelDir, cacheDir, true);
+  const t9Wall = Date.now() - t9Start;
+  const s9 = getDbStats(parallelDbPath, parallelProjectName);
+  const p9 = parseOutput(r9.output);
+  results.push({
+    scenario: 'parallel-noop-after-meta', wallMs: t9Wall,
+    filesIndexed: p9.filesIndexed, filesSkipped: p9.filesSkipped,
+    nodes: s9.nodes, edges: s9.edges, orphanEdges: s9.orphanEdges,
+    duplicateQNs: s9.duplicateQNs, hashCount: s9.hashCount,
+    statsMatch: s9.statsMatch, errors: p9.errors,
+  });
+  console.log(`  ${t9Wall}ms | indexed=${p9.filesIndexed} skipped=${p9.filesSkipped} (should be 0/${PARALLEL_FILE_COUNT})`);
+
   // Print summary
   console.log();
   console.log('─'.repeat(80));
@@ -262,10 +339,55 @@ try {
     console.log(`  ✓ Metadata-only: nodes preserved (${metaOnly.nodes})`);
   } else {
     console.log(`  ✗ Metadata-only: nodes changed (${metaOnly?.nodes} vs ${results[0].nodes})`);
+    allOk = false;
+  }
+
+  // R88: Parallel correctness checks
+  console.log();
+  console.log('  Parallel correctness:');
+  const parallelNoop = results.find(r => r.scenario === 'parallel-incremental-noop');
+  if (parallelNoop && parallelNoop.filesIndexed === 0 && parallelNoop.filesSkipped === PARALLEL_FILE_COUNT) {
+    console.log(`  ✓ Parallel no-op: 0 indexed, ${PARALLEL_FILE_COUNT} skipped`);
+  } else {
+    console.log(`  ✗ Parallel no-op: indexed=${parallelNoop?.filesIndexed}, skipped=${parallelNoop?.filesSkipped} (expected 0/${PARALLEL_FILE_COUNT})`);
+    allOk = false;
+  }
+
+  const parallelMeta = results.find(r => r.scenario === 'parallel-metadata-only');
+  if (parallelMeta && parallelMeta.nodes === results.find(r => r.scenario === 'parallel-full-cold')?.nodes) {
+    console.log(`  ✓ Parallel metadata-only: nodes preserved (${parallelMeta.nodes})`);
+  } else {
+    console.log(`  ✗ Parallel metadata-only: nodes changed`);
+    allOk = false;
+  }
+
+  const parallelFastSkip = results.find(r => r.scenario === 'parallel-noop-after-meta');
+  if (parallelFastSkip && parallelFastSkip.filesIndexed === 0 && parallelFastSkip.filesSkipped === PARALLEL_FILE_COUNT) {
+    console.log(`  ✓ Parallel fast-skip after metadata-only: 0 indexed, ${PARALLEL_FILE_COUNT} skipped`);
+  } else {
+    console.log(`  ✗ Parallel fast-skip after metadata-only: indexed=${parallelFastSkip?.filesIndexed}, skipped=${parallelFastSkip?.filesSkipped} (expected 0/${PARALLEL_FILE_COUNT})`);
+    allOk = false;
+  }
+
+  // R88: hash coverage check for parallel
+  const parallelFull = results.find(r => r.scenario === 'parallel-full-cold');
+  if (parallelFull && parallelFull.hashCount === PARALLEL_FILE_COUNT) {
+    console.log(`  ✓ Parallel hash coverage: ${parallelFull.hashCount}/${PARALLEL_FILE_COUNT}`);
+  } else {
+    console.log(`  ✗ Parallel hash coverage: ${parallelFull?.hashCount}/${PARALLEL_FILE_COUNT} (must match)`);
+    allOk = false;
   }
 
   console.log();
   console.log('─'.repeat(80));
+
+  // R88: exit non-zero if any invariant failed
+  if (!allOk) {
+    console.log('  BENCHMARK FAILED — invariants not met');
+    process.exitCode = 1;
+  } else {
+    console.log('  BENCHMARK PASSED — all invariants met');
+  }
 
 } finally {
   rmSync(tmpDir, { recursive: true, force: true });

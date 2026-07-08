@@ -271,6 +271,26 @@ async function indexParallel(
   }
 
   if (batches.length === 0) {
+    // R88: Bug 30 fix — if all files are metadata-only (no batches needed),
+    // we must still apply the metadata-only hash updates before returning.
+    // Previously, the early return skipped the transaction that applies
+    // allMetadataOnlyHashUpdates, so mtime_ns/size were never persisted.
+    // Next run would re-stat + re-read + re-hash all "metadata-only" files.
+    if (allMetadataOnlyHashUpdates.length > 0) {
+      const upsertHash = db.prepare(`
+        INSERT INTO file_hashes (project, file_path, content_hash, mtime, mtime_ns, size, indexed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project, file_path) DO UPDATE SET
+          content_hash = excluded.content_hash, mtime = excluded.mtime,
+          mtime_ns = excluded.mtime_ns, size = excluded.size, indexed_at = excluded.indexed_at
+      `);
+      const metaTx = db.transaction(() => {
+        for (const h of allMetadataOnlyHashUpdates) {
+          upsertHash.run(project, h.relPath, h.hash, h.mtime, h.mtimeNs, h.size, h.indexedAt);
+        }
+      });
+      metaTx();
+    }
     return { nodes: 0, edges: 0, files: 0, skipped: totalSkipped, errors: [], languages };
   }
 

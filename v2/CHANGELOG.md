@@ -1,5 +1,74 @@
 # Changelog — Codebase Memory V2
 
+## 0.26.0 — Round 88 (2026-07-08) Parallel Metadata Fix + Benchmark CI Lock
+
+**14th round (GPT 5.5 external audit R89).** 1 bug fixed + benchmark improvements.
+The GPT 5.5 audit found a critical edge case: parallel incremental metadata-only
+updates were silently lost when `batches.length === 0` (all files metadata-only).
+
+### Bug fixed (1, from GPT 5.5 R89 audit)
+
+30. **Parallel incremental metadata-only updates lost when batches.length === 0** (`indexer.ts`) — When all files in a parallel incremental run are metadata-only (mtime changed, content same), `filesToIndex` is empty for every language, so `batches.length === 0`. The function returned early before reaching the transaction that applies `allMetadataOnlyHashUpdates`. Result: mtime_ns/size were never persisted, and the next run re-stat + re-read + re-hash all "metadata-only" files. Fixed: apply metadata-only updates in a transaction before the early return.
+
+### Benchmark improvements (3)
+
+1. **Parallel scenarios added** (`incremental-benchmark-r87.ts`) — Added 4 new scenarios with 64 files to exercise the parallel path: `parallel-full-cold`, `parallel-incremental-noop`, `parallel-metadata-only`, `parallel-noop-after-meta`. All verify hash coverage, orphan edges, stats match, and no duplicate QNs.
+
+2. **Benchmark exits non-zero on invariant failure** — Previously the benchmark printed errors but exited 0. Now `process.exitCode = 1` if any invariant fails (orphan edges, stats mismatch, duplicate QNs, hash coverage, incremental correctness).
+
+3. **Parallel correctness checks** — Verifies: parallel no-op (0 indexed, 64 skipped), parallel metadata-only (nodes preserved), parallel fast-skip after metadata-only (0 indexed, 64 skipped), parallel hash coverage (64/64).
+
+### Benchmark results (all pass)
+
+```
+parallel-full-cold               476ms    64     0    192    128     0      0    64    true
+parallel-incremental-noop        252ms     0    64    192    128     0      0    64    true
+parallel-metadata-only           212ms     0    64    192    128     0      0    64    true
+parallel-noop-after-meta         231ms     0    64    192    128     0      0    64    true
+
+✓ Parallel no-op: 0 indexed, 64 skipped
+✓ Parallel metadata-only: nodes preserved (192)
+✓ Parallel fast-skip after metadata-only: 0 indexed, 64 skipped
+✓ Parallel hash coverage: 64/64
+BENCHMARK PASSED — all invariants met
+```
+
+### Docs fix
+
+- `v2/README.md` — replaced stale `378 tests` with `see CHANGELOG.md for current test count`
+
+### Verification
+
+```
+Test Files  35 passed (35)
+     Tests  374 passed (374)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/indexer.ts` (Bug 30: metadata-only updates before early return)
+- Modified: `v2/scripts/incremental-benchmark-r87.ts` (parallel scenarios + exit code)
+- Modified: `v2/README.md` (docs sync)
+- Modified: `v2/package.json` (version 0.26.0)
+
+### Total: 30 bugs + 6 optimizations + 19 tests across 14 rounds
+
+| Round | Type | Count |
+|---|---|---|
+| R78-R82 (1-4) | bugs | 8+1+5+5+4 = 23 |
+| R83 (9) | optimizations | 3 + portability |
+| R84 (10) | bugs | 2 + docs sync |
+| R85 (11) | bugs | 2 (mtimeNs, no-pre-read) + 6 tests + docs sync |
+| R86 (12) | bugs | 2 (parallel hash persistence, threshold fix) |
+| R87 (13) | tests + benchmark | 7 failure tests + incremental benchmark |
+| R88 (14) | bug + benchmark | 1 (parallel metadata-only early return) + parallel scenarios + CI exit code |
+
+### Next steps
+
+1. **Cross-file CALLS resolution** — V2 still misses 900+ edges V1 finds
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Benchmark cold vs warm process** — separate CLI cold from persistent process
+
 ## 0.25.0 — Round 87 (2026-07-08) Incremental Failure Tests + Benchmark
 
 **13th round (GPT 5.5 external audit R86).** 0 new bugs — this round adds the
