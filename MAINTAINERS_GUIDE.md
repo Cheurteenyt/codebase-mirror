@@ -18,8 +18,8 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
 3. **Test** — run `npm run build && npx vitest run` in both `v2/` and
    `graph-ui/`. The full suite (see v2/CHANGELOG.md for current test count) must
    pass with 0 regressions before committing.
-4. **Docs** — update in parallel: CHANGELOG.md entry, version bump in
-   package.json, README/docs version refs, CHANGELOG.md entry + version bump in package.json.
+4. **Docs** — update in parallel: CHANGELOG.md entry, package.json version,
+   README/docs references, and any affected operational docs.
 5. **Commit** — one commit per round (e.g. R56). Message format:
    `docs(v2): 0.12.3 R56 self-audit + MAINTAINERS_GUIDE (3 improvements)`
 6. **Push** — `git push origin v2/r<n>-<short-name> -o merge_request.create
