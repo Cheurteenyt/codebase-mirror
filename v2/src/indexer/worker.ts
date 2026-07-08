@@ -127,6 +127,10 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         // Without this, a parse error in extractFast would leak the WASM tree
         // (same bug that was fixed in wasm-extractor.ts).
         try {
+          // R92: test-only failure injection for real failure tests
+          if (process.env.CBM_TEST_FAIL_ON_FILE === relPath) {
+            throw new Error(`Injected test failure for ${relPath}`);
+          }
           // R72: use fast-walker (descendantsOfType) instead of recursive walkAST
           const extracted = extractFast(tree.rootNode, batch.project, relPath, fileQn, source.length);
 

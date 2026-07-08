@@ -3,7 +3,7 @@
 // Measures: full, noop, metadata-only, 1-file-change, 10%-change, parallel full->noop.
 // Verifies after each run: orphan_edges=0, project stats exact, file_hashes coverage.
 
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, utimesSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -30,20 +30,18 @@ interface BenchResult {
 }
 
 function runIndexer(project: string, root: string, cacheDir: string, incremental: boolean, allowPartial: boolean = false): { exitCode: number; output: string } {
-  const args = ['node', V2_DIST, 'index', '--project', project, '--root', root];
+  // R92: use spawnSync instead of execSync(args.join(' ')) for portability
+  // (handles paths with spaces, no shell injection risk, Windows-compatible)
+  const args = [V2_DIST, 'index', '--project', project, '--root', root];
   if (incremental) args.push('--incremental');
   if (allowPartial) args.push('--allow-partial');
-  try {
-    const output = execSync(args.join(' '), {
-      encoding: 'utf-8',
-      timeout: 60000,
-      env: { ...process.env, XDG_CACHE_HOME: cacheDir },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return { exitCode: 0, output };
-  } catch (e: any) {
-    return { exitCode: e.status ?? 1, output: e.stdout ?? '' };
-  }
+  const res = spawnSync(process.execPath, args, {
+    encoding: 'utf-8',
+    timeout: 60000,
+    env: { ...process.env, XDG_CACHE_HOME: cacheDir },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return { exitCode: res.status ?? 0, output: res.stdout ?? '' };
 }
 
 function getDbStats(dbPath: string, project: string): {

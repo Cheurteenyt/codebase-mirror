@@ -375,6 +375,10 @@ export async function extractFromFilesWasm(
 
       // R78: use try/finally to guarantee tree.delete() even if extractFast throws.
       try {
+        // R92: test-only failure injection for real failure tests
+        if (process.env.CBM_TEST_FAIL_ON_FILE === relPath) {
+          throw new Error(`Injected test failure for ${relPath}`);
+        }
         const fileQn = `${project}::${relPath}`;
         const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
 
