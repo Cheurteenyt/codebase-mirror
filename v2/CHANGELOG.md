@@ -1,5 +1,44 @@
 # Changelog — Codebase Memory V2
 
+## 0.36.0 — Round 101 (2026-07-09) Cross-file CALLS Stale Propagation + DB Persistence
+
+**26th round (GPT 5.5 external audit R101).** 0 new bugs — `crossFileCallsStale`
+is now visible in CLI, persisted in DB, and reset on full reindex. Also fixes
+stale comment in `indexParallel()`.
+
+### Improvements (3)
+
+1. **CLI warning when `crossFileCallsStale`** (`cli/commands/index.ts`) — After incremental index that modifies files, CLI now prints:
+   ```
+   ⚠ Cross-file CALLS may be stale after incremental changes.
+     Run "cbm-v2 index --project <name> --root <path>" (full reindex) to rebuild them.
+   ```
+
+2. **`cross_file_calls_stale` persisted in `projects` table** (`schema.ts` + `indexer.ts`) — Added `cross_file_calls_stale INTEGER DEFAULT 0` column to `projects` table. Auto-migration via `migrateProjectsCrossFileStale()`. `updateProjectStats()` now takes a `crossFileCallsStale: boolean` parameter. Set to `true` on incremental with files changed, `false` on full reindex. MCP/UI can query `SELECT cross_file_calls_stale FROM projects WHERE name = ?` to check if the graph is stale.
+
+3. **Fixed stale comment in `indexParallel()`** (`indexer.ts`) — Old comment said "cross-file CALLS edge resolution is limited to within each batch" which was no longer true since R98. Replaced with accurate description: "Cross-file CALLS are resolved in full mode by a main-thread second pass. In incremental mode they are intentionally marked stale."
+
+### Verification
+
+```
+Test Files  38 passed (38)
+     Tests  388 passed (388)
+```
+
+### Files
+
+- Modified: `v2/src/cli/commands/index.ts` (CLI warning)
+- Modified: `v2/src/indexer/schema.ts` (cross_file_calls_stale column + migration + updateProjectStats)
+- Modified: `v2/src/indexer/indexer.ts` (persist stale flag, fix stale comment)
+- Modified: `v2/package.json` (version 0.36.0)
+
+### Next steps
+
+1. **Call-sites persistent table** — enable cross-file CALLS in incremental mode
+2. **Import-aware resolution** — parse import statements
+3. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode
+
 ## 0.35.0 — Round 100 (2026-07-08) Cross-file CALLS Tests + Stale Flag
 
 **25th round (GPT 5.5 external audit R100).** 0 new bugs — 6 tests + 1 feature

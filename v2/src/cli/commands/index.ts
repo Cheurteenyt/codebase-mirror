@@ -74,6 +74,13 @@ export function registerIndexCommand(program: Command): void {
           console.log(`  Run "cbm-v2 stats --project ${project}" to see the graph.`);
         }
 
+        // R101: warn if cross-file CALLS may be stale after incremental
+        if (result.crossFileCallsStale) {
+          console.log();
+          console.log(`⚠ Cross-file CALLS may be stale after incremental changes.`);
+          console.log(`  Run "cbm-v2 index --project ${project} --root ${rootPath}" (full reindex) to rebuild them.`);
+        }
+
         // R82: Bug 22 fix — exit non-zero if ANY extraction errors, unless --allow-partial.
         // Previously, exit was 0 if result.nodes > 0, masking partial failures.
         // This is critical for CI/benchmarks — a partial index must not look successful.

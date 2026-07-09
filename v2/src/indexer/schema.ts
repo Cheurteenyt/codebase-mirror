@@ -52,7 +52,8 @@ const SCHEMA_SQL = `
     root_path TEXT NOT NULL,
     indexed_at TEXT NOT NULL,
     node_count INTEGER DEFAULT 0,
-    edge_count INTEGER DEFAULT 0
+    edge_count INTEGER DEFAULT 0,
+    cross_file_calls_stale INTEGER DEFAULT 0
   );
 
   -- Indexes matching V1's layout for query compatibility.
@@ -85,6 +86,8 @@ export function initIndexerSchema(db: Database.Database): void {
   migrateFileHashesSizeColumn(db);
   // R85: add mtime_ns column if missing (for nanosecond precision fast skip)
   migrateFileHashesMtimeNsColumn(db);
+  // R101: add cross_file_calls_stale column to projects if missing
+  migrateProjectsCrossFileStale(db);
 }
 
 /**
@@ -192,6 +195,17 @@ function migrateFileHashesMtimeNsColumn(db: Database.Database): void {
 }
 
 /**
+ * R101: Add cross_file_calls_stale column to projects if missing.
+ */
+function migrateProjectsCrossFileStale(db: Database.Database): void {
+  const cols = db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+  const hasCol = cols.some(c => c.name === 'cross_file_calls_stale');
+  if (!hasCol) {
+    db.exec('ALTER TABLE projects ADD COLUMN cross_file_calls_stale INTEGER DEFAULT 0');
+  }
+}
+
+/**
  * Clear all data for a project (nodes, edges, file_hashes) before re-indexing.
  * Does NOT clear the projects table — that's updated separately.
  */
@@ -206,6 +220,7 @@ export function clearProjectData(db: Database.Database, project: string): void {
 
 /**
  * Update the projects table with final counts after indexing.
+ * R101: also persists cross_file_calls_stale flag.
  */
 export function updateProjectStats(
   db: Database.Database,
@@ -213,14 +228,16 @@ export function updateProjectStats(
   rootPath: string,
   nodeCount: number,
   edgeCount: number,
+  crossFileCallsStale: boolean = false,
 ): void {
   db.prepare(`
-    INSERT INTO projects (name, root_path, indexed_at, node_count, edge_count)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO projects (name, root_path, indexed_at, node_count, edge_count, cross_file_calls_stale)
+    VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       root_path = excluded.root_path,
       indexed_at = excluded.indexed_at,
       node_count = excluded.node_count,
-      edge_count = excluded.edge_count
-  `).run(project, rootPath, new Date().toISOString(), nodeCount, edgeCount);
+      edge_count = excluded.edge_count,
+      cross_file_calls_stale = excluded.cross_file_calls_stale
+  `).run(project, rootPath, new Date().toISOString(), nodeCount, edgeCount, crossFileCallsStale ? 1 : 0);
 }
