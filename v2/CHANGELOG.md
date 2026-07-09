@@ -1,5 +1,71 @@
 # Changelog — Codebase Memory V2
 
+## 0.50.0 — Round 115 (2026-07-09) Import-aware Phase 2: Namespace Imports
+
+**40th round (GPT 5.5 external audit R116).** Major feature: namespace import
+resolution. Before R115, `import * as api from './api'; api.foo()` would create
+ambiguous edges to ALL files that export a function named `foo`. After R115,
+the resolver checks if the object name (`api`) is a namespace import, resolves
+the source module, and creates a single exact edge to the correct file.
+
+### Feature: Namespace Import Resolution (R115 Phase 2)
+
+New resolution type: `cross_file_namespace_exact` (confidence 1.0).
+
+The resolver now handles member calls where the object is a namespace import:
+1. For `call_kind='member_call'`, extract the object name (first segment before `.`)
+2. Check if the object name matches a namespace import in the file's imports
+3. If yes, resolve the source module to a file path
+4. Look up the method name (last segment) in that file's symbol index
+5. Create a `cross_file_namespace_exact` edge (confidence 1.0, single candidate)
+
+If the namespace import doesn't resolve (module not found, method not found),
+falls back to name-based resolution (existing behavior).
+
+### Verification of R116 P2
+
+Standalone reproduction confirmed:
+- `import * as api from './api'; api.foo()` with `api.ts` and `c.ts` both exporting `foo`
+- Before R115: 2 ambiguous edges (to both `api.ts::foo` and `c.ts::foo`)
+- After R115: 1 exact edge (to `api.ts::foo` only, `cross_file_namespace_exact`)
+
+### Tests added (7)
+
+New file: `v2/tests/indexer/r115-namespace-member-call.test.ts`
+
+1. **namespace import: `api.foo()` → api.ts::foo only** — The core R116 P2 fix.
+2. **namespace disambiguates: two files export foo, namespace picks correct one** — `api1.foo` → api1.ts, `api2.foo` → api2.ts.
+3. **namespace import: multiple methods (api.foo, api.bar, api.baz) all resolve** — All methods resolve via namespace_exact.
+4. **member call on non-import object → name-based fallback** — `s.listNodes()` where `s` is a local var, NOT namespace_exact.
+5. **incremental: modify caller with namespace import → edge still resolves** — Namespace works in incremental mode.
+6. **orphan edges = 0 after namespace resolution** — Integrity check.
+7. **namespace import with different alias name** — `import * as myApi` → `myApi.foo()` resolves.
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  20 passed (20)     [indexer tests]
+     Tests  114 passed (114)   [107 existing + 7 new R115]
+Benchmark smoke: PASSED (all invariants met)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/cross-file-resolver.ts` (namespace import resolution for member calls)
+- New: `v2/tests/indexer/r115-namespace-member-call.test.ts` (7 tests)
+- Modified: `v2/package.json` (version 0.50.0)
+
+### Total: 42 bugs + 11 optimizations + 114 indexer tests across 40 rounds
+
+### Next steps
+
+1. **Member-call tracking on imported objects** — `import { Store } from './store'; const s = new Store(); s.method()` (requires type inference, Phase 3)
+2. **Re-exports / barrel files** — `export { foo } from './b'`, `index.ts` barrel files
+3. **tsconfig paths support** — `@/`, `~` aliases
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode
+5. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+
 ## 0.49.0 — Round 114 (2026-07-09) Precision Benchmark Row-Level Attribution Lock
 
 **39th round (GPT 5.5 external audit R115).** 0 runtime bugs — 2 benchmark

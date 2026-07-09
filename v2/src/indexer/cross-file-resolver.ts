@@ -324,10 +324,65 @@ export function rebuildCrossFileCallsEdges(
   for (const cs of allCallSites) {
     const callKind = cs.call_kind as 'identifier_call' | 'member_call' | 'computed_call';
 
+    // R115: Namespace import resolution for member calls.
+    // For `import * as ns from './api'; ns.foo()`, the callee is 'ns.foo'
+    // and call_kind is 'member_call'. We check if 'ns' (the first segment
+    // before the dot) is a namespace import in the file's imports. If yes,
+    // resolve the source module and look up 'foo' (last segment) in that file.
+    if (callKind === 'member_call') {
+      const fileImports = importsByFile.get(cs.file_path);
+      if (fileImports) {
+        // Extract the object name (first segment before the first dot)
+        const dotIndex = cs.callee.indexOf('.');
+        if (dotIndex > 0) {
+          const objectName = cs.callee.substring(0, dotIndex);
+          const nsBinding = fileImports.get(objectName);
+          if (nsBinding && nsBinding.importKind === 'namespace') {
+            // Resolve the source module to a file path
+            const resolvedFile = resolveModulePath(nsBinding.sourceModule, cs.file_path, knownFiles);
+            if (resolvedFile) {
+              const fileSyms = fileSymbolIndex.get(resolvedFile);
+              if (fileSyms) {
+                // Look up the last segment (method name) in the source file
+                const targetQn = fileSyms.get(cs.last_segment);
+                if (targetQn && targetQn !== cs.source_qn) {
+                  const sourceId = qnToId.get(cs.source_qn);
+                  const targetId = qnToId.get(targetQn);
+                  if (sourceId && targetId) {
+                    insertEdge.run(
+                      project,
+                      sourceId,
+                      targetId,
+                      'CALLS',
+                      JSON.stringify({
+                        callee: cs.callee,
+                        inferred: true,
+                        resolution: 'cross_file_namespace_exact',
+                        confidence: 1.0,
+                        candidate_count: 1,
+                        candidate_index: 0,
+                        call_kind: callKind,
+                        import_kind: 'namespace',
+                        source_module: nsBinding.sourceModule,
+                      }),
+                    );
+                    edgesInserted++;
+                    // Namespace resolved — skip name-based fallback
+                    continue;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
     // R110: Try import-aware resolution first (only for identifier calls).
     // Member calls (obj.method) and computed calls (obj[key]) don't have a
     // simple import binding for the callee expression, so skip import-aware
     // resolution for them.
+    // R115: exception — namespace imports are handled above for member calls.
     if (callKind === 'identifier_call') {
       const fileImports = importsByFile.get(cs.file_path);
       if (fileImports) {
