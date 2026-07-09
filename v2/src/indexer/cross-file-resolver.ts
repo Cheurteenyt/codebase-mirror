@@ -36,7 +36,7 @@
 //     from changed files + only delete cross-file edges touching changed files.
 
 import type Database from 'better-sqlite3';
-import type { UnresolvedCallSite, ImportBinding } from './fast-walker.js';
+import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
 import { BUILTIN_METHOD_NAMES } from './fast-walker.js';
 
 // R116: moved from extraction-time to resolution-time filter
@@ -128,6 +128,40 @@ export function replaceImportsForFiles(
       imp.importedName,
       imp.importKind,
       imp.line,
+    );
+  }
+}
+
+/**
+ * R119: Insert (or replace) exports for a set of files.
+ * Same pattern as replaceImportsForFiles.
+ */
+export function replaceExportsForFiles(
+  db: Database.Database,
+  project: string,
+  filePaths: string[],
+  newExports: ExportBinding[],
+): void {
+  if (filePaths.length > 0) {
+    const ph = filePaths.map(() => '?').join(',');
+    db.prepare(
+      `DELETE FROM exports WHERE project = ? AND file_path IN (${ph})`
+    ).run(project, ...filePaths);
+  }
+  const insertStmt = db.prepare(
+    `INSERT INTO exports (project, file_path, exported_name, local_name, source_module, imported_name, export_kind, line)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const exp of newExports) {
+    insertStmt.run(
+      project,
+      exp.filePath,
+      exp.exportedName,
+      exp.localName,
+      exp.sourceModule,
+      exp.importedName,
+      exp.exportKind,
+      exp.line,
     );
   }
 }
@@ -316,6 +350,61 @@ export function rebuildCrossFileCallsEdges(
     }
   }
 
+  // R119: Build exportsByFile: filePath -> Map<exportedName, ExportBinding>
+  const allExports = db.prepare(
+    'SELECT file_path, exported_name, local_name, source_module, imported_name, export_kind FROM exports WHERE project = ?'
+  ).all(project) as Array<{
+    file_path: string; exported_name: string; local_name: string | null;
+    source_module: string | null; imported_name: string | null; export_kind: string;
+  }>;
+  const exportsByFile = new Map<string, Map<string, { localName: string | null; sourceModule: string | null; importedName: string | null; exportKind: string }>>();
+  for (const exp of allExports) {
+    let fileMap = exportsByFile.get(exp.file_path);
+    if (!fileMap) { fileMap = new Map(); exportsByFile.set(exp.file_path, fileMap); }
+    fileMap.set(exp.exported_name, {
+      localName: exp.local_name, sourceModule: exp.source_module,
+      importedName: exp.imported_name, exportKind: exp.export_kind,
+    });
+  }
+
+  // R119: Resolve an exported name to a target QN, following re-exports.
+  function resolveExportedSymbol(filePath: string, exportedName: string, depth: number, visited: Set<string>): string | undefined {
+    if (depth > 10) return undefined; // depth cap
+    const key = `${filePath}::${exportedName}`;
+    if (visited.has(key)) return undefined; // cycle
+    visited.add(key);
+
+    const fileExps = exportsByFile.get(filePath);
+    if (!fileExps) {
+      // No exports tracked — fall back to direct symbol lookup
+      const fileSyms = fileSymbolIndex.get(filePath);
+      return fileSyms?.get(exportedName);
+    }
+
+    const expBinding = fileExps.get(exportedName);
+    if (!expBinding) {
+      // No export binding for this name — fall back to direct symbol lookup
+      const fileSyms = fileSymbolIndex.get(filePath);
+      return fileSyms?.get(exportedName);
+    }
+
+    if (expBinding.exportKind === 'local_named' || expBinding.exportKind === 'local_alias') {
+      // Local export (possibly aliased): look up localName in fileSyms
+      const fileSyms = fileSymbolIndex.get(filePath);
+      return fileSyms?.get(expBinding.localName || exportedName);
+    }
+
+    if (expBinding.exportKind === 're_export_named' || expBinding.exportKind === 're_export_alias') {
+      // Re-export: resolve sourceModule, then resolve importedName in that file
+      if (!expBinding.sourceModule) return undefined;
+      const resolvedFile = resolveModulePath(expBinding.sourceModule, filePath, knownFiles);
+      if (!resolvedFile) return undefined;
+      return resolveExportedSymbol(resolvedFile, expBinding.importedName || exportedName, depth + 1, visited);
+    }
+
+    return undefined;
+  }
+
   // 4. Resolve each call_site to candidates and insert CALLS edges.
   //    R110: import-aware resolution — try imports first, then name-based fallback.
   //    R111: default imports now use the default export marker for correct resolution.
@@ -348,7 +437,7 @@ export function rebuildCrossFileCallsEdges(
               const fileSyms = fileSymbolIndex.get(resolvedFile);
               if (fileSyms) {
                 // Look up the last segment (method name) in the source file
-                const targetQn = fileSyms.get(cs.last_segment);
+                const targetQn = resolveExportedSymbol(resolvedFile, cs.last_segment, 0, new Set());
                 if (targetQn && targetQn !== cs.source_qn) {
                   const sourceId = qnToId.get(cs.source_qn);
                   const targetId = qnToId.get(targetQn);
@@ -422,7 +511,7 @@ export function rebuildCrossFileCallsEdges(
                 } else {
                   // Fallback: try the local name (old R110 behavior — works when
                   // the default export name matches the local import name)
-                  targetQn = fileSyms.get(cs.callee);
+                  targetQn = resolveExportedSymbol(resolvedFile, cs.callee, 0, new Set());
                   if (targetQn) {
                     resolution = 'cross_file_import_exact';
                     confidence = 1.0;
@@ -431,7 +520,7 @@ export function rebuildCrossFileCallsEdges(
               } else {
                 // Named or alias import: import { foo } or import { foo as bar }
                 // Look up the imported name (original name in source module)
-                targetQn = fileSyms.get(impBinding.importedName);
+                targetQn = resolveExportedSymbol(resolvedFile, impBinding.importedName, 0, new Set());
                 if (targetQn) {
                   resolution = impBinding.importKind === 'alias'
                     ? 'cross_file_import_alias'

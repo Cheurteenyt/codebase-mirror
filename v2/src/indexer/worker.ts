@@ -20,7 +20,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { relative, join, dirname } from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { extractFast, type UnresolvedCallSite, type ImportBinding } from './fast-walker.js';
+import { extractFast, type UnresolvedCallSite, type ImportBinding, type ExportBinding } from './fast-walker.js';
 
 const require2 = createRequire(import.meta.url);
 
@@ -58,6 +58,8 @@ export interface WorkerFileResult {
   imports: ImportBinding[];
   // R111: default export QN for default import resolution
   defaultExportQn: string | null;
+  // R119: export bindings for export-aware resolution
+  exports: ExportBinding[];
 }
 
 export interface WorkerBatchResult {
@@ -123,7 +125,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         };
         const tree = p.parse(source);
         if (!tree) {
-          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null, unresolvedCalls: [], imports: [], defaultExportQn: null });
+          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null, unresolvedCalls: [], imports: [], defaultExportQn: null, exports: [] });
           continue;
         }
 
@@ -148,6 +150,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
             error: null, unresolvedCalls: extracted.unresolvedCalls,
             imports: extracted.imports,
             defaultExportQn: extracted.defaultExportQn,
+            exports: extracted.exports,
             hashInfo,
           });
         } finally {
@@ -157,6 +160,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         results.push({
           filePath: relPath, language: batch.language, nodes: [], edges: [], unresolvedCalls: [], imports: [],
           defaultExportQn: null,
+          exports: [],
           error: e instanceof Error ? e.message : String(e),
           hashInfo: null,
         });
@@ -169,6 +173,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         filePath: relative(batch.rootPath, filePath), language: batch.language,
         nodes: [], edges: [], error: errMsg, hashInfo: null, unresolvedCalls: [], imports: [],
         defaultExportQn: null,
+        exports: [],
       });
     }
   }

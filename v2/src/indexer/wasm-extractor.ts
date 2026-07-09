@@ -28,8 +28,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { relative, extname, basename, dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
-import { extractFast, type UnresolvedCallSite, type ImportBinding } from './fast-walker.js';
-import { replaceCallSitesForFiles, replaceImportsForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
+import { extractFast, type UnresolvedCallSite, type ImportBinding, type ExportBinding } from './fast-walker.js';
+import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
 const require2 = createRequire(import.meta.url);
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -271,6 +271,8 @@ export async function extractFromFilesWasm(
     imports: ImportBinding[];
     // R111: default export QN (for default import resolution)
     defaultExportQn: string | null;
+    // R119: export bindings for export-aware resolution
+    exports: ExportBinding[];
   }
 
   const allExtracts: FileExtract[] = [];
@@ -400,7 +402,7 @@ export async function extractFromFilesWasm(
         const fileQn = `${project}::${relPath}`;
         const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
 
-        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges, unresolvedCalls: extracted.unresolvedCalls, imports: extracted.imports, defaultExportQn: extracted.defaultExportQn });
+        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges, unresolvedCalls: extracted.unresolvedCalls, imports: extracted.imports, defaultExportQn: extracted.defaultExportQn, exports: extracted.exports });
         result.files++;
 
         // R82: Bug 20 fix — ONLY after extractFast succeeds, schedule the mutations.
@@ -588,6 +590,17 @@ export async function extractFromFilesWasm(
       replaceImportsForFiles(db, project, changedRelPaths, newImports);
     } else {
       replaceImportsForFiles(db, project, [], newImports);
+    }
+
+    // R119: persist exports (same pattern as imports).
+    const newExports: ExportBinding[] = [];
+    for (const ext of allExtracts) {
+      newExports.push(...ext.exports);
+    }
+    if (incremental) {
+      replaceExportsForFiles(db, project, changedRelPaths, newExports);
+    } else {
+      replaceExportsForFiles(db, project, [], newExports);
     }
 
     // Step 2: rebuild cross-file CALLS edges from persistent call_sites.
