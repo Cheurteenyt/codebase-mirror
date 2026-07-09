@@ -56,6 +56,8 @@ export interface WorkerFileResult {
   unresolvedCalls: UnresolvedCallSite[];
   // R110: import bindings for import-aware cross-file resolution by main thread
   imports: ImportBinding[];
+  // R111: default export QN for default import resolution
+  defaultExportQn: string | null;
 }
 
 export interface WorkerBatchResult {
@@ -121,7 +123,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         };
         const tree = p.parse(source);
         if (!tree) {
-          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null, unresolvedCalls: [], imports: [] });
+          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null, unresolvedCalls: [], imports: [], defaultExportQn: null });
           continue;
         }
 
@@ -145,6 +147,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
             edges: extracted.edges,
             error: null, unresolvedCalls: extracted.unresolvedCalls,
             imports: extracted.imports,
+            defaultExportQn: extracted.defaultExportQn,
             hashInfo,
           });
         } finally {
@@ -153,6 +156,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
       } catch (e: unknown) {
         results.push({
           filePath: relPath, language: batch.language, nodes: [], edges: [], unresolvedCalls: [], imports: [],
+          defaultExportQn: null,
           error: e instanceof Error ? e.message : String(e),
           hashInfo: null,
         });
@@ -164,6 +168,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
       results.push({
         filePath: relative(batch.rootPath, filePath), language: batch.language,
         nodes: [], edges: [], error: errMsg, hashInfo: null, unresolvedCalls: [], imports: [],
+        defaultExportQn: null,
       });
     }
   }

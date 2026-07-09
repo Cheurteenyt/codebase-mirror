@@ -1,5 +1,68 @@
 # Changelog — Codebase Memory V2
 
+## 0.46.0 — Round 111 (2026-07-09) Import Resolution Correctness Lock
+
+**36th round (GPT 5.5 external audit R112).** 3 bugs fixed. GPT 5.5 found 3
+cases where R110's import-aware resolution would fall back to name-based
+fallback, recreating the false positives R110 was designed to eliminate.
+
+### Bugs fixed (3)
+
+40. **`resolveModulePath()` didn't handle explicit extensions** (`cross-file-resolver.ts`) — `import { foo } from './b.ts'` produced `basePath='b.ts'`, then the extension loop tried `'b.ts.ts'`, `'b.ts.tsx'`, etc. — never matching the actual file `'b.ts'`. The import-aware resolver would fail and fall back to name-based, creating edges to both `b::foo` and `c::foo` (ambiguous). Fixed: try `basePath` directly (before the extension loop) so explicit extensions like `./b.ts`, `./b.js`, `./dir/index.ts` resolve correctly.
+
+41. **Default import failed when local name differed from exported name** (`fast-walker.ts`, `cross-file-resolver.ts`) — For `import foo from './b'` where `b.ts` has `export default function realName()`, the resolver looked up `foo` in `b.ts`'s symbol index but found `realName` — no match, fell back to name-based. Fixed: R111 adds `extractDefaultExport()` to `fast-walker.ts` which detects `export default function/class` and records the target QN. The QN is persisted as a marker row in `imports` (local_name=`__default_export__`, import_kind=`default_export`). The resolver's `defaultExportByFile` map now resolves default imports to the correct symbol regardless of the local name.
+
+42. **Type-only imports (`import type { Foo }`) were persisted** (`fast-walker.ts`) — `extractImports()` didn't distinguish `import type { Foo }` from `import { Foo }`, so type-only bindings were persisted and could influence the value resolver. Fixed: detect `import type` (the `type` keyword as a child of `import_statement`) and skip the entire import. Also detect inline type-only specifiers (`import { type Foo, bar }`) by checking for the `type` keyword on individual `import_specifier` nodes.
+
+### Implementation
+
+1. **`cross-file-resolver.ts`**: `resolveModulePath()` now tries `basePath` directly before the extension loop. New `defaultExportByFile` map in `rebuildCrossFileCallsEdges()` for default import resolution.
+2. **`fast-walker.ts`**: new `extractDefaultExport()` function detects `export default function/class` and returns the target QN. New `defaultExportQn` field in `FastFileResult`. `extractImports()` now detects and skips `import type { ... }` and inline `{ type Foo, bar }`.
+3. **`wasm-extractor.ts` + `worker.ts` + `indexer.ts`**: persist `defaultExportQn` as a marker row in `imports` (import_kind=`default_export`).
+4. **`ImportBinding.importKind`**: new `'default_export'` kind for marker rows.
+
+### Tests added (9)
+
+New file: `v2/tests/indexer/r111-import-correctness.test.ts`
+
+1. **explicit extension: `./b.ts`** — resolves to b::foo (was ambiguous before R111)
+2. **explicit extension: `./b.js`** — resolves when b.js exists
+3. **explicit extension: `./dir/index.ts`** — resolves nested path
+4. **default import: `import foo from './b'` resolves to b::realName (different name)** — The core R112 P2 fix.
+5. **default import: names match (regression check)** — Still works when local name = exported name.
+6. **type-only import: `import type { Foo }` not persisted** — Foo absent from imports table.
+7. **inline type-only: `{ type Foo, bar }` skips Foo, keeps bar** — Per-specifier type modifier.
+8. **parallel: workers=2 import-aware resolution works** — P2/P3 from R112 report.
+9. **default export marker persisted in imports table** — Schema verification.
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  16 passed (16)     [indexer tests]
+     Tests  90 passed (90)     [81 existing + 9 new R111]
+Benchmark smoke: PASSED (all invariants met)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/cross-file-resolver.ts` (explicit extensions + default export map)
+- Modified: `v2/src/indexer/fast-walker.ts` (extractDefaultExport + type-only skipping + defaultExportQn field)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (persist default export marker)
+- Modified: `v2/src/indexer/worker.ts` (return defaultExportQn)
+- Modified: `v2/src/indexer/indexer.ts` (persist default export marker in parallel)
+- New: `v2/tests/indexer/r111-import-correctness.test.ts` (9 tests)
+- Modified: `v2/package.json` (version 0.46.0)
+
+### Total: 42 bugs + 11 optimizations + 90 indexer tests across 36 rounds
+
+### Next steps
+
+1. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+2. **Import-aware Phase 2** — namespace imports (ns.foo), re-exports, barrel files
+3. **Worker pool persistant** — for MCP/UI/watch daemon mode
+4. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+
 ## 0.45.0 — Round 110 (2026-07-09) Import-aware Resolution Phase 1
 
 **35th round (GPT 5.5 external audit R111).** Major feature: import-aware

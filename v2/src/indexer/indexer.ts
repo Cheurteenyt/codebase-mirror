@@ -738,11 +738,23 @@ async function indexParallel(
     }
 
     // R110: persist imports (same pattern as call_sites).
+    // R111: also persist default export QN as a marker row.
     const newImports: ImportBinding[] = [];
     for (const batchResult of results) {
       for (const fileResult of batchResult.results) {
         if (fileResult.error || !fileResult.imports) continue;
         newImports.push(...fileResult.imports);
+        // R111: store default export QN as a marker row
+        if (fileResult.defaultExportQn) {
+          newImports.push({
+            localName: '__default_export__',
+            sourceModule: '',
+            importedName: fileResult.defaultExportQn,
+            importKind: 'default_export',
+            line: 0,
+            filePath: fileResult.filePath,
+          });
+        }
       }
     }
     if (incremental) {

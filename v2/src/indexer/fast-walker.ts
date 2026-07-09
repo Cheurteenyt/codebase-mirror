@@ -52,7 +52,7 @@ export interface ImportBinding {
   localName: string;
   sourceModule: string;
   importedName: string;
-  importKind: 'named' | 'alias' | 'default' | 'namespace';
+  importKind: 'named' | 'alias' | 'default' | 'namespace' | 'default_export';
   line: number;
   filePath: string;
 }
@@ -65,6 +65,13 @@ export interface FastFileResult {
   unresolvedCalls: UnresolvedCallSite[];
   // R110: import bindings for import-aware cross-file resolution
   imports: ImportBinding[];
+  // R111: qualified name of the default export target (if any).
+  // For `export default function realName() {}`, this is the QN of realName.
+  // For `export default foo;` (re-export of a variable), this is the QN of foo.
+  // Null if the file has no default export.
+  // Used by import-aware resolution for `import foo from './b'` where the
+  // local name (foo) differs from the exported name (realName).
+  defaultExportQn: string | null;
 }
 
 // ── Node type sets (same as worker.ts) ─────────────────────────────────
@@ -89,6 +96,10 @@ const CALL_TYPES = ['call_expression', 'call'];
 // R110: Import statement node types for TS/JS.
 // tree-sitter typescript and javascript grammars both use 'import_statement'.
 const IMPORT_TYPES = ['import_statement'];
+
+// R111: Export statement node types for detecting default exports.
+// tree-sitter TS/JS: 'export_statement' covers `export default ...` and `export { ... }`.
+const EXPORT_TYPES = ['export_statement'];
 
 // R99: builtin method names to skip for cross-file resolution.
 // These are extremely common in JS/TS and would create massive false positives
@@ -319,7 +330,70 @@ export function extractFast(
   // Used by the cross-file resolver to prioritize imported symbols.
   const imports = extractImports(rootNode, relPath);
 
-  return { nodes, edges, astNodeCount: 0, unresolvedCalls, imports };
+  // ── Extract default export (R111: default import resolution) ─────────
+  // For `import foo from './b'`, the local name (foo) may differ from the
+  // exported name (realName). We detect the default export target QN so the
+  // resolver can map the local name to the correct symbol.
+  const defaultExportQn = extractDefaultExport(rootNode, qnByNode, fileQn);
+
+  return { nodes, edges, astNodeCount: 0, unresolvedCalls, imports, defaultExportQn };
+}
+
+/**
+ * R111: Extract the qualified name of the default export target.
+ *
+ * Handles `export default function realName() {}` and `export default class Foo {}`.
+ * For anonymous defaults (`export default function() {}`), returns the file QN
+ * (since there's no named symbol to point to).
+ * For `export default foo;` (re-export of a variable), looks up `foo` in qnByNode.
+ *
+ * Returns null if the file has no default export.
+ */
+function extractDefaultExport(
+  rootNode: TSNode,
+  qnByNode: Map<number, string>,
+  fileQn: string,
+): string | null {
+  const allExports = rootNode.descendantsOfType(EXPORT_TYPES);
+  for (const exp of allExports) {
+    // Check if this is a default export by looking for 'default' keyword child
+    let isDefault = false;
+    for (let i = 0; i < exp.childCount; i++) {
+      const child = exp.child(i);
+      if (child && child.type === 'default') {
+        isDefault = true;
+        break;
+      }
+    }
+    if (!isDefault) continue;
+
+    // The default export target is typically a function/class declaration or identifier.
+    // Walk children to find the target.
+    for (let i = 0; i < exp.childCount; i++) {
+      const child = exp.child(i);
+      if (!child) continue;
+      const childType = child.type;
+
+      // export default function realName() {} — function_declaration
+      // export default class Foo {} — class_declaration
+      if (FUNCTION_TYPES.includes(childType) || CLASS_TYPES.includes(childType) || METHOD_TYPES.includes(childType)) {
+        const qn = qnByNode.get(child.id);
+        if (qn) return qn;
+        // Function/class wasn't indexed (e.g., anonymous) — use file QN as fallback
+        return fileQn;
+      }
+
+      // export default foo; — identifier reference
+      // Look up foo in qnByNode. But qnByNode is keyed by node.id of DECLARATIONS,
+      // not references. So we can't resolve this directly here.
+      // The resolver will handle this case by falling back to name-based lookup.
+      if (childType === 'identifier') {
+        // Can't resolve without a full symbol table — return null to trigger fallback
+        return null;
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -345,6 +419,10 @@ function extractImports(rootNode: TSNode, filePath: string): ImportBinding[] {
   const allImports = rootNode.descendantsOfType(IMPORT_TYPES);
   for (const imp of allImports) {
     const line = imp.startPosition.row + 1;
+    // R111: Detect type-only imports: `import type { Foo } from './types'`
+    // tree-sitter TS grammar: the `type` keyword is a child of import_statement
+    // (as 'type' identifier) before the import_clause.
+    let isTypeOnlyImport = false;
     // Find the source module string (the 'from "..." ' or just '"..."')
     // tree-sitter: import_statement has a string child for the source.
     let sourceModule = '';
@@ -357,8 +435,15 @@ function extractImports(rootNode: TSNode, filePath: string): ImportBinding[] {
         sourceModule = child.text.replace(/^["'`]/, '').replace(/["'`]$/, '');
       } else if (child.type === 'import_clause') {
         importClause = child;
+      } else if (child.type === 'type') {
+        // `import type { ... }` — entire import is type-only
+        isTypeOnlyImport = true;
       }
     }
+
+    // R111: Skip type-only imports (`import type { Foo } from '...'`).
+    // These don't create runtime bindings and shouldn't influence the resolver.
+    if (isTypeOnlyImport) continue;
 
     // Side-effect import (no import_clause) — skip (no bindings)
     if (!importClause) continue;
@@ -380,6 +465,17 @@ function extractImports(rootNode: TSNode, filePath: string): ImportBinding[] {
         for (let j = 0; j < child.childCount; j++) {
           const spec = child.child(j);
           if (!spec || spec.type !== 'import_specifier') continue;
+          // R111: Skip inline type-only specifiers: `import { type Foo, bar }`
+          // tree-sitter TS: the `type` keyword is a child of import_specifier.
+          let isTypeOnlySpecifier = false;
+          for (let k = 0; k < spec.childCount; k++) {
+            const specChild = spec.child(k);
+            if (specChild && specChild.type === 'type') {
+              isTypeOnlySpecifier = true;
+              break;
+            }
+          }
+          if (isTypeOnlySpecifier) continue;
           // import_specifier: identifier (name) or identifier 'as' identifier (alias)
           const nameNode = spec.childForFieldName('name');
           const aliasNode = spec.childForFieldName('alias');

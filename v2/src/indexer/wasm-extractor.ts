@@ -269,6 +269,8 @@ export async function extractFromFilesWasm(
     unresolvedCalls: UnresolvedCallSite[];
     // R110: import bindings for import-aware cross-file resolution
     imports: ImportBinding[];
+    // R111: default export QN (for default import resolution)
+    defaultExportQn: string | null;
   }
 
   const allExtracts: FileExtract[] = [];
@@ -398,7 +400,7 @@ export async function extractFromFilesWasm(
         const fileQn = `${project}::${relPath}`;
         const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
 
-        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges, unresolvedCalls: extracted.unresolvedCalls, imports: extracted.imports });
+        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges, unresolvedCalls: extracted.unresolvedCalls, imports: extracted.imports, defaultExportQn: extracted.defaultExportQn });
         result.files++;
 
         // R82: Bug 20 fix — ONLY after extractFast succeeds, schedule the mutations.
@@ -564,10 +566,23 @@ export async function extractFromFilesWasm(
     }
 
     // R110: persist imports (same pattern as call_sites).
+    // R111: also persist default export QN as a special import binding marker.
     // extractImports already sets filePath on each binding.
     const newImports: ImportBinding[] = [];
     for (const ext of allExtracts) {
       newImports.push(...ext.imports);
+      // R111: store default export QN as a marker row so the resolver can
+      // retrieve it per-file. Use local_name='__default_export__' as a sentinel.
+      if (ext.defaultExportQn) {
+        newImports.push({
+          localName: '__default_export__',
+          sourceModule: '',
+          importedName: ext.defaultExportQn,
+          importKind: 'default_export',
+          line: 0,
+          filePath: ext.relPath,
+        });
+      }
     }
     if (incremental) {
       replaceImportsForFiles(db, project, changedRelPaths, newImports);

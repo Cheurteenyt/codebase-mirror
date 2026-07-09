@@ -134,6 +134,10 @@ export function replaceImportsForFiles(
  * Handles relative imports like './b', '../utils/helpers', './b.ts'.
  * Tries common extensions and index files.
  *
+ * R111: also handles imports with explicit extensions (./b.ts, ./b.js, ./dir/index.ts).
+ * Before R111, importing './b.ts' would produce basePath='b.ts', then try
+ * 'b.ts.ts', 'b.ts.tsx', etc. — never matching the actual file 'b.ts'.
+ *
  * @param sourceModule  The module path as written in the import (e.g. './b')
  * @param currentFile   The file path of the importing file (e.g. 'a.ts')
  * @param knownFiles    Set of known file paths in the project
@@ -168,6 +172,12 @@ function resolveModulePath(
     resultParts.push(p);
   }
   const basePath = resultParts.join('/');
+
+  // R111: First, try basePath directly (handles imports with explicit extensions
+  // like './b.ts', './b.js', './dir/index.ts'). Before R111, this case was missed:
+  // importing './b.ts' produced basePath='b.ts', then the extension loop tried
+  // 'b.ts.ts', 'b.ts.tsx', etc. — never matching the actual file 'b.ts'.
+  if (knownFiles.has(basePath)) return basePath;
 
   // Try common extensions
   const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
@@ -292,8 +302,19 @@ export function rebuildCrossFileCallsEdges(
     });
   }
 
+  // R111: Build a map of filePath → default export QN.
+  // Stored as marker rows in imports with local_name='__default_export__'
+  // and imported_name = the QN of the default export target.
+  const defaultExportByFile = new Map<string, string>();
+  for (const imp of allImports) {
+    if (imp.import_kind === 'default_export' && imp.local_name === '__default_export__') {
+      defaultExportByFile.set(imp.file_path, imp.imported_name);
+    }
+  }
+
   // 4. Resolve each call_site to candidates and insert CALLS edges.
   //    R110: import-aware resolution — try imports first, then name-based fallback.
+  //    R111: default imports now use the default export marker for correct resolution.
   const insertEdge = db.prepare(
     `INSERT INTO edges (project, source_id, target_id, type, properties_json)
      VALUES (?, ?, ?, ?, ?)`
@@ -331,13 +352,22 @@ export function rebuildCrossFileCallsEdges(
                 // Skip import-aware resolution for namespace bindings.
                 // (resolution stays '', confidence stays 0)
               } else if (impBinding.importKind === 'default') {
-                // Default import: import foo from './b'
-                // The exported symbol could be the function/class name.
-                // Try the local name (which is what the file exports as default).
-                targetQn = fileSyms.get(cs.callee);
-                if (targetQn) {
+                // R111: Default import: import foo from './b'
+                // The local name (foo) may differ from the exported name (realName).
+                // Use the default export marker to find the correct QN.
+                const defaultQn = defaultExportByFile.get(resolvedFile);
+                if (defaultQn) {
+                  targetQn = defaultQn;
                   resolution = 'cross_file_import_exact';
                   confidence = 1.0;
+                } else {
+                  // Fallback: try the local name (old R110 behavior — works when
+                  // the default export name matches the local import name)
+                  targetQn = fileSyms.get(cs.callee);
+                  if (targetQn) {
+                    resolution = 'cross_file_import_exact';
+                    confidence = 1.0;
+                  }
                 }
               } else {
                 // Named or alias import: import { foo } or import { foo as bar }
