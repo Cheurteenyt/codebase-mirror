@@ -151,15 +151,17 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // R86: Bug 28 fix — use estimatedFilesToIndex, not files.length
   const useParallel = numWorkers > 1 && estimatedFilesToIndex > 20;
 
-  // R104: Bug 37 fix — detect deleted files in incremental mode.
-  // Files that were indexed previously but no longer exist on disk must be
-  // cleaned up from nodes, edges, and file_hashes.
+  // R104/R105: Bug 37 fix — detect deleted files in incremental mode.
+  // R105: use nodes ∪ file_hashes to catch legacy DBs where file_hashes
+  // may be incomplete (pre-R79 full mode didn't store hashes).
   let deletedRelPaths: string[] = [];
   if (opts.incremental) {
     const currentRelPaths = new Set(files.map(f => nodeRelative(opts.rootPath, f)));
     const indexedPaths = db.prepare(
-      'SELECT file_path FROM file_hashes WHERE project = ?'
-    ).all(opts.project) as Array<{ file_path: string }>;
+      `SELECT DISTINCT file_path FROM nodes WHERE project = ?
+       UNION
+       SELECT file_path FROM file_hashes WHERE project = ?`
+    ).all(opts.project, opts.project) as Array<{ file_path: string }>;
     deletedRelPaths = indexedPaths
       .map(r => r.file_path)
       .filter(p => !currentRelPaths.has(p));
