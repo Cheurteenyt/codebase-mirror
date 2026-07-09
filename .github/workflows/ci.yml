@@ -33,9 +33,14 @@ on:
     branches: [main]
 
 # Cancel in-progress runs for the same branch (saves minutes).
+# R116: set cancel-in-progress: false — previously true, which cancelled
+# the Frontend (graph-ui) job mid-install when a new push to main happened.
+# graph-ui's npm install can take 60-90s, and the cancel produced a false
+# "This job was cancelled" error. With false, in-progress runs complete
+# naturally; new runs queue behind them.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # R52: least-privilege — the default GITHUB_TOKEN has write permissions
 # we don't need. Restrict to read-only for all jobs.
@@ -51,6 +56,8 @@ jobs:
     name: Backend (v2)
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
+    # R116: explicit timeout so a hung install/test doesn't run forever.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: v2
@@ -84,6 +91,9 @@ jobs:
     name: Frontend (graph-ui)
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
+    # R116: explicit timeout — graph-ui's npm install can take 60-90s and
+    # jsdom test setup adds overhead. 15 min is generous but bounded.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: graph-ui
