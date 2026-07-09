@@ -160,7 +160,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
         (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
     `).get(opts.project, opts.project) as { nodes: number; edges: number };
-    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges);
+    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, false);
     db.close();
     return {
       dbPath,
@@ -173,6 +173,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       languages: allLangs,
       parallel: false,
       workerCount: 0,
+      crossFileCallsStale: false,
     };
   }
 
@@ -199,7 +200,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
       (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
   `).get(opts.project, opts.project) as { nodes: number; edges: number };
-  updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges);
+  // R101: persist crossFileCallsStale in DB + return in IndexResult
+  const crossFileStale = (opts.incremental ?? false) && result.files > 0;
+  updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale);
   db.close();
 
   return {
@@ -209,10 +212,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     languages: result.languages ?? allLangs,
     parallel: useParallel,
     workerCount: useParallel ? numWorkers : 0,
-    // R100: cross-file CALLS are only built in full mode. In incremental mode,
-    // changed files lose their cross-file edges until a full reindex.
-    // This flag warns consumers (MCP/UI/watch) that the graph may be stale.
-    crossFileCallsStale: (opts.incremental ?? false) && result.files > 0,
+    crossFileCallsStale: crossFileStale,
   };
 }
 
@@ -224,10 +224,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
  * serialized nodes/edges. The main thread collects all results and
  * writes to SQLite in a single transaction.
  *
- * Limitation: cross-file CALLS edge resolution is limited to within
- * each batch (workers can't see other workers' name→QN maps). Intra-file
- * calls work correctly. A future improvement could do a second pass
- * on the main thread to resolve cross-file calls.
+ * R101: Cross-file CALLS are resolved in full mode by a main-thread second pass
+ * after all nodes are inserted. In incremental mode they are intentionally
+ * marked stale (crossFileCallsStale=true) until a full reindex or a persistent
+ * call_sites table is implemented.
  */
 async function indexParallel(
   db: Database.Database,
