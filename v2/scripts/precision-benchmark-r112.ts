@@ -161,22 +161,23 @@ async function main() {
   }
 
   // 2b. Call-sites metrics
-  // R113: compute REAL resolved/unresolved call_sites.
-  // A call_site is "resolved" if its callee name appears as a callee in at
-  // least one cross-file edge. This is an approximation — the resolver doesn't
-  // store a direct link between call_sites and edges, so we match by callee name.
-  // This is more honest than the old code which set unresolved = total.
+  // R114: compute resolved/unresolved call_sites at ROW LEVEL (not per distinct callee name).
+  // R113 used SELECT DISTINCT callee which undercounted: if 2 call_sites both call
+  // foo(), R113 counted 1 resolved instead of 2. R114 counts each call_site row.
+  // A call_site row is "resolved" if its callee name appears as a callee in at
+  // least one cross-file edge. This is still name-based (not a direct edge↔call_site
+  // link), but it's row-accurate.
   const totalCallSites = (db.prepare('SELECT COUNT(*) AS c FROM call_sites WHERE project = ?').get(project) as { c: number }).c;
-  // R113: collect ALL callee names from ALL cross-file edges (not just sample)
+  // R114: collect ALL callee names from ALL cross-file edges (not just sample)
   const allCalleeNames = new Set<string>();
   for (const e of allEdges) {
     const props = JSON.parse(e.properties_json);
     if (props.callee) allCalleeNames.add(props.callee);
   }
-  // R113: count call_sites whose callee appears in at least one edge
+  // R114: count ALL call_site rows (not DISTINCT callee) whose callee appears in edges
   let resolvedCallSites = 0;
-  const allCallSiteCallees = db.prepare('SELECT DISTINCT callee FROM call_sites WHERE project = ?').all(project) as Array<{ callee: string }>;
-  for (const cs of allCallSiteCallees) {
+  const allCallSiteRows = db.prepare('SELECT callee FROM call_sites WHERE project = ?').all(project) as Array<{ callee: string }>;
+  for (const cs of allCallSiteRows) {
     if (allCalleeNames.has(cs.callee)) resolvedCallSites++;
   }
   const unresolvedCallSites = totalCallSites - resolvedCallSites;
@@ -209,19 +210,18 @@ async function main() {
     sample_size: edgeSamples.length,
   };
 
-  // R113: compute unresolved_imports GLOBALLY (not sample-based).
-  // An import binding is "resolved" if its local_name appears as a callee in
-  // ANY cross-file edge (across all edges, not just the sample).
-  // This fixes the old bug where the metric depended on the sample size.
-  const importedLocalNames = new Set<string>();
+  // R114: compute unresolved_imports at ROW LEVEL (not per distinct name).
+  // R113 used a Set<string> of local_name which deduplicated imports: if 2 files
+  // import `foo`, R113 counted 1. R114 counts each import row.
+  // An import row is "resolved" if its local_name appears as a callee in ANY
+  // cross-file edge. This is name-based (not a direct import↔edge link), but
+  // row-accurate.
   // Re-open to check imports
   const db2 = new Database(dbPath, { readonly: true });
-  const imports = db2.prepare('SELECT local_name FROM imports WHERE project = ? AND import_kind != ?').all(project, 'default_export') as Array<{ local_name: string }>;
-  for (const imp of imports) importedLocalNames.add(imp.local_name);
-  // R113: use allCalleeNames (global, from ALL edges) instead of edgeSamples
+  const allImportRows = db2.prepare('SELECT local_name FROM imports WHERE project = ? AND import_kind != ?').all(project, 'default_export') as Array<{ local_name: string }>;
   let unresolvedImports = 0;
-  for (const name of importedLocalNames) {
-    if (!allCalleeNames.has(name)) unresolvedImports++;
+  for (const imp of allImportRows) {
+    if (!allCalleeNames.has(imp.local_name)) unresolvedImports++;
   }
   metrics.unresolved_imports = unresolvedImports;
   db2.close();

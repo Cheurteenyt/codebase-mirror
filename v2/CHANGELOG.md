@@ -1,5 +1,68 @@
 # Changelog — Codebase Memory V2
 
+## 0.49.0 — Round 114 (2026-07-09) Precision Benchmark Row-Level Attribution Lock
+
+**39th round (GPT 5.5 external audit R115).** 0 runtime bugs — 2 benchmark
+metric accuracy fixes. GPT 5.5 found that R113's `resolved_call_sites` used
+`SELECT DISTINCT callee` which undercounted: if 2 call_sites both call `foo()`,
+R113 counted 1 resolved instead of 2. Same issue for `unresolved_imports`
+which used a `Set<string>` of local_name (deduplicated).
+
+### Benchmark metric fixes (2)
+
+46. **`resolved_call_sites` undercounted due to `SELECT DISTINCT callee`** (`precision-benchmark-r112.ts`) — R113 used `SELECT DISTINCT callee FROM call_sites` then counted how many distinct names appeared in edges. If 2 call_sites both call `foo()`, this counted 1 resolved instead of 2. Fixed: R114 uses `SELECT callee FROM call_sites` (all rows, not DISTINCT) and counts each row whose callee appears in edges. Now 2 call_sites to `foo()` → resolved=2.
+
+47. **`unresolved_imports` undercounted due to `Set<string>` dedup** (`precision-benchmark-r112.ts`) — R113 built a `Set<string>` of `local_name` from imports, which deduplicated: if 2 files import `foo`, R113 counted 1. Fixed: R114 iterates all import rows directly (no Set) and counts each row whose local_name doesn't appear in edges.
+
+### Real metrics after R114 (v2/src, 43 files, 794 nodes, 1518 edges)
+
+```
+Total cross-file CALLS edges:  568
+Total call_sites:              1376
+  Resolved (callee in edges):   466  (was 169 under R113 — DISTINCT undercount)
+  Unresolved:                   910  (was 1207)
+Total imports:                 366 (incl. 0 default export markers)
+  Unresolved (no edge for name):224  (was 85 under R113 — Set dedup undercount)
+Ambiguous ratio:               35.9%
+```
+
+The R114 fix reveals that R113 undercounted resolved call_sites by ~64% (169 vs 466) and unresolved imports by ~62% (85 vs 224). These are significant enough to change product decisions.
+
+### Tests added (6)
+
+New file: `v2/tests/indexer/r114-row-level-attribution.test.ts`
+
+1. **two call_sites calling same callee → resolved=2 (row-level)** — The exact R115 P2 scenario.
+2. **mixed: 2 call foo + 1 call bar → resolved=3** — Multiple callees, all resolved.
+3. **two files import same name, both call → row-level import counting** — No Set dedup.
+4. **import never called → unresolved (row-level)** — Each import row counted independently.
+5. **global metrics independent of sample size** — Sample only affects the detailed sample array, not global counts.
+6. **benchmark script uses row-level (not DISTINCT)** — Verifies the query is `SELECT callee` not `SELECT DISTINCT callee`, and no Set dedup for imports.
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  19 passed (19)     [indexer tests]
+     Tests  107 passed (107)   [101 existing + 6 new R114]
+Benchmark: runs with row-accurate metrics
+```
+
+### Files
+
+- Modified: `v2/scripts/precision-benchmark-r112.ts` (row-level call_sites + imports)
+- New: `v2/tests/indexer/r114-row-level-attribution.test.ts` (6 tests)
+- Modified: `v2/package.json` (version 0.49.0)
+
+### Total: 42 bugs + 11 optimizations + 107 indexer tests across 39 rounds
+
+### Next steps
+
+1. **Import-aware Phase 2** — namespace imports (ns.foo), member-call tracking, re-exports, barrel files, default export expressions
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+4. **Instrument builtins_skipped / type_only_skipped** — add counters in fast-walker.ts for real KPIs
+
 ## 0.48.0 — Round 113 (2026-07-09) Precision Benchmark Metrics Honesty Lock
 
 **38th round (GPT 5.5 external audit R114).** 0 runtime bugs — 3 benchmark

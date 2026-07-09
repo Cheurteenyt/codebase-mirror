@@ -240,10 +240,10 @@
 | R75 (pre-read files, skip setLanguage, multi-row batch INSERT 50 rows/statement, 273ms v2/src) | 0.15.7 | 0 | 0 | 378 |
 | R76 (single-pass complexity estimation, skip anonymous, 267ms v2/src, 897ms v1/src) | 0.15.8 | 0 | 0 | 378 |
 | R77 (honest benchmark: V2 11% slower in wall time, 20% faster in extraction only, docs corrected) | 0.15.9 | 0 | 0 | 378 |
-| R78–R113 | 0.16.0–0.48.0 | — | — | — |
+| R78–R114 | 0.16.0–0.49.0 | — | — | — |
 | **Total** | | **566+** | **513+** | **378** |
 
-> **Note:** Rounds R78–R113 (versions 0.16.0–0.48.0) are documented in
+> **Note:** Rounds R78–R114 (versions 0.16.0–0.49.0) are documented in
 > `v2/CHANGELOG.md`. Key milestones: R78 rigorous benchmark fix, R79-R85
 > incremental mode + mtime_ns precision, R86-R94 parallel + failure safety,
 > R98-R101 cross-file CALLS resolution, R102-R105 stale flag + deletion
@@ -251,13 +251,13 @@
 > R107 call_sites_initialized flag, R108 stale-complete precision lock,
 > R109 empty graph complete state lock, R110 import-aware resolution Phase 1,
 > R111 import correctness lock, R112 precision benchmark + default export scope,
-> R113 benchmark metrics honesty lock.
-> The V2 indexer now has 101 tests across 18 test files covering correctness,
+> R113 benchmark metrics honesty lock, R114 row-level attribution lock.
+> The V2 indexer now has 107 tests across 19 test files covering correctness,
 > incremental safety, cross-file CALLS, stale flag semantics, call_sites
 > persistence, deletion cleanup, empty graph handling, import-aware resolution
 > (named/alias/default/namespace), explicit extensions, default export markers,
-> type-only import filtering, precision benchmark validation, and benchmark
-> metrics honesty.
+> type-only import filtering, precision benchmark validation, benchmark metrics
+> honesty, and row-level attribution.
 
 ## Performance Milestones
 
