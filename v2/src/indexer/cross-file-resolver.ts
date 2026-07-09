@@ -620,9 +620,16 @@ export function rebuildCrossFileCallsEdges(
 
 /**
  * R120: Check whether the exports table is populated for a project.
- * Used to detect legacy DBs (pre-R119) that have call_sites_initialized=1
- * but no exports. In that case, the resolver can't resolve export aliases
- * or re-exports for unchanged files, so the caller should mark stale=true.
+ *
+ * R121: This helper is currently UNUSED — the hasExports gate was removed in R120
+ * because it was too aggressive (most files use `export function foo()` which
+ * doesn't create export bindings, so the exports table can be legitimately empty
+ * even on a fully initialized R119+ DB). The resolver's resolveExportedSymbol()
+ * falls back to fileSyms.get() when no export binding exists, which is sufficient.
+ *
+ * Kept for potential future use (e.g., upgrade detection, diagnostics, or
+ * re-enabling a smarter legacy gate that checks for export-containing files
+ * rather than just any exports row).
  */
 export function hasExports(db: Database.Database, project: string): boolean {
   const row = db.prepare(

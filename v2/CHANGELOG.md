@@ -1,5 +1,36 @@
 # Changelog — Codebase Memory V2
 
+## 0.52.2 — Round 121 (2026-07-09) Export Tracking Legacy Upgrade Hygiene Lock
+
+**45th round (GPT 5.5 audit R126).** 0 runtime bugs — code hygiene + 3 tests.
+GPT 5.5 noted that `hasExports()` was exported but unused (gate removed in R120),
+and recommended a legacy upgrade test + documentation.
+
+### Code hygiene
+
+- Updated `hasExports()` comment to clearly state it's currently unused and why
+  (gate was too aggressive, resolver falls back to `fileSyms.get()` which is sufficient)
+- Documented in CHANGELOG: export alias/re-export tracking is complete after full
+  reindex; legacy incremental may need full reindex to backfill `exports` table
+
+### Tests (3)
+
+`v2/tests/indexer/r121-legacy-upgrade-lock.test.ts`
+
+1. **Legacy DB upgrade**: empty exports → alias NOT resolved, no crash, stale=false (documented limitation)
+2. **Full reindex after upgrade**: alias resolved correctly (exports backfilled)
+3. **hasExports() returns correct values**: false when empty, true when populated
+
+### Documented limitation
+
+Export alias/re-export tracking requires a full reindex after upgrading from
+pre-R119. In incremental mode on a legacy DB (exports table empty), the resolver
+falls back to direct `fileSyms.get()` — aliases and re-exports won't be resolved
+until a full reindex populates the `exports` table. This is not a bug but a
+documented migration requirement.
+
+### Total: 42 bugs + 11 optimizations + 137 indexer tests across 45 rounds
+
 ## 0.52.1 — Round 120 (2026-07-09) Export Tracking Precision Lock
 
 **44th round (GPT 5.5 audit R125).** 1 bug fixed + 3 precision tests. GPT 5.5
