@@ -39,12 +39,20 @@ interface Metrics {
   total_cross_file_edges: number;
   resolution_breakdown: Record<string, number>;
   ambiguous_ratio: number;
+  // R113: renamed from unresolved_call_sites (which was always = total_call_sites).
+  // Now measures call_sites whose callee didn't produce any cross-file edge.
+  resolved_call_sites: number;
   unresolved_call_sites: number;
   total_call_sites: number;
+  // R113: unresolved_imports now computed globally (not sample-based).
+  // Counts import bindings whose local_name never appears as a callee in
+  // ANY cross-file edge (across all edges, not just the sample).
   unresolved_imports: number;
   total_imports: number;
-  builtins_skipped: number;
-  type_only_skipped: number;
+  // R113: renamed to clarify these are uninstrumented (always 0 without
+  // fast-walker.ts instrumentation). Do NOT use as KPIs.
+  builtins_skipped_uninstrumented: number;
+  type_only_skipped_uninstrumented: number;
   default_export_markers: number;
   sample_size: number;
 }
@@ -153,17 +161,25 @@ async function main() {
   }
 
   // 2b. Call-sites metrics
+  // R113: compute REAL resolved/unresolved call_sites.
+  // A call_site is "resolved" if its callee name appears as a callee in at
+  // least one cross-file edge. This is an approximation — the resolver doesn't
+  // store a direct link between call_sites and edges, so we match by callee name.
+  // This is more honest than the old code which set unresolved = total.
   const totalCallSites = (db.prepare('SELECT COUNT(*) AS c FROM call_sites WHERE project = ?').get(project) as { c: number }).c;
-  // Unresolved call_sites = call_sites that didn't produce any cross-file edge.
-  // We approximate: call_sites whose callee doesn't appear in any cross-file edge.
-  // A more precise measure would require joining call_sites to edges, but the
-  // resolver doesn't store that link. We use the difference as an approximation.
-  const resolvedCallSites = new Set<string>();
+  // R113: collect ALL callee names from ALL cross-file edges (not just sample)
+  const allCalleeNames = new Set<string>();
   for (const e of allEdges) {
     const props = JSON.parse(e.properties_json);
-    if (props.callee) resolvedCallSites.add(props.callee);
+    if (props.callee) allCalleeNames.add(props.callee);
   }
-  const unresolvedCallSites = totalCallSites; // approximation — all call_sites are "unresolved" at extraction time
+  // R113: count call_sites whose callee appears in at least one edge
+  let resolvedCallSites = 0;
+  const allCallSiteCallees = db.prepare('SELECT DISTINCT callee FROM call_sites WHERE project = ?').all(project) as Array<{ callee: string }>;
+  for (const cs of allCallSiteCallees) {
+    if (allCalleeNames.has(cs.callee)) resolvedCallSites++;
+  }
+  const unresolvedCallSites = totalCallSites - resolvedCallSites;
 
   // 2c. Imports metrics
   const totalImports = (db.prepare('SELECT COUNT(*) AS c FROM imports WHERE project = ?').get(project) as { c: number }).c;
@@ -182,29 +198,30 @@ async function main() {
     total_cross_file_edges: allEdges.length,
     resolution_breakdown: resolutionBreakdown,
     ambiguous_ratio: allEdges.length > 0 ? ambiguousCount / allEdges.length : 0,
+    resolved_call_sites: resolvedCallSites,
     unresolved_call_sites: unresolvedCallSites,
     total_call_sites: totalCallSites,
     unresolved_imports: 0, // computed below
     total_imports: totalImports,
-    builtins_skipped: builtinsSkipped,
-    type_only_skipped: typeOnlySkipped,
+    builtins_skipped_uninstrumented: builtinsSkipped,
+    type_only_skipped_uninstrumented: typeOnlySkipped,
     default_export_markers: defaultExportMarkers,
     sample_size: edgeSamples.length,
   };
 
-  // Approximate unresolved imports: imports whose source_module is relative
-  // but didn't produce a cross-file edge. We can check if any import binding's
-  // local_name appears as a callee in the edges.
+  // R113: compute unresolved_imports GLOBALLY (not sample-based).
+  // An import binding is "resolved" if its local_name appears as a callee in
+  // ANY cross-file edge (across all edges, not just the sample).
+  // This fixes the old bug where the metric depended on the sample size.
   const importedLocalNames = new Set<string>();
   // Re-open to check imports
   const db2 = new Database(dbPath, { readonly: true });
   const imports = db2.prepare('SELECT local_name FROM imports WHERE project = ? AND import_kind != ?').all(project, 'default_export') as Array<{ local_name: string }>;
   for (const imp of imports) importedLocalNames.add(imp.local_name);
-  const calleeNamesInEdges = new Set<string>();
-  for (const e of edgeSamples) calleeNamesInEdges.add(e.callee);
+  // R113: use allCalleeNames (global, from ALL edges) instead of edgeSamples
   let unresolvedImports = 0;
   for (const name of importedLocalNames) {
-    if (!calleeNamesInEdges.has(name)) unresolvedImports++;
+    if (!allCalleeNames.has(name)) unresolvedImports++;
   }
   metrics.unresolved_imports = unresolvedImports;
   db2.close();
@@ -215,9 +232,11 @@ async function main() {
   console.log('═'.repeat(70));
   console.log(`Total cross-file CALLS edges:  ${metrics.total_cross_file_edges}`);
   console.log(`Total call_sites:              ${metrics.total_call_sites}`);
+  console.log(`  Resolved (callee in edges):   ${metrics.resolved_call_sites}`);
+  console.log(`  Unresolved:                   ${metrics.unresolved_call_sites}`);
   console.log(`Total imports:                 ${metrics.total_imports} (incl. ${metrics.default_export_markers} default export markers)`);
+  console.log(`  Unresolved (no edge for name):${metrics.unresolved_imports}`);
   console.log(`Ambiguous ratio:               ${(metrics.ambiguous_ratio * 100).toFixed(1)}%`);
-  console.log(`Unresolved imports (approx):   ${metrics.unresolved_imports}`);
   console.log();
   console.log('Resolution breakdown:');
   for (const [res, count] of Object.entries(metrics.resolution_breakdown).sort((a, b) => b[1] - a[1])) {
@@ -225,8 +244,9 @@ async function main() {
     console.log(`  ${res.padEnd(30)} ${String(count).padStart(6)}  (${pct}%)`);
   }
   console.log();
-  console.log('Note: builtins_skipped and type_only_skipped are filtered at extraction');
-  console.log('time and not measurable from the DB. Instrument fast-walker.ts to track.');
+  console.log('Note: builtins_skipped_uninstrumented and type_only_skipped_uninstrumented');
+  console.log('are always 0 — these are filtered at extraction time and not measurable');
+  console.log('from the DB. Instrument fast-walker.ts to track them as real KPIs.');
   console.log();
 
   console.log('═'.repeat(70));

@@ -1,5 +1,67 @@
 # Changelog — Codebase Memory V2
 
+## 0.48.0 — Round 113 (2026-07-09) Precision Benchmark Metrics Honesty Lock
+
+**38th round (GPT 5.5 external audit R114).** 0 runtime bugs — 3 benchmark
+metric honesty fixes. GPT 5.5 found that R112's precision benchmark had 3
+metrics that were approximate or sample-based despite having global-sounding
+names, which could lead to wrong product decisions if taken at face value.
+
+### Benchmark metric fixes (3)
+
+43. **`unresolved_call_sites` was always = `totalCallSites`** (`precision-benchmark-r112.ts`) — The old code calculated `resolvedCallSites` (a Set of callee names from edges) but then set `unresolvedCallSites = totalCallSites` instead of `totalCallSites - resolvedCallSites.size`. This made it look like ALL call_sites were unresolved. Fixed: now computes `resolvedCallSites` by checking which call_site callees appear in cross-file edges, then `unresolved = total - resolved`.
+
+44. **`unresolved_imports` was sample-based** (`precision-benchmark-r112.ts`) — The old code built `calleeNamesInEdges` from `edgeSamples` (limited to the sample size, default 50), not from `allEdges`. So the metric varied depending on the sample size and was unreliable for large projects. Fixed: now uses `allCalleeNames` (built from ALL cross-file edges, not just the sample).
+
+45. **`builtins_skipped` / `type_only_skipped` were always 0** (`precision-benchmark-r112.ts`) — These were hardcoded to 0 with a note, but the names suggested they were real metrics. Fixed: renamed to `builtins_skipped_uninstrumented` and `type_only_skipped_uninstrumented` to make clear they're not measurable without instrumentation in `fast-walker.ts`. Also added `resolved_call_sites` to the Metrics interface and output.
+
+### Real metrics after R113 (v2/src, 43 files, 794 nodes, 1518 edges)
+
+```
+Total cross-file CALLS edges:  568
+Total call_sites:              1376
+  Resolved (callee in edges):   169
+  Unresolved:                   1207
+Total imports:                 366 (incl. 0 default export markers)
+  Unresolved (no edge for name): 85
+Ambiguous ratio:               35.9%
+```
+
+### Tests added (6)
+
+New file: `v2/tests/indexer/r113-benchmark-honesty.test.ts`
+
+1. **`resolved_call_sites > 0` when cross-file edges exist** — Verifies the old bug (always 0) is fixed.
+2. **`unresolved = total - resolved` invariant** — The exact arithmetic must hold.
+3. **`unresolved_imports` is global** — Counts imports with no matching edge across ALL edges, not just sample.
+4. **import never called → no edge** — bar is imported but not called, should have 0 edges.
+5. **call_site for undefined function → unresolved** — nonexistentFunction has no edge, all call_sites unresolved.
+6. **benchmark script has corrected fields** — Verifies `resolved_call_sites`, `_uninstrumented` suffix, and absence of old buggy lines.
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  18 passed (18)     [indexer tests]
+     Tests  101 passed (101)   [95 existing + 6 new R113]
+Benchmark: runs successfully with honest metrics
+```
+
+### Files
+
+- Modified: `v2/scripts/precision-benchmark-r112.ts` (3 metric fixes + output update)
+- New: `v2/tests/indexer/r113-benchmark-honesty.test.ts` (6 tests)
+- Modified: `v2/package.json` (version 0.48.0)
+
+### Total: 42 bugs + 11 optimizations + 101 indexer tests across 38 rounds
+
+### Next steps
+
+1. **Import-aware Phase 2** — namespace imports (ns.foo), member-call tracking, re-exports, barrel files, default export expressions
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+4. **Instrument builtins_skipped / type_only_skipped** — add counters in fast-walker.ts for real KPIs
+
 ## 0.47.0 — Round 112 (2026-07-09) Cross-file CALLS Precision Benchmark + Default Export Scope
 
 **37th round (GPT 5.5 external audit R113).** 0 bugs — precision benchmark
