@@ -1,5 +1,74 @@
 # Changelog — Codebase Memory V2
 
+## 0.42.0 — Round 107 (2026-07-09) Call-sites Initialized State + First Incremental Proof
+
+**32nd round (GPT 5.5 external audit R108).** 1 bug fixed. GPT 5.5 found that
+R106's legacy DB detection using `hasCallSites()===false` was ambiguous: a
+valid R106 project with 0 call-sites (no unresolved cross-file calls) would be
+incorrectly treated as "legacy DB", causing the incremental resolver to skip
+resolution and mark the graph stale.
+
+### Bug fixed (1)
+
+38. **`hasCallSites()===false` ambiguous: valid R106 DB with 0 call-sites treated as legacy** (`cross-file-resolver.ts`, `wasm-extractor.ts`, `indexer.ts`, `schema.ts`) — R106 used `hasCallSites(project)===false` as the signal for "legacy pre-R106 DB". But a valid R106 DB can legitimately have 0 call-sites (project with no unresolved cross-file calls). In that case, the first incremental that introduces cross-file calls would: (1) insert the new call_site, (2) skip resolution because `callSitesExistedBefore=false`, (3) mark `stale=true`, (4) NOT create the cross-file edge until a full reindex. Fixed: added explicit `projects.call_sites_initialized INTEGER DEFAULT 0` flag. Set to 1 after any successful full R106+ reindex. Incremental mode now uses `isCallSitesInitialized()` instead of `hasCallSites()` as the legacy DB signal. A valid R106 DB with 0 call-sites has `initialized=1`, so the resolver is allowed to run when the first call-site is introduced.
+
+### Implementation
+
+1. Schema: `ALTER TABLE projects ADD COLUMN call_sites_initialized INTEGER DEFAULT 0`
+2. Migration: `migrateProjectsCallSitesInitialized()` — idempotent, adds column if missing
+3. `updateProjectStats()` — new `callSitesInitialized` parameter (7th arg)
+4. Full reindex: sets `call_sites_initialized=1` (even if 0 call-sites found)
+5. Incremental: preserves existing `call_sites_initialized` value
+6. New helper: `isCallSitesInitialized(db, project)` — authoritative legacy DB signal
+7. Both single-thread (`wasm-extractor.ts`) and parallel (`indexer.ts`) paths use `isCallSitesInitialized()` instead of capturing `callSitesExistedBefore` before insertion
+8. Deletion-only fast path and post-extraction cleanup also use `isCallSitesInitialized()`
+
+### Tests added (7)
+
+New file: `v2/tests/indexer/r107-call-sites-initialized.test.ts`
+
+1. **full index with 0 call-sites: initialized=1, call_sites=0, stale=false** — Project with no cross-file calls. Full index should set initialized=1 even though call_sites=0.
+2. **incremental adds first call-site: edge created, stale=false (R108 P2 fix)** — The exact R108 P2 scenario: full index with 0 call-sites, then incremental adds a cross-file call. Before R107, stale=true and no edge. After R107, stale=false and edge created.
+3. **legacy DB (initialized=0): incremental keeps stale=true** — Manually reset initialized=0 + delete call_sites. Incremental should mark stale=true (forces full reindex).
+4. **no-op incremental preserves call_sites_initialized flag** — No-op doesn't change the flag.
+5. **metadata-only incremental preserves call_sites_initialized flag** — Metadata-only doesn't change the flag.
+6. **parallel: workers=2 full index populates call_sites + incremental resolves** — P2/P3 from R108 report: forces real parallel path with 24+ files and workers=2. Verifies call_sites populated, cross-file edges created, incremental resolves, stale=false, orphan_edges=0.
+7. **projects table has call_sites_initialized column** — Schema verification.
+
+### Tests updated (2)
+
+- `r104-deleted-files.test.ts` test 1: `crossFileCallsStale` now `false` (was `true`) — with R107, deletion-only fast path either rebuilds cross-file CALLS (stale=false) or has nothing to rebuild (stale=false, graph still complete).
+- `r106-call-sites-persistent.test.ts` test 11 (legacy DB): now also resets `call_sites_initialized=0` (not just deletes call_sites rows) — R107 requires both to simulate legacy DB.
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  12 passed (12)     [indexer tests]
+     Tests  60 passed (60)     [53 existing + 7 new R107]
+Benchmark smoke: PASSED (all invariants met)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/schema.ts` (call_sites_initialized column + migration + updateProjectStats)
+- Modified: `v2/src/indexer/cross-file-resolver.ts` (new isCallSitesInitialized helper)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (use isCallSitesInitialized)
+- Modified: `v2/src/indexer/indexer.ts` (use isCallSitesInitialized in all 3 paths + preserve flag)
+- New: `v2/tests/indexer/r107-call-sites-initialized.test.ts` (7 tests)
+- Updated: `v2/tests/indexer/r104-deleted-files.test.ts` (stale=false after deletion)
+- Updated: `v2/tests/indexer/r106-call-sites-persistent.test.ts` (legacy DB simulation resets flag)
+- Modified: `v2/package.json` (version 0.42.0)
+
+### Total: 38 bugs + 11 optimizations + 60 indexer tests across 32 rounds
+
+### Next steps
+
+1. **Import-aware resolution** — parse import statements to prefer imported symbols
+2. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+3. **Worker pool persistant** — for MCP/UI/watch daemon mode
+4. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+
 ## 0.41.0 — Round 106 (2026-07-09) Call-sites Persistent Table + Deletion-only Fast Path
 
 **31st round (GPT 5.5 external audit R106).** Major feature: persistent

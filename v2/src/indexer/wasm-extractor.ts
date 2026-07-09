@@ -29,7 +29,7 @@ import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { relative, extname, basename, dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { extractFast, type UnresolvedCallSite } from './fast-walker.js';
-import { replaceCallSitesForFiles, rebuildCrossFileCallsEdges, hasCallSites } from './cross-file-resolver.js';
+import { replaceCallSitesForFiles, rebuildCrossFileCallsEdges, hasCallSites, isCallSitesInitialized } from './cross-file-resolver.js';
 const require2 = createRequire(import.meta.url);
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -522,6 +522,8 @@ export async function extractFromFilesWasm(
     //      extraction. Now we insert all new call_sites from allExtracts.
     //   2. Then rebuildCrossFileCallsEdges() rebuilds ALL cross-file CALLS edges
     //      from the persistent table + all current nodes.
+    //   3. Mark call_sites_initialized=1 (R107) — even if 0 call-sites were
+    //      found, the table is now authoritative for this project.
     //
     // Incremental mode:
     //   1. Delete call_sites for changed files (changedRelPaths).
@@ -533,16 +535,14 @@ export async function extractFromFilesWasm(
     //      changed and unchanged files).
     //   4. crossFileCallsStale = false (no longer stale!).
     //
-    // Edge case: if call_sites was empty BEFORE this transaction (legacy DB
-    // without call_sites, e.g., pre-R106 DB doing its first incremental), we
-    // can't rebuild a complete graph — unchanged files' call_sites are missing.
-    // In that case, skip resolution and let the caller mark stale=true.
-    // This forces a full reindex which will populate call_sites for all files.
+    // R107: legacy DB detection now uses isCallSitesInitialized() instead of
+    // hasCallSites(). A valid R106 DB can have 0 call-sites (project with no
+    // unresolved cross-file calls), so hasCallSites()===false is ambiguous.
+    // isCallSitesInitialized() checks the explicit call_sites_initialized flag
+    // set by the last full R106+ reindex.
 
-    // R106: capture legacy DB flag BEFORE inserting new call_sites.
-    // After insertion, hasCallSites would return true even for legacy DBs
-    // (because changed files' call_sites were just inserted).
-    const callSitesExistedBefore = hasCallSites(db, project);
+    // R107: capture initialized flag BEFORE inserting new call_sites.
+    const callSitesInitialized = isCallSitesInitialized(db, project);
 
     // Step 1: persist call_sites.
     // - Full mode: insert all call_sites from allExtracts (table was cleared).
@@ -564,16 +564,23 @@ export async function extractFromFilesWasm(
     // Step 2: rebuild cross-file CALLS edges from persistent call_sites.
     if (incremental) {
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(project) as { c: number }).c;
-      if (nodesCount > 0 && !callSitesExistedBefore) {
-        // Legacy DB: call_sites was empty before this transaction. Unchanged
-        // files' call_sites are missing. Skip resolution to avoid creating an
-        // incomplete graph. Caller will mark stale=true to force full reindex.
+      if (nodesCount > 0 && !callSitesInitialized) {
+        // R107: Legacy DB (pre-R106, or R106 full reindex never completed).
+        // call_sites is not authoritative for unchanged files. Skip resolution
+        // to avoid creating an incomplete graph. Caller marks stale=true to
+        // force full reindex which will set call_sites_initialized=1.
       } else if (nodesCount > 0 && hasCallSites(db, project)) {
+        // R107: initialized=true (or call_sites now has entries from changed files).
+        // Rebuild cross-file CALLS from the full call_sites table.
         const added = rebuildCrossFileCallsEdges(db, project);
         result.edges += added;
         result.crossFileCallsResolved = true;
       }
       // else: no nodes or no call_sites — nothing to resolve.
+      // R107: if initialized=true but call_sites is empty (project genuinely
+      // has 0 unresolved cross-file calls), there's nothing to rebuild, which
+      // is correct. crossFileCallsResolved stays false, but stale will be
+      // computed as false by the caller (existingStale || files > 0 || deleted).
     } else {
       // Full mode: always rebuild (table was cleared, all call_sites are new).
       const added = rebuildCrossFileCallsEdges(db, project);

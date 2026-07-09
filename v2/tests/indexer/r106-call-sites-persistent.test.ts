@@ -408,16 +408,19 @@ describe('R106: Call-sites Persistent Table — Phase 1', () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function caller() { return foo(); }\n');
     writeFileSync(join(projectDir, 'b.ts'), 'export function foo() { return 42; }\n');
 
-    // Full index — populates call_sites
+    // Full index — populates call_sites + sets call_sites_initialized=1
     await indexProjectWasm({
       project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0,
     });
 
-    // Simulate legacy DB: delete all call_sites
+    // Simulate legacy DB: delete all call_sites AND reset call_sites_initialized=0
+    // R107: the initialized flag is the authoritative legacy signal.
+    // Just deleting call_sites rows is not enough — the flag must also be reset.
     const dbPath = defaultCodeDbPath(projectName);
     const dbW = new Database(dbPath);
     initIndexerSchema(dbW);
     dbW.prepare('DELETE FROM call_sites WHERE project = ?').run(projectName);
+    dbW.prepare('UPDATE projects SET call_sites_initialized = 0 WHERE name = ?').run(projectName);
     dbW.close();
 
     // Modify a.ts — incremental
@@ -427,10 +430,10 @@ describe('R106: Call-sites Persistent Table — Phase 1', () => {
     });
 
     expect(result2.errors.length).toBe(0);
-    // R106: legacy DB without call_sites → can't resolve → stale=true
+    // R107: legacy DB (call_sites_initialized=0) → can't resolve → stale=true
     expect(result2.crossFileCallsStale).toBe(true);
 
-    // Full reindex should populate call_sites and reset stale
+    // Full reindex should populate call_sites, set initialized=1, and reset stale
     const result3 = await indexProjectWasm({
       project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0,
     });
@@ -439,6 +442,9 @@ describe('R106: Call-sites Persistent Table — Phase 1', () => {
 
     const db = getDb();
     expect(countCallSites(db)).toBeGreaterThan(0);
+    // R107: initialized flag should be 1 after full reindex
+    const initRow = (db.prepare("SELECT call_sites_initialized FROM projects WHERE name = ?").get(projectName) as { call_sites_initialized?: number });
+    expect(initRow.call_sites_initialized).toBe(1);
     db.close();
   });
 

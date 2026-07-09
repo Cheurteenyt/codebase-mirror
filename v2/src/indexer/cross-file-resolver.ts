@@ -201,10 +201,33 @@ export function rebuildCrossFileCallsEdges(
  * (returns false — legacy DB or first run after R106 migration).
  *
  * Returns true iff there is at least one call_site row for the project.
+ *
+ * R107: this function alone is NOT sufficient to detect legacy DBs, because a
+ * valid R106 DB can have 0 call-sites (project with no unresolved cross-file
+ * calls). Use isCallSitesInitialized() for the legacy DB detection instead.
  */
 export function hasCallSites(db: Database.Database, project: string): boolean {
   const row = db.prepare(
     'SELECT COUNT(*) AS c FROM call_sites WHERE project = ?'
   ).get(project) as { c: number };
   return row.c > 0;
+}
+
+/**
+ * R107: Check whether the project has been initialized by a full R106+ reindex.
+ *
+ * This is the authoritative signal for "is this DB legacy (pre-R106)?".
+ * - Returns true: a full R106+ reindex has run → call_sites is authoritative
+ *   (even if it's empty because the project has 0 unresolved cross-file calls).
+ * - Returns false: legacy pre-R106 DB, or brand-new project that hasn't been
+ *   fully indexed yet → incremental should mark stale=true to force full reindex.
+ *
+ * This replaces the R106 heuristic of using hasCallSites()===false as the
+ * legacy signal, which was ambiguous (R108 P2 bug).
+ */
+export function isCallSitesInitialized(db: Database.Database, project: string): boolean {
+  const row = db.prepare(
+    'SELECT call_sites_initialized FROM projects WHERE name = ?'
+  ).get(project) as { call_sites_initialized?: number } | undefined;
+  return row?.call_sites_initialized === 1;
 }

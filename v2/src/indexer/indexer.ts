@@ -11,7 +11,7 @@ import Database from 'better-sqlite3';
 import { defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { initIndexerSchema, clearProjectData, updateProjectStats } from './schema.js';
 import { discoverSourceFilesWasm, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
-import { replaceCallSitesForFiles, rebuildCrossFileCallsEdges, hasCallSites } from './cross-file-resolver.js';
+import { replaceCallSitesForFiles, rebuildCrossFileCallsEdges, hasCallSites, isCallSitesInitialized } from './cross-file-resolver.js';
 import { Worker } from 'node:worker_threads';
 import { cpus } from 'node:os';
 import { join, relative as nodeRelative } from 'node:path';
@@ -184,11 +184,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // A no-op incremental must NOT reset stale to false. The graphe may still
     // be stale from a previous incremental that changed files. Only a full
     // reindex can reset stale to false.
-    const existingStaleRow = db.prepare(
-      'SELECT cross_file_calls_stale FROM projects WHERE name = ?'
-    ).get(opts.project) as { cross_file_calls_stale?: number } | undefined;
-    const existingStale = existingStaleRow?.cross_file_calls_stale === 1;
-    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, existingStale);
+    const existingRow = db.prepare(
+      'SELECT cross_file_calls_stale, call_sites_initialized FROM projects WHERE name = ?'
+    ).get(opts.project) as { cross_file_calls_stale?: number; call_sites_initialized?: number } | undefined;
+    const existingStale = existingRow?.cross_file_calls_stale === 1;
+    // R107: preserve existing call_sites_initialized (no-op doesn't change it)
+    const existingInitialized = existingRow?.call_sites_initialized === 1;
+    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, existingStale, existingInitialized);
     db.close();
     return {
       dbPath,
@@ -211,7 +213,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // cross-file CALLS from the persistent call_sites table.
   // Before R106, this case fell through to extractFromFilesWasm() which would
   // stat+skip every file (wasteful) before the cleanup transaction ran.
+  // R107: use isCallSitesInitialized() for legacy DB detection.
   if (opts.incremental && estimatedFilesToIndex === 0 && deletedRelPaths.length > 0) {
+    // R107: capture initialized flag BEFORE the transaction (it won't change inside).
+    const callSitesInitialized = isCallSitesInitialized(db, opts.project);
+    let crossFileResolved = false;
     const cleanupTx = db.transaction(() => {
       // 1. Delete nodes/edges/file_hashes/call_sites for deleted files.
       const ph = deletedRelPaths.map(() => '?').join(',');
@@ -234,32 +240,32 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         .run(opts.project, ...deletedRelPaths);
 
       // 2. Rebuild cross-file CALLS from the post-cleanup state.
-      //    This removes edges that pointed to deleted nodes and re-resolves
-      //    call_sites that may now match different candidates.
-      //    If call_sites is empty (legacy DB), skip — caller will mark stale.
+      //    R107: only if call_sites was initialized (not legacy DB).
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c;
-      if (nodesCount > 0 && hasCallSites(db, opts.project)) {
+      if (nodesCount > 0 && callSitesInitialized && hasCallSites(db, opts.project)) {
         rebuildCrossFileCallsEdges(db, opts.project);
+        crossFileResolved = true;
       }
     });
     cleanupTx();
 
-    // Compute totals + stale.
+    // Compute totals + stale + initialized.
     const totals = db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
         (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
     `).get(opts.project, opts.project) as { nodes: number; edges: number };
+    // R107: if resolver ran, stale=false. If legacy DB (not initialized),
+    // stale=true to force full reindex. Otherwise preserve existing stale.
     const existingStaleRow = db.prepare(
       'SELECT cross_file_calls_stale FROM projects WHERE name = ?'
     ).get(opts.project) as { cross_file_calls_stale?: number } | undefined;
     const existingStale = existingStaleRow?.cross_file_calls_stale === 1;
-    // R106: if call_sites was populated, we rebuilt cross-file CALLS → stale=false.
-    // If call_sites was empty (legacy DB), stale=true to force full reindex.
-    const nodesCountForStale = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c;
-    const resolved = nodesCountForStale > 0 && hasCallSites(db, opts.project);
-    const crossFileStale = resolved ? false : (existingStale || true);
-    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale);
+    const crossFileStale = crossFileResolved
+      ? false
+      : (callSitesInitialized ? existingStale : true);
+    // R107: preserve call_sites_initialized (deletion-only doesn't change it)
+    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale, callSitesInitialized);
     db.close();
     return {
       dbPath,
@@ -324,7 +330,8 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       // The extraction transaction already rebuilt cross-file CALLS, but that
       // used the pre-cleanup state (deleted files' nodes were still present).
       // This second rebuild uses the post-cleanup state.
-      if (hasCallSites(db, opts.project)) {
+      // R107: use isCallSitesInitialized for legacy DB detection.
+      if (isCallSitesInitialized(db, opts.project) && hasCallSites(db, opts.project)) {
         rebuildCrossFileCallsEdges(db, opts.project);
       }
     });
@@ -342,10 +349,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // R106: with persistent call_sites, incremental mode can now rebuild cross-file
   // CALLS. If result.crossFileCallsResolved is true, stale=false. If false
   // (legacy DB without call_sites), preserve existing stale or set to true.
-  const existingStaleRow = opts.incremental
-    ? db.prepare('SELECT cross_file_calls_stale FROM projects WHERE name = ?').get(opts.project) as { cross_file_calls_stale?: number } | undefined
+  // R107: call_sites_initialized is set to true after full reindex, preserved
+  // by incremental. This is the authoritative legacy DB signal.
+  const existingRow = opts.incremental
+    ? db.prepare('SELECT cross_file_calls_stale, call_sites_initialized FROM projects WHERE name = ?').get(opts.project) as { cross_file_calls_stale?: number; call_sites_initialized?: number } | undefined
     : undefined;
-  const existingStale = existingStaleRow?.cross_file_calls_stale === 1;
+  const existingStale = existingRow?.cross_file_calls_stale === 1;
+  const existingInitialized = existingRow?.call_sites_initialized === 1;
   const crossFileStale = opts.incremental
     ? // R106: if resolver ran successfully, not stale. Otherwise, preserve
       // existing stale (could be true from a previous run) or set true if
@@ -354,7 +364,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         ? false
         : (existingStale || result.files > 0 || deletedRelPaths.length > 0)
     : false; // full reindex always resets stale (resolver always runs in full mode)
-  updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale);
+  // R107: full reindex sets call_sites_initialized=true; incremental preserves it.
+  const callSitesInitialized = opts.incremental ? existingInitialized : true;
+  updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale, callSitesInitialized);
   db.close();
 
   return {
@@ -676,6 +688,7 @@ async function indexParallel(
     //      extraction. Now we insert all new call_sites from worker results.
     //   2. Then rebuildCrossFileCallsEdges() rebuilds ALL cross-file CALLS edges
     //      from the persistent table + all current nodes.
+    //   3. Mark call_sites_initialized=1 (R107).
     //
     // Incremental mode:
     //   1. Delete call_sites for changed files (changedToApply).
@@ -685,11 +698,11 @@ async function indexParallel(
     //      files) + all current nodes (has nodes for both changed and unchanged).
     //   4. crossFileCallsStale = false (no longer stale!).
     //
-    // Edge case: if call_sites was empty BEFORE this transaction (legacy DB
-    // without call_sites), skip resolution to avoid an incomplete graph.
+    // R107: legacy DB detection now uses isCallSitesInitialized() instead of
+    // hasCallSites(). See cross-file-resolver.ts for explanation.
 
-    // R106: capture legacy DB flag BEFORE inserting new call_sites.
-    const callSitesExistedBefore = hasCallSites(db, project);
+    // R107: capture initialized flag BEFORE inserting new call_sites.
+    const callSitesInitialized = isCallSitesInitialized(db, project);
 
     // Step 1: collect new call_sites from worker results.
     const newCallSites: UnresolvedCallSite[] = [];
@@ -713,9 +726,8 @@ async function indexParallel(
     // Step 3: rebuild cross-file CALLS edges.
     if (incremental) {
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(project) as { c: number }).c;
-      if (nodesCount > 0 && !callSitesExistedBefore) {
-        // Legacy DB: call_sites was empty before. Skip resolution.
-        // Caller marks stale=true to force full reindex.
+      if (nodesCount > 0 && !callSitesInitialized) {
+        // R107: Legacy DB. Skip resolution. Caller marks stale=true.
       } else if (nodesCount > 0 && hasCallSites(db, project)) {
         const added = rebuildCrossFileCallsEdges(db, project);
         edgeCount += added;

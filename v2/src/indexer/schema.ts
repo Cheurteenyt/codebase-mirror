@@ -53,7 +53,12 @@ const SCHEMA_SQL = `
     indexed_at TEXT NOT NULL,
     node_count INTEGER DEFAULT 0,
     edge_count INTEGER DEFAULT 0,
-    cross_file_calls_stale INTEGER DEFAULT 0
+    cross_file_calls_stale INTEGER DEFAULT 0,
+    -- R107: explicit flag indicating that a full R106+ reindex has populated
+    -- the call_sites table (even if it found 0 call-sites). This distinguishes
+    -- a valid R106 DB with 0 call-sites from a legacy pre-R106 DB that never
+    -- had call_sites. Without this flag, hasCallSites()===false is ambiguous.
+    call_sites_initialized INTEGER DEFAULT 0
   );
 
   -- R106: Call-sites persistent table.
@@ -116,6 +121,8 @@ export function initIndexerSchema(db: Database.Database): void {
   migrateFileHashesMtimeNsColumn(db);
   // R101: add cross_file_calls_stale column to projects if missing
   migrateProjectsCrossFileStale(db);
+  // R107: add call_sites_initialized column to projects if missing
+  migrateProjectsCallSitesInitialized(db);
   // R106: call_sites table is created by SCHEMA_SQL (CREATE IF NOT EXISTS),
   // but the index idx_call_sites_project_file must exist for legacy DBs that
   // already had the table created without it. CREATE INDEX IF NOT EXISTS in
@@ -238,6 +245,26 @@ function migrateProjectsCrossFileStale(db: Database.Database): void {
 }
 
 /**
+ * R107: Add call_sites_initialized column to projects if missing.
+ *
+ * This flag is set to 1 after any successful full R106+ reindex. It
+ * distinguishes:
+ *   - A valid R106 DB that found 0 call-sites at full index time (initialized=1)
+ *   - A legacy pre-R106 DB that never had call_sites populated (initialized=0)
+ *
+ * Without this flag, hasCallSites()===false is ambiguous: it returns false
+ * for both cases, causing the incremental resolver to skip resolution
+ * incorrectly for valid R106 DBs with 0 call-sites (R108 P2 bug).
+ */
+function migrateProjectsCallSitesInitialized(db: Database.Database): void {
+  const cols = db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+  const hasCol = cols.some(c => c.name === 'call_sites_initialized');
+  if (!hasCol) {
+    db.exec('ALTER TABLE projects ADD COLUMN call_sites_initialized INTEGER DEFAULT 0');
+  }
+}
+
+/**
  * Clear all data for a project (nodes, edges, file_hashes, call_sites) before re-indexing.
  * Does NOT clear the projects table — that's updated separately.
  * R106: also clears call_sites (persistent cross-file resolution table).
@@ -255,6 +282,7 @@ export function clearProjectData(db: Database.Database, project: string): void {
 /**
  * Update the projects table with final counts after indexing.
  * R101: also persists cross_file_calls_stale flag.
+ * R107: also persists call_sites_initialized flag (set to true after full reindex).
  */
 export function updateProjectStats(
   db: Database.Database,
@@ -263,15 +291,17 @@ export function updateProjectStats(
   nodeCount: number,
   edgeCount: number,
   crossFileCallsStale: boolean = false,
+  callSitesInitialized: boolean = false,
 ): void {
   db.prepare(`
-    INSERT INTO projects (name, root_path, indexed_at, node_count, edge_count, cross_file_calls_stale)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO projects (name, root_path, indexed_at, node_count, edge_count, cross_file_calls_stale, call_sites_initialized)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       root_path = excluded.root_path,
       indexed_at = excluded.indexed_at,
       node_count = excluded.node_count,
       edge_count = excluded.edge_count,
-      cross_file_calls_stale = excluded.cross_file_calls_stale
-  `).run(project, rootPath, new Date().toISOString(), nodeCount, edgeCount, crossFileCallsStale ? 1 : 0);
+      cross_file_calls_stale = excluded.cross_file_calls_stale,
+      call_sites_initialized = excluded.call_sites_initialized
+  `).run(project, rootPath, new Date().toISOString(), nodeCount, edgeCount, crossFileCallsStale ? 1 : 0, callSitesInitialized ? 1 : 0);
 }

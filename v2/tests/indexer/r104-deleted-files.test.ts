@@ -79,8 +79,12 @@ describe('R104: Incremental Deleted Files Cleanup', () => {
     `).get(projectName) as { c: number }).c;
     expect(orphanEdges).toBe(0);
 
-    // crossFileCallsStale should be true (deletion changes the graph)
-    expect(result.crossFileCallsStale).toBe(true);
+    // R107: crossFileCallsStale should be false — with persistent call_sites
+    // and the initialized flag, the deletion-only fast path either:
+    //   (a) rebuilds cross-file CALLS (if call_sites exist) → stale=false, or
+    //   (b) has nothing to rebuild (no call_sites) → stale=false (graph still complete)
+    // Before R106, this was true because deletion made the graph stale.
+    expect(result.crossFileCallsStale).toBe(false);
 
     db2.close();
   });
