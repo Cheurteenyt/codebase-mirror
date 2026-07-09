@@ -1,0 +1,78 @@
+# GitHub Actions Quota Report — schedule-only workflow
+#
+# R112: split from ci.yml to fix false "1 error" annotation on push/PR pipelines.
+# Previously, quota-report lived in ci.yml with `if: github.event_name == 'schedule'`,
+# which caused it to be SKIPPED on every push/PR. GitHub Actions reports skipped
+# jobs as "1 error" in annotations, making the pipeline look failed even when
+# backend/frontend passed.
+#
+# Now this workflow ONLY triggers on schedule (weekly Monday 00:00 UTC).
+# Push/PR pipelines only run ci.yml (backend + frontend) — no skipped jobs.
+#
+# R50: original quota-report job
+# R52: security hardening, single API call + single parse
+# R55 (D3): job-level permissions: actions: read for /actions/runs API
+# R55 (D5): schedule-only (removed push trigger to reduce noise)
+# R112: moved to separate workflow file to fix skipped-job false error
+
+name: Quota Report
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'  # Weekly Monday 00:00 UTC
+  workflow_dispatch: {}  # Allow manual trigger
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  quota-report:
+    name: Quota Report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate quota report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "## Quota Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Single API call + single Python parse for all rate limit data
+          RATE_LIMIT=$(curl -s -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/rate_limit")
+
+          echo "$RATE_LIMIT" | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          core = d['resources']['core']
+          search = d['resources']['search']
+          print('### GitHub API Rate Limits')
+          print()
+          print('| Resource | Remaining | Limit |')
+          print('|----------|-----------|-------|')
+          print(f'| Core API | {core[\"remaining\"]} | {core[\"limit\"]} |')
+          print(f'| Search API | {search[\"remaining\"]} | {search[\"limit\"]} |')
+          print()
+          " >> $GITHUB_STEP_SUMMARY
+
+          # Single API call for Actions runs count
+          RUNS_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs?per_page=1")
+
+          TOTAL_RUNS=$(echo "$RUNS_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('total_count', 0))")
+
+          echo "### GitHub Actions (last 30 days)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total runs | $TOTAL_RUNS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Actions minutes | Unlimited (public repo) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Public repos have unlimited Actions minutes." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub Actions: unlimited (public repo)" >> $GITHUB_STEP_SUMMARY
+          echo "- GitLab CI: ~1% usage (mirror only)" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub API: 5000 req/hr (authenticated)" >> $GITHUB_STEP_SUMMARY
