@@ -1,5 +1,51 @@
 # Changelog — Codebase Memory V2
 
+## 0.37.0 — Round 102 (2026-07-09) Stale Flag Monotonicity Fix
+
+**27th round (GPT 5.5 external audit R102).** 1 bug fixed. GPT 5.5 found that
+a no-op incremental could reset `cross_file_calls_stale` to `false`, masking
+a stale graph from MCP/UI consumers.
+
+### Bug fixed (1)
+
+35. **No-op incremental resets `cross_file_calls_stale` to false** (`indexer.ts`) — After an incremental that changed files (stale=true), a subsequent no-op incremental would reset stale to `false` via `updateProjectStats(..., false)`. MCP/UI querying the DB would see `cross_file_calls_stale = 0` and believe the graph is complete, when cross-file CALLS edges are still missing. Fixed: no-op incremental now reads the existing `cross_file_calls_stale` from DB and preserves it. Only a full reindex resets to `false`. The normal incremental path (files changed) always sets `true`.
+
+### Test added (1)
+
+New file: `v2/tests/indexer/r102-stale-monotonicity.test.ts`
+
+- **`full → incremental changed → no-op preserves stale → full resets`** — Verifies the complete lifecycle: full (stale=false) → modify file + incremental (stale=true) → no-op incremental (stale STILL true) → full reindex (stale=false again). Checks both `IndexResult.crossFileCallsStale` and DB `projects.cross_file_calls_stale`.
+
+### Stale flag semantics (now correct)
+
+```
+Full reindex              → cross_file_calls_stale = false (DB + IndexResult)
+Incremental (files changed) → cross_file_calls_stale = true  (DB + IndexResult + CLI warning)
+Incremental (no-op)       → preserves existing DB value (does NOT reset to false)
+```
+
+### Verification
+
+```
+Test Files  39 passed (39)
+     Tests  389 passed (389)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/indexer.ts` (Bug 35: preserve existing stale in no-op, simplify normal path)
+- New: `v2/tests/indexer/r102-stale-monotonicity.test.ts` (1 test)
+- Modified: `v2/package.json` (version 0.37.0)
+
+### Total: 35 bugs + 10 optimizations + 34 tests across 27 rounds
+
+### Next steps
+
+1. **Call-sites persistent table** — enable cross-file CALLS in incremental mode
+2. **Import-aware resolution** — parse import statements
+3. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode
+
 ## 0.36.0 — Round 101 (2026-07-09) Cross-file CALLS Stale Propagation + DB Persistence
 
 **26th round (GPT 5.5 external audit R101).** 0 new bugs — `crossFileCallsStale`

@@ -160,7 +160,15 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
         (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
     `).get(opts.project, opts.project) as { nodes: number; edges: number };
-    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, false);
+    // R102: Bug 35 fix — preserve existing cross_file_calls_stale from DB.
+    // A no-op incremental must NOT reset stale to false. The graphe may still
+    // be stale from a previous incremental that changed files. Only a full
+    // reindex can reset stale to false.
+    const existingStaleRow = db.prepare(
+      'SELECT cross_file_calls_stale FROM projects WHERE name = ?'
+    ).get(opts.project) as { cross_file_calls_stale?: number } | undefined;
+    const existingStale = existingStaleRow?.cross_file_calls_stale === 1;
+    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, existingStale);
     db.close();
     return {
       dbPath,
@@ -173,7 +181,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       languages: allLangs,
       parallel: false,
       workerCount: 0,
-      crossFileCallsStale: false,
+      crossFileCallsStale: existingStale,
     };
   }
 
@@ -200,8 +208,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
       (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
   `).get(opts.project, opts.project) as { nodes: number; edges: number };
-  // R101: persist crossFileCallsStale in DB + return in IndexResult
-  const crossFileStale = (opts.incremental ?? false) && result.files > 0;
+  // R101/R102: persist crossFileCallsStale in DB + return in IndexResult
+  // R102: Bug 35 fix — stale flag is monotonic. Once true, it stays true until
+  // full reindex. Incremental with files changed → true. Incremental no-op →
+  // preserve existing. Full reindex → false.
+  const crossFileStale = opts.incremental
+    ? true  // any incremental that reaches here changed files (estimatedFilesToIndex > 0)
+    : false; // full reindex resets stale
   updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale);
   db.close();
 
