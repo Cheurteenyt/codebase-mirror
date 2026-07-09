@@ -1,5 +1,43 @@
 # Changelog — Codebase Memory V2
 
+## 0.40.0 — Round 105 (2026-07-09) Legacy Deletion Detection + Parallel Proof
+
+**30th round (GPT 5.5 external audit R105).** 0 new bugs — hardens R104's
+deleted files cleanup for legacy DBs and adds parallel path proof.
+
+### Improvement (1)
+
+- **Legacy DB deletion detection** (`indexer.ts`) — R104 detected deleted files via `SELECT file_path FROM file_hashes WHERE project = ?`. But legacy DBs (pre-R79) may have `nodes` without corresponding `file_hashes` entries. Ghost nodes from these files would survive incremental cleanup. Fixed: detection now uses `SELECT DISTINCT file_path FROM nodes WHERE project = ? UNION SELECT file_path FROM file_hashes WHERE project = ?` — catches both sources.
+
+### Tests added (2)
+
+New file: `v2/tests/indexer/r105-legacy-deletion.test.ts`
+
+1. **`legacy DB: nodes without file_hashes are detected and cleaned up`** — Manually inserts a ghost node for `ghost.ts` without a `file_hashes` entry. Incremental must detect and clean it up via the `nodes ∪ file_hashes` query.
+2. **`parallel: deletion cleanup works with workers > 1`** — 24 files, full index parallel, delete file5.ts, incremental, verify cleanup + orphan_edges=0 + other files preserved.
+
+### Verification
+
+```
+Test Files  42 passed (42)
+     Tests  396 passed (396)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/indexer.ts` (R105: nodes ∪ file_hashes detection)
+- New: `v2/tests/indexer/r105-legacy-deletion.test.ts` (2 tests)
+- Modified: `v2/package.json` (version 0.40.0)
+
+### Total: 37 bugs + 10 optimizations + 41 tests across 30 rounds
+
+### Next steps
+
+1. **Call-sites persistent table** — enable cross-file CALLS in incremental mode (the real fix for stale)
+2. **Import-aware resolution** — parse import statements
+3. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode
+
 ## 0.39.0 — Round 104 (2026-07-09) Incremental Deleted Files Cleanup
 
 **29th round (GPT 5.5 external audit R104).** 1 bug fixed. GPT 5.5 found that
