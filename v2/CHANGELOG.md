@@ -1,5 +1,88 @@
 # Changelog — Codebase Memory V2
 
+## 0.45.0 — Round 110 (2026-07-09) Import-aware Resolution Phase 1
+
+**35th round (GPT 5.5 external audit R111).** Major feature: import-aware
+cross-file CALLS resolution. Before R110, the resolver was purely name-based:
+if two files exported `foo`, a call to `foo()` would create edges to BOTH.
+After R110, an explicit import `import { foo } from './b'` resolves only to
+b::foo with high confidence.
+
+### Feature: Import-aware Resolution (R110 Phase 1)
+
+New `imports` table stores import bindings per file. The resolver now:
+1. Checks if the callee name matches an import binding in the call-site's file.
+2. If yes, resolves to the imported symbol in the source module (high confidence).
+3. If no, falls back to name-based resolution (existing behavior).
+
+Supports 4 import kinds:
+- **Named**: `import { foo } from './b'` → `cross_file_import_exact`
+- **Alias**: `import { foo as bar } from './b'` → `cross_file_import_alias`
+- **Default**: `import foo from './b'` → `cross_file_import_exact`
+- **Namespace**: `import * as ns from './b'` → skipped (would need member access tracking)
+
+New resolution types:
+- `cross_file_import_exact` — import resolved to a single symbol (confidence 1.0)
+- `cross_file_import_alias` — alias import resolved (confidence 1.0)
+- `cross_file_name_fallback` — name-based fallback (was `cross_file_name_exact`)
+- `cross_file_ambiguous` — multiple name-based candidates (unchanged)
+
+### Implementation
+
+1. **Schema**: new `imports` table with columns `(id, project, file_path, local_name, source_module, imported_name, import_kind, line)` + index `idx_imports_project_file`
+2. **`fast-walker.ts`**: new `extractImports()` function parses `import_statement` AST nodes, extracts named/alias/default/namespace bindings. Returns `ImportBinding[]` in `FastFileResult`.
+3. **`cross-file-resolver.ts`**: new `replaceImportsForFiles()` helper (same pattern as `replaceCallSitesForFiles`). `rebuildCrossFileCallsEdges()` now loads imports, builds per-file import maps, and tries import-aware resolution before name-based fallback. New `resolveModulePath()` resolves relative import paths to file paths.
+4. **`wasm-extractor.ts`**: persists imports alongside call_sites (full + incremental).
+5. **`worker.ts`**: returns `imports` in `WorkerFileResult`.
+6. **`indexer.ts`**: parallel path persists imports; deletion cleanup also cleans imports.
+
+### Tests added (8)
+
+New file: `v2/tests/indexer/r110-import-aware-resolution.test.ts`
+
+1. **named import: import { foo } from "./b" resolves to b::foo, not c::foo** — The core R111 P2 fix scenario.
+2. **alias import: import { foo as bar } resolves to b::foo** — Alias resolution.
+3. **default import: import foo from "./b" resolves to b::foo** — Default import resolution.
+4. **no import: name-based fallback creates edges to all candidates** — Fallback behavior preserved.
+5. **builtins filter preserved: imported log still works, console.log filtered** — R99 filter still works with imports.
+6. **incremental: modify caller with import → edge still resolves correctly** — Import-aware works in incremental.
+7. **imports table is populated with correct bindings** — Schema verification.
+8. **orphan edges = 0 after import-aware resolution** — Integrity check.
+
+### Tests updated (1)
+
+- `r100-cross-file-calls.test.ts` test 1: `resolution` changed from `cross_file_name_exact` to `cross_file_name_fallback` (R110 renamed the name-based resolution type).
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  15 passed (15)     [indexer tests]
+     Tests  81 passed (81)     [73 existing + 8 new R110]
+Benchmark smoke: PASSED (all invariants met)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/schema.ts` (imports table + index + clearProjectData)
+- Modified: `v2/src/indexer/fast-walker.ts` (ImportBinding type + extractImports function)
+- Modified: `v2/src/indexer/cross-file-resolver.ts` (replaceImportsForFiles + resolveModulePath + import-aware rebuildCrossFileCallsEdges)
+- Modified: `v2/src/indexer/wasm-extractor.ts` (persist imports)
+- Modified: `v2/src/indexer/worker.ts` (return imports in WorkerFileResult)
+- Modified: `v2/src/indexer/indexer.ts` (persist imports in parallel + deletion cleanup)
+- New: `v2/tests/indexer/r110-import-aware-resolution.test.ts` (8 tests)
+- Updated: `v2/tests/indexer/r100-cross-file-calls.test.ts` (resolution name change)
+- Modified: `v2/package.json` (version 0.45.0)
+
+### Total: 39 bugs + 11 optimizations + 81 indexer tests across 35 rounds
+
+### Next steps
+
+1. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+4. **Import-aware Phase 2** — handle namespace imports (ns.foo), re-exports, barrel files
+
 ## 0.44.0 — Round 109 (2026-07-09) Empty Graph Complete State Lock
 
 **34th round (GPT 5.5 external audit R110).** 0 bugs confirmed — defensive fix

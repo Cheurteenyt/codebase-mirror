@@ -28,8 +28,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { relative, extname, basename, dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
-import { extractFast, type UnresolvedCallSite } from './fast-walker.js';
-import { replaceCallSitesForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
+import { extractFast, type UnresolvedCallSite, type ImportBinding } from './fast-walker.js';
+import { replaceCallSitesForFiles, replaceImportsForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
 const require2 = createRequire(import.meta.url);
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -267,6 +267,8 @@ export async function extractFromFilesWasm(
     edges: Array<{ sourceQn: string; targetQn: string; type: string; properties: string }>;
     // R98: unresolved call-sites for cross-file resolution
     unresolvedCalls: UnresolvedCallSite[];
+    // R110: import bindings for import-aware cross-file resolution
+    imports: ImportBinding[];
   }
 
   const allExtracts: FileExtract[] = [];
@@ -396,7 +398,7 @@ export async function extractFromFilesWasm(
         const fileQn = `${project}::${relPath}`;
         const extracted = extractFast(tree.rootNode, project, relPath, fileQn, source.length);
 
-        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges, unresolvedCalls: extracted.unresolvedCalls });
+        allExtracts.push({ relPath, nodes: extracted.nodes, edges: extracted.edges, unresolvedCalls: extracted.unresolvedCalls, imports: extracted.imports });
         result.files++;
 
         // R82: Bug 20 fix — ONLY after extractFast succeeds, schedule the mutations.
@@ -559,6 +561,18 @@ export async function extractFromFilesWasm(
       // Full mode: table was cleared by clearProjectData. Just insert.
       // Use the helper with an empty delete list.
       replaceCallSitesForFiles(db, project, [], newCallSites);
+    }
+
+    // R110: persist imports (same pattern as call_sites).
+    // extractImports already sets filePath on each binding.
+    const newImports: ImportBinding[] = [];
+    for (const ext of allExtracts) {
+      newImports.push(...ext.imports);
+    }
+    if (incremental) {
+      replaceImportsForFiles(db, project, changedRelPaths, newImports);
+    } else {
+      replaceImportsForFiles(db, project, [], newImports);
     }
 
     // Step 2: rebuild cross-file CALLS edges from persistent call_sites.

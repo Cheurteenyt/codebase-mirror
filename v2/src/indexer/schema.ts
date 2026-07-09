@@ -84,6 +84,30 @@ const SCHEMA_SQL = `
     line INTEGER NOT NULL
   );
 
+  -- R110: Imports persistent table.
+  -- Stores import bindings per file so that cross-file CALLS resolution can
+  -- prioritize imported symbols over name-based fallback.
+  -- Schema:
+  --   - project + file_path: which file the import lives in
+  --   - local_name: the name used in the file (after alias, if any)
+  --   - source_module: the module path as written (e.g. './b', './utils/helpers')
+  --   - imported_name: the original name in the source module (before alias)
+  --   - import_kind: named | alias | default | namespace
+  --   - line: 1-indexed source line
+  -- When resolving a call-site, the resolver checks if the callee name matches
+  -- a local_name in the file's imports. If so, it resolves to the source module's
+  -- symbol with high confidence (cross_file_import_exact or cross_file_import_alias).
+  CREATE TABLE IF NOT EXISTS imports (
+    id INTEGER PRIMARY KEY,
+    project TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    local_name TEXT NOT NULL,
+    source_module TEXT NOT NULL,
+    imported_name TEXT NOT NULL,
+    import_kind TEXT NOT NULL,
+    line INTEGER NOT NULL
+  );
+
   -- Indexes matching V1's layout for query compatibility.
   CREATE INDEX IF NOT EXISTS idx_nodes_project ON nodes(project);
   CREATE INDEX IF NOT EXISTS idx_nodes_qn ON nodes(project, qualified_name);
@@ -98,6 +122,8 @@ const SCHEMA_SQL = `
   -- all call_sites for a project at once and uses an in-memory Map (faster than
   -- per-row index lookup for the typical 1k-100k call-site range).
   CREATE INDEX IF NOT EXISTS idx_call_sites_project_file ON call_sites(project, file_path);
+  -- R110: index for imports — (project, file_path) for per-file delete/replace.
+  CREATE INDEX IF NOT EXISTS idx_imports_project_file ON imports(project, file_path);
 `;
 
 /**
@@ -265,9 +291,10 @@ function migrateProjectsCallSitesInitialized(db: Database.Database): void {
 }
 
 /**
- * Clear all data for a project (nodes, edges, file_hashes, call_sites) before re-indexing.
+ * Clear all data for a project (nodes, edges, file_hashes, call_sites, imports) before re-indexing.
  * Does NOT clear the projects table — that's updated separately.
  * R106: also clears call_sites (persistent cross-file resolution table).
+ * R110: also clears imports (persistent import bindings table).
  */
 export function clearProjectData(db: Database.Database, project: string): void {
   const tx = db.transaction(() => {
@@ -275,6 +302,7 @@ export function clearProjectData(db: Database.Database, project: string): void {
     db.prepare('DELETE FROM edges WHERE project = ?').run(project);
     db.prepare('DELETE FROM file_hashes WHERE project = ?').run(project);
     db.prepare('DELETE FROM call_sites WHERE project = ?').run(project);
+    db.prepare('DELETE FROM imports WHERE project = ?').run(project);
   });
   tx();
 }

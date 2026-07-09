@@ -11,14 +11,14 @@ import Database from 'better-sqlite3';
 import { defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { initIndexerSchema, clearProjectData, updateProjectStats } from './schema.js';
 import { discoverSourceFilesWasm, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
-import { replaceCallSitesForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
+import { replaceCallSitesForFiles, replaceImportsForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
 import { Worker } from 'node:worker_threads';
 import { cpus } from 'node:os';
 import { join, relative as nodeRelative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import type { WorkerBatch, WorkerBatchResult } from './worker.js';
-import type { UnresolvedCallSite } from './fast-walker.js';
+import type { UnresolvedCallSite, ImportBinding } from './fast-walker.js';
 
 export interface IndexOptions {
   project: string;
@@ -238,6 +238,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       // R106: also clean up call_sites for deleted files.
       db.prepare(`DELETE FROM call_sites WHERE project = ? AND file_path IN (${ph})`)
         .run(opts.project, ...deletedRelPaths);
+      // R110: also clean up imports for deleted files.
+      db.prepare(`DELETE FROM imports WHERE project = ? AND file_path IN (${ph})`)
+        .run(opts.project, ...deletedRelPaths);
 
       // 2. Rebuild cross-file CALLS from the post-cleanup state.
       //    R108: when callSitesInitialized=true, ALWAYS rebuild (even if
@@ -330,6 +333,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         .run(opts.project, ...deletedRelPaths);
       // R106: clean up call_sites for deleted files.
       db.prepare(`DELETE FROM call_sites WHERE project = ? AND file_path IN (${ph})`)
+        .run(opts.project, ...deletedRelPaths);
+      // R110: clean up imports for deleted files.
+      db.prepare(`DELETE FROM imports WHERE project = ? AND file_path IN (${ph})`)
         .run(opts.project, ...deletedRelPaths);
 
       // R106: rebuild cross-file CALLS to remove edges that pointed to deleted
@@ -729,6 +735,20 @@ async function indexParallel(
     } else {
       // Full mode: table was cleared by clearProjectData. Just insert.
       replaceCallSitesForFiles(db, project, [], newCallSites);
+    }
+
+    // R110: persist imports (same pattern as call_sites).
+    const newImports: ImportBinding[] = [];
+    for (const batchResult of results) {
+      for (const fileResult of batchResult.results) {
+        if (fileResult.error || !fileResult.imports) continue;
+        newImports.push(...fileResult.imports);
+      }
+    }
+    if (incremental) {
+      replaceImportsForFiles(db, project, changedToApply, newImports);
+    } else {
+      replaceImportsForFiles(db, project, [], newImports);
     }
 
     // Step 3: rebuild cross-file CALLS edges.

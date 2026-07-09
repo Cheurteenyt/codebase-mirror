@@ -20,7 +20,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { relative, join, dirname } from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { extractFast, type UnresolvedCallSite } from './fast-walker.js';
+import { extractFast, type UnresolvedCallSite, type ImportBinding } from './fast-walker.js';
 
 const require2 = createRequire(import.meta.url);
 
@@ -54,6 +54,8 @@ export interface WorkerFileResult {
   hashInfo: { hash: string; mtime: number; mtimeNs: string; size: number } | null;
   // R98: unresolved call-sites for cross-file resolution by main thread
   unresolvedCalls: UnresolvedCallSite[];
+  // R110: import bindings for import-aware cross-file resolution by main thread
+  imports: ImportBinding[];
 }
 
 export interface WorkerBatchResult {
@@ -119,7 +121,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         };
         const tree = p.parse(source);
         if (!tree) {
-          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null, unresolvedCalls: [] });
+          results.push({ filePath: relPath, language: batch.language, nodes: [], edges: [], error: 'parse returned null', hashInfo: null, unresolvedCalls: [], imports: [] });
           continue;
         }
 
@@ -142,6 +144,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
             nodes: extracted.nodes,
             edges: extracted.edges,
             error: null, unresolvedCalls: extracted.unresolvedCalls,
+            imports: extracted.imports,
             hashInfo,
           });
         } finally {
@@ -149,7 +152,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
         }
       } catch (e: unknown) {
         results.push({
-          filePath: relPath, language: batch.language, nodes: [], edges: [], unresolvedCalls: [],
+          filePath: relPath, language: batch.language, nodes: [], edges: [], unresolvedCalls: [], imports: [],
           error: e instanceof Error ? e.message : String(e),
           hashInfo: null,
         });
@@ -160,7 +163,7 @@ async function processBatch(batch: WorkerBatch): Promise<WorkerBatchResult> {
     for (const filePath of batch.files) {
       results.push({
         filePath: relative(batch.rootPath, filePath), language: batch.language,
-        nodes: [], edges: [], error: errMsg, hashInfo: null, unresolvedCalls: [],
+        nodes: [], edges: [], error: errMsg, hashInfo: null, unresolvedCalls: [], imports: [],
       });
     }
   }

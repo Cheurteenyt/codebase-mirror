@@ -41,12 +41,30 @@ export interface UnresolvedCallSite {
   callKind: 'identifier_call' | 'member_call' | 'computed_call';
 }
 
+// R110: Import binding extracted from import statements.
+// Represents a single name binding from an import:
+//   import { foo } from './b'           → { localName:'foo', sourceModule:'./b', importedName:'foo', kind:'named' }
+//   import { foo as bar } from './b'    → { localName:'bar', sourceModule:'./b', importedName:'foo', kind:'alias' }
+//   import foo from './b'               → { localName:'foo', sourceModule:'./b', importedName:'default', kind:'default' }
+//   import * as ns from './b'           → { localName:'ns', sourceModule:'./b', importedName:'*', kind:'namespace' }
+// Note: filePath is set by the caller (wasm-extractor or worker) before persistence.
+export interface ImportBinding {
+  localName: string;
+  sourceModule: string;
+  importedName: string;
+  importKind: 'named' | 'alias' | 'default' | 'namespace';
+  line: number;
+  filePath: string;
+}
+
 export interface FastFileResult {
   nodes: FastNode[];
   edges: FastEdge[];
   astNodeCount: number;
   // R98: unresolved call-sites for cross-file resolution
   unresolvedCalls: UnresolvedCallSite[];
+  // R110: import bindings for import-aware cross-file resolution
+  imports: ImportBinding[];
 }
 
 // ── Node type sets (same as worker.ts) ─────────────────────────────────
@@ -67,6 +85,10 @@ const METHOD_TYPES = [
 ];
 
 const CALL_TYPES = ['call_expression', 'call'];
+
+// R110: Import statement node types for TS/JS.
+// tree-sitter typescript and javascript grammars both use 'import_statement'.
+const IMPORT_TYPES = ['import_statement'];
 
 // R99: builtin method names to skip for cross-file resolution.
 // These are extremely common in JS/TS and would create massive false positives
@@ -292,7 +314,136 @@ export function extractFast(
     }
   }
 
-  return { nodes, edges, astNodeCount: 0, unresolvedCalls };
+  // ── Extract imports (R110: import-aware resolution) ──────────────────
+  // Parse import statements to build a map of local_name → source_module.
+  // Used by the cross-file resolver to prioritize imported symbols.
+  const imports = extractImports(rootNode, relPath);
+
+  return { nodes, edges, astNodeCount: 0, unresolvedCalls, imports };
+}
+
+/**
+ * R110: Extract import bindings from a tree-sitter AST.
+ *
+ * Handles 4 import kinds for TS/JS:
+ *   import { foo } from './b'           → named
+ *   import { foo as bar } from './b'    → alias
+ *   import foo from './b'               → default
+ *   import * as ns from './b'           → namespace
+ *
+ * Returns an array of ImportBinding, one per name binding.
+ * Side-effect imports (import './b') and type-only imports are skipped
+ * (no bindings to extract).
+ *
+ * Note: this uses heuristic child traversal rather than named fields because
+ * tree-sitter TS and JS grammars have slightly different AST shapes for
+ * import statements. The traversal is defensive: if the structure doesn't
+ * match expectations, it skips that import rather than throwing.
+ */
+function extractImports(rootNode: TSNode, filePath: string): ImportBinding[] {
+  const imports: ImportBinding[] = [];
+  const allImports = rootNode.descendantsOfType(IMPORT_TYPES);
+  for (const imp of allImports) {
+    const line = imp.startPosition.row + 1;
+    // Find the source module string (the 'from "..." ' or just '"..."')
+    // tree-sitter: import_statement has a string child for the source.
+    let sourceModule = '';
+    let importClause: TSNode | null = null;
+    for (let i = 0; i < imp.childCount; i++) {
+      const child = imp.child(i);
+      if (!child) continue;
+      if (child.type === 'string') {
+        // Strip quotes from the string literal
+        sourceModule = child.text.replace(/^["'`]/, '').replace(/["'`]$/, '');
+      } else if (child.type === 'import_clause') {
+        importClause = child;
+      }
+    }
+
+    // Side-effect import (no import_clause) — skip (no bindings)
+    if (!importClause) continue;
+    if (!sourceModule) continue;
+
+    // Walk the import_clause to extract bindings.
+    // import_clause can contain:
+    //   - named_imports: { foo, bar as baz }
+    //   - namespace_import: * as ns
+    //   - identifier (default import): foo
+    //   - combination: default + named (import foo, { bar } from '...')
+    for (let i = 0; i < importClause.childCount; i++) {
+      const child = importClause.child(i);
+      if (!child) continue;
+      const childType = child.type;
+
+      if (childType === 'named_imports') {
+        // named_imports contains import_specifier children
+        for (let j = 0; j < child.childCount; j++) {
+          const spec = child.child(j);
+          if (!spec || spec.type !== 'import_specifier') continue;
+          // import_specifier: identifier (name) or identifier 'as' identifier (alias)
+          const nameNode = spec.childForFieldName('name');
+          const aliasNode = spec.childForFieldName('alias');
+          if (!nameNode) continue;
+          const importedName = nameNode.text;
+          if (aliasNode) {
+            // alias import: import { foo as bar }
+            imports.push({
+              localName: aliasNode.text,
+              sourceModule,
+              importedName,
+              importKind: 'alias',
+              line,
+              filePath,
+            });
+          } else {
+            // named import: import { foo }
+            imports.push({
+              localName: importedName,
+              sourceModule,
+              importedName,
+              importKind: 'named',
+              line,
+              filePath,
+            });
+          }
+        }
+      } else if (childType === 'namespace_import') {
+        // namespace_import: * as ns
+        // The identifier is a child of namespace_import
+        let nsName = '';
+        for (let j = 0; j < child.childCount; j++) {
+          const idNode = child.child(j);
+          if (idNode && idNode.type === 'identifier') {
+            nsName = idNode.text;
+            break;
+          }
+        }
+        if (nsName) {
+          imports.push({
+            localName: nsName,
+            sourceModule,
+            importedName: '*',
+            importKind: 'namespace',
+            line,
+            filePath,
+          });
+        }
+      } else if (childType === 'identifier') {
+        // default import: import foo from '...'
+        // The identifier is a direct child of import_clause
+        imports.push({
+          localName: child.text,
+          sourceModule,
+          importedName: 'default',
+          importKind: 'default',
+          line,
+          filePath,
+        });
+      }
+      // Skip punctuation (commas, braces, etc.)
+    }
+  }
+  return imports;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

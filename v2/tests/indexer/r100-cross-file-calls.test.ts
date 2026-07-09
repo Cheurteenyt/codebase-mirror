@@ -59,7 +59,7 @@ describe('R100: Cross-file CALLS Precision + Correctness', () => {
     const props = JSON.parse(edge.properties_json);
     expect(props.callee).toBe('foo');
     expect(props.call_kind).toBe('identifier_call');
-    expect(props.resolution).toBe('cross_file_name_exact');
+    expect(props.resolution).toBe('cross_file_name_fallback');
     db.close();
   });
 
