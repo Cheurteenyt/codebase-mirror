@@ -1,5 +1,54 @@
 # Changelog — Codebase Memory V2
 
+## 0.38.0 — Round 103 (2026-07-09) Stale Flag Precision Lock
+
+**28th round (GPT 5.5 external audit R103).** 1 bug fixed. GPT 5.5 found that
+R102's `crossFileStale = true` for ALL incremental runs was too pessimistic —
+metadata-only updates (touch/mtime change without content change) don't modify
+the graph, so cross-file CALLS remain valid.
+
+### Bug fixed (1)
+
+36. **`crossFileCallsStale` too pessimistic on metadata-only incremental** (`indexer.ts`) — R102 set `crossFileStale = true` for any incremental that reached the normal path (estimatedFilesToIndex > 0). But a metadata-only update (mtime changed, content same) results in `result.files = 0` (no re-indexing, just hash metadata update). Setting stale=true in this case is a false positive that pushes unnecessary full reindexes. Fixed: `crossFileStale = existingStale || result.files > 0`. Now: metadata-only (files=0) preserves existing stale state without forcing true. Only real content changes (files>0) set stale=true.
+
+### Stale flag semantics (now precise)
+
+```
+Full reindex                → cross_file_calls_stale = false
+Incremental (content changed, files>0) → cross_file_calls_stale = true
+Incremental (metadata-only, files=0)   → preserves existing DB value
+Incremental (no-op)                    → preserves existing DB value
+```
+
+### Tests added (2)
+
+New file: `v2/tests/indexer/r103-stale-precision.test.ts`
+
+1. **`metadata-only touch does not set stale when graph was clean`** — Touch a.ts (change mtime, keep content), run incremental. Verify: `files=0`, `skipped>0`, `crossFileCallsStale=false`, DB stale=false.
+2. **`real content change sets stale, then metadata-only preserves stale`** — Full → modify content (stale=true) → touch b.ts metadata-only (stale STILL true, preserved) → full reindex (stale=false).
+
+### Verification
+
+```
+Test Files  40 passed (40)
+     Tests  391 passed (391)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/indexer.ts` (Bug 36: stale = existingStale || result.files > 0)
+- New: `v2/tests/indexer/r103-stale-precision.test.ts` (2 tests)
+- Modified: `v2/package.json` (version 0.38.0)
+
+### Total: 36 bugs + 10 optimizations + 36 tests across 28 rounds
+
+### Next steps
+
+1. **Call-sites persistent table** — enable cross-file CALLS in incremental mode (the real fix)
+2. **Import-aware resolution** — parse import statements
+3. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode
+
 ## 0.37.0 — Round 102 (2026-07-09) Stale Flag Monotonicity Fix
 
 **27th round (GPT 5.5 external audit R102).** 1 bug fixed. GPT 5.5 found that

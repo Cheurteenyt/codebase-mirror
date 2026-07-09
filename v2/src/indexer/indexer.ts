@@ -208,12 +208,19 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
       (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
   `).get(opts.project, opts.project) as { nodes: number; edges: number };
-  // R101/R102: persist crossFileCallsStale in DB + return in IndexResult
+  // R101/R102/R103: persist crossFileCallsStale in DB + return in IndexResult
   // R102: Bug 35 fix — stale flag is monotonic. Once true, it stays true until
-  // full reindex. Incremental with files changed → true. Incremental no-op →
-  // preserve existing. Full reindex → false.
+  // full reindex. Incremental no-op → preserve existing. Full reindex → false.
+  // R103: Bug 36 fix — don't set stale=true for metadata-only updates (files=0).
+  // A metadata-only update (mtime changed, content same) doesn't change the
+  // graph, so cross-file CALLS remain valid. Only set stale=true when files
+  // are actually re-indexed (result.files > 0).
+  const existingStaleRow = opts.incremental
+    ? db.prepare('SELECT cross_file_calls_stale FROM projects WHERE name = ?').get(opts.project) as { cross_file_calls_stale?: number } | undefined
+    : undefined;
+  const existingStale = existingStaleRow?.cross_file_calls_stale === 1;
   const crossFileStale = opts.incremental
-    ? true  // any incremental that reaches here changed files (estimatedFilesToIndex > 0)
+    ? existingStale || result.files > 0  // monotonic: preserve existing OR set true if graph changed
     : false; // full reindex resets stale
   updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale);
   db.close();
