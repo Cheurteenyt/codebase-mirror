@@ -1,5 +1,31 @@
 # Changelog — Codebase Memory V2
 
+## 0.51.0 — Round 116 (2026-07-09) Namespace Builtin-Method Escape Hatch
+
+**41st round (GPT 5.5 external audit R117).** 1 bug fixed. GPT 5.5 found that
+R115's namespace resolution was blocked by the builtin method filter in
+`fast-walker.ts`. Calls like `api.get()` (where `get` is in
+`BUILTIN_METHOD_NAMES`) were filtered at extraction time, so the namespace
+resolver never saw them.
+
+### Bug fixed (1)
+
+48. **Namespace calls with builtin method names filtered before resolver** (`fast-walker.ts`, `cross-file-resolver.ts`) — R99's `BUILTIN_METHOD_NAMES` filter was applied in `fast-walker.ts` at extraction time, skipping member calls whose last segment matched a builtin name (`get`, `set`, `map`, `then`, etc.) before they were collected into `call_sites`. This prevented R115's namespace resolver from seeing valid calls like `api.get()`. Fixed: removed the extraction-time filter, moved it to the resolver where it applies ONLY to member calls NOT resolved via namespace import.
+
+### Tests (7)
+
+`v2/tests/indexer/r116-namespace-builtin-escape.test.ts`
+
+1. `api.get()` resolves via namespace
+2. `api.set()`, `api.has()`, `api.delete()` all resolve via namespace
+3. `arr.map()` still filtered (non-namespace)
+4. `console.log()` still filtered
+5. `api.map()` resolves via namespace
+6. `api.then()` / `api.resolve()` resolve via namespace
+7. orphan edges = 0
+
+### Total: 42 bugs + 11 optimizations + 121 indexer tests across 41 rounds
+
 ## 0.50.0 — Round 115 (2026-07-09) Import-aware Phase 2: Namespace Imports
 
 **40th round (GPT 5.5 external audit R116).** Major feature: namespace import

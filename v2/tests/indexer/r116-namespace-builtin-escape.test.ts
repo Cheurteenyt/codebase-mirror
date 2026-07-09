@@ -16,6 +16,15 @@ describe('R116: Namespace Builtin-Method Escape Hatch', () => {
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 }); expect(r.errors.length).toBe(0);
     const db = getDb(); const e = getEdges(db, 'api.get'); expect(e.length).toBe(1); expect(e[0].target_qn).toContain('api.ts'); expect(JSON.parse(e[0].properties_json).resolution).toBe('cross_file_namespace_exact'); db.close();
   });
+  it('namespace import: api.set(), api.has(), api.delete() all resolve', async () => {
+    writeFileSync(join(projectDir, 'api.ts'), 'export function set() { return 1; }\nexport function has() { return 2; }\nexport function delete_() { return 3; }\n');
+    writeFileSync(join(projectDir, 'c.ts'), 'export function set() { return 99; }\n');
+    writeFileSync(join(projectDir, 'a.ts'), `import * as api from './api';\nexport function caller() { return api.set() + api.has() + api.delete_(); }\n`);
+    const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 }); expect(r.errors.length).toBe(0);
+    const db = getDb();
+    for (const m of ['api.set', 'api.has', 'api.delete_']) { const e = getEdges(db, m); expect(e.length).toBe(1); expect(e[0].target_qn).toContain('api.ts'); expect(JSON.parse(e[0].properties_json).resolution).toBe('cross_file_namespace_exact'); }
+    db.close();
+  });
   it('non-namespace: arr.map() still filtered', async () => {
     writeFileSync(join(projectDir, 'b.ts'), 'export function map() { return 1; }\n'); writeFileSync(join(projectDir, 'a.ts'), `const arr = [1, 2, 3];\nexport function caller() { return arr.map(x => x); }\n`);
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 }); expect(r.errors.length).toBe(0);
