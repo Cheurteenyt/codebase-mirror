@@ -1,5 +1,63 @@
 # Changelog — Codebase Memory V2
 
+## 0.43.0 — Round 108 (2026-07-09) Call-sites Empty Initialized Precision Lock
+
+**33rd round (GPT 5.5 external audit R109).** 1 bug fixed. GPT 5.5 found that
+R107 could still mark `crossFileCallsStale=true` when a project with
+`call_sites_initialized=1` and `call_sites=0` had a content change. This is a
+false positive — the graph is complete (no cross-file calls to resolve), so
+stale should be false.
+
+### Bug fixed (1)
+
+39. **`stale=true` false positive when `initialized=1 + call_sites=0 + content change`** (`wasm-extractor.ts`, `indexer.ts`) — R107's resolver only ran when `hasCallSites(db, project)` returned true (i.e., at least one call_site row existed). But a valid R107 project can have `call_sites=0` (no unresolved cross-file calls). In that case, a content change that doesn't introduce cross-file calls would: (1) re-index the file, (2) skip resolution because `hasCallSites()=false`, (3) `crossFileCallsResolved=false`, (4) `crossFileStale = existingStale || result.files > 0 = true`. Fixed: when `callSitesInitialized=true`, ALWAYS run `rebuildCrossFileCallsEdges()` (even if `call_sites=0`). This: (a) cleans up any stale cross-file edges if `call_sites` became empty after the change, (b) sets `crossFileCallsResolved=true` so the caller computes `stale=false`. A project with `initialized=true + call_sites=0` is now correctly treated as a COMPLETE state.
+
+### Implementation
+
+1. Single-thread path (`wasm-extractor.ts`): changed condition from `hasCallSites(db, project)` to `callSitesInitialized` — always rebuild when initialized, even if call_sites is empty.
+2. Parallel path (`indexer.ts` `indexParallel()`): same change.
+3. Deletion-only fast path (`indexer.ts`): same change — always rebuild when initialized.
+4. Post-extraction deletion cleanup (`indexer.ts`): changed from `isCallSitesInitialized && hasCallSites` to just `isCallSitesInitialized` — always rebuild when initialized.
+5. Removed unused `hasCallSites` import from both `wasm-extractor.ts` and `indexer.ts` (still exported from `cross-file-resolver.ts` for potential future use).
+6. `rebuildCrossFileCallsEdges()` already handles the empty case correctly: it deletes all existing cross-file CALLS edges first, then inserts 0 new ones if `call_sites` is empty.
+
+### Tests added (7)
+
+New file: `v2/tests/indexer/r108-stale-complete-precision.test.ts`
+
+1. **incremental content change with initialized empty call_sites stays stale=false** — The exact R109 P2 scenario: full index with 0 call-sites, then content change (still no call-sites). Before R108: stale=true. After R108: stale=false.
+2. **incremental removing all cross-file calls cleans up edges, stale=false** — Project has cross-file calls, then a.ts modified to remove them. Old cross-file edges must be cleaned up. Stale=false (resolver ran).
+3. **incremental content change with initialized non-empty call_sites stays stale=false** — Sanity check: normal case (has call-sites, content changes) still works.
+4. **no-op incremental after initialized empty call_sites stays stale=false** — No-op doesn't change anything.
+5. **deletion-only with initialized empty call_sites stays stale=false** — Deletion-only fast path with no cross-file calls.
+6. **lifecycle: empty → add calls → remove calls → empty, stale always false** — Full lifecycle: stale is always false when initialized=true.
+7. **legacy DB (initialized=0) + content change → stale=true (unchanged by R108)** — Sanity check: legacy DBs still get stale=true.
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  13 passed (13)     [indexer tests]
+     Tests  67 passed (67)     [60 existing + 7 new R108]
+Benchmark smoke: PASSED (all invariants met)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/wasm-extractor.ts` (always rebuild when initialized)
+- Modified: `v2/src/indexer/indexer.ts` (parallel + deletion-only + post-extraction cleanup)
+- New: `v2/tests/indexer/r108-stale-complete-precision.test.ts` (7 tests)
+- Modified: `v2/package.json` (version 0.43.0)
+
+### Total: 39 bugs + 11 optimizations + 67 indexer tests across 33 rounds
+
+### Next steps
+
+1. **Import-aware resolution** — parse import statements to prefer imported symbols
+2. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+3. **Worker pool persistant** — for MCP/UI/watch daemon mode
+4. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+
 ## 0.42.0 — Round 107 (2026-07-09) Call-sites Initialized State + First Incremental Proof
 
 **32nd round (GPT 5.5 external audit R108).** 1 bug fixed. GPT 5.5 found that

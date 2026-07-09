@@ -11,7 +11,7 @@ import Database from 'better-sqlite3';
 import { defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { initIndexerSchema, clearProjectData, updateProjectStats } from './schema.js';
 import { discoverSourceFilesWasm, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
-import { replaceCallSitesForFiles, rebuildCrossFileCallsEdges, hasCallSites, isCallSitesInitialized } from './cross-file-resolver.js';
+import { replaceCallSitesForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
 import { Worker } from 'node:worker_threads';
 import { cpus } from 'node:os';
 import { join, relative as nodeRelative } from 'node:path';
@@ -240,9 +240,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         .run(opts.project, ...deletedRelPaths);
 
       // 2. Rebuild cross-file CALLS from the post-cleanup state.
-      //    R107: only if call_sites was initialized (not legacy DB).
+      //    R108: when callSitesInitialized=true, ALWAYS rebuild (even if
+      //    call_sites is empty) to clean up stale edges and mark state complete.
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c;
-      if (nodesCount > 0 && callSitesInitialized && hasCallSites(db, opts.project)) {
+      if (nodesCount > 0 && callSitesInitialized) {
         rebuildCrossFileCallsEdges(db, opts.project);
         crossFileResolved = true;
       }
@@ -330,8 +331,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       // The extraction transaction already rebuilt cross-file CALLS, but that
       // used the pre-cleanup state (deleted files' nodes were still present).
       // This second rebuild uses the post-cleanup state.
-      // R107: use isCallSitesInitialized for legacy DB detection.
-      if (isCallSitesInitialized(db, opts.project) && hasCallSites(db, opts.project)) {
+      // R108: use isCallSitesInitialized (not hasCallSites) — always rebuild
+      // when initialized=true, even if call_sites is empty.
+      if (isCallSitesInitialized(db, opts.project)) {
         rebuildCrossFileCallsEdges(db, opts.project);
       }
     });
@@ -724,11 +726,14 @@ async function indexParallel(
     }
 
     // Step 3: rebuild cross-file CALLS edges.
+    // R108: when callSitesInitialized=true, ALWAYS run rebuildCrossFileCallsEdges
+    // (even if call_sites is empty). See wasm-extractor.ts for full explanation.
     if (incremental) {
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(project) as { c: number }).c;
       if (nodesCount > 0 && !callSitesInitialized) {
         // R107: Legacy DB. Skip resolution. Caller marks stale=true.
-      } else if (nodesCount > 0 && hasCallSites(db, project)) {
+      } else if (nodesCount > 0 && callSitesInitialized) {
+        // R108: initialized=true → always rebuild (even if call_sites=0).
         const added = rebuildCrossFileCallsEdges(db, project);
         edgeCount += added;
         crossFileResolved = true;

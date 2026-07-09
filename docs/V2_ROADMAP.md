@@ -240,18 +240,19 @@
 | R75 (pre-read files, skip setLanguage, multi-row batch INSERT 50 rows/statement, 273ms v2/src) | 0.15.7 | 0 | 0 | 378 |
 | R76 (single-pass complexity estimation, skip anonymous, 267ms v2/src, 897ms v1/src) | 0.15.8 | 0 | 0 | 378 |
 | R77 (honest benchmark: V2 11% slower in wall time, 20% faster in extraction only, docs corrected) | 0.15.9 | 0 | 0 | 378 |
-| R78–R107 | 0.16.0–0.42.0 | — | — | — |
+| R78–R108 | 0.16.0–0.43.0 | — | — | — |
 | **Total** | | **566+** | **513+** | **378** |
 
-> **Note:** Rounds R78–R107 (versions 0.16.0–0.42.0) are documented in
+> **Note:** Rounds R78–R108 (versions 0.16.0–0.43.0) are documented in
 > `v2/CHANGELOG.md`. Key milestones: R78 rigorous benchmark fix, R79-R85
 > incremental mode + mtime_ns precision, R86-R94 parallel + failure safety,
 > R98-R101 cross-file CALLS resolution, R102-R105 stale flag + deletion
 > cleanup, R106 persistent call_sites table + deletion-only fast path,
-> R107 call_sites_initialized flag (fixes legacy DB ambiguity).
-> The V2 indexer now has 60 tests across 12 test files covering correctness,
+> R107 call_sites_initialized flag (fixes legacy DB ambiguity),
+> R108 stale-complete precision lock (initialized+empty=complete).
+> The V2 indexer now has 67 tests across 13 test files covering correctness,
 > incremental safety, cross-file CALLS, stale flag semantics, call_sites
-> persistence, and deletion cleanup.
+> persistence, deletion cleanup, and empty-initialized precision.
 
 ## Performance Milestones
 
