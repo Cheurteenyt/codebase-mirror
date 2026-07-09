@@ -37,6 +37,10 @@
 
 import type Database from 'better-sqlite3';
 import type { UnresolvedCallSite, ImportBinding } from './fast-walker.js';
+import { BUILTIN_METHOD_NAMES } from './fast-walker.js';
+
+// R116: moved from extraction-time to resolution-time filter
+const BUILTIN_METHOD_NAMES_SET = BUILTIN_METHOD_NAMES;
 
 /**
  * R106: Insert (or replace) call_sites for a set of files.
@@ -468,6 +472,12 @@ export function rebuildCrossFileCallsEdges(
           }
         }
       }
+    }
+
+    // R116: Builtin filter for member calls NOT resolved via namespace.
+    if (callKind === 'member_call') {
+      const seg = cs.last_segment.toLowerCase();
+      if (BUILTIN_METHOD_NAMES_SET.has(seg)) continue;
     }
 
     // R110: Name-based fallback (only if import-aware resolution didn't match)

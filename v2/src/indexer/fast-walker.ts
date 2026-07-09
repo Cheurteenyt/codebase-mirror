@@ -104,7 +104,7 @@ const EXPORT_TYPES = ['export_statement'];
 // R99: builtin method names to skip for cross-file resolution.
 // These are extremely common in JS/TS and would create massive false positives
 // if matched against project functions with the same name (e.g. `log`, `map`).
-const BUILTIN_METHOD_NAMES = new Set([
+export const BUILTIN_METHOD_NAMES = new Set([
   'map', 'filter', 'foreach', 'reduce', 'reduceRight', 'find', 'findIndex',
   'some', 'every', 'includes', 'indexOf', 'lastIndexOf', 'flat', 'flatMap',
   'sort', 'reverse', 'join', 'slice', 'splice', 'concat', 'fill', 'keys',
@@ -284,16 +284,11 @@ export function extractFast(
 
     if (!candidates || candidates.length === 0) {
       // R98: collect unresolved call-sites for cross-file resolution
-      // R99: detect call kind and filter builtins
+      // R99: detect call kind
+      // R116: REMOVED builtin filter — moved to resolver.
       const callKind: 'identifier_call' | 'member_call' | 'computed_call' =
         funcNode.type === 'identifier' ? 'identifier_call' :
         funcNode.type === 'member_expression' ? 'member_call' : 'computed_call';
-
-      // R99: skip common builtins for member calls to reduce false positives
-      if (callKind === 'member_call') {
-        const seg = lastSegment.toLowerCase();
-        if (BUILTIN_METHOD_NAMES.has(seg)) continue;
-      }
 
       unresolvedCalls.push({
         sourceQn,
