@@ -16,13 +16,35 @@ describe('R116: Namespace Builtin-Method Escape Hatch', () => {
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 }); expect(r.errors.length).toBe(0);
     const db = getDb(); const e = getEdges(db, 'api.get'); expect(e.length).toBe(1); expect(e[0].target_qn).toContain('api.ts'); expect(JSON.parse(e[0].properties_json).resolution).toBe('cross_file_namespace_exact'); db.close();
   });
-  it('namespace import: api.set(), api.has(), api.delete() all resolve', async () => {
+  it('namespace import: api.set(), api.has(), api.delete_() all resolve', async () => {
     writeFileSync(join(projectDir, 'api.ts'), 'export function set() { return 1; }\nexport function has() { return 2; }\nexport function delete_() { return 3; }\n');
     writeFileSync(join(projectDir, 'c.ts'), 'export function set() { return 99; }\n');
     writeFileSync(join(projectDir, 'a.ts'), `import * as api from './api';\nexport function caller() { return api.set() + api.has() + api.delete_(); }\n`);
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 }); expect(r.errors.length).toBe(0);
     const db = getDb();
     for (const m of ['api.set', 'api.has', 'api.delete_']) { const e = getEdges(db, m); expect(e.length).toBe(1); expect(e[0].target_qn).toContain('api.ts'); expect(JSON.parse(e[0].properties_json).resolution).toBe('cross_file_namespace_exact'); }
+    db.close();
+  });
+  it('namespace import: api.delete() call_site collected but no edge (export alias limitation)', async () => {
+    // R118: api.delete() is valid JS/TS syntax (delete is only reserved as unary operator).
+    // tree-sitter parses it as member_expression → callee='api.delete', call_kind='member_call'.
+    // The call_site IS collected. However, the namespace resolver can't resolve it because
+    // `export { _delete as delete }` creates a node with name='_delete' (the local name),
+    // not 'delete' (the export alias). The resolver looks up cs.last_segment ('delete') in
+    // fileSyms (keyed by node.name), which only has '_delete'.
+    // This is a known limitation: the indexer doesn't track export aliases for symbol lookup.
+    // Phase 3 would need export alias tracking to resolve api.delete() → _delete.
+    writeFileSync(join(projectDir, 'api.ts'), 'const _delete = () => 1;\nexport { _delete as delete };\n');
+    writeFileSync(join(projectDir, 'a.ts'), `import * as api from './api';\nexport function caller() { return api.delete(); }\n`);
+    const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 }); expect(r.errors.length).toBe(0);
+    const db = getDb();
+    // The call_site IS collected (api.delete, member_call)
+    const cs = db.prepare("SELECT callee, call_kind FROM call_sites WHERE project = ?").all(projectName);
+    expect(cs.length).toBe(1);
+    expect(cs[0].callee).toBe('api.delete');
+    expect(cs[0].call_kind).toBe('member_call');
+    // No cross-file edge created (export alias not tracked)
+    expect(getEdges(db, 'api.delete').length).toBe(0);
     db.close();
   });
   it('non-namespace: arr.map() still filtered', async () => {

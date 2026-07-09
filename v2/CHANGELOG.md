@@ -1,5 +1,41 @@
 # Changelog — Codebase Memory V2
 
+## 0.51.1 — Round 117 (2026-07-09) R116 Documentation + Builtin Coverage Lock + Delete Exactness
+
+**42nd round (GPT 5.5 external audit R121).** 0 runtime bugs — documentation
+lock + test exactness check. GPT 5.5 noted that R116's test used `api.delete_()`
+instead of the exact `api.delete()`. R117 adds the exact test and documents
+the export alias limitation.
+
+### Documentation
+
+- Added missing CHANGELOG entry for R116 (was 0.50.0, now 0.51.0 is documented)
+- Updated V2_ROADMAP.md to include R116
+
+### Tests (8 total in r116 file, was 6→7→8)
+
+1. `api.get()` resolves via namespace
+2. `api.set()`, `api.has()`, `api.delete_()` all resolve via namespace
+3. **NEW**: `api.delete()` — call_site collected but no edge (export alias limitation documented)
+4. `arr.map()` still filtered (non-namespace)
+5. `console.log()` still filtered
+6. `api.map()` resolves via namespace
+7. `api.then()` / `api.resolve()` resolve via namespace
+8. orphan edges = 0
+
+### Findings: `api.delete()` exactness
+
+**Verified**: `api.delete()` IS valid JS/TS syntax. tree-sitter parses it as
+`member_expression` → callee='api.delete', call_kind='member_call'. The call_site
+IS collected. However, the namespace resolver cannot resolve it because:
+- `export { _delete as delete }` creates a node with name='_delete' (the local name)
+- The resolver looks up cs.last_segment ('delete') in fileSyms (keyed by node.name)
+- fileSyms only has '_delete', not 'delete' (the export alias)
+- **Limitation**: The indexer doesn't track export aliases for symbol lookup
+- **Phase 3** would need export alias tracking to resolve `api.delete()` → `_delete`
+
+### Total: 42 bugs + 11 optimizations + 122 indexer tests across 42 rounds
+
 ## 0.51.0 — Round 116 (2026-07-09) Namespace Builtin-Method Escape Hatch
 
 **41st round (GPT 5.5 external audit R117).** 1 bug fixed. GPT 5.5 found that
