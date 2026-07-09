@@ -568,22 +568,33 @@ export async function extractFromFilesWasm(
     //   - Marks crossFileCallsResolved=true so the caller sets stale=false
     // A project with initialized=true and call_sites=0 is in a COMPLETE state
     // (no cross-file calls to resolve), so stale must be false.
+    // R109: when callSitesInitialized=true && nodesCount=0 (all files deleted
+    // or empty project), the graph is also COMPLETE — mark resolved=true
+    // without calling rebuildCrossFileCallsEdges (nothing to rebuild).
     if (incremental) {
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(project) as { c: number }).c;
-      if (nodesCount > 0 && !callSitesInitialized) {
+      if (!callSitesInitialized) {
         // R107: Legacy DB (pre-R106, or R106 full reindex never completed).
         // call_sites is not authoritative for unchanged files. Skip resolution
         // to avoid creating an incomplete graph. Caller marks stale=true to
         // force full reindex which will set call_sites_initialized=1.
-      } else if (nodesCount > 0 && callSitesInitialized) {
+      } else if (nodesCount > 0) {
         // R108: initialized=true → call_sites is authoritative (even if empty).
         // Always rebuild: inserts new edges if call_sites has entries, OR
         // cleans up stale cross-file edges if call_sites is empty.
         const added = rebuildCrossFileCallsEdges(db, project);
         result.edges += added;
         result.crossFileCallsResolved = true;
+      } else {
+        // R109: initialized=true && nodesCount=0 → empty graph is COMPLETE.
+        // No nodes means no call-sites and no edges to resolve. Mark resolved
+        // so the caller sets stale=false. This is defensive — currently the
+        // extractor always creates a File node per file, so nodesCount=0 only
+        // happens when all files are deleted (handled by the deletion-only
+        // fast path in indexer.ts). But this makes the semantics explicit
+        // and guards against future changes to the extractor.
+        result.crossFileCallsResolved = true;
       }
-      // else: no nodes — nothing to resolve.
     } else {
       // Full mode: always rebuild (table was cleared, all call_sites are new).
       const added = rebuildCrossFileCallsEdges(db, project);

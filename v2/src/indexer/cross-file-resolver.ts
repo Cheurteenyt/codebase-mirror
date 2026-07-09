@@ -97,6 +97,10 @@ export function replaceCallSitesForFiles(
  *
  * Returns the number of cross-file CALLS edges inserted.
  *
+ * R109: safe to call when nodesCount=0 — deletes any stale cross-file edges,
+ * then inserts 0 new edges (allNodes and allCallSites are empty arrays).
+ * However, callers typically skip the call when nodesCount=0 for efficiency.
+ *
  * Must be called INSIDE a transaction by the caller.
  */
 export function rebuildCrossFileCallsEdges(

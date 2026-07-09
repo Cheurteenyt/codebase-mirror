@@ -1,5 +1,75 @@
 # Changelog — Codebase Memory V2
 
+## 0.44.0 — Round 109 (2026-07-09) Empty Graph Complete State Lock
+
+**34th round (GPT 5.5 external audit R110).** 0 bugs confirmed — defensive fix
++ 6 tests. GPT 5.5 reported a P2 bug where `initialized=true + nodesCount=0`
+could produce `stale=true`. Verification showed the bug was **NOT triggerable**
+because the extractor always creates a File node per file (so `nodesCount >= 1`
+when any file exists). `nodesCount=0` only happens when ALL files are deleted,
+which is handled correctly by the deletion-only fast path. However, R109
+applies a **defensive fix** to make the "empty graph is complete" semantics
+explicit in all 3 code paths, guarding against future extractor changes.
+
+### Verification of R110 P2 claim
+
+Standalone reproduction scripts tested 2 scenarios:
+1. **Function → const** (`export function local()` → `export const x = 1;`):
+   `nodesCount=1` (File node always created), `stale=false`. Bug NOT triggered.
+2. **All files deleted** (deletion-only): `nodesCount=0`, `stale=false`
+   (deletion-only fast path uses `existingStale` fallback). Bug NOT triggered.
+
+**Conclusion**: The report's scenario was based on a false assumption that the
+extractor doesn't create a File node for files without functions/classes. In
+reality, `fast-walker.ts` line 159 always pushes a File node.
+
+### Defensive fix applied
+
+Despite the bug being non-triggerable, R109 makes the semantics explicit in all
+3 code paths (single-thread, parallel, deletion-only):
+- When `callSitesInitialized=true && nodesCount=0`, mark `crossFileCallsResolved=true`
+  without calling `rebuildCrossFileCallsEdges()` (nothing to rebuild).
+- This guards against future extractor changes that might skip File node creation.
+- Also documented that `rebuildCrossFileCallsEdges()` is safe to call with
+  `nodesCount=0` (defensive), even though callers now skip it.
+
+### Tests added (6)
+
+New file: `v2/tests/indexer/r109-empty-graph-complete.test.ts`
+
+1. **single-thread: function → const, stale=false** — Verifies File node is always created, so nodesCount >= 1.
+2. **deletion-only: all files deleted → nodes=0, edges=0, call_sites=0, stale=false** — The only real nodesCount=0 scenario.
+3. **deletion-only all deleted → full reindex repopulates correctly** — Lifecycle: empty → repopulate.
+4. **parallel: file loses last function → stale=false, orphan_edges=0** — P2/P3 from R110 report.
+5. **legacy DB (initialized=0) + all files deleted → stale=true** — Documents legacy DB behavior.
+6. **rebuildCrossFileCallsEdges is safe when nodesCount=0** — Direct unit test of the resolver on an empty project.
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  14 passed (14)     [indexer tests]
+     Tests  73 passed (73)     [67 existing + 6 new R109]
+Benchmark smoke: PASSED (all invariants met)
+```
+
+### Files
+
+- Modified: `v2/src/indexer/wasm-extractor.ts` (defensive: nodesCount=0 → resolved=true)
+- Modified: `v2/src/indexer/indexer.ts` (parallel + deletion-only defensive fix)
+- Modified: `v2/src/indexer/cross-file-resolver.ts` (documented safe with nodesCount=0)
+- New: `v2/tests/indexer/r109-empty-graph-complete.test.ts` (6 tests)
+- Modified: `v2/package.json` (version 0.44.0)
+
+### Total: 39 bugs + 11 optimizations + 73 indexer tests across 34 rounds
+
+### Next steps
+
+1. **Import-aware resolution** — parse import statements to prefer imported symbols
+2. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+3. **Worker pool persistant** — for MCP/UI/watch daemon mode
+4. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+
 ## 0.43.0 — Round 108 (2026-07-09) Call-sites Empty Initialized Precision Lock
 
 **33rd round (GPT 5.5 external audit R109).** 1 bug fixed. GPT 5.5 found that

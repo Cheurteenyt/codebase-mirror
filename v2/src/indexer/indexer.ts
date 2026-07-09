@@ -242,9 +242,15 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       // 2. Rebuild cross-file CALLS from the post-cleanup state.
       //    R108: when callSitesInitialized=true, ALWAYS rebuild (even if
       //    call_sites is empty) to clean up stale edges and mark state complete.
+      //    R109: when callSitesInitialized=true && nodesCount=0 (all files
+      //    deleted), the empty graph is COMPLETE — mark resolved=true without
+      //    calling rebuild (nothing to rebuild).
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c;
-      if (nodesCount > 0 && callSitesInitialized) {
+      if (callSitesInitialized && nodesCount > 0) {
         rebuildCrossFileCallsEdges(db, opts.project);
+        crossFileResolved = true;
+      } else if (callSitesInitialized && nodesCount === 0) {
+        // R109: empty graph is complete — no rebuild needed.
         crossFileResolved = true;
       }
     });
@@ -728,14 +734,19 @@ async function indexParallel(
     // Step 3: rebuild cross-file CALLS edges.
     // R108: when callSitesInitialized=true, ALWAYS run rebuildCrossFileCallsEdges
     // (even if call_sites is empty). See wasm-extractor.ts for full explanation.
+    // R109: when callSitesInitialized=true && nodesCount=0, mark resolved=true
+    // without calling rebuild (empty graph is complete).
     if (incremental) {
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(project) as { c: number }).c;
-      if (nodesCount > 0 && !callSitesInitialized) {
+      if (!callSitesInitialized) {
         // R107: Legacy DB. Skip resolution. Caller marks stale=true.
-      } else if (nodesCount > 0 && callSitesInitialized) {
+      } else if (nodesCount > 0) {
         // R108: initialized=true → always rebuild (even if call_sites=0).
         const added = rebuildCrossFileCallsEdges(db, project);
         edgeCount += added;
+        crossFileResolved = true;
+      } else {
+        // R109: initialized=true && nodesCount=0 → empty graph is COMPLETE.
         crossFileResolved = true;
       }
     } else {
