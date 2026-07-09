@@ -383,7 +383,20 @@ export function rebuildCrossFileCallsEdges(
 
     const expBinding = fileExps.get(exportedName);
     if (!expBinding) {
-      // No export binding for this name — fall back to direct symbol lookup
+      // R122: No direct export binding — check star re-exports (export * from './b')
+      const fileExps2 = exportsByFile.get(filePath);
+      if (fileExps2) {
+        for (const [, expB] of fileExps2) {
+          if (expB.exportKind === 'star_re_export' && expB.sourceModule) {
+            const starResolvedFile = resolveModulePath(expB.sourceModule, filePath, knownFiles);
+            if (starResolvedFile) {
+              const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, visited);
+              if (result) return result;
+            }
+          }
+        }
+      }
+      // No export binding found — fall back to direct symbol lookup
       const fileSyms = fileSymbolIndex.get(filePath);
       return fileSyms?.get(exportedName);
     }

@@ -1,5 +1,54 @@
 # Changelog — Codebase Memory V2
 
+## 0.53.0 — Round 122 (2026-07-09) export * Star Re-exports
+
+**46th round (GPT 5.5 audit R127).** Major feature: `export *` star re-export
+support with depth cap (10) and cycle detection (visited set). The resolver
+can now follow `export * from './b'` chains to resolve symbols through barrel
+files and re-export aggregations.
+
+### Feature: export * Star Re-exports (R122)
+
+New `star_re_export` export kind in `ExportBinding`. When `resolveExportedSymbol()`
+doesn't find a direct export binding for a name, it checks all `star_re_export`
+entries in the file and tries to resolve the name in each star-re-exported file.
+
+**Supports:**
+- `export * from './b'` — direct star re-export
+- Barrel: `dir/index.ts` with `export * from './foo'`
+- Cycles: `a.ts → b.ts → a.ts` — no infinite loop (visited set + depth cap 10)
+- Collisions: `export * from './b'; export * from './c'` — resolves to first found
+- Namespace + star: `import * as api; api.foo()` where foo comes from `export *`
+- Incremental: modify star source → edge updates
+- Deletion cleanup: delete star source → edges removed, no orphans
+- Type-only: `export * from './types'` doesn't create runtime edges for interfaces
+
+**Implementation:**
+1. `fast-walker.ts`: `extractExports()` now extracts `export * from './b'` as `star_re_export` binding
+2. `cross-file-resolver.ts`: `resolveExportedSymbol()` checks star re-exports when no direct binding found
+3. Depth cap (10) + visited set prevent infinite loops on cycles
+
+### Tests (8)
+
+`v2/tests/indexer/r122-export-star-reexport.test.ts`
+
+1. Star direct: `export * from './b'` → resolves to `b::foo`
+2. Barrel star: `dir/index.ts` with `export * from './foo'`
+3. Cycle: `a → b → a` → no crash, no infinite loop
+4. Collision: `export * from './b'; export * from './c'` → resolves to first found
+5. Type-only: `export * from './types'` → no runtime edge for interface
+6. Incremental: modify star source → edge updates
+7. Deletion cleanup: delete star source → edges removed
+8. Namespace + star: `api.foo()` resolves through `export *`
+
+### Total: 42 bugs + 11 optimizations + 145 indexer tests across 46 rounds
+
+### Next steps
+
+1. tsconfig paths (`@/`, `~`)
+2. Worker pool persistant
+3. Incremental cross-file CALLS optimization
+
 ## 0.52.2 — Round 121 (2026-07-09) Export Tracking Legacy Upgrade Hygiene Lock
 
 **45th round (GPT 5.5 audit R126).** 0 runtime bugs — code hygiene + 3 tests.

@@ -68,7 +68,7 @@ export interface ExportBinding {
   localName: string | null;
   sourceModule: string | null;
   importedName: string | null;
-  exportKind: 'local_named' | 'local_alias' | 're_export_named' | 're_export_alias';
+  exportKind: 'local_named' | 'local_alias' | 're_export_named' | 're_export_alias' | 'star_re_export';
   line: number;
   filePath: string;
 }
@@ -440,7 +440,7 @@ function extractDefaultExport(
  *   export { foo as bar } from './b'  → re_export_alias
  *
  * Skips type-only exports (export type { Foo }).
- * Skips export * (Phase 3+).
+ * R122: Supports export * from './b' (star re-exports).
  * Skips default exports (handled by extractDefaultExport).
  */
 function extractExports(rootNode: TSNode, filePath: string): ExportBinding[] {
@@ -477,13 +477,33 @@ function extractExports(rootNode: TSNode, filePath: string): ExportBinding[] {
     }
     if (isDefault) continue;
 
-    // Skip export * (star exports) — Phase 3+
+    // R122: Support export * from './b' (star re-exports)
+    // Extract as a special export binding with exportedName='*' and sourceModule.
+    // The resolver will expand this at resolution time by looking up ALL exports
+    // from the source file.
     let isStar = false;
+    let starSourceModule: string | null = null;
     for (let i = 0; i < exp.childCount; i++) {
       const child = exp.child(i);
-      if (child && child.type === 'namespace_export' && child.text === '*') { isStar = true; break; }
+      if (child && child.type === 'namespace_export' && child.text === '*') { isStar = true; }
+      if (child && child.type === 'string') {
+        starSourceModule = child.text.replace(/^["'`]/, '').replace(/["'`]$/, '');
+      }
     }
-    if (isStar) continue;
+    if (isStar) {
+      if (starSourceModule) {
+        exports.push({
+          exportedName: '*',
+          localName: null,
+          sourceModule: starSourceModule,
+          importedName: null,
+          exportKind: 'star_re_export',
+          line,
+          filePath,
+        });
+      }
+      continue;
+    }
 
     if (!exportClause) continue;
 
