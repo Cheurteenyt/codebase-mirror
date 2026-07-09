@@ -1,6 +1,6 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.46.0",
+  "version": "0.47.0",
   "description": "Codebase Memory V2 sidecar \u2014 human memory graph + Obsidian sync",
   "type": "module",
   "main": "dist/cli/index.js",
@@ -16,7 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run typecheck && npm test",
     "bench:incremental": "tsx scripts/incremental-benchmark-r87.ts",
-    "bench:incremental:smoke": "CBM_BENCH_SMOKE=1 tsx scripts/incremental-benchmark-r87.ts"
+    "bench:incremental:smoke": "CBM_BENCH_SMOKE=1 tsx scripts/incremental-benchmark-r87.ts",
+    "bench:precision": "tsx scripts/precision-benchmark-r112.ts --project precision-bench --root ./src --sample 50"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

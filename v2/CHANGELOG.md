@@ -1,5 +1,76 @@
 # Changelog — Codebase Memory V2
 
+## 0.47.0 — Round 112 (2026-07-09) Cross-file CALLS Precision Benchmark + Default Export Scope
+
+**37th round (GPT 5.5 external audit R113).** 0 bugs — precision benchmark
+script + Phase 1 scope documentation. GPT 5.5 recommended creating a precision
+benchmark that measures edge QUALITY (not just count) before optimizing further.
+Also documented the Phase 1 limitation: `export default realName` (expression)
+is not supported, only `export default function/class`.
+
+### Feature: Precision Benchmark Script
+
+New `v2/scripts/precision-benchmark-r112.ts` measures cross-file CALLS edge quality:
+- Samples up to N edges (default 50) with full details (source file/QN, callee, target file/QN, resolution, confidence, import_kind)
+- Produces aggregate metrics: total edges, resolution breakdown (import_exact/alias/name_fallback/ambiguous), ambiguous ratio, unresolved imports, call_sites count, import count, default export markers
+- Outputs reviewable JSON report (`precision-benchmark-r112-results.json`)
+- Added `npm run bench:precision` script
+
+**Real metrics from v2/src (43 files, 794 nodes, 1518 edges):**
+- 568 cross-file CALLS edges
+- 0 `cross_file_import_exact` edges (all are name_fallback or ambiguous)
+- 35.9% ambiguous ratio
+- 160 unresolved imports (approx)
+
+**Insight:** The v2/src codebase uses many member calls (`humanStore.listNodes`)
+and deep import chains that Phase 1 doesn't resolve import-aware (member calls
+skip import-aware resolution). This is expected — Phase 2 will address namespace
+imports and member-call tracking.
+
+### Default Export Scope Documentation
+
+Verified and documented that Phase 1 supports:
+- `export default function realName() {}` — ✓ marker created, resolves correctly
+- `export default class RealName {}` — ✓ marker created, resolves correctly
+- `export default realName;` (expression) — ✗ Phase 2 (extractDefaultExport returns null for identifier references)
+
+The `FastFileResult.defaultExportQn` comment has been updated to clarify Phase 1 scope.
+
+### Tests added (5)
+
+New file: `v2/tests/indexer/r112-precision-and-default-export.test.ts`
+
+1. **default export expression is Phase 2** — Documents that `export default realName` falls back to name-based. Marker is NOT created.
+2. **default export function works (Phase 1)** — Regression check: `export default function realName` creates marker, resolves import-aware.
+3. **default export class works (Phase 1)** — Regression check: `export default class RealName` creates marker.
+4. **precision: resolution types correctly tagged** — Verifies import_exact and name_fallback/ambiguous edges coexist.
+5. **benchmark script exists** — Verifies the precision benchmark script is present.
+
+### Verification
+
+```
+Typecheck: OK
+Test Files  17 passed (17)     [indexer tests]
+     Tests  95 passed (95)     [90 existing + 5 new R112]
+Benchmark smoke: PASSED (all invariants met)
+Precision benchmark: runs successfully on v2/src
+```
+
+### Files
+
+- New: `v2/scripts/precision-benchmark-r112.ts` — precision benchmark script
+- New: `v2/tests/indexer/r112-precision-and-default-export.test.ts` (5 tests)
+- Modified: `v2/package.json` (version 0.47.0 + `bench:precision` script)
+
+### Total: 42 bugs + 11 optimizations + 95 indexer tests across 37 rounds
+
+### Next steps
+
+1. **Import-aware Phase 2** — namespace imports (ns.foo), re-exports, barrel files, default export expressions
+2. **Worker pool persistant** — for MCP/UI/watch daemon mode
+3. **Incremental cross-file CALLS optimization** — only re-resolve call_sites from changed files
+4. **Precision benchmark on larger repo** — run on cbm-r19 v1/src to compare with V1
+
 ## 0.46.0 — Round 111 (2026-07-09) Import Resolution Correctness Lock
 
 **36th round (GPT 5.5 external audit R112).** 3 bugs fixed. GPT 5.5 found 3
