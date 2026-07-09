@@ -57,6 +57,22 @@ export interface ImportBinding {
   filePath: string;
 }
 
+// R119: Export binding extracted from export statements.
+// Represents a single export name mapping:
+//   export { foo }                    → { exportedName:'foo', localName:'foo', kind:'local_named' }
+//   export { foo as bar }             → { exportedName:'bar', localName:'foo', kind:'local_alias' }
+//   export { foo } from './b'         → { exportedName:'foo', sourceModule:'./b', importedName:'foo', kind:'re_export_named' }
+//   export { foo as bar } from './b'  → { exportedName:'bar', sourceModule:'./b', importedName:'foo', kind:'re_export_alias' }
+export interface ExportBinding {
+  exportedName: string;
+  localName: string | null;
+  sourceModule: string | null;
+  importedName: string | null;
+  exportKind: 'local_named' | 'local_alias' | 're_export_named' | 're_export_alias';
+  line: number;
+  filePath: string;
+}
+
 export interface FastFileResult {
   nodes: FastNode[];
   edges: FastEdge[];
@@ -65,6 +81,8 @@ export interface FastFileResult {
   unresolvedCalls: UnresolvedCallSite[];
   // R110: import bindings for import-aware cross-file resolution
   imports: ImportBinding[];
+  // R119: export bindings for export-aware cross-file resolution
+  exports: ExportBinding[];
   // R111: qualified name of the default export target (if any).
   // For `export default function realName() {}`, this is the QN of realName.
   // For `export default foo;` (re-export of a variable), this is the QN of foo.
@@ -325,13 +343,16 @@ export function extractFast(
   // Used by the cross-file resolver to prioritize imported symbols.
   const imports = extractImports(rootNode, relPath);
 
+  // ── Extract exports (R119: export alias / re-export tracking) ───────
+  const exports = extractExports(rootNode, relPath);
+
   // ── Extract default export (R111: default import resolution) ─────────
   // For `import foo from './b'`, the local name (foo) may differ from the
   // exported name (realName). We detect the default export target QN so the
   // resolver can map the local name to the correct symbol.
   const defaultExportQn = extractDefaultExport(rootNode, qnByNode, fileQn);
 
-  return { nodes, edges, astNodeCount: 0, unresolvedCalls, imports, defaultExportQn };
+  return { nodes, edges, astNodeCount: 0, unresolvedCalls, imports, defaultExportQn, exports };
 }
 
 /**
@@ -409,6 +430,104 @@ function extractDefaultExport(
  * import statements. The traversal is defensive: if the structure doesn't
  * match expectations, it skips that import rather than throwing.
  */
+/**
+ * R119: Extract export bindings from a tree-sitter AST.
+ *
+ * Handles 4 export kinds:
+ *   export { foo }                    → local_named
+ *   export { foo as bar }             → local_alias
+ *   export { foo } from './b'         → re_export_named
+ *   export { foo as bar } from './b'  → re_export_alias
+ *
+ * Skips type-only exports (export type { Foo }).
+ * Skips export * (Phase 3+).
+ * Skips default exports (handled by extractDefaultExport).
+ */
+function extractExports(rootNode: TSNode, filePath: string): ExportBinding[] {
+  const exports: ExportBinding[] = [];
+  const allExports = rootNode.descendantsOfType(EXPORT_TYPES);
+  for (const exp of allExports) {
+    const line = exp.startPosition.row + 1;
+
+    // Check for type-only export: export type { Foo }
+    let isTypeOnly = false;
+    // Check for 'from' clause (re-export)
+    let sourceModule: string | null = null;
+    // Find export_clause and string (source module)
+    let exportClause: TSNode | null = null;
+    for (let i = 0; i < exp.childCount; i++) {
+      const child = exp.child(i);
+      if (!child) continue;
+      if (child.type === 'type') isTypeOnly = true;
+      if (child.type === 'string') {
+        sourceModule = child.text.replace(/^["'`]/, '').replace(/["'`]$/, '');
+      } else if (child.type === 'export_clause') {
+        exportClause = child;
+      }
+    }
+
+    // Skip type-only exports
+    if (isTypeOnly) continue;
+
+    // Skip default exports (handled by extractDefaultExport)
+    let isDefault = false;
+    for (let i = 0; i < exp.childCount; i++) {
+      const child = exp.child(i);
+      if (child && child.type === 'default') { isDefault = true; break; }
+    }
+    if (isDefault) continue;
+
+    // Skip export * (star exports) — Phase 3+
+    let isStar = false;
+    for (let i = 0; i < exp.childCount; i++) {
+      const child = exp.child(i);
+      if (child && child.type === 'namespace_export' && child.text === '*') { isStar = true; break; }
+    }
+    if (isStar) continue;
+
+    if (!exportClause) continue;
+
+    // Walk export_clause for export_specifier children
+    for (let i = 0; i < exportClause.childCount; i++) {
+      const spec = exportClause.child(i);
+      if (!spec || spec.type !== 'export_specifier') continue;
+
+      // export_specifier has 'name' (original) and 'alias' (exported name)
+      const nameNode = spec.childForFieldName('name');
+      const aliasNode = spec.childForFieldName('alias');
+      if (!nameNode) continue;
+
+      const originalName = nameNode.text;
+      const exportedName = aliasNode ? aliasNode.text : originalName;
+
+      if (sourceModule) {
+        // Re-export: export { foo } from './b'  or  export { foo as bar } from './b'
+        exports.push({
+          exportedName,
+          localName: null,
+          sourceModule,
+          importedName: originalName,
+          exportKind: aliasNode ? 're_export_alias' : 're_export_named',
+          line,
+          filePath,
+        });
+      } else {
+        // Local export: export { foo }  or  export { foo as bar }
+        exports.push({
+          exportedName,
+          localName: originalName,
+          sourceModule: null,
+          importedName: null,
+          exportKind: aliasNode ? 'local_alias' : 'local_named',
+          line,
+          filePath,
+        });
+      }
+    }
+  }
+  return exports;
+}
+
 function extractImports(rootNode: TSNode, filePath: string): ImportBinding[] {
   const imports: ImportBinding[] = [];
   const allImports = rootNode.descendantsOfType(IMPORT_TYPES);

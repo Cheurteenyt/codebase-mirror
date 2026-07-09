@@ -108,6 +108,21 @@ const SCHEMA_SQL = `
     line INTEGER NOT NULL
   );
 
+  -- R119: Exports persistent table.
+  -- Stores export bindings per file so that the resolver can map exported
+  -- names to local symbols (alias) or to re-exported symbols from other files.
+  CREATE TABLE IF NOT EXISTS exports (
+    id INTEGER PRIMARY KEY,
+    project TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    exported_name TEXT NOT NULL,
+    local_name TEXT,
+    source_module TEXT,
+    imported_name TEXT,
+    export_kind TEXT NOT NULL,
+    line INTEGER NOT NULL
+  );
+
   -- Indexes matching V1's layout for query compatibility.
   CREATE INDEX IF NOT EXISTS idx_nodes_project ON nodes(project);
   CREATE INDEX IF NOT EXISTS idx_nodes_qn ON nodes(project, qualified_name);
@@ -124,6 +139,8 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_call_sites_project_file ON call_sites(project, file_path);
   -- R110: index for imports — (project, file_path) for per-file delete/replace.
   CREATE INDEX IF NOT EXISTS idx_imports_project_file ON imports(project, file_path);
+  -- R119: index for exports — (project, file_path) for per-file delete/replace.
+  CREATE INDEX IF NOT EXISTS idx_exports_project_file ON exports(project, file_path);
 `;
 
 /**
@@ -303,6 +320,7 @@ export function clearProjectData(db: Database.Database, project: string): void {
     db.prepare('DELETE FROM file_hashes WHERE project = ?').run(project);
     db.prepare('DELETE FROM call_sites WHERE project = ?').run(project);
     db.prepare('DELETE FROM imports WHERE project = ?').run(project);
+    db.prepare('DELETE FROM exports WHERE project = ?').run(project);
   });
   tx();
 }

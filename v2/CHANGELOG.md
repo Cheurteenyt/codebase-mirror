@@ -1,5 +1,59 @@
 # Changelog — Codebase Memory V2
 
+## 0.52.0 — Round 119 (2026-07-09) Export Alias / Re-export Tracking
+
+**43rd round (GPT 5.5 audit R124).** Major feature: export alias and re-export
+tracking. The resolver can now map exported names to local symbols (alias) and
+follow re-exports through barrel files. This closes the `api.delete()` limitation
+documented in R117/R118.
+
+### Feature: Export Alias / Re-export Tracking (R119)
+
+New `exports` table stores export bindings per file. The resolver now uses
+`resolveExportedSymbol()` to map exported names to local symbols, following
+re-exports with depth cap (10) and cycle detection (visited set).
+
+Supports:
+- **Local named**: `export { foo }` → resolves `foo` directly
+- **Local alias**: `export { foo as bar }` → `bar` maps to `foo`
+- **Re-export named**: `export { foo } from './b'` → resolves through `b.ts`
+- **Re-export alias**: `export { foo as bar } from './b'` → `bar` maps to `b::foo`
+- **Barrel files**: `import { foo } from './dir'` → resolves through `dir/index.ts`
+- **Type-only exports skipped**: `export type { Foo }` doesn't create runtime edges
+- **export * skipped**: Phase 3+ (documented limitation)
+
+### Implementation
+
+1. **Schema**: new `exports` table + index `idx_exports_project_file`
+2. **fast-walker.ts**: `ExportBinding` type + `extractExports()` function
+3. **cross-file-resolver.ts**: `replaceExportsForFiles()` + `resolveExportedSymbol()` with depth cap + visited set
+4. **Resolver updated**: named/alias imports, namespace calls, and default imports now use `resolveExportedSymbol()` instead of direct `fileSyms.get()`
+5. **Persistence**: exports persisted in single-thread + parallel + incremental + deletion cleanup
+
+### Tests (9)
+
+`v2/tests/indexer/r119-export-alias-reexport.test.ts`
+
+1. Export alias: `import { bar }` resolves to `api::foo`
+2. Namespace + export alias: `api.delete()` resolves to `_delete`
+3. Disambiguation: `api.delete()` doesn't fall back to `c.ts`
+4. Re-export named: `import { foo } from './index'` resolves to `b::foo`
+5. Re-export alias: `import { bar } from './index'` resolves to `b::foo`
+6. Barrel folder: `import { foo } from './dir'` resolves to `dir/foo.ts::foo`
+7. Incremental: modify re-export target → edge updates
+8. Deletion cleanup: delete re-exported file → no orphan edges
+9. Type-only export: `export type { Foo }` doesn't create runtime edge
+
+### Total: 42 bugs + 11 optimizations + 131 indexer tests across 43 rounds
+
+### Next steps
+
+1. `export *` (star re-exports) with cap + cycle detection
+2. tsconfig paths (`@/`, `~`)
+3. Variable declaration name tracking (`const _delete = () => 1` → node name `_delete`)
+4. Worker pool persistant
+5. Incremental cross-file CALLS optimization
+
 ## 0.51.1 — Round 117 (2026-07-09) R116 Documentation + Builtin Coverage Lock + Delete Exactness
 
 **42nd round (GPT 5.5 external audit R121).** 0 runtime bugs — documentation
