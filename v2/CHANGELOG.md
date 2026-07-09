@@ -1,5 +1,48 @@
 # Changelog — Codebase Memory V2
 
+## 0.35.0 — Round 100 (2026-07-08) Cross-file CALLS Tests + Stale Flag
+
+**25th round (GPT 5.5 external audit R100).** 0 new bugs — 6 tests + 1 feature
+flag. Closes the test gap for R98/R99 cross-file CALLS and adds explicit
+`crossFileCallsStale` flag for incremental mode.
+
+### Feature: `crossFileCallsStale` flag
+
+- **`IndexResult.crossFileCallsStale: boolean`** (`indexer.ts`) — Set to `true` when incremental mode modifies files and cross-file CALLS edges may be stale (not rebuilt). Consumers (MCP/UI/watch) can check this flag and recommend a full reindex.
+
+### Tests added (6 new, versioned)
+
+New file: `v2/tests/indexer/r100-cross-file-calls.test.ts`
+
+1. **`full index: cross-file CALLS edge created for identifier call`** — Verifies `foo()` in `a.ts` calling `foo()` defined in `b.ts` creates a `cross_file_name_exact` edge with `call_kind: identifier_call`.
+2. **`builtins filtered: console.log, array.map do not create cross-file edges`** — Verifies `console.log()` and `arr.map()` do NOT create edges to project functions `log`/`map`, but `log()` as identifier call DOES.
+3. **`ambiguity: max 5 candidates per call`** — 7 files each define `foo()`. Cross-file edges capped at 5 with `resolution: cross_file_ambiguous`.
+4. **`JSON properties are valid for all CALLS edges`** — All CALLS edge properties parse as valid JSON with `inferred: true`.
+5. **`orphan edges = 0 after full index with cross-file CALLS`** — No orphan edges when cross-file CALLS are present.
+6. **`incremental: crossFileCallsStale flag is set when files change`** — After incremental modifying a file, `result.crossFileCallsStale === true`.
+
+### Verification
+
+```
+Test Files  38 passed (38)
+     Tests  388 passed (388)
+```
+
+### Files
+
+- New: `v2/tests/indexer/r100-cross-file-calls.test.ts` (6 tests)
+- Modified: `v2/src/indexer/indexer.ts` (crossFileCallsStale flag + IndexResult)
+- Modified: `v2/package.json` (version 0.35.0)
+
+### Total: 34 bugs + 10 optimizations + 33 tests across 25 rounds
+
+### Next steps
+
+1. **Call-sites persistent table** — enable cross-file CALLS in incremental mode
+2. **Import-aware resolution** — parse import statements to prefer imported symbols
+3. **Precision benchmark** — manually verify 20-50 cross-file CALLS edges
+4. **Worker pool persistant** — for MCP/UI/watch daemon mode
+
 ## 0.34.0 — Round 99 (2026-07-08) Cross-file CALLS Correctness + Precision Lock
 
 **24th round (GPT 5.5 external audit R99).** 1 P1 bug fixed + 3 precision

@@ -42,6 +42,9 @@ export interface IndexResult {
   languages?: Set<string>;
   parallel?: boolean;
   workerCount?: number;
+  // R100: true when incremental mode changed files and cross-file CALLS
+  // edges may be stale (not rebuilt). Consumers should recommend full reindex.
+  crossFileCallsStale?: boolean;
 }
 
 /**
@@ -206,6 +209,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     languages: result.languages ?? allLangs,
     parallel: useParallel,
     workerCount: useParallel ? numWorkers : 0,
+    // R100: cross-file CALLS are only built in full mode. In incremental mode,
+    // changed files lose their cross-file edges until a full reindex.
+    // This flag warns consumers (MCP/UI/watch) that the graph may be stale.
+    crossFileCallsStale: (opts.incremental ?? false) && result.files > 0,
   };
 }
 
