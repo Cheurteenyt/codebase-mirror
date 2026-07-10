@@ -6,58 +6,81 @@
 // routeIndex via safeRealpathStrict). Before R55 this file existed but was
 // never imported, leaving the two call sites with their own inline copies —
 // the exact duplication risk Round 8 warned about.
-// R139: Unified Path Containment — fixed the P0 vault write escape by walking
-// up to the nearest existing ancestor instead of falling back to lexical
-// resolve. This prevents symlink-based escapes when multiple path segments
-// don't exist yet.
+// R139: Unified Path Containment — nearestExistingAncestor walk.
+// R140: Fail-closed hotfix — removed depth cap, no lexical fallback,
+// ENOENT-only catch, path.relative for cross-platform containment.
 
 import { realpathSync } from 'node:fs';
-import { resolve, join, dirname, basename, sep } from 'node:path';
+import { resolve, join, dirname, basename, sep, relative, isAbsolute } from 'node:path';
 
 /**
- * R139: Find the nearest existing ancestor of a path and resolve it.
+ * R140: Check if an error is an ENOENT (file not found) error.
+ * Only ENOENT should trigger the ancestor walk — other errors (EACCES,
+ * ELOOP, ENOTDIR, ENAMETOOLONG, EIO) must fail-closed.
+ */
+function isENOENT(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error as { code: string }).code === 'ENOENT';
+}
+
+/**
+ * R140: Check if a candidate path is inside a root path, cross-platform.
+ * Uses path.relative instead of manual startsWith to handle Windows
+ * separators, drives, and case sensitivity correctly.
+ */
+function isPathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..' + sep) && rel !== '..' && !isAbsolute(rel));
+}
+
+/**
+ * R140: Find the nearest existing ancestor of a path and resolve it.
  *
  * Walks up the path tree until it finds a component that exists on disk,
  * then resolves that ancestor with realpathSync (following symlinks).
- * Returns `{ realAncestor, remainingParts }` where `remainingParts` are the
- * non-existent path segments to append to `realAncestor`.
  *
- * This replaces the old 2-level fallback (path → parent → lexical resolve)
- * which was vulnerable to symlink escapes when multiple descendants don't
- * exist. Now, a symlink anywhere in the existing ancestor chain is resolved
- * and checked for containment.
+ * R140: Removed the depth cap (100). The `parent === current` check
+ * already guarantees termination — the path converges to the filesystem
+ * root. The cap created a fail-open bypass: after 100 iterations, the
+ * function returned null, and safeRealpath fell back to lexical resolve,
+ * which is vulnerable to symlink escapes. Now: no cap, no lexical fallback.
  *
- * Returns `{ realAncestor: null, remainingParts: [] }` if no ancestor exists
- * (e.g., the path is on a non-existent drive on Windows).
+ * R140: Only ENOENT errors trigger the ancestor walk. EACCES, ELOOP,
+ * ENOTDIR, etc. propagate as exceptions (fail-closed).
+ *
+ * Throws if no existing ancestor is found (e.g., non-existent drive).
  */
-function nearestExistingAncestor(absPath: string): { realAncestor: string | null; remainingParts: string[] } {
+function nearestExistingAncestor(absPath: string): { realAncestor: string; remainingParts: string[] } {
   const parts: string[] = [];
   let current = absPath;
-  for (let i = 0; i < 100; i++) { // depth cap to prevent infinite loops
+  // R140: No depth cap — parent === current guarantees termination.
+  while (true) {
     try {
       const real = realpathSync(current);
       return { realAncestor: real, remainingParts: parts.reverse() };
-    } catch {
+    } catch (error) {
+      // R140: Only ENOENT means "path doesn't exist yet" — continue walking up.
+      // All other errors (EACCES, ELOOP, ENOTDIR, ENAMETOOLONG, EIO) must throw.
+      if (!isENOENT(error)) throw error;
       parts.push(basename(current));
       const parent = dirname(current);
       if (parent === current) {
-        // Reached filesystem root without finding an existing path
-        return { realAncestor: null, remainingParts: [] };
+        // Reached filesystem root without finding an existing path.
+        // R140: Fail-closed — throw instead of returning null (which caused
+        // the lexical fallback vulnerability).
+        throw new Error(`Cannot resolve path: no existing ancestor found for "${absPath}"`);
       }
       current = parent;
     }
   }
-  return { realAncestor: null, remainingParts: [] };
 }
 
 /**
  * Resolve a path to its real (symlink-followed) location, with a fallback
  * for paths that don't exist yet (e.g., a file being created).
  *
- * R139: Replaced the old 3-level fallback (path → parent → lexical) with
- * nearestExistingAncestor walk. This closes the P0 vault write escape where
- * a symlink ancestor could redirect writes outside the vault when multiple
- * descendants don't exist.
+ * R140: Fail-closed. If no existing ancestor is found, throws instead of
+ * returning a lexical resolve. A security helper must NEVER return an
+ * unresolvable path — it must reject.
  *
  * Used by routeBrowse (path may not exist yet) and assertPathInsideRoot
  * (writes to not-yet-existing files must still be containment-checked).
@@ -65,47 +88,36 @@ function nearestExistingAncestor(absPath: string): { realAncestor: string | null
 export function safeRealpath(absPath: string): string {
   try {
     return realpathSync(absPath);
-  } catch {
-    // R139: walk up to nearest existing ancestor, resolve it, reattach
+  } catch (error) {
+    // R140: Only ENOENT triggers the ancestor walk. Other errors throw.
+    if (!isENOENT(error)) throw error;
+    // R140: Walk up to nearest existing ancestor, resolve it, reattach.
+    // Throws if no ancestor exists — no lexical fallback.
     const { realAncestor, remainingParts } = nearestExistingAncestor(absPath);
-    if (realAncestor !== null && remainingParts.length > 0) {
+    if (remainingParts.length > 0) {
       return join(realAncestor, ...remainingParts);
     }
-    if (realAncestor !== null) {
-      return realAncestor;
-    }
-    // No ancestor exists at all — return lexical resolve (root filesystem itself)
-    return resolve(absPath);
+    return realAncestor;
   }
 }
 
 /**
  * Resolve a path to its real (symlink-followed) location, throwing if the
- * path doesn't exist on disk. Use this when the caller needs to verify
- * the path exists AND get its real location in one step.
- *
- * Used by routeIndex which must 404 on a non-existent root_path before
- * attempting to spawn an indexing job.
+ * path doesn't exist on disk.
  */
 export function safeRealpathStrict(absPath: string): string {
-  // realpathSync throws ENOENT (or EACCES, ELOOP, etc.) if the path doesn't
-  // exist or is inaccessible. The caller is expected to catch and map to
-  // the appropriate HTTP status.
   return realpathSync(absPath);
 }
 
 /**
  * Check if a relative path stays inside a root directory, following symlinks.
- * Rejects ".." traversal and backslashes (defensive — path.join would
- * normalise them, but failing early gives clearer error messages).
+ * Rejects ".." traversal and backslashes.
  *
- * Used by vault.ts's readNote/writeNote/deleteNote (formerly
- * assertPathInsideVault) to prevent symlinks inside the vault from escaping
- * to arbitrary filesystem locations.
+ * R140: Uses path.relative for containment check instead of manual
+ * startsWith — fixes Windows separator issue (R139 used '/' which
+ * doesn't match '\' on Windows).
  *
- * Returns the resolved real path so the caller can use it for subsequent
- * operations on the actual on-disk target rather than the possibly-symlinked
- * input path.
+ * Returns the resolved real path.
  */
 export function assertPathInsideRoot(rootPath: string, relPath: string): string {
   if (relPath.includes('..')) {
@@ -122,7 +134,8 @@ export function assertPathInsideRoot(rootPath: string, relPath: string): string 
   }
   const absPath = resolve(join(absRoot, relPath));
   const realPath = safeRealpath(absPath);
-  if (realPath !== absRoot && !realPath.startsWith(absRoot + sep)) {
+  // R140: Use path.relative for cross-platform containment check.
+  if (!isPathInside(absRoot, realPath)) {
     throw new Error(
       `Path traversal rejected: "${relPath}" resolves outside the root "${absRoot}".`
     );

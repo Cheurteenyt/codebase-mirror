@@ -1,5 +1,63 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.1 — Round 140 (2026-07-10) Fail-Closed Path Hotfix
+
+**65th round (GPT 5.6 Sol audit R139).** 1 P0 + 1 P1 + 1 P2 fixed. Hotfix for
+R139's incomplete P0 closure: the depth cap of 100 in `nearestExistingAncestor`
+created a fail-open bypass. After 100 non-existent path segments, the function
+returned null → `safeRealpath` fell back to lexical `resolve()` →
+`assertPathInsideRoot` accepted the path → `mkdirSync(recursive)` + `writeFileSync`
+followed the symlink and wrote outside the vault.
+
+### Security fixes (1 P0 + 1 P1 + 1 P2)
+
+94. **P0 vault write bypass via depth >100** (`safe-path.ts`) — The
+    `nearestExistingAncestor` function had a `for (let i = 0; i < 100; i++)`
+    cap. After 100 iterations it returned `{ realAncestor: null }`, and
+    `safeRealpath` fell back to `resolve(absPath)` (lexical). An attacker
+    could create `vault/escape -> /external` then write to
+    `escape/d0/d1/.../d100/note.md` (101+ segments). The cap consumed all
+    iterations before reaching the symlink, the lexical path appeared inside
+    the vault, and the write followed the symlink to `/external`. Fixed:
+    removed the cap entirely — `while(true)` with `parent === current` as
+    the termination condition (guaranteed by filesystem root). No lexical
+    fallback. If no ancestor exists, throws (fail-closed). (SEC-R140-01)
+
+95. **Discovery duplicate indexing via internal symlinks** (`wasm-extractor.ts`)
+    — `visitedDirs` only contained `realRoot` and symlink targets. Regular
+    directories were never added, so a file accessible via both `subdir/file.ts`
+    and `link/file.ts` (where `link -> subdir`) was indexed twice under
+    different paths. Fixed: ALL directories (regular + symlink) are now
+    resolved with `realpathSync` and added to `visitedDirs` before traversal.
+    Duplicate paths are skipped. (IDX-R140-01)
+
+96. **Windows path separator in containment check** (`wasm-extractor.ts`,
+    `safe-path.ts`) — R139 used `realRoot + '/'` for `startsWith` containment
+    check. On Windows, `C:\repo\sub` does not start with `C:\repo/`. Internal
+    symlinks would be rejected. The condition was also duplicated (two identical
+    `startsWith` checks). Fixed: replaced manual `startsWith` with
+    `path.relative`-based `isPathInside()` function that handles all separators,
+    drives, and platforms correctly. (COMPAT-R140-01, QUAL-R140-01)
+
+### Additional fixes
+
+- **SEC-R140-03**: `nearestExistingAncestor` now only catches `ENOENT` errors.
+  Other errors (`EACCES`, `ELOOP`, `ENOTDIR`, `ENAMETOOLONG`, `EIO`) propagate
+  as exceptions (fail-closed). Previously all errors were treated as "path
+  doesn't exist" which could mask permission issues.
+
+- **PERF-R140-01**: `SKIP_DIRS` now checks the symlink target's basename in
+  addition to the entry name. A symlink named `source-alias` pointing to
+  `node_modules/` is now correctly skipped.
+
+### Tests (2 new, 1 updated)
+
+- **SEC-R140-01**: 101+ descendants under external symlink → `assertPathInsideRoot` throws
+- **IDX-R140-01**: symlink cycle → file indexed exactly once (was ≤2)
+- **COMPAT-R140-01**: containment uses `path.relative` (cross-platform)
+
+### Total: 96 bugs + 11 optimizations + 240 indexer tests across 65 rounds
+
 ## 0.56.0 — Round 139 (2026-07-10) Unified Path Containment
 
 **64th round (GPT 5.6 Sol audit R138).** 2 P1 security bugs fixed + 1 P0

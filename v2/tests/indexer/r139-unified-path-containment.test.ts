@@ -48,7 +48,7 @@ describe('R139: Unified Path Containment', () => {
     db.close();
   });
 
-  it('discovery: symlink cycle does NOT cause infinite loop', async () => {
+  it('discovery: symlink cycle does NOT cause infinite loop or duplicates', async () => {
     // Create a cycle: project/a/loop -> project/a
     mkdirSync(join(projectDir, 'a'), { recursive: true });
     symlinkSync(join(projectDir, 'a'), join(projectDir, 'a', 'loop'));
@@ -57,14 +57,11 @@ describe('R139: Unified Path Containment', () => {
     // This should complete without hanging
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r.errors.length).toBe(0);
-    // The real file should be indexed (at least once)
     const db = new Database(defaultCodeDbPath(projectName), { readonly: true });
     const realFiles = db.prepare("SELECT DISTINCT file_path FROM nodes WHERE project = ? AND file_path LIKE '%real.ts'").all(projectName) as Array<{ file_path: string }>;
-    // R139: The file should be found, but not through an excessive number of
-    // different paths (cycle prevention limits duplication).
-    // We expect at most 2 distinct paths: 'a/real.ts' and 'a/loop/real.ts'
-    expect(realFiles.length).toBeLessThanOrEqual(2);
-    expect(realFiles.length).toBeGreaterThanOrEqual(1);
+    // R140: With visitedDirs for ALL directories, the file should be indexed
+    // exactly once (no duplicate via the symlink cycle).
+    expect(realFiles.length).toBe(1);
     db.close();
   });
 
@@ -98,6 +95,28 @@ describe('R139: Unified Path Containment', () => {
     // The result should contain 'target' (the symlink target), not 'projectDir/link'
     expect(result).toContain('target');
     expect(result).not.toContain('link');
+  });
+
+  it('assertPathInsideRoot: rejects path that escapes via symlink with 101+ descendants (SEC-R140-01)', () => {
+    // R140: The P0 bypass was: nearestExistingAncestor had a depth cap of 100.
+    // After 100 iterations it returned null → safeRealpath fell back to lexical
+    // resolve → assertPathInsideRoot accepted the path → writeNote wrote outside vault.
+    // R140 fix: no cap, fail-closed throw.
+    const root = join(tmpDir, 'vault-deep');
+    const external = join(tmpDir, 'external-deep');
+    mkdirSync(root, { recursive: true });
+    mkdirSync(external, { recursive: true });
+    // Create a symlink inside root pointing to external
+    symlinkSync(external, join(root, 'escape'));
+    // Build a path with 101 non-existent descendants under the symlink
+    const segments = ['escape'];
+    for (let i = 0; i < 101; i++) segments.push(`d${i}`);
+    segments.push('note.md');
+    const relPath = segments.join('/');
+    // R140: This MUST throw — no lexical fallback, no depth cap bypass
+    expect(() => {
+      assertPathInsideRoot(root, relPath);
+    }).toThrow();
   });
 
   it('assertPathInsideRoot: rejects path that escapes via symlink', () => {

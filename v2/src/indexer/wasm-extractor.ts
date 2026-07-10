@@ -25,8 +25,8 @@
 import { Parser, Language } from 'web-tree-sitter';
 import type Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
+import { relative as pathRelative, isAbsolute, relative, extname, basename, dirname, join } from 'node:path';
 import { readFileSync, statSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
-import { relative, extname, basename, dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { extractFast, type UnresolvedCallSite, type ImportBinding, type ExportBinding } from './fast-walker.js';
 import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFiles, rebuildCrossFileCallsEdges, clearCrossFileCallEdges, isCallSitesInitialized, isExtractorSemanticsCurrent } from './cross-file-resolver.js';
@@ -139,19 +139,24 @@ export function detectLanguage(filePath: string): string | null {
  */
 export function discoverSourceFilesWasm(rootPath: string): string[] {
   const results: string[] = [];
-  // R139: Resolve the real root path once. All discovered paths must be
+  // R139/R140: Resolve the real root path once. All discovered paths must be
   // inside this real root to prevent symlink-based escapes.
   let realRoot: string;
   try {
     realRoot = realpathSync(rootPath);
   } catch {
-    realRoot = rootPath; // rootPath itself doesn't exist — nothing to discover
-    return results;
+    return results; // rootPath doesn't exist — nothing to discover
   }
-  const realRootWithSep = realRoot + '/'; // Use '/' not sep for cross-platform comparison
-  // R139: Track visited realpaths to prevent symlink cycles and duplicate indexing.
+  // R140: Track visited realpaths for ALL directories (regular + symlink)
+  // to prevent duplicate indexing and cycles.
   const visitedDirs = new Set<string>([realRoot]);
   const stack: string[] = [rootPath];
+
+  // R140: Cross-platform containment check using path.relative
+  function isInside(root: string, candidate: string): boolean {
+    const rel = pathRelative(root, candidate);
+    return rel === '' || (!rel.startsWith('..' + '/') && !rel.startsWith('..' + '\\') && rel !== '..' && !isAbsolute(rel));
+  }
 
   while (stack.length > 0) {
     const dir = stack.pop()!;
@@ -165,25 +170,26 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
     for (const entry of entries) {
       const fullPath = join(dir, entry);
       try {
-        // R139: Use lstatSync to detect symlinks before following them.
         const lst = lstatSync(fullPath);
         if (lst.isSymbolicLink()) {
-          // R139: Resolve the symlink target and check containment.
+          // R139/R140: Resolve symlink target and check containment.
           try {
             const realTarget = realpathSync(fullPath);
-            // Check if the resolved target is inside the real root.
-            if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep) && !realTarget.startsWith(realRoot + '/')) {
-              // Symlink points outside the project root — skip it.
+            if (!isInside(realRoot, realTarget)) {
+              continue; // External symlink — skip
+            }
+            // R140: Check SKIP_DIRS against the target's basename too
+            const targetBase = basename(realTarget);
+            if (SKIP_DIRS.has(targetBase) || SKIP_DIRS.has(entry)) {
               continue;
             }
-            // Check if we've already visited this real path (cycle/duplicate prevention).
+            // R140: Check visited for ALL directories (dedup)
             if (visitedDirs.has(realTarget)) {
               continue;
             }
-            // Determine if the symlink target is a directory or file.
-            const realStat = statSync(fullPath); // follows the symlink
+            const realStat = statSync(fullPath);
             if (realStat.isDirectory()) {
-              if (!SKIP_DIRS.has(entry) && !entry.startsWith('.')) {
+              if (!entry.startsWith('.')) {
                 visitedDirs.add(realTarget);
                 stack.push(fullPath);
               }
@@ -192,13 +198,20 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
               if (lang) results.push(fullPath);
             }
           } catch {
-            // Broken symlink — skip.
-            continue;
+            continue; // Broken symlink
           }
         } else if (lst.isDirectory()) {
-          // Regular directory (not a symlink).
           if (!SKIP_DIRS.has(entry) && !entry.startsWith('.')) {
-            // For regular dirs, the path is already inside root (we started from root)
+            // R140: Resolve regular dirs too and check visited (dedup)
+            try {
+              const realDir = realpathSync(fullPath);
+              if (visitedDirs.has(realDir)) {
+                continue; // Already visited via symlink or another path
+              }
+              visitedDirs.add(realDir);
+            } catch {
+              // If realpath fails, still push (may not exist yet — unlikely for a dir we just lstat'd)
+            }
             stack.push(fullPath);
           }
         } else if (lst.isFile()) {
