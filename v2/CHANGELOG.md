@@ -1,5 +1,73 @@
 # Changelog — Codebase Memory V2
 
+## 0.57.2 — Round 151 (2026-07-11) Broken Symlink Liveness Lock
+
+**76th round (GPT 5.6 Sol audit R150).** 1 P1 + 2 P1/P2 + 1 P1/P2 fixed.
+Closes the 4 confirmed P1 code findings of the R150 audit.
+
+### Availability (1 P1)
+
+168. **P1 broken symlink permanent blocks all full indexes**
+     (`indexer.ts`, `wasm-extractor.ts`) — R150 set
+     `globalDeletionUncertainty=true` unconditionally on every broken
+     symlink. This blocked ALL full indexes and ALL deletions on every
+     run, even for a first full index with no existing graph to protect.
+     A single permanently broken symlink (common in npm, git worktrees,
+     IDEs) would make the project un-indexable indefinitely. Fixed:
+     `globalDeletionUncertainty` is now set by the INDEXER (not discovery)
+     based on whether the project already has existing nodes. On a first
+     full index (no existing graph), broken symlinks are recorded as
+     warnings but do NOT block the index — there's nothing to delete.
+     Subsequent runs (with existing graph) still protect old data.
+     (AVAIL-R151-01)
+
+### Diagnostics (2 P1/P2)
+
+169. **P1/P2 broken symlink path not exposed** (`wasm-extractor.ts`) —
+     `recordWarning()` only stored the code, not the path. The user
+     knew the project was stale but couldn't identify which symlink to
+     fix. On a monorepo with thousands of links, the diagnostic was
+     useless. Fixed: `recordWarning()` now accepts an optional `path`
+     parameter. Up to 100 warning samples are stored in
+     `DiscoveryResult.warningSamples`. The full-index error message
+     includes the first 10 broken symlink paths. (OBS-R151-01)
+
+170. **P1/P2 fast paths show "0 path(s)" when globalDeletionUncertainty**
+     (`indexer.ts`) — The full-index error message included
+     `globalDeletionUncertainty` info, but the fast-path `indexError`
+     only counted `uncertainPaths.length` and `uncertainSubtrees.length`.
+     When `globalDeletionUncertainty` was the only cause (0 paths, 0
+     subtrees), the message said "0 path(s), 0 subtree(s)" — misleading.
+     Fixed: the fast-path `indexError` now includes the broken symlink
+     info from `warningSamples` and `warningCountsByCode`. The message
+     says "global deletion uncertainty (broken symlinks: ...)" with the
+     actual paths. (OBS-R151-02)
+
+### Edge case (1 P1/P2)
+
+171. **P1/P2 empty relTarget doesn't protect all descendants**
+     (`indexer.ts`) — If `realTarget === realRoot`, then
+     `relative(realRoot, realTarget) === ''`. Adding `''` to
+     `uncertainSubtrees` doesn't protect `src/a.ts` because
+     `'src/a.ts'.startsWith('' + sep)` is false. The root itself was
+     uncertain but descendants weren't protected. Fixed: if any
+     `uncertainSubtrees` entry is `''`, `effectiveGlobalDeletionUncertainty`
+     is set to `true` — blocking ALL deletions. (DATA-R151-01)
+
+### Tests (9 new, 4 updated)
+
+- **AVAIL-R151-01** (2 tests): first full with broken symlink succeeds,
+  second full with broken symlink blocks.
+- **OBS-R151-01** (2 tests): code inspection of recordWarning path +
+  warningSamples in DiscoveryResult.
+- **OBS-R151-02** (1 test): code inspection of fast-path broken symlinks info.
+- **DATA-R151-01** (1 test): code inspection of empty relTarget check.
+- **Regression** (3 tests): semantics v8, hardlink extensions, extraction error.
+- **Updated**: 4 tests (R143/R144/R148/R150) adjusted for R151 first-index
+  behavior change (broken symlinks on first full no longer block).
+
+### Total: 171 bugs + 11 optimizations + 385 indexer tests across 76 rounds
+
 ## 0.57.1 — Round 150 (2026-07-11) Directory-Target Lock + Broken Symlink Confidence
 
 **75th round (GPT 5.6 Sol audit R149).** 2 P1 + 1 P1/P2 fixed.

@@ -196,17 +196,16 @@ describe('R143: Persistent Discovery State', () => {
     expect(result.skippedPolicyPaths).toBeGreaterThanOrEqual(0); // may or may not count
   });
 
-  it('DISC-R143-01c: broken symlink triggers uncertainty lock (R150)', async () => {
+  it('DISC-R143-01c: broken symlink on first full does NOT block (R151 AVAIL-R151-01)', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     symlinkSync('/nonexistent/target', join(projectDir, 'stale-alias.ts'));
 
-    // R150 (DATA-R150-02): broken symlinks now set globalDeletionUncertainty.
-    // A full index with a broken symlink must abort (preserve old graph)
-    // because the symlink may have been valid at the previous run.
-    // R143 behavior (succeed despite broken symlink) is superseded by R150.
+    // R151 (AVAIL-R151-01): On a FIRST full index (no existing graph),
+    // broken symlinks do NOT block the index — there's nothing to protect.
+    // The first full creates the initial graph; subsequent runs protect it.
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
-    expect(r.errors.length).toBeGreaterThan(0);
-    expect(r.crossFileCallsStale).toBe(true);
+    expect(r.errors.length).toBe(0);
+    expect(r.crossFileCallsStale).toBe(false);
   });
 
   // ── ID-R143-01: deterministic hardlink code+code selection ───────────

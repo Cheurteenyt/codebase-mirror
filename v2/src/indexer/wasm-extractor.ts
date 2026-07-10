@@ -241,6 +241,11 @@ export interface DiscoveryResult {
    * symlink is encountered that may have been valid at the previous run.
    */
   globalDeletionUncertainty: boolean;
+  /**
+   * R151 (OBS-R151-01): Warning samples with paths, capped at 100.
+   * Lets the user identify which symlinks to fix.
+   */
+  warningSamples: Array<{ path: string; code: string }>;
   /** Diagnostic counters. */
   skippedExternalSymlinks: number;
   skippedPolicyPaths: number;
@@ -460,10 +465,18 @@ export function discoverSourceFilesStructured(
    * discovery incomplete (the entry is simply skipped), but are tracked
    * so the UI/MCP can report "5 broken symlinks skipped" without alarming
    * the user.
+   * R151 (OBS-R151-01): Also store up to 100 warning samples with paths
+   * so the user can identify which symlinks to fix.
    */
-  function recordWarning(code: string): void {
+  const MAX_WARNING_SAMPLES = 100;
+  const warningSamples: Array<{ path: string; code: string }> = [];
+
+  function recordWarning(code: string, path?: string): void {
     totalWarningCount++;
     warningCountsByCode.set(code, (warningCountsByCode.get(code) ?? 0) + 1);
+    if (path !== undefined && warningSamples.length < MAX_WARNING_SAMPLES) {
+      warningSamples.push({ path, code });
+    }
   }
 
   /**
@@ -565,8 +578,18 @@ export function discoverSourceFilesStructured(
             // deletions in this run. The next successful run (when the
             // target is back) will re-index normally. This is conservative
             // but prevents silent data loss.
-            recordWarning('ENOENT');
-            globalDeletionUncertainty = true;
+            // R151 (OBS-R151-01): Include the symlink path in the warning
+            // sample so the user can identify which link to fix.
+            // R151 (AVAIL-R151-01): Only set globalDeletionUncertainty if
+            // there's an existing graph to protect. On a first full index,
+            // there's nothing to delete — blocking would prevent the project
+            // from ever being indexed. The first full creates the initial
+            // graph; subsequent runs with broken symlinks protect it.
+            recordWarning('ENOENT', fullPath);
+            // R151: globalDeletionUncertainty is set by the indexer (not
+            // discovery) based on whether the project already has nodes.
+            // Discovery just records the warning + path. The indexer will
+            // decide based on `existingInitialized`.
             continue;
           }
           if (code === 'ELOOP') {
@@ -783,6 +806,7 @@ export function discoverSourceFilesStructured(
     uncertainPaths,
     uncertainSubtrees,
     globalDeletionUncertainty,
+    warningSamples,
     skippedExternalSymlinks,
     skippedPolicyPaths,
     duplicates,
