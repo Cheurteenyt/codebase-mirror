@@ -65,12 +65,21 @@ import type Database from 'better-sqlite3';
  *        and duplicate File nodes from file symlinks — all of which must be
  *        purged by a full reindex before the new policy is trustworthy. The
  *        version bump forces the incremental gate to mark these DBs stale.
+ *   - 8: R144 — Hardlink Language Contract. R143 changed hardlink tie-breaking
+ *        from "first seen wins" to "lexicographically smaller path wins". This
+ *        can change file_path, qualified names, file_hashes, and potentially
+ *        the tree-sitter grammar (module.js vs module.ts). R144 further changes
+ *        the identity key to include the language, so two paths with different
+ *        extensions to the same inode are treated as separate files (not
+ *        deduplicated). DBs indexed by R143 (v7) may have the wrong path/grammar
+ *        for hardlinks — they must be re-parsed. The version bump forces the
+ *        incremental gate to mark these DBs stale.
  *
  * When bumping this constant, also add a migration test that simulates an
  * upgrade from the previous version (delete the relevant rows, keep
  * file_hashes, run incremental, assert crossFileCallsStale=true).
  */
-export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 7;
+export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8;
 
 /**
  * Tables created by the native indexer. Matches V1's schema so that
@@ -136,7 +145,19 @@ const SCHEMA_SQL = `
     --   6 = R135/R136+ (builtin truth lock, top-level type default, version fix)
     --   7 = R141+ (discovery policy lock: external symlinks, canonical paths,
     --             file-symlink dedup, root discovery failure lock)
-    extractor_semantics_version INTEGER DEFAULT 0
+    --   8 = R144+ (hardlink language contract: identity includes language,
+    --             deterministic tie-break, symlink error classification)
+    extractor_semantics_version INTEGER DEFAULT 0,
+    -- R144 (STATE-R144-03): Distinguish successful index from failed attempt.
+    -- indexed_at is updated by any write (including stale=1 on failure),
+    -- which made Graph Status show last_indexed=now after a failed index.
+    -- These fields separate the two:
+    --   last_successful_index_at — last time a full or incremental index SUCCEEDED
+    --   last_index_attempt_at — last time an index was ATTEMPTED (success or failure)
+    --   last_index_error — error message from the last failed attempt (NULL on success)
+    last_successful_index_at TEXT,
+    last_index_attempt_at TEXT,
+    last_index_error TEXT
   );
 
   -- R106: Call-sites persistent table.
@@ -246,6 +267,8 @@ export function initIndexerSchema(db: Database.Database): void {
   migrateProjectsCallSitesInitialized(db);
   // R126: add extractor_semantics_version column to projects if missing
   migrateProjectsExtractorSemanticsVersion(db);
+  // R144: add last_successful_index_at, last_index_attempt_at, last_index_error
+  migrateProjectsIndexStateColumns(db);
   // R106: call_sites table is created by SCHEMA_SQL (CREATE IF NOT EXISTS),
   // but the index idx_call_sites_project_file must exist for legacy DBs that
   // already had the table created without it. CREATE INDEX IF NOT EXISTS in
@@ -410,6 +433,27 @@ function migrateProjectsExtractorSemanticsVersion(db: Database.Database): void {
 }
 
 /**
+ * R144 (STATE-R144-03): Add last_successful_index_at, last_index_attempt_at,
+ * last_index_error columns to projects if missing. These distinguish a
+ * successful index from a failed attempt — `indexed_at` is updated by any
+ * write (including stale=1 on failure), which made Graph Status show
+ * "last_indexed: now" after a failed index.
+ */
+function migrateProjectsIndexStateColumns(db: Database.Database): void {
+  const cols = db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('last_successful_index_at')) {
+    db.exec('ALTER TABLE projects ADD COLUMN last_successful_index_at TEXT');
+  }
+  if (!names.has('last_index_attempt_at')) {
+    db.exec('ALTER TABLE projects ADD COLUMN last_index_attempt_at TEXT');
+  }
+  if (!names.has('last_index_error')) {
+    db.exec('ALTER TABLE projects ADD COLUMN last_index_error TEXT');
+  }
+}
+
+/**
  * Clear all data for a project (nodes, edges, file_hashes, call_sites, imports) before re-indexing.
  * Does NOT clear the projects table — that's updated separately.
  * R106: also clears call_sites (persistent cross-file resolution table).
@@ -433,6 +477,11 @@ export function clearProjectData(db: Database.Database, project: string): void {
  * R107: also persists call_sites_initialized flag (set to true after full reindex).
  * R126: also persists extractor_semantics_version (set to CURRENT after full
  *   reindex; preserved by incremental so the gate can detect stale semantics).
+ * R144 (STATE-R144-03): also persists last_successful_index_at (on success),
+ *   last_index_attempt_at (always), and last_index_error (on failure). This
+ *   separates successful index from failed attempt — `indexed_at` is updated
+ *   by any write, which made Graph Status show "last_indexed: now" after a
+ *   failed index.
  */
 export function updateProjectStats(
   db: Database.Database,
@@ -443,10 +492,15 @@ export function updateProjectStats(
   crossFileCallsStale: boolean = false,
   callSitesInitialized: boolean = false,
   extractorSemanticsVersion: number = 0,
+  indexError: string | null = null,
 ): void {
+  const now = new Date().toISOString();
+  const succeeded = indexError === null;
+  // R144: on success, update last_successful_index_at and clear last_index_error.
+  // On failure, set last_index_error but do NOT update last_successful_index_at.
   db.prepare(`
-    INSERT INTO projects (name, root_path, indexed_at, node_count, edge_count, cross_file_calls_stale, call_sites_initialized, extractor_semantics_version)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO projects (name, root_path, indexed_at, node_count, edge_count, cross_file_calls_stale, call_sites_initialized, extractor_semantics_version, last_index_attempt_at, last_successful_index_at, last_index_error)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       root_path = excluded.root_path,
       indexed_at = excluded.indexed_at,
@@ -454,6 +508,15 @@ export function updateProjectStats(
       edge_count = excluded.edge_count,
       cross_file_calls_stale = excluded.cross_file_calls_stale,
       call_sites_initialized = excluded.call_sites_initialized,
-      extractor_semantics_version = excluded.extractor_semantics_version
-  `).run(project, rootPath, new Date().toISOString(), nodeCount, edgeCount, crossFileCallsStale ? 1 : 0, callSitesInitialized ? 1 : 0, extractorSemanticsVersion);
+      extractor_semantics_version = excluded.extractor_semantics_version,
+      last_index_attempt_at = excluded.last_index_attempt_at,
+      last_successful_index_at = CASE WHEN excluded.last_successful_index_at IS NOT NULL THEN excluded.last_successful_index_at ELSE last_successful_index_at END,
+      last_index_error = excluded.last_index_error
+  `).run(
+    project, rootPath, now, nodeCount, edgeCount,
+    crossFileCallsStale ? 1 : 0, callSitesInitialized ? 1 : 0, extractorSemanticsVersion,
+    now,                                           // last_index_attempt_at
+    succeeded ? now : null,                       // last_successful_index_at (only on success)
+    indexError,                                    // last_index_error (null on success)
+  );
 }

@@ -37,46 +37,81 @@ export interface IndexOptions {
 }
 
 /**
- * R143 (STATE-R143-01, DATA-R143-01): Mark a project as stale in the DB
- * WITHOUT touching nodes/edges/version. Used by all error branches
- * (root failure, partial discovery) so that Graph Status reflects the
- * failure and the existing graph is preserved.
+ * R143/R144 (STATE-R143-01, DATA-R143-01, MIG-R144-02, STATE-R144-02):
+ * Mark a project as stale in the DB WITHOUT touching nodes/edges/version.
+ * Used by ALL error branches (root failure, full partial, incremental
+ * partial) so that Graph Status reflects the failure and the existing
+ * graph is preserved.
+ *
+ * R144 (MIG-R144-02): Unified cleanup. This helper now ALSO reads the
+ * extractor semantics version and clears cross-file edges if the version
+ * mismatches. R143 only did this in the incremental-partial branch,
+ * leaving old v7 exact edges in the DB on root failure and full partial.
+ * Now ALL error paths get the same cleanup.
+ *
+ * R144 (STATE-R144-02): The return value is now an object with `stalePersisted`
+ * and `edgesCleared` so callers can report whether the persistence succeeded.
+ * R143 returned a boolean that callers ignored, making the invariant
+ * "stale returned → stale persisted" unverifiable.
+ *
+ * R144 (STATE-R144-03): Also sets last_index_attempt_at and last_index_error
+ * so Graph Status can distinguish a successful index from a failed attempt.
  *
  * Safety guarantees:
- *   - Does NOT create the DB if it doesn't exist (DATA-R143-01: the previous
- *     `new Database(dbPath)` created an empty file for projects that never
- *     had a successful index). Uses existsSync first.
- *   - Uses try/finally to guarantee the DB handle is closed even if the
- *     UPDATE throws.
- *   - Only updates the projects row if it already exists — a non-existent
- *     row means the project was never indexed, so there's nothing to mark.
- *
- * Returns true if the stale flag was persisted, false otherwise (DB missing,
- * project row missing, or error).
+ *   - Does NOT create the DB if it doesn't exist (DATA-R143-01). Uses
+ *     existsSync first.
+ *   - Uses try/finally to guarantee the DB handle is closed.
+ *   - Only updates the projects row if it already exists.
  */
-function markProjectStalePreservingGraph(dbPath: string, project: string): boolean {
+function markProjectStalePreservingGraph(
+  dbPath: string,
+  project: string,
+  errorMessage: string | null = null,
+): { stalePersisted: boolean; edgesCleared: boolean } {
   // R143 (DATA-R143-01): do NOT create the DB file. existsSync check first.
   if (!existsSync(dbPath)) {
-    return false;
+    return { stalePersisted: false, edgesCleared: false };
   }
   let db: Database.Database | null = null;
+  let stalePersisted = false;
+  let edgesCleared = false;
   try {
     db = new Database(dbPath);
-    const existing = db.prepare('SELECT name FROM projects WHERE name = ?').get(project);
+    const dbNonNull = db;
+    const existing = dbNonNull.prepare(
+      'SELECT extractor_semantics_version AS version FROM projects WHERE name = ?'
+    ).get(project) as { version?: number } | undefined;
     if (!existing) {
-      return false; // project row doesn't exist — nothing to mark
+      return { stalePersisted: false, edgesCleared: false };
     }
-    db.prepare('UPDATE projects SET cross_file_calls_stale = 1 WHERE name = ?').run(project);
-    return true;
+    const tx = dbNonNull.transaction(() => {
+      const now = new Date().toISOString();
+      // R144 (STATE-R144-03): persist last_index_attempt_at and last_index_error.
+      dbNonNull.prepare(`
+        UPDATE projects SET
+          cross_file_calls_stale = 1,
+          last_index_attempt_at = ?,
+          last_index_error = ?
+        WHERE name = ?
+      `).run(now, errorMessage, project);
+      stalePersisted = true;
+      // R144 (MIG-R144-02): clear cross-file edges on semantic mismatch.
+      const storedVersion = existing.version ?? 0;
+      if (storedVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION) {
+        clearCrossFileCallEdges(dbNonNull, project);
+        edgesCleared = true;
+      }
+    });
+    tx();
   } catch {
     // DB is corrupt or locked — nothing we can do. The in-memory
     // IndexResult still carries the error and stale flag.
-    return false;
   } finally {
     if (db !== null) {
       try { db.close(); } catch { /* ignore close error */ }
     }
   }
+  return { stalePersisted, edgesCleared };
 }
 
 export interface IndexResult {
@@ -139,11 +174,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     const message = error instanceof DiscoveryRootError
       ? `Discovery root error (${error.reason}): "${error.rootPath}"`
       : `Discovery root error: "${opts.rootPath}" (${(error as Error).message})`;
-    // R143 (STATE-R143-01, DATA-R143-01): persist stale=true in the DB
-    // via the unified helper. Does NOT create the DB if it doesn't exist
-    // (was: `new Database(dbPath)` created an empty file). Uses try/finally
-    // to guarantee the handle is closed.
-    markProjectStalePreservingGraph(dbPath, opts.project);
+    // R144 (MIG-R144-02, STATE-R144-02): persist stale=true in the DB
+    // via the unified helper. The helper also clears cross-file edges on
+    // semantic mismatch (R143 only did this in incremental-partial) and
+    // persists last_index_attempt_at + last_index_error (STATE-R144-03).
+    // The return value is now used to report whether persistence succeeded
+    // (STATE-R144-02: R143 discarded it, making the invariant unverifiable).
+    const staleResult = markProjectStalePreservingGraph(dbPath, opts.project, message);
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -151,7 +188,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       edges: 0,
       files: 0,
       skipped: 0,
-      errors: [{ file: opts.rootPath, error: message }],
+      errors: [{ file: opts.rootPath, error: message + (staleResult.stalePersisted ? '' : ' [WARNING: stale flag could not be persisted to DB]') }],
       languages: new Set(),
       parallel: false,
       workerCount: 0,
@@ -232,57 +269,47 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     };
   }
 
-  // R143 (PERF-R143-01): Bound diagnostics. A repo with thousands of broken
-  // symlinks could produce a multi-megabyte error string and OOM. We cap
-  // the inline message at 20 samples and include the total count.
-  function formatDiscoveryErrors(errors: { path: string; code: string; message: string }[]): string {
-    const total = errors.length;
-    const samples = errors.slice(0, 20);
+  // R143 (PERF-R143-01) / R144 (PERF-R144-01): Bound diagnostics. A repo
+  // with thousands of broken symlinks could produce a multi-megabyte error
+  // string and OOM. We cap the inline message at 20 samples and include
+  // the total count from discovery.totalErrors (NOT errors.length, which
+  // is capped at 100 — R144 fix: R143 used errors.length, reporting only
+  // 100 for 10000 errors).
+  function formatDiscoveryErrors(d: { totalErrors: number; errors: { path: string; code: string; message: string }[]; countsByCode: Record<string, number> }): string {
+    const total = d.totalErrors;
+    const samples = d.errors.slice(0, 20);
     const sampleStr = samples.map(e => `${e.path}: ${e.code}`).join('; ');
+    const codeSummary = Object.entries(d.countsByCode).map(([c, n]) => `${c}=${n}`).join(', ');
     if (total > samples.length) {
-      return `${total} discovery errors (showing ${samples.length}): ${sampleStr}; ...`;
+      return `${total} discovery errors (showing ${samples.length}, codes: ${codeSummary}): ${sampleStr}; ...`;
     }
-    return `${total} discovery error(s): ${sampleStr}`;
+    return `${total} discovery error(s) (codes: ${codeSummary}): ${sampleStr}`;
   }
 
   // R142 (DATA-R142-02): Partial discovery lock. If discovery encountered
-  // errors (subtree EACCES, broken symlinks, etc.), the file list may be
-  // incomplete. In full mode, clearing the existing graph would destroy
+  // errors (subtree EACCES, fatal symlink errors, etc.), the file list may
+  // be incomplete. In full mode, clearing the existing graph would destroy
   // valid nodes we can't rediscover. In incremental mode, computing
   // deletedRelPaths would treat the missing files as deleted.
   //
-  // R143 (MIG-R143-01): Semantic gate dominance. The partial branch MUST
-  // read the project's semantic version BEFORE the early return. If the
-  // stored version ≠ CURRENT, we must clear cross-file edges (the old
-  // edges were produced by a previous extractor version and are not
-  // trustworthy). R142 returned before the semantic gate, leaving stale
-  // v6 exact edges in the DB.
-  //
-  // Policy:
-  //   - Full mode + partial discovery: do NOT clearProjectData. Persist
-  //     stale=1 (STATE-R143-01). Return an error.
-  //   - Incremental mode + partial discovery: do NOT compute
-  //     deletedRelPaths. Persist stale=1. Clear cross-file edges if
-  //     semantic version mismatches (MIG-R143-01).
+  // R144 (MIG-R144-02): Unified cleanup via markProjectStalePreservingGraph.
+  // R143 had three separate code paths (root failure, full partial,
+  // incremental partial) with inconsistent cleanup. The root failure and
+  // full partial branches did NOT clear cross-file edges on semantic
+  // mismatch. Now ALL error paths use the same helper, which:
+  //   1. reads the version;
+  //   2. marks stale=1;
+  //   3. clears cross-file edges on mismatch;
+  //   4. persists last_index_attempt_at + last_index_error;
+  //   5. preserves nodes, hashes, and the old version.
   if (!discovery.complete) {
-    // R143 (MIG-R143-01): Read semantic state BEFORE the early return.
-    // This ensures the semantic gate fires even when discovery is partial.
-    const projectStateRow = opts.incremental
-      ? (db.prepare(
-          'SELECT extractor_semantics_version AS version FROM projects WHERE name = ?'
-        ).get(opts.project) as { version?: number } | undefined)
-      : undefined;
-    const storedSemanticsVersion = projectStateRow?.version ?? 0;
-    const semanticsStale = opts.incremental
-      ? storedSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION
-      : false;
-
+    const errorMsg = formatDiscoveryErrors(discovery);
+    const fullMsg = `Discovery incomplete: ${errorMsg}`;
     if (!opts.incremental) {
-      // R143 (STATE-R143-01): full mode + partial → persist stale=1, preserve graph.
-      // R142 bug: this branch closed the DB without persisting stale.
+      // R144 (MIG-R144-02): full mode + partial → persist stale=1, clear
+      // edges on mismatch, preserve graph.
       db.close();
-      markProjectStalePreservingGraph(dbPath, opts.project);
-      const errorMsg = formatDiscoveryErrors(discovery.errors);
+      markProjectStalePreservingGraph(dbPath, opts.project, fullMsg);
       return {
         dbPath,
         durationMs: Date.now() - start,
@@ -290,29 +317,18 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         edges: 0,
         files: 0,
         skipped: 0,
-        errors: [{ file: opts.rootPath, error: `Discovery incomplete: ${errorMsg}` }],
+        errors: [{ file: opts.rootPath, error: fullMsg }],
         languages: new Set(),
         parallel: false,
         workerCount: 0,
         crossFileCallsStale: true,
       };
     }
-    // R143 (DATA-R142-02, MIG-R143-01): incremental mode + partial →
-    // persist stale=1, clear cross-file edges if semantic version
-    // mismatches, preserve graph, return early.
-    const partialTx = db.transaction(() => {
-      db.prepare('UPDATE projects SET cross_file_calls_stale = 1 WHERE name = ?').run(opts.project);
-      // R143 (MIG-R143-01): if the stored semantic version ≠ CURRENT,
-      // the cross-file edges were produced by a previous extractor version
-      // and are not trustworthy. Clear them. The version is preserved so
-      // the next full reindex still detects the mismatch.
-      if (semanticsStale) {
-        clearCrossFileCallEdges(db, opts.project);
-      }
-    });
-    try { partialTx(); } catch { /* project row may not exist yet */ }
+    // R144 (MIG-R144-02): incremental mode + partial → same unified helper.
+    // The helper handles stale=1 + edge cleanup + last_index_error.
+    // We close the DB first (the helper opens its own connection).
     db.close();
-    const errorMsg = formatDiscoveryErrors(discovery.errors);
+    markProjectStalePreservingGraph(dbPath, opts.project, fullMsg);
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -320,7 +336,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       edges: 0,
       files: 0,
       skipped: 0,
-      errors: [{ file: opts.rootPath, error: `Discovery incomplete: ${errorMsg}` }],
+      errors: [{ file: opts.rootPath, error: fullMsg }],
       languages: new Set(),
       parallel: false,
       workerCount: 0,

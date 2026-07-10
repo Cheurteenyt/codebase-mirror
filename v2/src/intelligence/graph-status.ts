@@ -84,7 +84,26 @@ export function getGraphStatus(
   // R36: check cache first. The cache key includes projectRoot because
   // the same project name could be used from different working directories
   // (unlikely but correct).
-  const cacheKey = `${project}:${projectRoot}`;
+  //
+  // R144 (STATE-R144-01): The cache key now includes the DB file's mtimeNs.
+  // R143's cache key was just `${project}:${projectRoot}`, which meant a
+  // stale DB update (e.g., the CLI indexer persisted stale=1) would NOT
+  // invalidate the cache in a different process (UI/MCP server). The cached
+  // FRESH status would be served until the SWR TTL expired (30-120s). By
+  // including the DB mtimeNs in the key, any DB write (including stale=1)
+  // changes the key, forcing a fresh computation. This is a cross-process
+  // coherence mechanism that doesn't require inter-process notifications.
+  const dbPath = defaultCodeDbPath(project);
+  let dbMtimeNs = 'none';
+  if (existsSync(dbPath)) {
+    try {
+      const st = statSync(dbPath, { bigint: true });
+      dbMtimeNs = st.mtimeNs.toString();
+    } catch {
+      // stat failed — use 'none' to force a fresh computation.
+    }
+  }
+  const cacheKey = `${project}:${projectRoot}:${dbMtimeNs}`;
   return graphStatusCache.getOrCompute(cacheKey, () => {
     return computeGraphStatus(project, codeReader, projectRoot);
   });
@@ -128,15 +147,22 @@ function computeGraphStatus(
   if (existsSync(dbPath)) {
     const stat = statSync(dbPath);
     dbMtime = stat.mtime;
-    status.last_indexed = dbMtime.toISOString();
-    status.age_seconds = Math.floor((Date.now() - dbMtime.getTime()) / 1000);
+    // R144 (STATE-R144-03): Don't use dbMtime for last_indexed — it's
+    // updated by ANY write (including stale=1 on failure), which made
+    // Graph Status show "last_indexed: now" after a failed index. The
+    // correct value (last_successful_index_at) is read from the DB below.
   }
 
-  // R143 (STATE-R143-02): Read persistent index state from the DB. This
-  // dominates the age/git heuristics — a DB with cross_file_calls_stale=1
-  // is untrustworthy regardless of how recent the file is. A DB with a
-  // non-current extractor_semantics_version was produced by a previous
-  // extractor and may have stale edges.
+  // R143 (STATE-R143-02) / R144 (STATE-R144-03): Read persistent index
+  // state from the DB. This dominates the age/git heuristics — a DB with
+  // cross_file_calls_stale=1 is untrustworthy regardless of how recent the
+  // file is. A DB with a non-current extractor_semantics_version was
+  // produced by a previous extractor and may have stale edges.
+  //
+  // R144 (STATE-R144-03): Also read last_successful_index_at (the correct
+  // "last indexed" value — NOT dbMtime, which is updated by any write
+  // including failed index attempts). Falls back to indexed_at if the
+  // column doesn't exist (legacy DB).
   //
   // We open the DB read-only (better-sqlite3 readonly mode) to avoid
   // creating it if missing. If the DB doesn't exist or the projects row
@@ -145,13 +171,29 @@ function computeGraphStatus(
     let db: Database.Database | null = null;
     try {
       db = new Database(dbPath, { readonly: true });
+      // R144: read last_successful_index_at + last_index_error alongside stale/version.
       const row = db.prepare(
-        'SELECT cross_file_calls_stale AS stale, extractor_semantics_version AS version FROM projects WHERE name = ?'
-      ).get(project) as { stale?: number; version?: number } | undefined;
+        'SELECT cross_file_calls_stale AS stale, extractor_semantics_version AS version, last_successful_index_at AS last_success, last_index_error AS last_error FROM projects WHERE name = ?'
+      ).get(project) as { stale?: number; version?: number; last_success?: string | null; last_error?: string | null } | undefined;
       if (row) {
         status.db_stale = row.stale === 1;
         status.db_semantics_version = row.version ?? 0;
         status.db_semantics_current = row.version === CURRENT_EXTRACTOR_SEMANTICS_VERSION;
+        // R144 (STATE-R144-03): use last_successful_index_at for last_indexed
+        // and age. Falls back to dbMtime if the column is NULL (legacy DB
+        // or pre-R144 DB that hasn't been migrated). This prevents a failed
+        // index from updating last_indexed (since a failed index only
+        // updates last_index_attempt_at, not last_successful_index_at).
+        const lastSuccess = row.last_success ?? null;
+        if (lastSuccess) {
+          status.last_indexed = lastSuccess;
+          const lastSuccessDate = new Date(lastSuccess);
+          status.age_seconds = Math.floor((Date.now() - lastSuccessDate.getTime()) / 1000);
+        } else if (dbMtime) {
+          // Legacy DB (pre-R144) — fall back to dbMtime.
+          status.last_indexed = dbMtime.toISOString();
+          status.age_seconds = Math.floor((Date.now() - dbMtime.getTime()) / 1000);
+        }
       }
     } catch {
       // DB is corrupt or locked — leave fields null.

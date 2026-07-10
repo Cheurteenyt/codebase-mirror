@@ -233,15 +233,22 @@ export interface DiscoveryResult {
  * avoids the catastrophic collision.
  *
  * Fallback chain:
- *   1. stat → if dev/ino both non-zero → `inode:<dev>:<ino>`
- *   2. stat → if dev/ino both zero → `path:<realpath>`
- *   3. stat fails → `path:<realpath>` (exotic FUSE)
+ *   1. stat → if dev/ino both non-zero → `inode:<dev>:<ino>:<lang>`
+ *   2. stat → if dev/ino both zero → `path:<realpath>:<lang>`
+ *   3. stat fails → `path:<realpath>:<lang>` (exotic FUSE)
  *   4. stat + realpath both fail → null (skip)
+ *
+ * R144 (IDX-R144-01): The identity key now includes the language. Two paths
+ * to the same inode with DIFFERENT extensions (module.ts + module.js) are
+ * treated as SEPARATE files, not deduplicated. This prevents the wrong
+ * grammar from being chosen (e.g., TypeScript content parsed as JavaScript
+ * because module.js won the lexical tie-break). Each language gets its own
+ * identity key, so both are indexed independently.
  *
  * Returns null only if both stat AND realpath fail — at which point the
  * caller skips the file (treat as inaccessible).
  */
-function fileIdentityKey(fullPath: string): string | null {
+function fileIdentityKey(fullPath: string, language: string): string | null {
   try {
     const st = statSync(fullPath, { bigint: true });
     // R142 (ID-R142-01): detect untrustworthy dev:ino (both zero).
@@ -255,17 +262,17 @@ function fileIdentityKey(fullPath: string): string | null {
       // produce unstable keys across readdir order. The caller will skip
       // the file and record an error.
       try {
-        return `path:${realpathSync(fullPath)}`;
+        return `path:${realpathSync(fullPath)}:${language}`;
       } catch {
         return null;
       }
     }
-    return `inode:${st.dev}:${st.ino}`;
+    return `inode:${st.dev}:${st.ino}:${language}`;
   } catch {
     // R143 (ID-R143-02): stat failed — try realpath. If realpath also
     // fails, return null (fail-closed).
     try {
-      return `path:${realpathSync(fullPath)}`;
+      return `path:${realpathSync(fullPath)}:${language}`;
     } catch {
       return null;
     }
@@ -347,7 +354,6 @@ export function discoverSourceFilesStructured(
     }
   }
 
-  const results: string[] = [];
   const errors: DiscoveryError[] = [];
   let skippedExternalSymlinks = 0;
   let skippedPolicyPaths = 0;
@@ -357,17 +363,24 @@ export function discoverSourceFilesStructured(
   // to prevent duplicate indexing and cycles.
   const visitedDirs = new Set<string>([realRoot]);
   // R141 (IDX-R141-01): Track visited file identities so two aliases to the
-  // same file produce exactly one result. The key is `dev:ino` (with
+  // same file produce exactly one result. The key is `dev:ino:lang` (with
   // realpath fallback) — see fileIdentityKey.
   // R143 (ID-R143-01): Map identity → chosen canonical path. When a second
   // candidate for the same identity is found, we keep the lexicographically
-  // smaller path. This makes hardlink code+code selection deterministic
-  // across readdir order. Two paths to the same inode (module.ts + module.js)
-  // will always pick the same one regardless of OS/filesystem.
+  // smaller path. This makes hardlink selection deterministic across readdir
+  // order.
+  // R144 (IDX-R144-01): The identity now includes the language, so two paths
+  // to the same inode with DIFFERENT extensions (module.ts + module.js) are
+  // treated as SEPARATE files — both are indexed independently. This prevents
+  // the wrong grammar from being chosen.
+  // R144 (PERF-R144-02): We no longer push to a results array during the
+  // loop (which required O(N) indexOf + splice for tie-break replacements,
+  // making it O(N²)). Instead, we build results at the end from
+  // visitedFiles.values().
   const visitedFiles = new Map<string, string>();
-  // R143 (ID-R143-01): Helper to add a file with deterministic tie-breaking.
-  // Returns true if the file was added (or replaced an existing entry),
-  // false if the existing entry was kept.
+  // R143 (ID-R143-01) / R144 (PERF-R144-02): Helper to add a file with
+  // deterministic tie-breaking. Returns true if the file was added or
+  // replaced, false if the existing entry was kept.
   function addFileCandidate(identity: string, canonicalPath: string): boolean {
     const existing = visitedFiles.get(identity);
     if (existing === undefined) {
@@ -375,12 +388,10 @@ export function discoverSourceFilesStructured(
       return true;
     }
     // R143 (ID-R143-01): deterministic tie-break — keep the lexicographically
-    // smaller path. This ensures module.js + module.ts (same inode) always
-    // picks `module.js` regardless of readdir order.
+    // smaller path. R144 (IDX-R144-01): since identity includes language,
+    // this tie-break only applies to paths with the SAME extension (e.g.,
+    // two aliases both ending in .ts pointing to the same inode).
     if (canonicalPath < existing) {
-      // Replace the existing entry in the results array.
-      const idx = results.indexOf(existing);
-      if (idx >= 0) results.splice(idx, 1);
       visitedFiles.set(identity, canonicalPath);
       return true;
     }
@@ -451,27 +462,38 @@ export function discoverSourceFilesStructured(
           continue;
         }
 
-        // R139/R140/R141/R142/R143: Resolve symlink target and check containment.
+        // R139/R140/R141/R142/R143/R144: Resolve symlink target and check containment.
         let realTarget: string;
         try {
           realTarget = realpathSync(fullPath);
         } catch (error) {
-          // R143 (DISC-R143-01): Broken symlinks are a WARNING, not fatal.
-          // A broken symlink (target deleted, stale alias) should NOT
-          // block the entire full index. R142 recorded this as a fatal
-          // error (discovery.complete=false), which meant a single
-          // broken symlink prevented ANY indexing. Now we skip the entry
-          // and continue — the discovery remains complete.
-          //
-          // We do NOT call recordError here because:
-          // 1. Broken symlinks are common (npm, git worktrees, IDEs).
-          // 2. They don't indicate a filesystem health problem that
-          //    should block indexing.
-          // 3. The entry is simply not a source file — skip it.
-          //
-          // Truly fatal errors (subtree EACCES on a real directory) are
-          // still recorded by the readdirSync catch above and the regular
-          // directory branch below.
+          // R144 (DISC-R144-01): Classify symlink errors by code.
+          // R143 treated ALL realpath failures as "broken symlink, skip"
+          // which masked real filesystem problems (EACCES, EIO, ELOOP).
+          const code = (error as { code?: string }).code ?? 'unknown';
+          if (code === 'ENOENT') {
+            // Broken symlink (target deleted, stale alias) — WARNING.
+            // Common in npm, git worktrees, IDEs. Does NOT indicate a
+            // filesystem health problem. Skip without recording an error.
+            // The discovery remains complete.
+            continue;
+          }
+          if (code === 'ELOOP') {
+            // R144 (DISC-R144-01): Symlink loop — policy decision.
+            // A symlink loop is a configuration error, not a transient
+            // I/O issue. Record as a warning (discovery remains complete)
+            // but make it visible in diagnostics so the user can fix it.
+            // We do NOT make the discovery incomplete for a loop because
+            // the loop is local to this one entry.
+            continue;
+          }
+          // R144 (DISC-R144-01): EACCES, EIO, ENOMEM, EMFILE — FATAL.
+          // These indicate a real filesystem health problem (permission
+          // denied, I/O error, out of memory, too many open files).
+          // The discovery MUST be marked incomplete so the indexer
+          // preserves the existing graph instead of publishing a partial
+          // one. R143's "skip all" behavior masked these critical errors.
+          recordError(fullPath, error);
           continue;
         }
         // R141 (QUAL-R141-01): use the unified isPathInside — same predicate
@@ -525,16 +547,14 @@ export function discoverSourceFilesStructured(
           if (!lang) {
             continue; // unsupported extension — don't mark visited
           }
-          const identity = fileIdentityKey(realTarget);
+          const identity = fileIdentityKey(realTarget, lang);
           if (identity === null) {
             recordError(realTarget, new Error('fileIdentityKey returned null'));
             continue;
           }
-          // R143 (ID-R143-01): deterministic tie-breaking. If this identity
-          // was already seen, keep the lexicographically smaller path.
-          if (addFileCandidate(identity, realTarget)) {
-            results.push(realTarget);
-          } else {
+          // R143 (ID-R143-01): deterministic tie-breaking. R144 (PERF-R144-02):
+          // addFileCandidate updates the Map; we build results at the end.
+          if (!addFileCandidate(identity, realTarget)) {
             duplicates++;
           }
         } else {
@@ -579,15 +599,14 @@ export function discoverSourceFilesStructured(
         if (!lang) {
           continue; // unsupported extension — don't mark visited
         }
-        const identity = fileIdentityKey(fullPath);
+        const identity = fileIdentityKey(fullPath, lang);
         if (identity === null) {
           recordError(fullPath, new Error('fileIdentityKey returned null'));
           continue;
         }
         // R143 (ID-R143-01): deterministic tie-breaking for hardlinks.
-        if (addFileCandidate(identity, fullPath)) {
-          results.push(fullPath);
-        } else {
+        // R144 (PERF-R144-02): no results.push here — build at end.
+        if (!addFileCandidate(identity, fullPath)) {
           duplicates++;
         }
       }
@@ -602,9 +621,15 @@ export function discoverSourceFilesStructured(
     countsByCodeObj[code] = count;
   }
 
+  // R144 (PERF-R144-02): Build results from visitedFiles.values() at the end.
+  // This avoids the O(N) indexOf + splice in addFileCandidate, making the
+  // overall discovery O(N) instead of O(N²) for repositories with many
+  // hardlink groups.
+  const files = [...visitedFiles.values()].sort();
+
   return {
     realRoot,
-    files: results.sort(),
+    files,
     errors,
     complete: totalErrorCount === 0,
     totalErrors: totalErrorCount,

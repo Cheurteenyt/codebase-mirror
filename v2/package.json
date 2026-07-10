@@ -1,14 +1,14 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.56.4",
-  "description": "Codebase Memory V2 sidecar \u2014 human memory graph + Obsidian sync",
+  "version": "0.56.5",
+  "description": "Codebase Memory V2 — hybrid code intelligence (native WASM indexer + human memory graph + Obsidian sync)",
   "type": "module",
   "main": "dist/cli/index.js",
   "bin": {
     "cbm-v2": "dist/cli/index.js"
   },
   "scripts": {
-    "clean": "rm -rf dist",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json",
     "dev": "tsx src/cli/index.ts",
     "start": "node dist/cli/index.js",

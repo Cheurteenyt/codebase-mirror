@@ -1,5 +1,136 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.5 — Round 144 (2026-07-11) Semantics v8 + Hardlink Language Contract
+
+**69th round (GPT 5.6 Sol audit R143).** 3 P1 + 2 P1/P2 + 5 P2 fixed.
+Closes the 10 confirmed code findings of the R143 audit.
+
+### Semantics & file identity (2 P1)
+
+127. **P1 semantics v7→v8 bump missing** (`schema.ts`) — R143 changed
+     hardlink tie-breaking from "first seen wins" to "lexicographically
+     smaller path wins". This can change `file_path`, qualified names,
+     `file_hashes`, and potentially the tree-sitter grammar (module.js vs
+     module.ts). But `CURRENT_EXTRACTOR_SEMANTICS_VERSION` stayed at 7.
+     DBs indexed by R143 (v7) would not be re-parsed — the old path choice
+     would persist. Fixed: bumped to 8. The incremental gate marks these
+     DBs stale, forcing a full reindex. (MIG-R144-01)
+
+128. **P1 hardlink language contract — wrong grammar** (`wasm-extractor.ts`)
+     — The identity key was `dev:ino` (no language). Two paths to the same
+     inode with different extensions (`module.ts` + `module.js`) were
+     deduplicated, and the lexical tie-break chose `module.js` (j < t). If
+     the content is TypeScript, the JavaScript grammar would be used —
+     wrong AST, wrong nodes/edges. Fixed: the identity key now includes
+     the language: `inode:<dev>:<ino>:<lang>` (or `path:<realpath>:<lang>`
+     for the 0:0 fallback). Two paths with different extensions to the
+     same inode are treated as SEPARATE files — both indexed independently
+     with their correct grammar. (IDX-R144-01)
+
+### Error-state dominance (1 P1)
+
+129. **P1 unified cleanup in ALL error branches** (`indexer.ts`) — R143
+     only cleared cross-file edges on semantic mismatch in the
+     incremental-partial branch. Root failure and full-partial branches
+     persisted `stale=1` but left old v7 exact edges in the DB. Graph
+     Status warned, but MCP tools continued to read the stale edges.
+     Fixed: `markProjectStalePreservingGraph()` is now the single helper
+     for ALL error paths. It reads the version, marks stale=1, clears
+     cross-file edges on mismatch, persists `last_index_attempt_at` +
+     `last_index_error`, and preserves nodes/hashes/version. The return
+     value `{ stalePersisted, edgesCleared }` is used by callers.
+     (MIG-R144-02, STATE-R144-02)
+
+### Symlink error classification (1 P1/P2)
+
+130. **P1/P2 symlink catch too broad** (`wasm-extractor.ts`) — R143's
+     `catch { continue }` on `realpathSync` treated ALL errors as "broken
+     symlink, skip". This masked `EACCES` (permission denied), `EIO`
+     (I/O error), `ENOMEM`, `EMFILE` — real filesystem health problems
+     that should make discovery incomplete. Fixed: errors are now
+     classified by code:
+     - `ENOENT` → warning (skip, discovery stays complete) — broken
+       symlink, common in npm/git worktrees.
+     - `ELOOP` → warning (skip) — symlink loop, local config error.
+     - `EACCES`, `EIO`, `ENOMEM`, `EMFILE` → fatal (`recordError`,
+       discovery incomplete) — real I/O problem, preserve existing graph.
+     (DISC-R144-01)
+
+### Graph Status coherence (1 P1/P2 + 1 P2)
+
+131. **P1/P2 Graph Status cache incoherent across processes**
+     (`graph-status.ts`) — The SWR cache key was `${project}:${projectRoot}`,
+     which did NOT include the DB mtime. If the CLI indexer persisted
+     `stale=1` (a DB write), the UI/MCP server (separate process) would
+     serve the cached FRESH status until the SWR TTL expired (30-120s).
+     Fixed: the cache key now includes the DB file's `mtimeNs`:
+     `${project}:${projectRoot}:${dbMtimeNs}`. Any DB write changes the
+     mtime, which changes the key, which forces a fresh computation. This
+     is a cross-process coherence mechanism that doesn't require
+     inter-process notifications. (STATE-R144-01)
+
+132. **P2 false last_indexed after failed index** (`schema.ts`,
+     `graph-status.ts`) — Graph Status used the SQLite file mtime as
+     `last_indexed`. But `UPDATE cross_file_calls_stale=1` (from a failed
+     index) also updates the mtime, so Graph Status showed "last_indexed:
+     now" after a failure. Fixed: added `last_successful_index_at`,
+     `last_index_attempt_at`, `last_index_error` columns to `projects`.
+     `updateProjectStats` sets `last_successful_index_at` only on success;
+     `markProjectStalePreservingGraph` sets `last_index_attempt_at` +
+     `last_index_error` on failure. Graph Status reads
+     `last_successful_index_at` for `last_indexed` (falls back to dbMtime
+     for legacy DBs). (STATE-R144-03)
+
+### Performance (2 P2)
+
+133. **P2 formatDiscoveryErrors used errors.length not totalErrors**
+     (`indexer.ts`) — R143's formatter used `errors.length` (capped at
+     100) instead of `discovery.totalErrors`. For 10000 errors, the
+     message said "100 discovery errors" instead of "10000". Fixed: the
+     formatter now takes the full `DiscoveryResult` and uses
+     `totalErrors` + `countsByCode` for an accurate summary.
+     (PERF-R144-01)
+
+134. **P2 O(N²) splice in hardlink tie-break** (`wasm-extractor.ts`) —
+     R143's `addFileCandidate` did `results.indexOf(existing)` + `splice`
+     when a smaller path replaced an existing entry. With many hardlink
+     groups, this was O(N²). Fixed: `results` is now built at the end
+     from `visitedFiles.values().sort()` — no indexOf/splice during the
+     loop. Overall discovery is O(N). (PERF-R144-02)
+
+### Build (1 P1/P2)
+
+135. **P1/P2 rm -rf dist breaks Windows** (`package.json`) — The `clean`
+     script used `rm -rf dist` which fails on Windows `cmd.exe`. Fixed:
+     replaced with `node -e "require('node:fs').rmSync('dist',{recursive:true,force:true})"`
+     — portable across Windows, macOS, and Linux. (PKG-R144-01)
+
+### Documentation (metadata)
+
+- **package.json description**: updated from "sidecar" to "hybrid code
+  intelligence (native WASM indexer + human memory graph + Obsidian sync)".
+- **README.md security section**: removed "broken symlinks" from partial
+  discovery causes (R144 classifies them as warning, not fatal).
+
+### Tests (20 new, 4 updated)
+
+- **MIG-R144-01** (3 tests): version is 8, full reindex sets v8, v7 DB stale.
+- **IDX-R144-01** (3 tests): two extensions → both indexed, same extension →
+  dedup with deterministic pick, both produce File nodes.
+- **MIG-R144-02** (2 tests): root failure on v7 DB clears edges, full partial
+  on v7 DB clears edges.
+- **DISC-R144-01** (2 tests): ENOENT warning (complete), EACCES fatal (incomplete).
+- **STATE-R144-01** (1 test): cache invalidated on DB write.
+- **STATE-R144-03** (3 tests): success sets last_successful, failure preserves
+  it, Graph Status uses it.
+- **PERF-R144-01** (1 test): totalErrors reported (not errors.length).
+- **PERF-R144-02** (1 test): 100 hardlink groups complete quickly.
+- **PKG-R144-01** (1 test): clean script portable.
+- **Regression** (3 tests): full partial stale, broken symlink, root mode 000.
+- **Updated**: 4 version-pin tests (7→8), 1 hardlink test (1 file → 2 files).
+
+### Total: 135 bugs + 11 optimizations + 323 indexer tests across 69 rounds
+
 ## 0.56.4 — Round 143 (2026-07-11) Persistent Discovery State
 
 **68th round (GPT 5.6 Sol audit R142).** 3 P1 + 2 P1/P2 + 4 P2 + 6 docs

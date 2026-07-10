@@ -214,19 +214,19 @@ describe('R143: Persistent Discovery State', () => {
 
   // ── ID-R143-01: deterministic hardlink code+code selection ───────────
 
-  it('ID-R143-01a: two code hardlinks (module.ts + module.js) → deterministic pick', () => {
+  it('ID-R143-01a: two code hardlinks (module.ts + module.js) → both indexed (R144 language contract)', () => {
     // Create module.ts, then hardlink module.js to it.
     writeFileSync(join(projectDir, 'module.ts'), 'export function m() { return 1; }\n');
     linkSync(join(projectDir, 'module.ts'), join(projectDir, 'module.js'));
 
     const files = discoverSourceFilesWasm(projectDir);
-    // R143: exactly one file (same inode). The pick must be deterministic
-    // regardless of readdir order. We pick the lexicographically smaller
-    // path (module.js < module.ts).
-    expect(files.length).toBe(1);
-    // The deterministic pick is the lexicographically smaller path.
-    // module.js < module.ts, so module.js should win.
-    expect(files[0].endsWith('module.js') || files[0].endsWith('module.ts')).toBe(true);
+    // R144 (IDX-R144-01): two paths to the same inode with DIFFERENT
+    // extensions are treated as SEPARATE files (identity includes language).
+    // Both module.ts and module.js are indexed independently. This prevents
+    // the wrong grammar from being chosen (TypeScript content parsed as JS).
+    expect(files.length).toBe(2);
+    expect(files.some(f => f.endsWith('module.ts'))).toBe(true);
+    expect(files.some(f => f.endsWith('module.js'))).toBe(true);
     // Run again — must be stable.
     const files2 = discoverSourceFilesWasm(projectDir);
     expect(files2).toEqual(files);
@@ -364,7 +364,7 @@ describe('R143: Persistent Discovery State', () => {
     expect(files.some(f => f.endsWith('real.ts'))).toBe(true);
   });
 
-  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 7 (R141 MIG-R141-01)', () => {
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(7);
+  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8 (R144 MIG-R144-01)', () => {
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
   });
 });

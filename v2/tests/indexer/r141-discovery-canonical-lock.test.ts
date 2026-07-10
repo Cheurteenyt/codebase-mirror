@@ -365,17 +365,18 @@ describe('R141: Discovery Canonical Lock', () => {
   });
 
   // ── MIG-R141-01: Semantics version bumped to 7 ─────────────────────────
+  // R144: bumped to 8 (hardlink language contract)
 
-  it('MIG-R141-01a: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 7 (discovery policy lock)', () => {
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(7);
+  it('MIG-R141-01a: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8 (R144 hardlink language contract)', () => {
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
   });
 
-  it('MIG-R141-01b: full reindex sets version=7 in DB', async () => {
+  it('MIG-R141-01b: full reindex sets version=8 in DB', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     const db = new Database(defaultCodeDbPath(projectName), { readonly: true });
     const row = db.prepare('SELECT extractor_semantics_version AS v FROM projects WHERE name = ?').get(projectName) as { v: number };
-    expect(row.v).toBe(7);
+    expect(row.v).toBe(8);
     db.close();
   });
 
