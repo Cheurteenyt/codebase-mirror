@@ -1,5 +1,35 @@
 # Changelog — Codebase Memory V2
 
+## 0.55.4 — Round 137 (2026-07-10) Migration Proof Lock
+
+**62nd round (GPT 5.6 Sol audit R136).** Quality round — no new bugs, no
+semantics bump. Strengthens the migration tests from R136 to be causal and
+non-vacu, and fixes corrupted test comments from mechanical sed replacements.
+
+### Test fixes (4 improvements)
+
+- **TEST-R137-01**: `edgesBefore` was calculated but never asserted. Added
+  `expect(edgesBefore).toBeGreaterThan(0)` to prove the cleanup actually
+  removed existing edges (not just verified 0=0).
+
+- **TEST-R137-02**: The "full after stale" test didn't go through the stale
+  cycle. Rewrote to: full → simulate v5 → incremental no-op → stale=true →
+  full → stale=false, version=6, edges restored. Now verifies the complete
+  recovery cycle.
+
+- **TEST-R137-03**: No causal R134 payload was simulated. Added a test that:
+  (1) indexes `export type { Foo as default }` + `node:fs` star, (2) removes
+  `type_only_default` rows + sets version=5 (simulating R134 DB), (3) no-op
+  incremental → stale=true, edges cleaned, (4) full → type_only_default rows
+  restored, edges restored.
+
+- **QUAL-R137-01**: Comments corrupted by mechanical sed ("R136 bumped from
+  5 to 6 bumped from 3 to 4"). Fixed: R131/R132/R133/R134 tests now use
+  `CURRENT_EXTRACTOR_SEMANTICS_VERSION` instead of hardcoded version numbers,
+  eliminating churn at each bump.
+
+### Total: 91 bugs + 11 optimizations + 233 indexer tests across 62 rounds
+
 ## 0.55.3 — Round 136 (2026-07-10) Upgrade Semantics Emergency Lock
 
 **61st round (GPT 5.6 Sol audit R135).** 2 P1 bugs fixed. This round is a

@@ -198,7 +198,7 @@ describe('R131: Module Validity Lock', () => {
     const db = getDb();
     const row = db.prepare('SELECT extractor_semantics_version AS v FROM projects WHERE name = ?').get(projectName) as { v: number };
     expect(row.v).toBe(CURRENT_EXTRACTOR_SEMANTICS_VERSION);
-    expect(row.v).toBe(6); // R136 bumped from 5 to 6 bumped from 3 to 4
+    expect(row.v).toBe(CURRENT_EXTRACTOR_SEMANTICS_VERSION);
     db.close();
   });
 });
