@@ -56,6 +56,9 @@ import type Database from 'better-sqlite3';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
 import { BUILTIN_METHOD_NAMES } from './fast-walker.js';
 import { CURRENT_EXTRACTOR_SEMANTICS_VERSION } from './schema.js';
+// R134: IDX-R134-03 — Node.js builtinModules for bare specifier validation.
+import { builtinModules as BUILTIN_MODULES_ARRAY } from 'node:module';
+const BUILTIN_MODULES_SET = new Set(BUILTIN_MODULES_ARRAY);
 // R126: CURRENT_EXTRACTOR_SEMANTICS_VERSION is re-exported via the helper
 // isExtractorSemanticsCurrent() for callers that need to check the stored
 // version (e.g. incremental mode deciding whether to pass semanticsCurrent=true).
@@ -552,8 +555,13 @@ export function rebuildCrossFileCallsEdges(
     for (const starExp of fileExp.stars) {
       // R132: only check relative paths (./ or ../)
       if (!starExp.sourceModule.startsWith('.')) {
-        // Bare specifier or alias — we can't verify, so don't mark invalid.
-        // This is `external_or_alias` in the tri-state model.
+        // R134: IDX-R134-03 — check Node.js builtins.
+        const spec = starExp.sourceModule;
+        const bareName = spec.startsWith('node:') ? spec.slice(5) : spec;
+        if (BUILTIN_MODULES_SET.has(bareName)) {
+          continue; // Valid Node builtin
+        }
+        // Unknown bare specifier — can't verify, don't mark invalid.
         continue;
       }
       const starResolvedFile = resolveModulePath(starExp.sourceModule, filePath, knownFiles);
@@ -624,6 +632,10 @@ export function rebuildCrossFileCallsEdges(
     }
     const expBinding = expBindings?.[0];
     if (expBinding) {
+      // R134: IDX-R134-02 — type-only default clauses are not runtime targets.
+      if (expBinding.exportKind === 'type_only_default') {
+        return { kind: 'missing' };
+      }
       if (expBinding.exportKind === 'local_named' || expBinding.exportKind === 'local_alias') {
         const fileSyms = fileSymbolIndex.get(filePath);
         const qn = fileSyms?.get(expBinding.localName || exportedName);

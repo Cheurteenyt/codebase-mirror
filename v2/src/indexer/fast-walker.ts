@@ -68,7 +68,7 @@ export interface ExportBinding {
   localName: string | null;
   sourceModule: string | null;
   importedName: string | null;
-  exportKind: 'local_named' | 'local_alias' | 're_export_named' | 're_export_alias' | 'star_re_export';
+  exportKind: 'local_named' | 'local_alias' | 're_export_named' | 're_export_alias' | 'star_re_export' | 'type_only_default';
   line: number;
   filePath: string;
 }
@@ -561,7 +561,26 @@ function extractExports(rootNode: TSNode, filePath: string): ExportBinding[] {
         const specChild = spec.child(k);
         if (specChild && specChild.type === 'type') { isSpecTypeOnly = true; break; }
       }
-      if (isSpecTypeOnly) continue;
+      // R134: IDX-R134-02 — don't skip type-only specifiers that alias to 'default'.
+      // `export { type Foo as default }` creates a type-only default export that
+      // conflicts with `export default function make()`. tsc rejects this (TS2323).
+      // We persist it with a new exportKind 'type_only_default' so the resolver
+      // can detect the collision. Non-default type-only specifiers are still skipped.
+      if (isSpecTypeOnly) {
+        const exportedNameForTypeCheck = aliasNode ? aliasNode.text : nameNode.text;
+        if (exportedNameForTypeCheck === 'default') {
+          exports.push({
+            exportedName: 'default',
+            localName: nameNode.text,
+            sourceModule: sourceModule,
+            importedName: sourceModule ? nameNode.text : null,
+            exportKind: 'type_only_default',
+            line,
+            filePath,
+          });
+        }
+        continue;
+      }
 
       const originalName = nameNode.text;
       const exportedName = aliasNode ? aliasNode.text : originalName;
