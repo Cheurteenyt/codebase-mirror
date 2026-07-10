@@ -1,5 +1,37 @@
 # Changelog — Codebase Memory V2
 
+## 0.55.1 — Round 134 (2026-07-10) Type Namespace Default Validity + BuiltinModules
+
+**59th round (GPT 5.6 Sol audit R133).** 2 P1 bugs fixed. Persists
+`export { type Foo as default }` clauses for collision detection (IDX-R134-02)
+and validates Node.js builtins for bare specifier star sources (IDX-R134-03).
+
+**Extractor semantics version bumped to 5.**
+
+### Bugs fixed (2 P1)
+
+86. **Type-only default clause not persisted for collision detection**
+    (`fast-walker.ts`, `cross-file-resolver.ts`) — `export { type Foo as default }`
+    was skipped by `extractExports()`. When combined with `export default function`,
+    tsc rejects (TS2323), but the resolver never saw the type-only default. Fixed:
+    type-only specifiers aliasing to `default` are persisted with
+    `exportKind='type_only_default'`. The resolver detects the collision and
+    returns `missing` for type-only bindings. (IDX-R134-02)
+
+87. **Node.js builtins not validated for bare specifier stars**
+    (`cross-file-resolver.ts`) — `export * from 'node:fake'` was treated the
+    same as `export * from 'node:path'`. Fixed: star preflight now checks
+    `builtinModules` from `node:module`. Valid builtins are allowed. (IDX-R134-03)
+
+### Tests (4 new + 3 updated)
+- IDX-R134-02: type-only default clause + runtime default → 0 edges
+- IDX-R134-03: `export * from 'node:fs'` → valid, local resolves
+- R133 preserved: interface + function → 1 edge
+- Semantics version: full reindex sets version=5
+- R131/R132/R133 version tests updated from 4 to 5
+
+### Total: 87 bugs + 11 optimizations + 222 indexer tests across 59 rounds
+
 ## 0.55.0 — Round 133 (2026-07-10) Type/Value Default Lock
 
 **58th round (GPT 5.6 Sol audit R132).** 3 P1 bugs fixed + 1 P1 test fix. This

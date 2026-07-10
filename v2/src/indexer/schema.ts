@@ -52,7 +52,7 @@ import type Database from 'better-sqlite3';
  * upgrade from the previous version (delete the relevant rows, keep
  * file_hashes, run incremental, assert crossFileCallsStale=true).
  */
-export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 4;
+export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 5;
 
 /**
  * Tables created by the native indexer. Matches V1's schema so that
@@ -114,6 +114,7 @@ const SCHEMA_SQL = `
     --   2 = R131+ (module validity lock, no export dedup)
     --   3 = R132+ (external star fix, default occurrence count)
     --   4 = R133+ (type/value default lock, interface excluded from runtime count)
+    --   5 = R134+ (type namespace default validity, builtinModules check)
     extractor_semantics_version INTEGER DEFAULT 0
   );
 
