@@ -34,17 +34,23 @@
 //   - O(N) for nodes table scan (N = nodes in project)
 //   - O(M) for call_sites scan (M = call_sites in project)
 //   - O(1) per call_site for symbol lookup (Map)
-//   - O(E × U) worst-case for star re-export traversal, where E is the number
-//     of `export *` edges and U is the number of distinct (file, name) pairs
-//     resolved in a single rebuild. The depth is capped at 10 and each branch
-//     carries its own visited set, so the traversal is bounded.
-//   - R126 NOTE: the previous "O(1) per call_site" comment was correct only
-//     when star re-exports were not detected (pre-R125B). With R125B's Bug 57
-//     fix, barrels are actually traversed, so the worst case is now
-//     O(N + M + E × U). A per-rebuild (file, name) cache is planned for R128.
+//   - O(M × P) worst-case for star re-export traversal, where P is the number
+//     of paths explored in the barrel DAG. P is bounded by the depth cap (10)
+//     but can be high with diamond topologies. Each call_site that triggers
+//     star traversal re-walks the DAG independently (no cache yet).
+//   - R127 NOTE: the previous R126 comment claimed O(N + M + E × U) which
+//     assumed a (file, name) cache that does NOT exist yet. The realistic
+//     complexity is O(N + M × P). A per-rebuild cache is planned for R128:
+//       interface ResolveContext { active: Set<string>; cache: Map<string, ResolutionResult> }
+//     with key `filePath + '\0' + exportedName`, which will bring the
+//     traversal cost down to O(E × U) where U is the number of distinct
+//     (file, name) pairs.
+//   - Allocations per call_site with star traversal: new Set per call, Set
+//     copy per branch, string key per level, Set of targets per level.
+//     R128 will eliminate these via the shared cache + active set.
 //   - For a typical 10k-node project with 5k call_sites and <100 barrels:
 //     ~50-150ms. Deep barrel chains (10+) or diamond topologies may add
-//     20-50ms. Acceptable for Phase 1.
+//     20-50ms. These estimates are approximate — R128 will add a benchmark.
 
 import type Database from 'better-sqlite3';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
@@ -480,9 +486,24 @@ export function rebuildCrossFileCallsEdges(
     //   unknown branch might also export the same name, making the result
     //   ambiguous). This prevents false-positive "exact" edges when a star
     //   source is missing or a legacy DB has incomplete export tracking.
+    // R127: IDX-R127-02 — ESM does NOT propagate `default` through `export *`.
+    //   `export * from './b'` re-exports all NAMED exports of b, but NOT b's
+    //   default export. So if exportedName is 'default', skip the star traversal
+    //   and return missing (the caller handles default separately via
+    //   defaultExportByFile). Without this guard, a barrel could falsely
+    //   resolve `default` through a star re-export.
+    if (exportedName === 'default') {
+      return { kind: 'missing' };
+    }
     const starTargets = new Set<string>();
     let hasAmbiguous = false;
     let hasUnknown = false;
+    // R127: OBS-R127-01 — track the first child unknown reason so the parent
+    // returns an accurate diagnostic instead of always hardcoding
+    // 'unresolved_reexport_module'. The first reason encountered is used
+    // (priority: unresolved source > child reason). This is informational —
+    // the terminal semantics (no fallback when semanticsCurrent) are unchanged.
+    let unknownReason: UnknownReason = 'unresolved_reexport_module';
     for (const starExp of fileExp.stars) {
       const starResolvedFile = resolveModulePath(starExp.sourceModule, filePath, knownFiles);
       if (!starResolvedFile) {
@@ -490,6 +511,7 @@ export function rebuildCrossFileCallsEdges(
         // mark this branch as unknown so the parent can't claim an exact
         // target from a different branch.
         hasUnknown = true;
+        unknownReason = 'unresolved_reexport_module';
         continue;
       }
       const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, new Set(visited));
@@ -503,7 +525,9 @@ export function rebuildCrossFileCallsEdges(
         // ignored, which let another branch's resolved target become a false
         // "exact" edge even when the unknown branch could have produced a
         // different target or an ambiguity.
+        // R127: OBS-R127-01 — preserve the child's reason for diagnostics.
         hasUnknown = true;
+        unknownReason = result.reason;
       }
       // 'missing' doesn't add targets and is NOT propagated (a star branch
       // that definitively doesn't export the name is fine).
@@ -521,12 +545,12 @@ export function rebuildCrossFileCallsEdges(
     }
     if (hasUnknown && starTargets.size === 0) {
       // All branches were unknown or missing — unknown wins over missing.
-      return { kind: 'unknown', reason: 'unresolved_reexport_module' };
+      return { kind: 'unknown', reason: unknownReason };
     }
     if (hasUnknown && starTargets.size > 0) {
       // At least one resolved + at least one unknown — we cannot trust the
       // resolved target to be the unique answer.
-      return { kind: 'unknown', reason: 'unresolved_reexport_module' };
+      return { kind: 'unknown', reason: unknownReason };
     }
     if (starTargets.size === 1) {
       return { kind: 'resolved', qn: starTargets.values().next().value! };
@@ -672,10 +696,13 @@ export function rebuildCrossFileCallsEdges(
               let confidence = 0;
 
               if (impBinding.importKind === 'namespace') {
-                // Namespace import: ns.foo() — the callee would be 'ns.foo',
-                // not 'ns', so we wouldn't reach here for a pure namespace import.
-                // Skip import-aware resolution for namespace bindings.
-                // (resolution stays '', confidence stays 0)
+                // R127: IDX-R127-01 — namespace import called as a function
+                // (e.g. `import * as api from './lib'; api();`). A namespace
+                // object is NOT callable in ESM — this is a TypeError at runtime.
+                // The callee 'api' matches the namespace binding, so we must
+                // NOT fall through to name-based fallback (which could match a
+                // decoy function named 'api' in another file). Terminal: skip.
+                continue;
               } else if (impBinding.importKind === 'default') {
                 // R111: Default import: import foo from './b'
                 // The local name (foo) may differ from the exported name (realName).

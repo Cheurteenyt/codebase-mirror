@@ -1,5 +1,131 @@
 # Changelog — Codebase Memory V2
 
+## 0.54.4 — Round 127 (2026-07-10) Semantics Gate Fast Paths + Full Publication Atomicity
+
+**52nd round (GPT 5.6 Sol audit R126).** 5 P1 bugs fixed + 2 P2 precision bugs
+fixed + 2 P2 observability/performance issues addressed. This round closes the
+migration lock gaps identified in the R126 audit: the no-op and deletion-only
+fast paths bypassed the version check, legacy edges were published before the
+stale flag was set, and a full index with extraction errors was falsely certified
+as current.
+
+### Bugs fixed (5 P1 + 2 P2)
+
+64. **No-op incremental bypasses version check** (`indexer.ts`) — The no-op fast
+    path read `extractor_semantics_version` but never compared it to
+    `CURRENT_EXTRACTOR_SEMANTICS_VERSION`. A stale DB (version=0) with
+    `cross_file_calls_stale=0` stayed falsely fresh after a no-op incremental.
+    Fixed: centralized `projectState` read before all fast paths; the no-op path
+    now computes `noOpStale = existingStale || semanticsStale`. (MIG-R127-01)
+
+65. **Deletion-only can reset stale=false** (`indexer.ts`) — The deletion-only
+    fast path called the resolver even when `semanticsCurrent=false`, then set
+    `crossFileResolved=true`, which forced `crossFileStale=false`. A stale DB
+    could become falsely fresh after a deletion. Fixed: when `semanticsStale`,
+    the deletion-only path deletes cross-file edges (cleanup) without running
+    the resolver, and `crossFileStale` is forced to `true`. (MIG-R127-02)
+
+66. **Legacy edges published despite stale flag** (`wasm-extractor.ts`,
+    `indexer.ts`) — On the normal incremental path with a stale version, the
+    resolver ran with `semanticsCurrent=false`, publishing legacy fallback edges.
+    The `crossFileCallsStale=true` flag was set only AFTER the edges were in the
+    DB. MCP/UI readers query the DB directly and are not blocked by the flag.
+    Fixed: when `semanticsStale`, the resolver is NOT run. Existing cross-file
+    edges are deleted (cleanup). `crossFileCallsResolved` stays `false`, which
+    correctly makes `crossFileStale=true`. No legacy edges are published. This
+    applies to all 3 resolver call sites (wasm-extractor single-thread, indexer
+    parallel path, indexer post-extraction cleanup). (MIG-R127-03)
+
+67. **Full partial falsely certified as current** (`indexer.ts`) — A full reindex
+    with extraction errors (via `CBM_TEST_FAIL_ON_FILE` or real failures) still
+    wrote `extractor_semantics_version=CURRENT`, `cross_file_calls_stale=false`,
+    `call_sites_initialized=true`. No `errors.length === 0` check was required.
+    A partial graph could be certified as modern and fresh, and the next
+    incremental would trust the file_hashes of the successfully-extracted files
+    while the failed files remained absent. Fixed: `fullModeHadErrors` check —
+    when `result.errors.length > 0`, full mode writes `version=0`,
+    `stale=true`, `call_sites_initialized=false`. (DATA-R127-01)
+
+68. **Namespace import called as function → false edge** (`cross-file-resolver.ts`)
+    — `import * as api from './lib'; api();` where `api` is a namespace import.
+    The resolver's namespace branch for `identifier_call` did nothing (no
+    `continue`), falling through to name-based fallback. A decoy function named
+    `api` in another file would receive a false CALLS edge. ESM throws TypeError
+    at runtime (namespace objects are not callable). Fixed: the namespace branch
+    now `continue`s — terminal, no fallback. (IDX-R127-01)
+
+69. **Default export traverses `export *`** (`cross-file-resolver.ts`) — ESM does
+    NOT propagate `default` through `export * from './b'`. The resolver had no
+    guard for `exportedName === 'default'` before the star traversal loop, so a
+    barrel could falsely resolve `default` through a star re-export. Fixed: if
+    `exportedName === 'default'`, return `{ kind: 'missing' }` before traversing
+    stars. Explicit `export { default }` or `export default` still works (handled
+    by the named-export check and `defaultExportByFile` respectively).
+    (IDX-R127-02)
+
+### Precision / observability improvements
+
+- **OBS-R127-01: UnknownReason propagation** (`cross-file-resolver.ts`) —
+  Previously, when a star branch returned `unknown`, the parent always hardcoded
+  the reason to `'unresolved_reexport_module'`, losing the child's actual reason
+  (`depth_limit`, `legacy_export_tracking`, `untracked_export_form`). Fixed: the
+  parent now tracks `unknownReason` from the first unknown branch encountered
+  (unresolved source takes priority, then child reason). The terminal semantics
+  are unchanged — this is purely diagnostic.
+
+- **PERF-R127-01: Complexity comment corrected** (`cross-file-resolver.ts`) —
+  The R126 comment claimed `O(N + M + E × U)` which assumed a `(file, name)`
+  cache that does NOT exist yet. The realistic complexity is `O(N + M × P)`
+  where P is the number of paths explored in the barrel DAG (bounded by depth 10
+  but potentially high with diamonds). Each call_site that triggers star
+  traversal re-walks the DAG independently. A per-rebuild cache is planned for
+  R128 with key `filePath + '\0' + exportedName'`, which will bring the cost
+  down to `O(E × U)`.
+
+### Architecture: centralized semantic-state read
+
+R126 computed `semanticsStale` independently in each fast path, leading to the
+no-op and deletion-only bypasses. R127 centralizes the read:
+
+```ts
+const projectState = opts.incremental
+  ? db.prepare('SELECT ... FROM projects WHERE name = ?').get(...)
+  : undefined;
+const existingStale = projectState?.stale === 1;
+const existingInitialized = projectState?.initialized === 1;
+const existingSemanticsVersion = projectState?.version ?? 0;
+const semanticsStale = opts.incremental
+  ? existingSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION
+  : false;
+```
+
+This single read is used by ALL fast paths (no-op, deletion-only, normal
+incremental) and the main path, eliminating the possibility of one path
+forgetting to check.
+
+### Tests (8 new)
+
+- **MIG-R127-01**: no-op + version 0 → stale=true
+- **MIG-R127-02**: deletion-only + version 0 → stale=true
+- **MIG-R127-03**: incremental with changed file + version 0 → 0 cross-file edges
+- **DATA-R127-01**: full index with `CBM_TEST_FAIL_ON_FILE` → version=0, stale=true, initialized=false
+- **IDX-R127-01**: namespace import called as function → 0 edges (decoy present)
+- **IDX-R127-02**: default does not traverse `export *`
+- **Positive control**: full reindex → version=CURRENT, stale=false
+- **Positive control**: incremental with current version → edges published, stale=false
+
+### Not addressed (deferred per audit recommendation)
+
+- **SEC-CARRY-01** (P0 symlink escape) — separate round R127A/R128
+- **DATA-CARRY-01** (full reindex non-atomic) — R127C staging tables
+- **DATA-R127-02** (per-file semantics marker) — P2, future round
+- **PERF-R127-02** (initial incremental double scan) — P2, R128
+- **TEST-R127-01** (worker test early-return) — P2, requires CI job
+- **API-R127-01** (`requiresFullReindex`/`staleReason` structured) — P2, future
+- **SCM-R127-01** (empty commit) — process fix, no code change
+
+### Total: 69 bugs + 11 optimizations + 172 indexer tests across 52 rounds
+
 ## 0.54.3 — Round 126 (2026-07-10) Extractor Semantics Migration Lock + Terminal Unknown/Unresolved
 
 **51st round (GPT 5.6 Sol audit R125B).** 6 bugs fixed + 2 P1 limitations closed +

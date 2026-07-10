@@ -613,22 +613,36 @@ export async function extractFromFilesWasm(
     // R109: when callSitesInitialized=true && nodesCount=0 (all files deleted
     // or empty project), the graph is also COMPLETE — mark resolved=true
     // without calling rebuildCrossFileCallsEdges (nothing to rebuild).
+    // R127: MIG-R127-03 — when semantics are stale (incremental with old
+    // extractor_semantics_version), DON'T run the resolver. The resolver would
+    // publish legacy fallback edges (semanticsCurrent=false) which remain in
+    // the DB even though the caller sets stale=true afterwards. Instead,
+    // delete all cross-file edges (cleanup) and leave crossFileCallsResolved=false
+    // so the caller forces stale=true and the user does a full reindex.
     if (incremental) {
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(project) as { c: number }).c;
+      const semanticsCurrent = isExtractorSemanticsCurrent(db, project);
       if (!callSitesInitialized) {
         // R107: Legacy DB (pre-R106, or R106 full reindex never completed).
         // call_sites is not authoritative for unchanged files. Skip resolution
         // to avoid creating an incomplete graph. Caller marks stale=true to
         // force full reindex which will set call_sites_initialized=1.
+      } else if (!semanticsCurrent) {
+        // R127: MIG-R127-03 — stale extractor semantics. The file_hashes are
+        // valid but the exports/call_sites/imports rows were produced by an
+        // older extractor. Don't run the resolver (it would publish legacy
+        // fallback edges). Delete existing cross-file edges and leave
+        // crossFileCallsResolved=false so the caller sets stale=true.
+        db.prepare(
+          `DELETE FROM edges WHERE project = ? AND type = 'CALLS'
+             AND properties_json LIKE '%"resolution":"cross_file%'`
+        ).run(project);
       } else if (nodesCount > 0) {
         // R108: initialized=true → call_sites is authoritative (even if empty).
         // Always rebuild: inserts new edges if call_sites has entries, OR
         // cleans up stale cross-file edges if call_sites is empty.
-        // R126: pass semanticsCurrent so the resolver knows whether to treat
-        // unknown/unresolved as terminal. For incremental, this is true iff
-        // the stored extractor_semantics_version matches CURRENT.
-        const semanticsCurrent = isExtractorSemanticsCurrent(db, project);
-        const added = rebuildCrossFileCallsEdges(db, project, semanticsCurrent);
+        // R126: semanticsCurrent=true (checked above).
+        const added = rebuildCrossFileCallsEdges(db, project, true);
         result.edges += added;
         result.crossFileCallsResolved = true;
       } else {
