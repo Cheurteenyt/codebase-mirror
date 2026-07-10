@@ -555,15 +555,21 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
           (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
       `).get(opts.project, opts.project) as { nodes: number; edges: number };
-      const noOpStale = existingStale || semanticsStale;
+      const noOpStale = existingStale || semanticsStale || hasUncertainty;
       // R145 (STATE-R145-04): no-op stale must NOT set last_successful_index_at.
       // R144 passed null (success), which set last_successful=now and cleared
       // last_index_error even when a full reindex was required. Now we pass
       // an explicit error when stale so the DB reflects the real state.
+      // R149 (STATE-R149-01): no-op must include hasUncertainty. R148 only
+      // checked uncertainty in the main path — the fast path returned
+      // stale=false + last_success=now despite uncertain paths. Now
+      // hasUncertainty forces stale + indexError in the no-op path too.
       const noOpError = noOpStale
         ? (semanticsStale
             ? `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`
-            : 'Project was already stale; no-op incremental did not refresh')
+            : hasUncertainty
+              ? `Source snapshot uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Retry incremental when filesystem is stable.`
+              : 'Project was already stale; no-op incremental did not refresh')
         : null;
       updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, noOpStale, existingInitialized, existingSemanticsVersion, noOpError);
       return { noOpStale };
@@ -662,7 +668,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R127: MIG-R127-02 — semanticsStale forces stale=true even if the
     // resolver ran. Previously, crossFileResolved=true forced stale=false,
     // which could make a stale DB falsely fresh after a deletion.
-    const crossFileStale = semanticsStale
+    // R149 (STATE-R149-02): hasUncertainty forces stale=true in deletion-only.
+    // R148 only checked uncertainty in the main path — the deletion-only
+    // fast path returned stale=false despite uncertain paths. Now
+    // hasUncertainty forces stale + indexError in the deletion-only path too.
+    const crossFileStale = semanticsStale || hasUncertainty
       ? true
       : crossFileResolved
         ? false
@@ -670,8 +680,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R107: preserve call_sites_initialized (deletion-only doesn't change it)
     // R126: preserve extractor_semantics_version (deletion-only doesn't change it)
     // R145 (STATE-R145-04): pass indexError when stale (semantics mismatch).
-    const deletionError = crossFileStale && semanticsStale
-      ? `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`
+    // R149 (STATE-R149-02): also pass indexError for uncertainty.
+    const deletionError = crossFileStale
+      ? (semanticsStale
+          ? `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`
+          : hasUncertainty
+            ? `Source snapshot uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Retry incremental when filesystem is stable.`
+            : null)
       : null;
     updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, existingSemanticsVersion, deletionError);
     db.close();

@@ -70,17 +70,18 @@ export function registerIndexCommand(program: Command): void {
         // R147 (OUTCOME-R147-01): Success banner ONLY when errors=0 AND stale=false.
         // R146 printed "indexed successfully" if result.nodes > 0, even with
         // errors and stale=true — misleading for CI and users.
+        // R149 (OUTCOME-R149-01): Stale/errors warning must NOT depend on
+        // result.nodes > 0. R148 gated the warning inside `else if nodes > 0`,
+        // so a no-op stale (nodes=0) or a full-abort (nodes=0) would exit
+        // non-zero without explaining why. Now the warning is always printed
+        // when stale or errors exist, regardless of node count.
         if (!opts.dryRun && result.nodes > 0 && result.errors.length === 0 && !result.crossFileCallsStale) {
           console.log();
           console.log(`✓ Project "${project}" indexed successfully.`);
           console.log(`  The code graph is now available for MCP tools, UI, and reports.`);
           console.log(`  Run "cbm-v2 stats --project ${project}" to see the graph.`);
-        } else if (!opts.dryRun && result.nodes > 0) {
-          // R147: Partial/stale outcome — don't claim success.
-          // R148 (OUTCOME-R148-01): Consolidated stale warning — R147 printed
-          // "Cross-file CALLS are stale" here AND "Cross-file CALLS may be
-          // stale" below (duplicate + contradictory). Now we print the
-          // warning only once, here.
+        } else if (!opts.dryRun) {
+          // R149: Always print outcome when not fresh success.
           console.log();
           if (result.errors.length > 0) {
             console.log(`⚠ Project "${project}" indexed with ${result.errors.length} error(s).`);
@@ -88,6 +89,12 @@ export function registerIndexCommand(program: Command): void {
           if (result.crossFileCallsStale) {
             console.log(`⚠ Cross-file CALLS may be stale.`);
             console.log(`  Run "cbm-v2 index --project ${project} --root ${rootPath}" (full reindex) to rebuild them.`);
+          }
+          if (result.errors.length === 0 && !result.crossFileCallsStale && result.nodes === 0) {
+            // R149: nodes=0 but no errors and not stale — likely a no-op
+            // incremental with 0 source files. This is technically a success
+            // but may be surprising.
+            console.log(`ℹ Project "${project}" has 0 source files. Nothing to index.`);
           }
         }
 
