@@ -24,12 +24,9 @@ describe('R124: Resolution State Machine', () => {
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r.errors.length).toBe(0);
     const db = getDb();
-    // R124: star conflict → ambiguous → no import-aware edge, NO name-based fallback
+    // R125A: star conflict → no EXACT edges (import-aware returns ambiguous)
     const edges = getEdges(db, 'foo');
-    const exactEdges = edges.filter((_: any) => {
-      const props = JSON.parse(_.properties_json);
-      return props.resolution === 'cross_file_import_exact';
-    });
+    const exactEdges = edges.filter((_: any) => { const p = JSON.parse(_.properties_json); return p.resolution === 'cross_file_import_exact'; });
     expect(exactEdges.length).toBe(0);
     db.close();
   });
@@ -57,15 +54,9 @@ describe('R124: Resolution State Machine', () => {
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r.errors.length).toBe(0);
     const db = getDb();
-    // R124: hidden is private (not exported) → import is invalid → no edge
-    // The resolver returns 'missing' and does NOT fall back to name-based
+    // R125A: hidden is private → no EXACT edges
     const edges = getEdges(db, 'hidden');
-    // With R124, explicit import of a missing export should produce 0 edges
-    // (no name-based fallback for invalid imports)
-    const exactEdges = edges.filter((_: any) => {
-      const props = JSON.parse(_.properties_json);
-      return props.resolution === 'cross_file_import_exact';
-    });
+    const exactEdges = edges.filter((_: any) => { const p = JSON.parse(_.properties_json); return p.resolution === 'cross_file_import_exact'; });
     expect(exactEdges.length).toBe(0);
     db.close();
   });
@@ -84,10 +75,7 @@ describe('R124: Resolution State Machine', () => {
     // R124: inner has ambiguous foo, index has inner(ambiguous) + e(resolved)
     // Overall: ambiguous → no exact edge, no name-based fallback
     const edges = getEdges(db, 'foo');
-    const exactEdges = edges.filter((_: any) => {
-      const props = JSON.parse(_.properties_json);
-      return props.resolution === 'cross_file_import_exact';
-    });
+    const exactEdges = edges.filter((_: any) => { const p = JSON.parse(_.properties_json); return p.resolution === 'cross_file_import_exact'; });
     expect(exactEdges.length).toBe(0);
     db.close();
   });
