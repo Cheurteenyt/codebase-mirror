@@ -16,7 +16,7 @@ import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFile
 import { assertDiscoveryRoot, DiscoveryRootError } from '../utils/safe-path.js';
 import { Worker } from 'node:worker_threads';
 import { cpus } from 'node:os';
-import { join, relative as nodeRelative } from 'node:path';
+import { join, relative as nodeRelative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import type { WorkerBatch, WorkerBatchResult } from './worker.js';
@@ -376,6 +376,34 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   const files = discovery.files;
   const effectiveRoot = canonicalRoot;
 
+  // R148 (DATA-R148-01): Full mode uncertainty lock. If discovery had
+  // uncertain paths/subtrees (ENOENT race — file temporarily absent),
+  // `discovery.complete` is still true (warnings don't make it incomplete).
+  // But in full mode, `clearProjectData` would destroy the existing graph
+  // and replace it with an incomplete one missing the uncertain files.
+  // An atomic-save race could thus lose nodes/edges for a file that still
+  // exists on disk. Now: if there's ANY uncertainty in full mode, we do NOT
+  // clear — we preserve the old graph and return stale+error.
+  const hasUncertainty = discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0;
+  if (!opts.incremental && hasUncertainty) {
+    db.close();
+    const uncertainMsg = `Discovery uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Full index aborted to preserve existing graph. Retry when filesystem is stable.`;
+    markProjectStalePreservingGraph(dbPath, opts.project, uncertainMsg);
+    return {
+      dbPath,
+      durationMs: Date.now() - start,
+      nodes: 0,
+      edges: 0,
+      files: 0,
+      skipped: 0,
+      errors: [{ file: opts.rootPath, error: uncertainMsg }],
+      languages: new Set(),
+      parallel: false,
+      workerCount: 0,
+      crossFileCallsStale: true,
+    };
+  }
+
   if (!opts.incremental) {
     clearProjectData(db, opts.project);
   }
@@ -464,12 +492,15 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     if (discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0) {
       const uncertainPathSet = new Set(discovery.uncertainPaths);
       const uncertainSubtreePrefixes = discovery.uncertainSubtrees;
+      // R148 (COMPAT-R148-01): Use path.sep instead of hardcoded '/' for
+      // cross-platform subtree prefix matching. On Windows, path.relative()
+      // produces backslash-separated paths, so '/' would never match.
       deletedRelPaths = deletedRelPaths.filter(p => {
         // Exact match — the file was seen as uncertain.
         if (uncertainPathSet.has(p)) return false;
         // Subtree match — the path is under an uncertain directory.
         for (const prefix of uncertainSubtreePrefixes) {
-          if (p === prefix || p.startsWith(prefix + '/')) return false;
+          if (p === prefix || p.startsWith(prefix + sep)) return false;
         }
         return true;
       });
@@ -758,8 +789,14 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // in BOTH full and incremental modes.
   const fullModeHadErrors = !opts.incremental && result.errors.length > 0;
   const incrementalHadErrors = opts.incremental && result.errors.length > 0;
+  // R148 (STATE-R148-01): Uncertainty forces stale in incremental mode.
+  // When a file was temporarily absent (ENOENT race), its old data is
+  // preserved (excluded from deletedRelPaths). But the old data may not
+  // match the new file content on disk (the file may have been modified
+  // during the atomic save). The graph must NOT be certified as fresh.
+  // R148: reuse hasUncertainty computed earlier (before clearProjectData).
   const crossFileStale = opts.incremental
-    ? semanticsStale || incrementalHadErrors
+    ? semanticsStale || incrementalHadErrors || hasUncertainty
         ? true
         : (result.crossFileCallsResolved ?? false)
           ? false
@@ -789,9 +826,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       ? `Extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`
       : 'Full index completed with errors';
   } else if (opts.incremental && incrementalHadErrors) {
-    // R146: incremental extraction errors → set indexError so last_successful
-    // is NOT updated and last_error records the failure.
     indexError = `Incremental extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`;
+  } else if (opts.incremental && hasUncertainty) {
+    // R148 (STATE-R148-01): uncertainty → stale, last_success unchanged.
+    indexError = `Source snapshot uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Retry incremental when filesystem is stable.`;
   } else if (opts.incremental && crossFileStale && semanticsStale) {
     indexError = `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`;
   }

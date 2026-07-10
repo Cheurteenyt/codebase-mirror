@@ -77,20 +77,18 @@ export function registerIndexCommand(program: Command): void {
           console.log(`  Run "cbm-v2 stats --project ${project}" to see the graph.`);
         } else if (!opts.dryRun && result.nodes > 0) {
           // R147: Partial/stale outcome — don't claim success.
+          // R148 (OUTCOME-R148-01): Consolidated stale warning — R147 printed
+          // "Cross-file CALLS are stale" here AND "Cross-file CALLS may be
+          // stale" below (duplicate + contradictory). Now we print the
+          // warning only once, here.
           console.log();
           if (result.errors.length > 0) {
             console.log(`⚠ Project "${project}" indexed with ${result.errors.length} error(s).`);
           }
           if (result.crossFileCallsStale) {
-            console.log(`⚠ Cross-file CALLS are stale — full reindex required.`);
+            console.log(`⚠ Cross-file CALLS may be stale.`);
+            console.log(`  Run "cbm-v2 index --project ${project} --root ${rootPath}" (full reindex) to rebuild them.`);
           }
-        }
-
-        // R101: warn if cross-file CALLS may be stale after incremental
-        if (result.crossFileCallsStale) {
-          console.log();
-          console.log(`⚠ Cross-file CALLS may be stale after incremental changes.`);
-          console.log(`  Run "cbm-v2 index --project ${project} --root ${rootPath}" (full reindex) to rebuild them.`);
         }
 
         // R82: Bug 22 fix — exit non-zero if ANY extraction errors, unless --allow-partial.

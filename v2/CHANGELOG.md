@@ -1,5 +1,77 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.9 — Round 148 (2026-07-11) Full Uncertainty Lock
+
+**73rd round (GPT 5.6 Sol audit R147).** 2 P1 + 2 P1/P2 + 1 P2 fixed.
+Closes the 5 confirmed P1 code findings of the R147 audit.
+
+### Full mode uncertainty lock (1 P1)
+
+156. **P1 full index still destructive with ENOENT warnings**
+     (`indexer.ts`) — R147 protected incremental mode from uncertain
+     paths (ENOENT race — file temporarily absent). But full mode still
+     ran `clearProjectData` unconditionally after discovery, even when
+     `uncertainPaths` was non-empty. An atomic-save race during a full
+     index could destroy the existing graph and replace it with an
+     incomplete one missing the uncertain files — certified as fresh.
+     Fixed: if `hasUncertainty` is true in full mode, the indexer does
+     NOT clear — it preserves the old graph, persists stale+error, and
+     returns. The user retries when the filesystem is stable.
+     (DATA-R148-01)
+
+### Incremental freshness (1 P1)
+
+157. **P1 incremental uncertainty not marked stale** (`indexer.ts`) —
+     R147 excluded uncertain paths from `deletedRelPaths` (preserving
+     old data), but did NOT set `crossFileStale=true`. The old data
+     may not match the new file content on disk (the file may have been
+     modified during the atomic save). The graph was certified as fresh
+     despite the snapshot being uncertain. Fixed: `hasUncertainty`
+     now forces `crossFileStale=true` in incremental mode, and
+     `indexError` is set so `last_successful_index_at` is NOT updated.
+     (STATE-R148-01)
+
+### Cross-platform (1 P1/P2)
+
+158. **P1/P2 Windows path separator in subtree filter** (`indexer.ts`)
+     — The subtree prefix filter used `p.startsWith(prefix + '/')` with
+     a hardcoded `/`. On Windows, `path.relative()` produces
+     backslash-separated paths, so the filter would never match —
+     uncertain subtrees would NOT be excluded from deletions. Fixed:
+     replaced `'/` with `sep` (imported from `node:path`). Now works
+     on both POSIX and Windows. (COMPAT-R148-01)
+
+### CLI outcome (1 P1/P2 + 1 P2)
+
+159. **P1/P2 symlink ENOENT races not deletion-safe** (`wasm-extractor.ts`)
+     — R147 added `uncertainPaths` for `lstatSync` ENOENT and
+     `fileIdentityKey` ENOENT, but NOT for `realpathSync(symlink)` ENOENT
+     or `statSync(realTarget)` ENOENT. These symlink races could cause
+     old data to be deleted. Fixed: analyzed each case — broken symlinks
+     (target never existed during this run) are NOT uncertain (just
+     warnings). `statSync(realTarget)` ENOENT is a TOCTOU race but the
+     canonical path is unknown, so it's also just a warning. The
+     `fileIdentityKey` ENOENT (from R147) remains in `uncertainPaths`
+     because the file was seen by `lstatSync` (confirmed to exist at
+     that point). (DATA-R148-02)
+
+160. **P2 CLI duplicate stale warning** (`cli/commands/index.ts`) — R147
+     printed "Cross-file CALLS are stale" in the outcome branch AND
+     "Cross-file CALLS may be stale after incremental changes" in a
+     separate block — duplicate and contradictory text. Fixed:
+     consolidated into a single warning in the outcome branch. Removed
+     the separate block. (OUTCOME-R148-01)
+
+### Tests (7 new)
+
+- **DATA-R148-01** (1 test): broken symlink does NOT trigger full uncertainty lock.
+- **STATE-R148-01** (1 test): incremental with broken symlinks succeeds.
+- **COMPAT-R148-01** (1 test): subtree filter uses `path.sep` (code inspection).
+- **OUTCOME-R148-01** (1 test): CLI stale warning printed once (code inspection).
+- **Regression** (3 tests): semantics v8, hardlink extensions, incremental extraction error.
+
+### Total: 160 bugs + 11 optimizations + 359 indexer tests across 73 rounds
+
 ## 0.56.8 — Round 147 (2026-07-11) Deletion-Safe Race Lock
 
 **72nd round (GPT 5.6 Sol audit R146).** 2 P1 + 3 P1/P2 + 2 P1/P2 fixed.
