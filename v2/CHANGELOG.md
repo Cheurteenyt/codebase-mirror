@@ -1,5 +1,143 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.6 — Round 145 (2026-07-11) Legacy Schema + WAL Coherence
+
+**70th round (GPT 5.6 Sol audit R144).** 5 P1 + 3 P1/P2 + 4 P2 fixed.
+Closes the 12 confirmed code findings of the R144 audit.
+
+### Dry-run contract (1 P1)
+
+136. **P1 dry-run writes DB on root failure** (`indexer.ts`) — R144's
+     root-failure handler ran BEFORE the `if (opts.dryRun)` check, so
+     `cbm-v2 index --dry-run --root /missing` could write `stale=1`,
+     `last_index_error`, and clear cross-file edges — violating the
+     dry-run contract (zero DB writes). Fixed: the dry-run check is now
+     FIRST, before ANY DB operation. Dry-run only discovers files and
+     reports; it never opens the DB for writes. (DRY-R145-01)
+
+### Legacy schema compatibility (2 P1)
+
+137. **P1 root failure on R143 DB fails to persist stale** (`indexer.ts`)
+     — `markProjectStalePreservingGraph` ran `UPDATE projects SET
+     last_index_attempt_at = ?, last_index_error = ?` but a real R143 DB
+     doesn't have these columns (added in R144). The UPDATE failed with
+     "no such column", the catch swallowed it, and `stalePersisted=false`
+     — stale was NOT persisted, edges were NOT cleared. Fixed: the helper
+     now calls `initIndexerSchema(db)` FIRST, which runs the migration
+     (adds columns if missing via `ALTER TABLE ADD COLUMN` with
+     `PRAGMA table_info` check). The UPDATE then succeeds on any DB
+     version. (MIG-R145-01)
+
+138. **P1 Graph Status query fails on R143 schema** (`graph-status.ts`)
+     — R144's single SELECT referenced `last_successful_index_at` and
+     `last_index_error`. On a real R143 DB, the entire query failed,
+     the catch left `db_stale=null`, and Graph Status could show FRESH
+     for a v7 DB. Fixed: progressive column detection. The query is now
+     split: first query the legacy columns (`stale`, `version`) that
+     exist on all DBs since R101/R126, then detect new columns via
+     `PRAGMA table_info` and enrich if available. The stale/version
+     state is NEVER lost because a diagnostic column is missing.
+     (STATE-R145-02)
+
+### WAL cache coherence (1 P1)
+
+139. **P1 Graph Status cache broken by WAL** (`graph-status.ts`) —
+     SQLite uses WAL mode (`PRAGMA journal_mode = WAL`). In WAL mode,
+     commits write to `.db-wal`, and the main `.db` file mtime may NOT
+     change until checkpoint. With a reader (`CodeGraphReader`) open,
+     checkpoint can't complete, so the `.db` mtime stays the same →
+     R144's cache key (which only used `.db` mtimeNs) stayed the same →
+     stale FRESH was served. Fixed: the cache key now includes the
+     mtimeNs AND size of `.db`, `.db-wal`, AND `.db-shm`. In WAL mode,
+     `.db-wal` changes on every commit even when `.db` doesn't. This
+     ensures cross-process coherence without requiring inter-process
+     notifications. (STATE-R145-01)
+
+### Index outcome contract (2 P1 + 1 P1/P2)
+
+140. **P1 extraction errors recorded as success** (`indexer.ts`) —
+     `updateProjectStats` decided `succeeded = indexError === null`,
+     but the main pipeline never passed an error. Even when
+     `fullModeHadErrors=true` (extraction errors), `last_successful_index_at`
+     was set to `now` and `last_index_error` was cleared. Fixed: the
+     pipeline now passes `indexError` when `fullModeHadErrors` (full
+     mode) or when `crossFileStale && semanticsStale` (incremental).
+     Only `indexError === null` sets `last_successful_index_at`.
+     (STATE-R145-03)
+
+141. **P1/P2 no-op stale recorded as success** (`indexer.ts`) — The
+     no-op incremental fast path called `updateProjectStats` without
+     `indexError`, even when `noOpStale=true` (semantics mismatch
+     requires full reindex). `last_successful_index_at` was set to
+     `now` and `last_index_error` was cleared. Fixed: the no-op path
+     now passes an explicit error when stale. Same fix applied to the
+     deletion-only fast path. (STATE-R145-04)
+
+142. **P1/P2 discovery exception catch bypasses helper** (`indexer.ts`)
+     — R144's catch for discovery exceptions (after DB open) just closed
+     the DB and returned — no stale persistence, no edge cleanup, no
+     `last_index_error`. Fixed: the catch now calls
+     `markProjectStalePreservingGraph` for the same state transition as
+     all other error paths. (MIG-R145-02)
+
+### Freshness (1 P1/P2)
+
+143. **P1/P2 Git freshness uses wrong timestamp** (`graph-status.ts`)
+     — R144 used `dbMtime` for Git `--since`, but `dbMtime` is updated
+     by ANY DB write (including failed index attempts). After a failed
+     index, Git `--since=@now` would miss files modified between the
+     last successful index and the failed attempt. Fixed: Git freshness
+     now uses `last_successful_index_at` (via `status.last_indexed`)
+     instead of `dbMtime`. (TIME-R145-01)
+
+### Observability (1 P2)
+
+144. **P2 last_index_error not exposed in GraphStatus**
+     (`graph-status.ts`) — R144 selected `last_index_error` from the DB
+     but never copied it to the `GraphStatus` interface. The UI/MCP
+     only saw a generic "stale" message. Fixed: `GraphStatus` now
+     includes `last_index_error: string | null`. The progressive query
+     populates it when the column exists. (OBS-R145-01)
+
+### Discovery warnings (2 P2)
+
+145. **P2 ELOOP warning invisible** (`wasm-extractor.ts`) — R144's
+     comment said ELOOP was a "warning visible in diagnostics" but the
+     code just did `continue` — no counter, no sample, no log. Fixed:
+     added `totalWarnings` and `warningCountsByCode` to `DiscoveryResult`.
+     ENOENT (broken symlink), ELOOP (symlink loop), and ENOENT_STAT
+     (TOCTOU target disappearance) now call `recordWarning(code)` which
+     increments the counters. Warnings don't make discovery incomplete
+     but are observable for diagnostics. (DISC-R145-01)
+
+146. **P2 TOCTOU target disappearance treated as fatal**
+     (`wasm-extractor.ts`) — R144 treated ALL `statSync(realTarget)`
+     errors as fatal (`recordError` → discovery incomplete). A target
+     that disappears between `realpathSync` and `statSync` (TOCTOU race)
+     is equivalent to a broken symlink — ENOENT should be a warning.
+     Fixed: the stat catch now classifies by code: ENOENT → warning
+     (skip, `recordWarning`), EACCES/EIO → fatal (`recordError`).
+     (DISC-R145-02)
+
+### Documentation
+
+- **README.md**: semantics version 7 → 8 (3 locations).
+- **docs/V2_CURRENT_STATE.md**: updated to R145, semantics 8.
+
+### Tests (12 new)
+
+- **DRY-R145-01** (2 tests): dry-run with nonexistent root no DB write,
+  dry-run with valid root no DB write.
+- **MIG-R145-01** (1 test): root failure on legacy DB persists stale.
+- **STATE-R145-02** (1 test): Graph Status reads stale on any schema.
+- **STATE-R145-04** (1 test): no-op stale doesn't set last_successful.
+- **OBS-R145-01** (1 test): GraphStatus exposes last_index_error.
+- **DISC-R145-01** (1 test): broken symlink tracked as warning.
+- **MIG-R145-02** (1 test): discovery exception helper verification.
+- **Regression** (4 tests): semantics v8, hardlink extensions, root mode 000.
+
+### Total: 146 bugs + 11 optimizations + 335 indexer tests across 70 rounds
+
 ## 0.56.5 — Round 144 (2026-07-11) Semantics v8 + Hardlink Language Contract
 
 **69th round (GPT 5.6 Sol audit R143).** 3 P1 + 2 P1/P2 + 5 P2 fixed.

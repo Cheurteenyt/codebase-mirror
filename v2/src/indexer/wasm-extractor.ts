@@ -209,6 +209,17 @@ export interface DiscoveryResult {
    * Always complete (not capped) — useful for diagnostics dashboards.
    */
   countsByCode: Record<string, number>;
+  /**
+   * R145 (DISC-R145-01): Total number of warnings encountered. Warnings
+   * (broken symlinks, ELOOP, target disappearance) do NOT make discovery
+   * incomplete, but are tracked for diagnostics. The UI/MCP can show
+   * "5 broken symlinks skipped" without alarming the user.
+   */
+  totalWarnings: number;
+  /**
+   * R145 (DISC-R145-01): Per-warning-code counts. E.g. `{ ENOENT: 3, ELOOP: 1 }`.
+   */
+  warningCountsByCode: Record<string, number>;
   /** Diagnostic counters. */
   skippedExternalSymlinks: number;
   skippedPolicyPaths: number;
@@ -407,6 +418,21 @@ export function discoverSourceFilesStructured(
   const MAX_STORED_ERRORS = 100;
   let totalErrorCount = 0;
   const countsByCode = new Map<string, number>();
+  // R145 (DISC-R145-01): Warning tracking. Warnings (ENOENT, ELOOP) don't
+  // make discovery incomplete but are tracked for diagnostics.
+  let totalWarningCount = 0;
+  const warningCountsByCode = new Map<string, number>();
+
+  /**
+   * R145 (DISC-R145-01): Record a discovery warning. Warnings don't make
+   * discovery incomplete (the entry is simply skipped), but are tracked
+   * so the UI/MCP can report "5 broken symlinks skipped" without alarming
+   * the user.
+   */
+  function recordWarning(code: string): void {
+    totalWarningCount++;
+    warningCountsByCode.set(code, (warningCountsByCode.get(code) ?? 0) + 1);
+  }
 
   /**
    * R142 (DATA-R142-02): Record a discovery error. The error is pushed to
@@ -476,15 +502,16 @@ export function discoverSourceFilesStructured(
             // Common in npm, git worktrees, IDEs. Does NOT indicate a
             // filesystem health problem. Skip without recording an error.
             // The discovery remains complete.
+            // R145 (DISC-R145-01): track as warning for diagnostics.
+            recordWarning('ENOENT');
             continue;
           }
           if (code === 'ELOOP') {
             // R144 (DISC-R144-01): Symlink loop — policy decision.
             // A symlink loop is a configuration error, not a transient
-            // I/O issue. Record as a warning (discovery remains complete)
-            // but make it visible in diagnostics so the user can fix it.
-            // We do NOT make the discovery incomplete for a loop because
-            // the loop is local to this one entry.
+            // I/O issue. Skip (discovery remains complete).
+            // R145 (DISC-R145-01): track as warning so it's visible.
+            recordWarning('ELOOP');
             continue;
           }
           // R144 (DISC-R144-01): EACCES, EIO, ENOMEM, EMFILE — FATAL.
@@ -518,7 +545,20 @@ export function discoverSourceFilesStructured(
           // platforms, but using realTarget is more explicit.
           realStat = statSync(realTarget);
         } catch (error) {
-          // R142: record target disappearance.
+          // R145 (DISC-R145-02): Classify target disappearance by code.
+          // R144 treated ALL stat errors as fatal (recordError → incomplete).
+          // A target that disappears between realpath and stat (TOCTOU race)
+          // is equivalent to a broken symlink — ENOENT should be a warning
+          // (skip), not fatal. EACCES/EIO remain fatal.
+          const code = (error as { code?: string }).code ?? 'unknown';
+          if (code === 'ENOENT') {
+            // Target disappeared between realpath and stat — warning, skip.
+            // Don't call recordError — discovery stays complete.
+            // R145 (DISC-R145-02): track as warning for diagnostics.
+            recordWarning('ENOENT_STAT');
+            continue;
+          }
+          // EACCES, EIO, etc. — fatal.
           recordError(realTarget, error);
           continue;
         }
@@ -627,6 +667,12 @@ export function discoverSourceFilesStructured(
   // hardlink groups.
   const files = [...visitedFiles.values()].sort();
 
+  // R145 (DISC-R145-01): convert warningCountsByCode Map to plain object.
+  const warningCountsByCodeObj: Record<string, number> = {};
+  for (const [code, count] of warningCountsByCode) {
+    warningCountsByCodeObj[code] = count;
+  }
+
   return {
     realRoot,
     files,
@@ -634,6 +680,8 @@ export function discoverSourceFilesStructured(
     complete: totalErrorCount === 0,
     totalErrors: totalErrorCount,
     countsByCode: countsByCodeObj,
+    totalWarnings: totalWarningCount,
+    warningCountsByCode: warningCountsByCodeObj,
     skippedExternalSymlinks,
     skippedPolicyPaths,
     duplicates,

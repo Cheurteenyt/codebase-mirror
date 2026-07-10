@@ -1,6 +1,6 @@
 # V2 Current State — Codebase Memory V2
 
-> **Authoritative snapshot of the current product state.** Updated R143 (2026-07-11).
+> **Authoritative snapshot of the current product state.** Updated R145 (2026-07-11).
 > For the historical roadmap, see [V2_ROADMAP.md](V2_ROADMAP.md) (archive, 0.15.9 era).
 > For the authoritative version and bug count, see `v2/package.json` and `v2/CHANGELOG.md`.
 
@@ -19,7 +19,7 @@ Both indexers write to the same V1-compatible SQLite schema, so `CodeGraphReader
 | Component | Version | Source of truth |
 |---|---|---|
 | Package | see `v2/package.json` | `v2/package.json` |
-| Extractor semantics | 7 | `v2/src/indexer/schema.ts` `CURRENT_EXTRACTOR_SEMANTICS_VERSION` |
+| Extractor semantics | 8 | `v2/src/indexer/schema.ts` `CURRENT_EXTRACTOR_SEMANTICS_VERSION` |
 | Bugs fixed | see `v2/CHANGELOG.md` | `v2/CHANGELOG.md` |
 | Indexer tests | see `v2/CHANGELOG.md` | `v2/CHANGELOG.md` |
 | Project tests | see `v2/CHANGELOG.md` | `v2/CHANGELOG.md` |

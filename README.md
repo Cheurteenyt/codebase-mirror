@@ -10,7 +10,7 @@
 
 Codebase Memory V2 is a **hybrid** code intelligence system:
 
-1. **Native WASM indexer** (V2) — 112 languages via tree-sitter WASM grammars. The most advanced semantic precision on TypeScript/JavaScript: cross-file CALLS resolution, module validity lock, type/value default separation, builtin truth lock. Semantics version 7.
+1. **Native WASM indexer** (V2) — 112 languages via tree-sitter WASM grammars. The most advanced semantic precision on TypeScript/JavaScript: cross-file CALLS resolution, module validity lock, type/value default separation, builtin truth lock. Semantics version 8.
 
 2. **Human memory graph** (V2) — ADRs, bug notes, refactor plans, conventions, legacy zone markers, risk assessments, activity journal — synced to an Obsidian-compatible Markdown vault.
 
@@ -146,7 +146,7 @@ Add to your MCP client config (Claude Desktop, Cursor, Zed, etc.):
 │   │  tree-sitter WASM       │  │  tree-sitter C           │  │
 │   │  112 languages          │  │  158 languages           │  │
 │   │  cross-file resolver    │  │  reference/fallback      │  │
-│   │  semantics v7           │  │                          │  │
+│   │  semantics v8           │  │                          │  │
 │   └───────────┬─────────────┘  └──────────┬───────────────┘  │
 │               │                           │                  │
 │               v                           v                  │
@@ -181,7 +181,7 @@ V2 includes a **native code indexer** that does NOT require the V1 C binary:
 - **Builtin truth lock** — `isBuiltin()` from `node:module`; `node:fake` rejected, `node:test` accepted
 - **Incremental indexing** — content hash + mtime_ns fast-skip; deletion-only fast path
 - **Parallel workers** — multi-threaded WASM parsing for large projects
-- **Semantics versioning** — `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 7`; incremental mode forces full reindex when extractor output changes
+- **Semantics versioning** — `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8`; incremental mode forces full reindex when extractor output changes
 - **Discovery completeness lock** — `DiscoveryResult` with structured errors; partial discovery preserves the existing graph (no silent wipe)
 - **Canonical root propagation** — symlinked roots produce `file_path` without `..`
 - **File identity contract** — `dev:ino` dedup with `0:0` fallback; deterministic hardlink selection

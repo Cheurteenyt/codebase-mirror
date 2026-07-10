@@ -74,6 +74,13 @@ export interface GraphStatus {
   db_stale: boolean | null;
   db_semantics_version: number | null;
   db_semantics_current: boolean | null;
+  /**
+   * R145 (OBS-R145-01): The last index error message (from
+   * `last_index_error` in the projects table). NULL if the last index
+   * succeeded or if the column doesn't exist (legacy DB). Exposed so
+   * UI/MCP can show WHY the graph is stale, not just that it is.
+   */
+  last_index_error: string | null;
 }
 
 export function getGraphStatus(
@@ -85,24 +92,38 @@ export function getGraphStatus(
   // the same project name could be used from different working directories
   // (unlikely but correct).
   //
-  // R144 (STATE-R144-01): The cache key now includes the DB file's mtimeNs.
-  // R143's cache key was just `${project}:${projectRoot}`, which meant a
-  // stale DB update (e.g., the CLI indexer persisted stale=1) would NOT
-  // invalidate the cache in a different process (UI/MCP server). The cached
-  // FRESH status would be served until the SWR TTL expired (30-120s). By
-  // including the DB mtimeNs in the key, any DB write (including stale=1)
-  // changes the key, forcing a fresh computation. This is a cross-process
-  // coherence mechanism that doesn't require inter-process notifications.
+  // R144 (STATE-R144-01): The cache key included the DB file's mtimeNs.
+  // R145 (STATE-R145-01): WAL coherence fix. SQLite is in WAL mode
+  // (schema.ts PRAGMA journal_mode = WAL). In WAL mode, commits write to
+  // `.db-wal`, and the main `.db` file mtime may NOT change until
+  // checkpoint. With a reader (CodeGraphReader) open, checkpoint can't
+  // complete, so the `.db` mtime stays the same → cache key stays the
+  // same → stale FRESH is served. R144's test closed the reader before
+  // the write, allowing checkpoint, so it didn't reproduce the bug.
+  //
+  // R145 fix: include the mtimeNs of `.db`, `.db-wal`, AND `.db-shm` in
+  // the cache key. In WAL mode, `.db-wal` changes on every commit even
+  // when `.db` doesn't. This ensures cross-process coherence without
+  // requiring inter-process notifications or PRAGMA data_version (which
+  // would require a persistent connection).
   const dbPath = defaultCodeDbPath(project);
   let dbMtimeNs = 'none';
-  if (existsSync(dbPath)) {
-    try {
-      const st = statSync(dbPath, { bigint: true });
-      dbMtimeNs = st.mtimeNs.toString();
-    } catch {
-      // stat failed — use 'none' to force a fresh computation.
+  const walPath = `${dbPath}-wal`;
+  const shmPath = `${dbPath}-shm`;
+  const parts: string[] = [];
+  for (const p of [dbPath, walPath, shmPath]) {
+    if (existsSync(p)) {
+      try {
+        const st = statSync(p, { bigint: true });
+        parts.push(`${st.mtimeNs}:${st.size}`);
+      } catch {
+        parts.push('err');
+      }
+    } else {
+      parts.push('none');
     }
   }
+  dbMtimeNs = parts.join('|');
   const cacheKey = `${project}:${projectRoot}:${dbMtimeNs}`;
   return graphStatusCache.getOrCompute(cacheKey, () => {
     return computeGraphStatus(project, codeReader, projectRoot);
@@ -132,6 +153,7 @@ function computeGraphStatus(
     db_stale: null,
     db_semantics_version: null,
     db_semantics_current: null,
+    last_index_error: null,
   };
 
   if (!codeReader) {
@@ -171,26 +193,46 @@ function computeGraphStatus(
     let db: Database.Database | null = null;
     try {
       db = new Database(dbPath, { readonly: true });
-      // R144: read last_successful_index_at + last_index_error alongside stale/version.
+      // R145 (STATE-R145-02): Progressive column detection. R144 queried
+      // last_successful_index_at + last_index_error in a single SELECT. On
+      // a real R143 DB (without these columns), the entire query failed,
+      // and the catch left db_stale=null → Graph Status could show FRESH
+      // for a v7 DB. Now we query the legacy columns (stale, version) FIRST
+      // — these exist on all DBs since R101/R126. Then we detect the new
+      // columns via PRAGMA table_info and enrich if available.
       const row = db.prepare(
-        'SELECT cross_file_calls_stale AS stale, extractor_semantics_version AS version, last_successful_index_at AS last_success, last_index_error AS last_error FROM projects WHERE name = ?'
-      ).get(project) as { stale?: number; version?: number; last_success?: string | null; last_error?: string | null } | undefined;
+        'SELECT cross_file_calls_stale AS stale, extractor_semantics_version AS version FROM projects WHERE name = ?'
+      ).get(project) as { stale?: number; version?: number } | undefined;
       if (row) {
         status.db_stale = row.stale === 1;
         status.db_semantics_version = row.version ?? 0;
         status.db_semantics_current = row.version === CURRENT_EXTRACTOR_SEMANTICS_VERSION;
-        // R144 (STATE-R144-03): use last_successful_index_at for last_indexed
-        // and age. Falls back to dbMtime if the column is NULL (legacy DB
-        // or pre-R144 DB that hasn't been migrated). This prevents a failed
-        // index from updating last_indexed (since a failed index only
-        // updates last_index_attempt_at, not last_successful_index_at).
-        const lastSuccess = row.last_success ?? null;
-        if (lastSuccess) {
-          status.last_indexed = lastSuccess;
-          const lastSuccessDate = new Date(lastSuccess);
-          status.age_seconds = Math.floor((Date.now() - lastSuccessDate.getTime()) / 1000);
+
+        // R145: detect new columns and enrich if available.
+        const cols = db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+        const colNames = new Set(cols.map(c => c.name));
+        if (colNames.has('last_successful_index_at') && colNames.has('last_index_error')) {
+          const enriched = db.prepare(
+            'SELECT last_successful_index_at AS last_success, last_index_error AS last_error FROM projects WHERE name = ?'
+          ).get(project) as { last_success?: string | null; last_error?: string | null } | undefined;
+          if (enriched) {
+            // R144 (STATE-R144-03): use last_successful_index_at for last_indexed.
+            const lastSuccess = enriched.last_success ?? null;
+            if (lastSuccess) {
+              status.last_indexed = lastSuccess;
+              const lastSuccessDate = new Date(lastSuccess);
+              status.age_seconds = Math.floor((Date.now() - lastSuccessDate.getTime()) / 1000);
+            } else if (dbMtime) {
+              status.last_indexed = dbMtime.toISOString();
+              status.age_seconds = Math.floor((Date.now() - dbMtime.getTime()) / 1000);
+            }
+            // R145 (OBS-R145-01): expose last_index_error in GraphStatus.
+            if (enriched.last_error) {
+              status.last_index_error = enriched.last_error;
+            }
+          }
         } else if (dbMtime) {
-          // Legacy DB (pre-R144) — fall back to dbMtime.
+          // Legacy DB (pre-R144) without new columns — fall back to dbMtime.
           status.last_indexed = dbMtime.toISOString();
           status.age_seconds = Math.floor((Date.now() - dbMtime.getTime()) / 1000);
         }
@@ -214,9 +256,18 @@ function computeGraphStatus(
   }
 
   // Detect stale files via git (uses Unix timestamp for cross-platform compat).
-  if (dbMtime && existsSync(join(projectRoot, '.git'))) {
+  // R145 (TIME-R145-01): Use last_successful_index_at (if available) instead
+  // of dbMtime for the Git --since timestamp. R144 used dbMtime, which is
+  // updated by ANY DB write (including failed index attempts that set
+  // stale=1). After a failed index, the DB mtime advances to "now", so Git
+  // --since=@now would miss files modified between the last SUCCESSFUL index
+  // and the failed attempt. Using last_successful_index_at ensures we
+  // detect ALL files modified since the last time the graph was actually
+  // trustworthy.
+  const gitSinceDate = status.last_indexed ? new Date(status.last_indexed) : dbMtime;
+  if (gitSinceDate && existsSync(join(projectRoot, '.git'))) {
     try {
-      const unixTs = Math.floor(dbMtime.getTime() / 1000);
+      const unixTs = Math.floor(gitSinceDate.getTime() / 1000);
       const gitResult = execSync(
         `git log --name-only --pretty=format: --since="@${unixTs}" --diff-filter=ACMRTUXB 2>/dev/null | sort -u | grep -v '^$' | head -100`,
         { cwd: projectRoot, encoding: 'utf-8', timeout: 5000 }

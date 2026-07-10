@@ -78,6 +78,14 @@ function markProjectStalePreservingGraph(
   try {
     db = new Database(dbPath);
     const dbNonNull = db;
+    // R145 (MIG-R145-01): Migrate the DB schema BEFORE writing state. A real
+    // R143 DB doesn't have last_index_attempt_at, last_index_error, or
+    // last_successful_index_at columns. R144's UPDATE would fail with
+    // "no such column", the catch would swallow it, and stale would NOT be
+    // persisted. Now we run the migration first (adds columns if missing),
+    // then the UPDATE succeeds. The migration is idempotent (ALTER TABLE
+    // ADD COLUMN with PRAGMA table_info check).
+    initIndexerSchema(dbNonNull);
     const existing = dbNonNull.prepare(
       'SELECT extractor_semantics_version AS version FROM projects WHERE name = ?'
     ).get(project) as { version?: number } | undefined;
@@ -151,53 +159,30 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // falls back to single-threaded.
   const numWorkers = opts.workers ?? Math.max(2, cpus().length - 1);
 
-  // R141/R142 (DATA-R142-01, PATH-R142-01, STATE-R142-01): Validate the
-  // discovery root BEFORE opening the DB (dry-run) or BEFORE
-  // clearProjectData (full mode) or BEFORE computing deletedRelPaths
-  // (incremental mode). The previous flow let a missing or unreadable
-  // root silently produce an empty result that wiped the graph.
-  //
-  // R142 changes:
-  //   - assertDiscoveryRoot now ALSO verifies readdir works (mode 000
-  //     closes). This was the gap that let R141 still wipe the graph.
-  //   - The return value (canonicalRoot) is captured and propagated to
-  //     ALL downstream operations (discovery, extraction, relative path
-  //     computation, project stats). Previously it was ignored, which
-  //     meant a symlinked root produced file_path values containing `..`.
-  //   - On root failure, we now open the DB (if it exists) and persist
-  //     cross_file_calls_stale=1 so Graph Status reflects the failure.
-  //     Previously the stale flag was only in the in-memory IndexResult.
-  let canonicalRoot: string;
-  try {
-    canonicalRoot = assertDiscoveryRoot(opts.rootPath);
-  } catch (error) {
-    const message = error instanceof DiscoveryRootError
-      ? `Discovery root error (${error.reason}): "${error.rootPath}"`
-      : `Discovery root error: "${opts.rootPath}" (${(error as Error).message})`;
-    // R144 (MIG-R144-02, STATE-R144-02): persist stale=true in the DB
-    // via the unified helper. The helper also clears cross-file edges on
-    // semantic mismatch (R143 only did this in incremental-partial) and
-    // persists last_index_attempt_at + last_index_error (STATE-R144-03).
-    // The return value is now used to report whether persistence succeeded
-    // (STATE-R144-02: R143 discarded it, making the invariant unverifiable).
-    const staleResult = markProjectStalePreservingGraph(dbPath, opts.project, message);
-    return {
-      dbPath,
-      durationMs: Date.now() - start,
-      nodes: 0,
-      edges: 0,
-      files: 0,
-      skipped: 0,
-      errors: [{ file: opts.rootPath, error: message + (staleResult.stalePersisted ? '' : ' [WARNING: stale flag could not be persisted to DB]') }],
-      languages: new Set(),
-      parallel: false,
-      workerCount: 0,
-      crossFileCallsStale: true,
-    };
-  }
-
+  // R145 (DRY-R145-01): Dry-run check FIRST. R144's root-failure handler
+  // ran BEFORE the dry-run check, so `cbm-v2 index --dry-run --root /missing`
+  // could write stale=1, last_index_error, and clear cross-file edges —
+  // violating the dry-run contract (zero DB writes). Now dry-run is checked
+  // before ANY DB operation. Dry-run only discovers files and reports; it
+  // never opens the DB for writes.
   if (opts.dryRun) {
-    // R142: pass canonicalRoot to avoid redundant stat+realpath+readdir.
+    let canonicalRoot: string;
+    try {
+      canonicalRoot = assertDiscoveryRoot(opts.rootPath);
+    } catch (error) {
+      const message = error instanceof DiscoveryRootError
+        ? `Discovery root error (${error.reason}): "${error.rootPath}"`
+        : `Discovery root error: "${opts.rootPath}" (${(error as Error).message})`;
+      return {
+        dbPath, durationMs: Date.now() - start, nodes: 0, edges: 0,
+        files: 0, skipped: 0,
+        errors: [{ file: opts.rootPath, error: message }],
+        languages: new Set(),
+        parallel: false,
+        workerCount: 0,
+        crossFileCallsStale: true,
+      };
+    }
     let discovery: DiscoveryResult;
     try {
       discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot);
@@ -228,6 +213,42 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     };
   }
 
+  // R141/R142 (DATA-R142-01, PATH-R142-01, STATE-R142-01): Validate the
+  // discovery root BEFORE opening the DB or BEFORE clearProjectData (full
+  // mode) or BEFORE computing deletedRelPaths (incremental mode). The
+  // previous flow let a missing or unreadable root silently produce an
+  // empty result that wiped the graph.
+  //
+  // R145 (MIG-R145-01): The root-failure handler now migrates the DB schema
+  // BEFORE writing state, so a real R143 DB (without last_* columns) is
+  // handled correctly. R144's helper assumed the columns existed.
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = assertDiscoveryRoot(opts.rootPath);
+  } catch (error) {
+    const message = error instanceof DiscoveryRootError
+      ? `Discovery root error (${error.reason}): "${error.rootPath}"`
+      : `Discovery root error: "${opts.rootPath}" (${(error as Error).message})`;
+    // R144 (MIG-R144-02, STATE-R144-02): persist stale=true in the DB
+    // via the unified helper. R145 (MIG-R145-01): the helper now migrates
+    // the DB schema first (adds last_* columns if missing) so the UPDATE
+    // doesn't fail on a real R143 DB.
+    const staleResult = markProjectStalePreservingGraph(dbPath, opts.project, message);
+    return {
+      dbPath,
+      durationMs: Date.now() - start,
+      nodes: 0,
+      edges: 0,
+      files: 0,
+      skipped: 0,
+      errors: [{ file: opts.rootPath, error: message + (staleResult.stalePersisted ? '' : ' [WARNING: stale flag could not be persisted to DB]') }],
+      languages: new Set(),
+      parallel: false,
+      workerCount: 0,
+      crossFileCallsStale: true,
+    };
+  }
+
   const db = new Database(dbPath);
   initIndexerSchema(db);
   // R79: Bug 9 fix — incremental mode preserves nodes/edges for unchanged files.
@@ -250,10 +271,15 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot);
   } catch (error) {
     // R141 (DATA-R141-01): discovery failed AFTER root validation — likely a
-    // transient I/O error or a TOCTOU race. Do NOT clearProjectData. Close
-    // the DB and return an error so the caller can retry.
+    // transient I/O error or a TOCTOU race. Do NOT clearProjectData.
+    // R145 (MIG-R145-02): Use the unified helper to persist stale + cleanup.
+    // R144 just closed the DB and returned — no stale persistence, no edge
+    // cleanup, no last_index_error. Now we use markProjectStalePreservingGraph
+    // for the same state transition as all other error paths.
     db.close();
     const message = (error as Error).message;
+    const fullMsg = `Discovery failed: ${message}`;
+    markProjectStalePreservingGraph(dbPath, opts.project, fullMsg);
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -261,7 +287,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       edges: 0,
       files: 0,
       skipped: 0,
-      errors: [{ file: opts.rootPath, error: `Discovery failed: ${message}` }],
+      errors: [{ file: opts.rootPath, error: fullMsg }],
       languages: new Set(),
       parallel: false,
       workerCount: 0,
@@ -477,7 +503,16 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
       `).get(opts.project, opts.project) as { nodes: number; edges: number };
       const noOpStale = existingStale || semanticsStale;
-      updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, noOpStale, existingInitialized, existingSemanticsVersion);
+      // R145 (STATE-R145-04): no-op stale must NOT set last_successful_index_at.
+      // R144 passed null (success), which set last_successful=now and cleared
+      // last_index_error even when a full reindex was required. Now we pass
+      // an explicit error when stale so the DB reflects the real state.
+      const noOpError = noOpStale
+        ? (semanticsStale
+            ? `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`
+            : 'Project was already stale; no-op incremental did not refresh')
+        : null;
+      updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, noOpStale, existingInitialized, existingSemanticsVersion, noOpError);
       return { noOpStale };
     });
     const { noOpStale } = noOpTx();
@@ -581,7 +616,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         : (callSitesInitialized ? existingStale : true);
     // R107: preserve call_sites_initialized (deletion-only doesn't change it)
     // R126: preserve extractor_semantics_version (deletion-only doesn't change it)
-    updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, existingSemanticsVersion);
+    // R145 (STATE-R145-04): pass indexError when stale (semantics mismatch).
+    const deletionError = crossFileStale && semanticsStale
+      ? `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`
+      : null;
+    updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, existingSemanticsVersion, deletionError);
     db.close();
     return {
       dbPath,
@@ -706,7 +745,23 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   const semanticsVersion = opts.incremental
     ? existingSemanticsVersion
     : (fullModeHadErrors ? 0 : CURRENT_EXTRACTOR_SEMANTICS_VERSION);
-  updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion);
+  // R145 (STATE-R145-03): Pass indexError when there were extraction errors
+  // or when stale. R144 always passed null (success), which set
+  // last_successful_index_at=now even on partial/failed extraction. Now:
+  //   - full mode with errors → indexError = first error message
+  //   - incremental stale (semantics mismatch) → indexError = reason
+  //   - success → indexError = null (last_successful_index_at updated)
+  let indexError: string | null = null;
+  if (!opts.incremental && fullModeHadErrors) {
+    indexError = result.errors.length > 0
+      ? `Extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`
+      : 'Full index completed with errors';
+  } else if (opts.incremental && crossFileStale && (semanticsStale || (result.files > 0 && result.errors.length > 0))) {
+    indexError = semanticsStale
+      ? `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`
+      : `Incremental index with errors (${result.errors.length})`;
+  }
+  updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion, indexError);
   db.close();
 
   return {
