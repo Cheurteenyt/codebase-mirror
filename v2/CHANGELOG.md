@@ -1,5 +1,71 @@
 # Changelog — Codebase Memory V2
 
+## 0.57.0 — Round 149 (2026-07-11) Fast-Path Uncertainty Dominance
+
+**74th round (GPT 5.6 Sol audit R148).** 2 P1 + 1 P1 + 1 P1/P2 fixed.
+Closes the 4 confirmed P1 code findings of the R148 audit.
+
+### Fast-path uncertainty dominance (2 P1)
+
+161. **P1 no-op fast path ignores hasUncertainty** (`indexer.ts`) — R148
+     added `hasUncertainty` to the main incremental path but NOT to the
+     no-op fast path. A no-op incremental (0 files changed, 0 deletions)
+     with uncertain paths would return `stale=false` +
+     `last_successful_index_at=now` — the graph was certified as fresh
+     despite the snapshot being uncertain. An atomic-save race during a
+     no-op incremental could produce a false FRESH. Fixed:
+     `noOpStale = existingStale || semanticsStale || hasUncertainty`.
+     The `indexError` is also set for uncertainty so
+     `last_successful_index_at` is NOT updated. (STATE-R149-01)
+
+162. **P1 deletion-only fast path ignores hasUncertainty** (`indexer.ts`)
+     — Same issue: R148 added `hasUncertainty` to the main path but NOT
+     to the deletion-only fast path. A deletion-only incremental (0 files
+     changed, some deletions) with uncertain paths could publish
+     `stale=false` + `last_successful_index_at=now` — the confirmed
+     deletions were applied but the uncertain old data was preserved
+     without marking the snapshot as untrustworthy. Fixed:
+     `crossFileStale = semanticsStale || hasUncertainty ? true : ...`.
+     The `deletionError` is also set for uncertainty. (STATE-R149-02)
+
+### Symlink race deletion-safety (1 P1)
+
+163. **P1 stat(realTarget) ENOENT not added to uncertainPaths**
+     (`wasm-extractor.ts`) — R148 incorrectly claimed "canonical path
+     unknown" for `statSync(realTarget)` ENOENT. But `realTarget` IS
+     known — it was returned by `realpathSync(fullPath)` which succeeded.
+     The target disappeared between realpath and stat (TOCTOU race).
+     Without adding it to `uncertainPaths`, the old data for the
+     canonical path could be deleted in incremental mode. Fixed:
+     `uncertainPaths.push(relative(realRoot, realTarget))` for
+     `ENOENT_STAT`. (DATA-R149-02)
+
+### CLI outcome (1 P1/P2)
+
+164. **P1/P2 CLI stale warning gated on nodes > 0** (`cli/commands/index.ts`)
+     — R148 moved the stale warning into `else if (!opts.dryRun && result.nodes > 0)`.
+     A no-op stale (nodes=0) or a full-abort (nodes=0) would exit
+     non-zero (code 1 or 2) without explaining why. With `--allow-partial`,
+     it could exit 0 without any stale warning. Fixed: the warning is now
+     printed whenever stale or errors exist, regardless of node count.
+     The `else if` branch no longer requires `result.nodes > 0`.
+     (OUTCOME-R149-01)
+
+### Tests (8 new)
+
+- **STATE-R149-01** (2 tests): no-op with symlink + code inspection of
+  noOpStale includes hasUncertainty.
+- **STATE-R149-02** (1 test): code inspection of deletion-only stale
+  includes hasUncertainty.
+- **DATA-R149-02** (1 test): code inspection of ENOENT_STAT adds to
+  uncertainPaths.
+- **OUTCOME-R149-01** (1 test): code inspection of CLI warning not
+  gated on nodes > 0.
+- **Regression** (3 tests): semantics v8, hardlink extensions,
+  incremental extraction error.
+
+### Total: 164 bugs + 11 optimizations + 367 indexer tests across 74 rounds
+
 ## 0.56.9 — Round 148 (2026-07-11) Full Uncertainty Lock
 
 **73rd round (GPT 5.6 Sol audit R147).** 2 P1 + 2 P1/P2 + 1 P2 fixed.

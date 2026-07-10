@@ -597,15 +597,13 @@ export function discoverSourceFilesStructured(
             // Target disappeared between realpath and stat — warning, skip.
             // Don't call recordError — discovery stays complete.
             // R145 (DISC-R145-02): track as warning for diagnostics.
-            // R148 (DATA-R148-02): Do NOT add to uncertainPaths. The target
-            // was resolved by realpath, so we know its canonical path. But
-            // it disappeared before stat. This is a TOCTOU race, but since
-            // we don't know the original indexed path (it could be an alias
-            // or the canonical), we can't safely map it to a deletedRelPath.
-            // The safe approach: just skip (warning) and let the next index
-            // retry. If the target comes back, it'll be indexed. If it's
-            // truly gone, the next successful full index will clean it up.
+            // R149 (DATA-R149-02): realTarget IS known (realpath succeeded).
+            // Add to uncertainPaths so the indexer doesn't delete old data
+            // for this canonical path. R148 incorrectly said "canonical
+            // unknown" — but realTarget is the canonical path, returned by
+            // realpathSync. The audit was right: we CAN map it.
             recordWarning('ENOENT_STAT');
+            uncertainPaths.push(relative(realRoot, realTarget));
             continue;
           }
           // EACCES, EIO, etc. — fatal.
