@@ -1,6 +1,6 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.56.3",
+  "version": "0.56.4",
   "description": "Codebase Memory V2 sidecar \u2014 human memory graph + Obsidian sync",
   "type": "module",
   "main": "dist/cli/index.js",
@@ -8,10 +8,11 @@
     "cbm-v2": "dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "dev": "tsx src/cli/index.ts",
     "start": "node dist/cli/index.js",
-    "pretest": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",

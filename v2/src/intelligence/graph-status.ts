@@ -12,6 +12,8 @@ import { existsSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { SwrCache } from './swr-cache.js';
+import Database from 'better-sqlite3';
+import { CURRENT_EXTRACTOR_SEMANTICS_VERSION } from '../indexer/schema.js';
 
 // R37: replaced TtlCache with SwrCache (Stale-While-Revalidate).
 // Fresh TTL: 30s (value is served immediately).
@@ -63,6 +65,15 @@ export interface GraphStatus {
   total_edges: number;
   nodes_by_label: Record<string, number>;
   recommendation: string;
+  /**
+   * R143 (STATE-R143-02): Persistent index state read from the DB.
+   * Dominates the age/git heuristics — if `db_stale=true` or
+   * `semantics_version != CURRENT`, the graph is untrustworthy regardless
+   * of how recent the DB file is.
+   */
+  db_stale: boolean | null;
+  db_semantics_version: number | null;
+  db_semantics_current: boolean | null;
 }
 
 export function getGraphStatus(
@@ -99,6 +110,9 @@ function computeGraphStatus(
     total_edges: 0,
     nodes_by_label: {},
     recommendation: '',
+    db_stale: null,
+    db_semantics_version: null,
+    db_semantics_current: null,
   };
 
   if (!codeReader) {
@@ -116,6 +130,36 @@ function computeGraphStatus(
     dbMtime = stat.mtime;
     status.last_indexed = dbMtime.toISOString();
     status.age_seconds = Math.floor((Date.now() - dbMtime.getTime()) / 1000);
+  }
+
+  // R143 (STATE-R143-02): Read persistent index state from the DB. This
+  // dominates the age/git heuristics — a DB with cross_file_calls_stale=1
+  // is untrustworthy regardless of how recent the file is. A DB with a
+  // non-current extractor_semantics_version was produced by a previous
+  // extractor and may have stale edges.
+  //
+  // We open the DB read-only (better-sqlite3 readonly mode) to avoid
+  // creating it if missing. If the DB doesn't exist or the projects row
+  // is absent, the fields stay null (treated as "unknown — not authoritative").
+  if (existsSync(dbPath)) {
+    let db: Database.Database | null = null;
+    try {
+      db = new Database(dbPath, { readonly: true });
+      const row = db.prepare(
+        'SELECT cross_file_calls_stale AS stale, extractor_semantics_version AS version FROM projects WHERE name = ?'
+      ).get(project) as { stale?: number; version?: number } | undefined;
+      if (row) {
+        status.db_stale = row.stale === 1;
+        status.db_semantics_version = row.version ?? 0;
+        status.db_semantics_current = row.version === CURRENT_EXTRACTOR_SEMANTICS_VERSION;
+      }
+    } catch {
+      // DB is corrupt or locked — leave fields null.
+    } finally {
+      if (db !== null) {
+        try { db.close(); } catch { /* ignore */ }
+      }
+    }
   }
 
   // Graph stats.
@@ -158,8 +202,19 @@ function computeGraphStatus(
     }
   }
 
-  // Determine staleness (either git-detected files or age-based).
-  if (status.stale_files_count > 0) {
+  // R143 (STATE-R143-02): DB persistent state DOMINATES the age/git
+  // heuristics. If the indexer marked the project stale (root failure,
+  // partial discovery, semantic mismatch), the graph is untrustworthy
+  // even if the DB file is recent and git shows no changes.
+  if (status.db_stale === true) {
+    status.stale = true;
+    status.stale_reason = 'Indexer marked this project as stale (discovery error or semantic mismatch)';
+  } else if (status.db_semantics_current === false) {
+    // R143: semantics version mismatch — the graph was produced by a
+    // previous extractor version and may have stale/incorrect edges.
+    status.stale = true;
+    status.stale_reason = `Extractor semantics version ${status.db_semantics_version} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`;
+  } else if (status.stale_files_count > 0) {
     status.stale = true;
     status.stale_reason = `${status.stale_files_count} source file(s) modified since last index`;
   } else if (status.age_seconds !== null && status.age_seconds > 3600) {
@@ -169,9 +224,9 @@ function computeGraphStatus(
 
   // Recommendation.
   if (status.stale) {
-    status.recommendation = `STALE: ${status.stale_reason}. Run "cbm index_repository" to refresh.`;
+    status.recommendation = `STALE: ${status.stale_reason}. Run "cbm-v2 index" to refresh.`;
   } else if (status.total_nodes === 0) {
-    status.recommendation = 'Code graph is empty. Run "cbm index_repository".';
+    status.recommendation = 'Code graph is empty. Run "cbm-v2 index".';
   } else {
     status.recommendation = 'FRESH';
   }
@@ -180,6 +235,8 @@ function computeGraphStatus(
 }
 
 export function getFreshnessScore(status: GraphStatus): number {
+  // R143 (STATE-R143-02): DB stale/semantics mismatch → score 0.0 (critical).
+  if (status.db_stale === true || status.db_semantics_current === false) return 0.0;
   if (!status.available || status.total_nodes === 0) return 0.0;
   if (status.stale_files_count > 50) return 0.2;
   if (status.stale_files_count > 10) return 0.4;

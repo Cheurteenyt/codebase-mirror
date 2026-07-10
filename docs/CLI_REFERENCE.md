@@ -1,10 +1,44 @@
 # CLI Reference — Codebase Memory V2
 
-> Updated 2026-07-07 for version 0.15.9.
+> See `v2/package.json` and `v2/CHANGELOG.md` for the authoritative version.
 
 All commands are available via `cbm-v2` (or `node dist/cli/index.js` before global install).
 
 ## Core Commands
+
+### `cbm-v2 index`
+Index a project natively using the V2 WASM indexer (112 languages via tree-sitter WASM). Does NOT require the V1 C binary.
+
+```bash
+# Full index (clears existing graph, re-indexes everything)
+cbm-v2 index --project my-app --root /path/to/repo
+
+# Incremental index (fast — skips unchanged files via content hash + mtime_ns)
+cbm-v2 index --project my-app --root /path/to/repo --incremental
+
+# Dry-run (preview what would be indexed without writing to DB)
+cbm-v2 index --project my-app --root /path/to/repo --dry-run
+
+# Limit worker threads (0 = single-threaded, default = cpu count - 1)
+cbm-v2 index --project my-app --root /path/to/repo --workers 0
+```
+
+**Options:**
+- `--project <name>` — Project name (required)
+- `--root <path>` — Root directory to index (required)
+- `--incremental` — Skip unchanged files (fast). Without this flag, a full re-index is performed.
+- `--dry-run` — Discover files and detect languages without writing to the DB.
+- `--workers <n>` — Number of parallel WASM parsing workers (0 = single-threaded).
+
+**Behavior:**
+- **Discovery completeness lock**: if discovery encounters errors (subtree EACCES, broken symlinks), the existing graph is preserved. The index returns errors in `IndexResult.errors` and sets `crossFileCallsStale=true`. Use `--incremental` to retry when the filesystem is healthy.
+- **Root validation**: `assertDiscoveryRoot` verifies the root exists, is a directory, is readable (stat + isDirectory + realpath + readdir) before any DB mutation. A missing or unreadable root returns an error WITHOUT wiping the existing graph.
+- **Semantics versioning**: the indexer tracks `CURRENT_EXTRACTOR_SEMANTICS_VERSION` (currently 7). If the DB was produced by a previous extractor version, incremental mode marks it stale and forces a full reindex.
+- **Cross-file CALLS resolution**: after extraction, the resolver matches call-sites to definitions across files using persistent `call_sites`, `imports`, and `exports` tables.
+
+**Exit codes:**
+- `0` — success (graph is fresh or stale but preserved)
+- Non-zero — discovery failure (root inaccessible, partial discovery with errors)
 
 ### `cbm-v2 init`
 Initialize `.codebase-memory.json` configuration file.
