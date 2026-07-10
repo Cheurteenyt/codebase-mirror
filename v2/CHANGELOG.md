@@ -1,5 +1,98 @@
 # Changelog — Codebase Memory V2
 
+## 0.54.7 — Round 130 (2026-07-10) Duplicate Export Lock + Typing/Doc Fixes
+
+**55th round (GPT 5.6 Sol audit R129).** 1 P1 bug fixed + 1 P1 test fix + 2 P2
+quality/doc fixes. This round detects duplicate explicit exports (ESM
+SyntaxError), fixes a tautological test assertion, restores compile-time
+exhaustiveness for `UnknownReason`, and corrects the changelog wording.
+
+### Bug fixed (1 P1)
+
+75. **Duplicate explicit exports silently overwritten** (`cross-file-resolver.ts`)
+    — The `named` exports Map used `Map.set(exportedName, binding)` which
+    silently overwrote duplicates (last-wins). For `export { default } from
+    './b'; export { default } from './c'` or `export { foo } from './b';
+    export { foo } from './c'`, ESM rejects the module with `SyntaxError:
+    Duplicate export of 'default'` / `'foo'`. The resolver could produce a
+    false exact edge (confidence 1.0) for a module that Node.js refuses to
+    load, with the target depending on SQL row order. Fixed: the `named` Map
+    now stores `NamedBinding[]` instead of a single `NamedBinding`. When >1
+    binding exists for the same `exportedName`, `resolveExportedSymbol`
+    returns `{ kind: 'unknown', reason: 'invalid_duplicate_export' }` —
+    terminal for modern DBs, 0 edges published. This is distinct from star
+    collision ambiguity (which is also 0 edges but with a different reason).
+    (IDX-R130-01)
+
+### Test fix (1 P1)
+
+- **TEST-R130-01: Tautological local default test** (`r129-default-alias-precision.test.ts`)
+  — The test for local `export { foo as default }` used
+  `expect(edges.length).toBeGreaterThanOrEqual(0)` which is always true (no
+  array length can be negative). The test passed even if no edge was created.
+  Fixed: tightened to `expect(edges.length).toBe(1)` with exact target QN
+  (`index.ts::foo`), resolution (`cross_file_import_exact`), confidence (1),
+  and candidate_count (1). A future regression of `local_alias` resolution
+  will now break the test.
+
+### Quality fix (1 P2)
+
+- **QUAL-R130-01: `UnknownReason` typing restored to compile-time exhaustive**
+  (`cross-file-resolver.ts`) — R129 hoisted `UNKNOWN_REASON_PRIORITY` to
+  module scope but weakened the type from `Record<UnknownReason, number>` to
+  `Record<string, number>`, and the helper from `(UnknownReason, UnknownReason)
+  → UnknownReason` to `(string, string) → string`. If a new reason was added
+  to the union but forgotten in the table, TypeScript wouldn't catch it — the
+  priority would be `undefined`, and the helper would silently choose the
+  wrong value. Fixed: `UnknownReason` type is now hoisted to module scope
+  (`export type UnknownReason = ...`) and the priority table uses
+  `satisfies Record<UnknownReason, number>`. The helper is now typed
+  `(UnknownReason, UnknownReason) → UnknownReason`. TypeScript will flag any
+  future reason added to the union but missing from the table.
+
+### Documentation fix (1 P2)
+
+- **DOC-R130-01: Changelog wording corrected** — R129's changelog claimed a
+  "complete matrix" of default forms. The audit found this overstated: at
+  least 4 classes remain open (`export * as default`, `export default
+  identifier`, alias toward arrow/function expression, string-literal export
+  names). R130 corrects the wording to "Complete matrix for currently
+  supported named/default clause-based forms" and explicitly lists the
+  unsupported forms in the "Not addressed" section.
+
+### New `UnknownReason` value
+
+R130 adds `invalid_duplicate_export` to the `UnknownReason` union. Priority:
+`invalid_duplicate_export (5) > unresolved_reexport_module (4) >
+untracked_export_form (3) > legacy_export_tracking (2) > depth_limit (1)`.
+Highest priority wins (module is invalid → can't trust anything from it).
+
+### Tests (8 new + 1 tightened)
+
+- **Duplicate default re-export** → 0 edges (ESM SyntaxError)
+- **Duplicate named re-export** → 0 edges
+- **Same binding exported twice** → 0 edges (even same target, module is invalid)
+- **Direct declaration + export clause** → behavior documented
+- **Single export { default }** → 1 edge (positive control)
+- **Single export { foo }** → 1 edge (positive control)
+- **Incremental: collision appears** → edges removed
+- **Incremental: collision disappears** → edge restored
+- **R129 local `foo as default`** tightened from `>= 0` to `=== 1` with exact metadata
+
+### Not addressed (deferred per audit recommendation)
+
+- **SEC-CARRY-01** (P0 symlink escape) — separate round, highest priority
+- **DATA-R130-01** (full atomic publication) — staging tables / DB.next
+- **IDX-R130-02** (`export * as default`) — R131 runtime export completeness
+- **IDX-R130-03** (alias default toward arrow) — R131 (IDX-CARRY-01)
+- **IDX-R130-04** (`export default identifier`) — R131 (IDX-CARRY-01)
+- **IDX-CARRY-02** (multi-declarator) — R131
+- **PERF-R130-01/02** (resolver cache, early stale detection) — R132
+- **API-CARRY-01** (`requiresFullReindex`/`staleReason`) — P2, future
+- **UX-CARRY-01** (CLI success before stale warning) — P2, future
+
+### Total: 75 bugs + 11 optimizations + 195 indexer tests across 55 rounds
+
 ## 0.54.6 — Round 129 (2026-07-10) Default Alias Precision + Quality/Perf Fixes
 
 **54th round (GPT 5.6 Sol audit R128).** 1 P1 bug fixed + 2 P2 quality/perf
@@ -46,9 +139,13 @@ allocations in the resolver hot path.
   recursive call. The future R131 resolver cache will further reduce call
   counts, but this hoist is a free, simple win now.
 
-### Default resolution semantics (complete matrix)
+### Default resolution semantics (R128+R129 — currently supported clause-based forms)
 
-R128 + R129 together now correctly handle all ESM default re-export forms:
+R128 + R129 together correctly handle the currently supported ESM default
+re-export forms. See R130 (DOC-R130-01) for the corrected, more precise
+wording — the matrix is NOT complete: `export * as default`, `export default
+identifier`, alias toward arrow/function expression, and string-literal export
+names remain unsupported (deferred to R131).
 
 | Form | `importedName` | Resolves to |
 |---|---|---|

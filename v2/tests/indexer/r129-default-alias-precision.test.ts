@@ -122,16 +122,19 @@ describe('R129: Default Alias Precision', () => {
     expect(r.errors.length).toBe(0);
     const db = getDb();
     const edges = getEdges(db, 'value');
-    // R129: local `export { foo as default }` has exportKind='local_alias',
+    // R130: TEST-R130-01 — fix tautological `>= 0` assertion.
+    // local `export { foo as default }` has exportKind='local_alias',
     // localName='foo'. The resolver looks up 'foo' in fileSymbolIndex.
-    // This should resolve to index.ts::foo.
-    // Note: if foo is not exported (just local), the default marker may not
-    // exist. But `export { foo as default }` makes it the default.
-    expect(edges.length).toBeGreaterThanOrEqual(0);
-    // If there's an edge, it should target index.ts
-    for (const e of edges) {
-      expect(e.target_qn).toContain('index.ts');
-    }
+    // This should resolve to exactly 1 edge targeting index.ts::foo.
+    expect(edges.length).toBe(1);
+    expect(edges[0].target_qn).toContain('index.ts');
+    expect(edges[0].target_qn).toContain('foo');
+    const props = JSON.parse(edges[0].properties_json);
+    expect(props).toMatchObject({
+      resolution: 'cross_file_import_exact',
+      confidence: 1,
+      candidate_count: 1,
+    });
     db.close();
   });
 

@@ -63,23 +63,34 @@ import { CURRENT_EXTRACTOR_SEMANTICS_VERSION } from './schema.js';
 // R116: moved from extraction-time to resolution-time filter
 const BUILTIN_METHOD_NAMES_SET = BUILTIN_METHOD_NAMES;
 
-// R129: PERF-R129-01 — hoist UnknownReason priority table and helper to module
-// scope. R128 defined these INSIDE resolveExportedSymbol, which meant every
-// recursive level that reached the star traversal allocated a new Record
-// object and a new closure. In a barrel DAG with many call_sites, this added
-// up. Hoisting to module scope makes them singletons — zero allocation per call.
-const UNKNOWN_REASON_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
+// R129/R130: Hoist UnknownReason type and priority table to module scope.
+// R128 defined these INSIDE resolveExportedSymbol (allocated per recursive call).
+// R129 hoisted the table but weakened the type to `string` (QUAL-R130-01).
+// R130 restores compile-time exhaustiveness: the priority table uses
+// `satisfies Record<UnknownReason, number>` so TypeScript catches missing reasons.
+// R130 also adds `invalid_duplicate_export` for IDX-R130-01 (duplicate explicit
+// exports — ESM SyntaxError, must not produce any edge).
+export type UnknownReason =
+  | 'legacy_export_tracking'     // file has no row in exports table (pre-R119 DB or never indexed)
+  | 'unresolved_reexport_module' // `export * from './missing'` — source module not found
+  | 'depth_limit'                // barrel chain exceeded the depth cap (10)
+  | 'untracked_export_form'      // export form not yet supported (e.g. `export * as ns`)
+  | 'invalid_duplicate_export';  // R130: duplicate explicit export (ESM SyntaxError)
+
+const UNKNOWN_REASON_PRIORITY = Object.freeze({
+  'invalid_duplicate_export': 5,     // R130: highest — module is invalid, can't trust anything
   'unresolved_reexport_module': 4,
   'untracked_export_form': 3,
   'legacy_export_tracking': 2,
   'depth_limit': 1,
-});
+} satisfies Record<UnknownReason, number>);
 /**
  * R129: Pick the higher-priority UnknownReason. Returns `b` if its priority is
  * strictly greater than `a`'s, otherwise `a`. Module-scope helper (no closure
  * allocation per recursive call).
+ * R130: typed parameters (UnknownReason, not string) for compile-time safety.
  */
-function higherPriorityUnknownReason(a: string, b: string): string {
+function higherPriorityUnknownReason(a: UnknownReason, b: UnknownReason): UnknownReason {
   return UNKNOWN_REASON_PRIORITY[b] > UNKNOWN_REASON_PRIORITY[a] ? b : a;
 }
 
@@ -440,8 +451,19 @@ export function rebuildCrossFileCallsEdges(
     file_path: string; exported_name: string; local_name: string | null;
     source_module: string | null; imported_name: string | null; export_kind: string;
   }>;
+  interface NamedBinding {
+    localName: string | null;
+    sourceModule: string | null;
+    importedName: string | null;
+    exportKind: string;
+  }
   interface FileExports {
-    named: Map<string, { localName: string | null; sourceModule: string | null; importedName: string | null; exportKind: string }>;
+    // R130: IDX-R130-01 — named exports stored as an array to detect duplicates.
+    // Previously used Map<string, NamedBinding> which silently overwrote
+    // duplicate exports (last-wins). ESM rejects duplicate exports with
+    // SyntaxError, so the resolver must return `unknown` (invalid_duplicate_export)
+    // when >1 binding exists for the same exportedName.
+    named: Map<string, NamedBinding[]>;
     stars: Array<{ sourceModule: string }>;
   }
   const exportsByFile = new Map<string, FileExports>();
@@ -457,10 +479,19 @@ export function rebuildCrossFileCallsEdges(
         fileExp.stars.push({ sourceModule: exp.source_module });
       }
     } else {
-      fileExp.named.set(exp.exported_name, {
+      // R130: IDX-R130-01 — accumulate bindings instead of overwriting.
+      // If >1 binding exists for the same exportedName, the resolver will
+      // return `unknown` (invalid_duplicate_export) — ESM SyntaxError.
+      const binding: NamedBinding = {
         localName: exp.local_name, sourceModule: exp.source_module,
         importedName: exp.imported_name, exportKind: exp.export_kind,
-      });
+      };
+      const existing = fileExp.named.get(exp.exported_name);
+      if (existing) {
+        existing.push(binding);
+      } else {
+        fileExp.named.set(exp.exported_name, [binding]);
+      }
     }
   }
 
@@ -468,13 +499,8 @@ export function rebuildCrossFileCallsEdges(
   // R126: `unknown` now carries a structured reason so callers and diagnostics
   // can distinguish "no export tracking" from "unresolved star source" from
   // "depth limit hit". The reason is informational and does NOT change the
-  // terminal semantics: any `unknown` is terminal when the project's extractor
-  // semantics version is current (no name-based fallback).
-  type UnknownReason =
-    | 'legacy_export_tracking'    // file has no row in exports table (pre-R119 DB or never indexed)
-    | 'unresolved_reexport_module' // `export * from './missing'` — source module not found
-    | 'depth_limit'                // barrel chain exceeded the depth cap (10)
-    | 'untracked_export_form';     // export form not yet supported (e.g. `export * as ns`)
+  // R130: UnknownReason is now hoisted to module scope (see export type above).
+  // This ensures compile-time exhaustiveness via `satisfies Record<UnknownReason, number>`.
   type ResolutionResult =
     | { kind: 'resolved'; qn: string }
     | { kind: 'missing' }
@@ -508,7 +534,17 @@ export function rebuildCrossFileCallsEdges(
     }
 
     // R123: Check named exports first (explicit exports win over star)
-    const expBinding = fileExp.named.get(exportedName);
+    // R130: IDX-R130-01 — named exports are now stored as an array.
+    // If >1 binding exists for the same exportedName, ESM rejects the module
+    // with SyntaxError. Return `unknown` (invalid_duplicate_export) — terminal
+    // for modern DBs, no edge published.
+    const expBindings = fileExp.named.get(exportedName);
+    if (expBindings && expBindings.length > 1) {
+      // R130: duplicate explicit export — ESM SyntaxError.
+      // Even if both bindings point to the same target, the module is invalid.
+      return { kind: 'unknown', reason: 'invalid_duplicate_export' };
+    }
+    const expBinding = expBindings?.[0];
     if (expBinding) {
       if (expBinding.exportKind === 'local_named' || expBinding.exportKind === 'local_alias') {
         const fileSyms = fileSymbolIndex.get(filePath);
@@ -583,10 +619,12 @@ export function rebuildCrossFileCallsEdges(
     // R127 used "last unknown wins" which made the diagnostic depend on SQL
     // row order. R128 used a local priority table + closure (PERF-R129-01:
     // allocated per recursive call). R129 hoists these to module scope.
-    // Priority: unresolved_reexport_module (4) > untracked_export_form (3)
-    // > legacy_export_tracking (2) > depth_limit (1). Higher priority wins.
-    // This is informational — the terminal semantics are unchanged.
-    let unknownReason: string | null = null;
+    // R130: typed UnknownReason (not string) for compile-time exhaustiveness.
+    // Priority: invalid_duplicate_export (5) > unresolved_reexport_module (4)
+    // > untracked_export_form (3) > legacy_export_tracking (2) > depth_limit (1).
+    // Higher priority wins. This is informational — the terminal semantics
+    // are unchanged.
+    let unknownReason: UnknownReason | null = null;
     for (const starExp of fileExp.stars) {
       const starResolvedFile = resolveModulePath(starExp.sourceModule, filePath, knownFiles);
       if (!starResolvedFile) {
@@ -611,6 +649,7 @@ export function rebuildCrossFileCallsEdges(
         // "exact" edge even when the unknown branch could have produced a
         // different target or an ambiguity.
         // R129: use hoisted helper (no closure allocation).
+        // R130: typed UnknownReason.
         hasUnknown = true;
         unknownReason = unknownReason === null
           ? result.reason
@@ -619,7 +658,7 @@ export function rebuildCrossFileCallsEdges(
       // 'missing' doesn't add targets and is NOT propagated (a star branch
       // that definitively doesn't export the name is fine).
     }
-    const finalUnknownReason: UnknownReason = (unknownReason as UnknownReason) ?? 'unresolved_reexport_module';
+    const finalUnknownReason: UnknownReason = unknownReason ?? 'unresolved_reexport_module';
 
     // R126: precedence — ambiguous > unknown > resolved-count.
     //   - If any branch is ambiguous, the overall result is ambiguous (ESM
