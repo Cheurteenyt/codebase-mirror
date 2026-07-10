@@ -220,6 +220,21 @@ export interface DiscoveryResult {
    * R145 (DISC-R145-01): Per-warning-code counts. E.g. `{ ENOENT: 3, ELOOP: 1 }`.
    */
   warningCountsByCode: Record<string, number>;
+  /**
+   * R147 (DATA-R147-01): Paths that disappeared during traversal (ENOENT race).
+   * These are NOT confirmed deletions — the file may have been temporarily
+   * absent (atomic save, codegen, package manager). The indexer MUST NOT
+   * include these paths in `deletedRelPaths` — doing so would silently
+   * delete nodes/hashes/imports/exports for a file that still exists.
+   * Each entry is the relative path from realRoot.
+   */
+  uncertainPaths: string[];
+  /**
+   * R147 (DATA-R147-02): Directory subtrees that disappeared during traversal.
+   * Same semantics as `uncertainPaths` but for directories. The indexer MUST
+   * NOT delete any path under these prefixes.
+   */
+  uncertainSubtrees: string[];
   /** Diagnostic counters. */
   skippedExternalSymlinks: number;
   skippedPolicyPaths: number;
@@ -422,6 +437,11 @@ export function discoverSourceFilesStructured(
   // make discovery incomplete but are tracked for diagnostics.
   let totalWarningCount = 0;
   const warningCountsByCode = new Map<string, number>();
+  // R147 (DATA-R147-01/02): Uncertain paths/subtrees. These disappeared
+  // during traversal (ENOENT race). The indexer MUST NOT treat them as
+  // confirmed deletions — they may have been temporarily absent.
+  const uncertainPaths: string[] = [];
+  const uncertainSubtrees: string[] = [];
 
   /**
    * R145 (DISC-R145-01): Record a discovery warning. Warnings don't make
@@ -479,7 +499,11 @@ export function discoverSourceFilesStructured(
         const code = (error as { code?: string }).code ?? 'unknown';
         if (code === 'ENOENT') {
           // Entry disappeared between readdir and lstat — warning, skip.
+          // R147 (DATA-R147-01): Record the path as uncertain. The indexer
+          // must NOT treat this as a confirmed deletion — the file may have
+          // been temporarily absent (atomic save, codegen, package manager).
           recordWarning('ENOENT_LSTAT');
+          uncertainPaths.push(relative(realRoot, fullPath));
           continue;
         }
         // EACCES, EIO, etc. — fatal.
@@ -600,7 +624,14 @@ export function discoverSourceFilesStructured(
           }
           const identity = fileIdentityKey(realTarget, lang);
           if (identity === null) {
-            recordError(realTarget, new Error('fileIdentityKey returned null'));
+            // R147 (DISC-R147-01): fileIdentityKey returned null — the file
+            // disappeared between lstat and stat/realpath (TOCTOU race).
+            // R146 treated this as fatal (recordError → discovery incomplete).
+            // But the same ENOENT race is a warning everywhere else. Now we
+            // treat it as a warning too — record the uncertain path so the
+            // indexer doesn't delete the old data for this file.
+            recordWarning('ENOENT_IDENTITY');
+            uncertainPaths.push(relative(realRoot, realTarget));
             continue;
           }
           // R143 (ID-R143-01): deterministic tie-breaking. R144 (PERF-R144-02):
@@ -637,7 +668,11 @@ export function discoverSourceFilesStructured(
           const code = (error as { code?: string }).code ?? 'unknown';
           if (code === 'ENOENT') {
             // Directory disappeared between lstat and realpath — warning, skip.
+            // R147 (DATA-R147-02): Record the subtree as uncertain. The indexer
+            // must NOT delete any path under this prefix — the directory may
+            // have been temporarily absent.
             recordWarning('ENOENT_REALPATH_DIR');
+            uncertainSubtrees.push(relative(realRoot, fullPath));
             continue;
           }
           // EACCES, EIO, ELOOP, etc. — fatal.
@@ -662,7 +697,10 @@ export function discoverSourceFilesStructured(
         }
         const identity = fileIdentityKey(fullPath, lang);
         if (identity === null) {
-          recordError(fullPath, new Error('fileIdentityKey returned null'));
+          // R147 (DISC-R147-01): TOCTOU race — file disappeared between lstat
+          // and stat/realpath in fileIdentityKey. Warning, not fatal.
+          recordWarning('ENOENT_IDENTITY');
+          uncertainPaths.push(relative(realRoot, fullPath));
           continue;
         }
         // R143 (ID-R143-01): deterministic tie-breaking for hardlinks.
@@ -703,6 +741,8 @@ export function discoverSourceFilesStructured(
     countsByCode: countsByCodeObj,
     totalWarnings: totalWarningCount,
     warningCountsByCode: warningCountsByCodeObj,
+    uncertainPaths,
+    uncertainSubtrees,
     skippedExternalSymlinks,
     skippedPolicyPaths,
     duplicates,

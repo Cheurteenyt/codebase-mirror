@@ -67,11 +67,23 @@ export function registerIndexCommand(program: Command): void {
           }
         }
 
-        if (!opts.dryRun && result.nodes > 0) {
+        // R147 (OUTCOME-R147-01): Success banner ONLY when errors=0 AND stale=false.
+        // R146 printed "indexed successfully" if result.nodes > 0, even with
+        // errors and stale=true — misleading for CI and users.
+        if (!opts.dryRun && result.nodes > 0 && result.errors.length === 0 && !result.crossFileCallsStale) {
           console.log();
           console.log(`✓ Project "${project}" indexed successfully.`);
           console.log(`  The code graph is now available for MCP tools, UI, and reports.`);
           console.log(`  Run "cbm-v2 stats --project ${project}" to see the graph.`);
+        } else if (!opts.dryRun && result.nodes > 0) {
+          // R147: Partial/stale outcome — don't claim success.
+          console.log();
+          if (result.errors.length > 0) {
+            console.log(`⚠ Project "${project}" indexed with ${result.errors.length} error(s).`);
+          }
+          if (result.crossFileCallsStale) {
+            console.log(`⚠ Cross-file CALLS are stale — full reindex required.`);
+          }
         }
 
         // R101: warn if cross-file CALLS may be stale after incremental
@@ -82,10 +94,19 @@ export function registerIndexCommand(program: Command): void {
         }
 
         // R82: Bug 22 fix — exit non-zero if ANY extraction errors, unless --allow-partial.
-        // Previously, exit was 0 if result.nodes > 0, masking partial failures.
-        // This is critical for CI/benchmarks — a partial index must not look successful.
+        // R147 (OUTCOME-R147-02): Also exit non-zero when stale without errors
+        // (semantics mismatch, partial discovery). A stale graph is NOT fresh —
+        // CI should not treat it as valid.
         const allowPartial = (opts as any).allowPartial ?? false;
-        process.exitCode = (result.errors.length > 0 && !allowPartial) ? 1 : 0;
+        if (result.errors.length > 0 && !allowPartial) {
+          process.exitCode = 1;
+        } else if (result.crossFileCallsStale && !allowPartial) {
+          // R147: stale without errors (e.g., semantics mismatch) → exit 2
+          // (distinct from 1 = failure, so CI can distinguish).
+          process.exitCode = 2;
+        } else {
+          process.exitCode = 0;
+        }
       } catch (e: unknown) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exitCode = 1;

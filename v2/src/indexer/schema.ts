@@ -442,10 +442,8 @@ function migrateProjectsExtractorSemanticsVersion(db: Database.Database): void {
 function migrateProjectsIndexStateColumns(db: Database.Database): void {
   const cols = db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
   const names = new Set(cols.map(c => c.name));
-  let addedLastSuccess = false;
   if (!names.has('last_successful_index_at')) {
     db.exec('ALTER TABLE projects ADD COLUMN last_successful_index_at TEXT');
-    addedLastSuccess = true;
   }
   if (!names.has('last_index_attempt_at')) {
     db.exec('ALTER TABLE projects ADD COLUMN last_index_attempt_at TEXT');
@@ -453,15 +451,23 @@ function migrateProjectsIndexStateColumns(db: Database.Database): void {
   if (!names.has('last_index_error')) {
     db.exec('ALTER TABLE projects ADD COLUMN last_index_error TEXT');
   }
-  // R146 (STATE-R146-02): Backfill last_successful_index_at from indexed_at.
-  // Without this, a DB upgraded from R143 has last_successful_index_at=NULL.
-  // After a root failure (which only sets last_index_attempt_at), Graph Status
-  // falls back to dbMtime (which is the failure time) → false "last_indexed: now".
-  // By backfilling from indexed_at, Graph Status shows the correct last
-  // successful index time for pre-R144 DBs.
-  if (addedLastSuccess) {
-    db.exec('UPDATE projects SET last_successful_index_at = indexed_at WHERE last_successful_index_at IS NULL AND indexed_at IS NOT NULL');
-  }
+  // R147 (STATE-R147-01): Idempotent backfill. R146 only ran the backfill
+  // when the column was freshly created (`addedLastSuccess`). If the column
+  // already existed but was NULL (crash after ALTER, partial migration, R144
+  // DB that had a failed first index), no backfill. Now we run it every time
+  // — the UPDATE is idempotent (only affects NULL rows).
+  //
+  // R147 (STATE-R147-02): Stale-aware backfill. `indexed_at` may represent
+  // a failed attempt, not a success. Only backfill when the old state was
+  // reliable (cross_file_calls_stale=0). If stale=1, leave NULL — we don't
+  // know when the last SUCCESSFUL index was.
+  db.exec(`
+    UPDATE projects
+    SET last_successful_index_at = indexed_at
+    WHERE last_successful_index_at IS NULL
+      AND indexed_at IS NOT NULL
+      AND cross_file_calls_stale = 0
+  `);
 }
 
 /**
