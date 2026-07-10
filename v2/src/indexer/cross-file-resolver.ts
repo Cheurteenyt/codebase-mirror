@@ -350,21 +350,38 @@ export function rebuildCrossFileCallsEdges(
     }
   }
 
-  // R119: Build exportsByFile: filePath -> Map<exportedName, ExportBinding>
+  // R119/R123: Build exportsByFile with separate named and star exports.
+  // R123 fix: star exports (export *) are stored in an array, not a Map,
+  // because multiple export * from different files would collide under the
+  // same key '*' in a Map. Named exports stay in the Map for O(1) lookup.
   const allExports = db.prepare(
     'SELECT file_path, exported_name, local_name, source_module, imported_name, export_kind FROM exports WHERE project = ?'
   ).all(project) as Array<{
     file_path: string; exported_name: string; local_name: string | null;
     source_module: string | null; imported_name: string | null; export_kind: string;
   }>;
-  const exportsByFile = new Map<string, Map<string, { localName: string | null; sourceModule: string | null; importedName: string | null; exportKind: string }>>();
+  interface FileExports {
+    named: Map<string, { localName: string | null; sourceModule: string | null; importedName: string | null; exportKind: string }>;
+    stars: Array<{ sourceModule: string }>;
+  }
+  const exportsByFile = new Map<string, FileExports>();
   for (const exp of allExports) {
-    let fileMap = exportsByFile.get(exp.file_path);
-    if (!fileMap) { fileMap = new Map(); exportsByFile.set(exp.file_path, fileMap); }
-    fileMap.set(exp.exported_name, {
-      localName: exp.local_name, sourceModule: exp.source_module,
-      importedName: exp.imported_name, exportKind: exp.export_kind,
-    });
+    let fileExp = exportsByFile.get(exp.file_path);
+    if (!fileExp) {
+      fileExp = { named: new Map(), stars: [] };
+      exportsByFile.set(exp.file_path, fileExp);
+    }
+    if (exp.export_kind === 'star_re_export') {
+      // R123: star exports go in the array, not the Map
+      if (exp.source_module) {
+        fileExp.stars.push({ sourceModule: exp.source_module });
+      }
+    } else {
+      fileExp.named.set(exp.exported_name, {
+        localName: exp.local_name, sourceModule: exp.source_module,
+        importedName: exp.imported_name, exportKind: exp.export_kind,
+      });
+    }
   }
 
   // R119: Resolve an exported name to a target QN, following re-exports.
@@ -374,48 +391,54 @@ export function rebuildCrossFileCallsEdges(
     if (visited.has(key)) return undefined; // cycle
     visited.add(key);
 
-    const fileExps = exportsByFile.get(filePath);
-    if (!fileExps) {
+    const fileExp = exportsByFile.get(filePath);
+    if (!fileExp) {
       // No exports tracked — fall back to direct symbol lookup
       const fileSyms = fileSymbolIndex.get(filePath);
       return fileSyms?.get(exportedName);
     }
 
-    const expBinding = fileExps.get(exportedName);
-    if (!expBinding) {
-      // R122: No direct export binding — check star re-exports (export * from './b')
-      const fileExps2 = exportsByFile.get(filePath);
-      if (fileExps2) {
-        for (const [, expB] of fileExps2) {
-          if (expB.exportKind === 'star_re_export' && expB.sourceModule) {
-            const starResolvedFile = resolveModulePath(expB.sourceModule, filePath, knownFiles);
-            if (starResolvedFile) {
-              const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, visited);
-              if (result) return result;
-            }
-          }
-        }
+    // R123: Check named exports first (explicit exports win over star)
+    const expBinding = fileExp.named.get(exportedName);
+    if (expBinding) {
+      if (expBinding.exportKind === 'local_named' || expBinding.exportKind === 'local_alias') {
+        const fileSyms = fileSymbolIndex.get(filePath);
+        return fileSyms?.get(expBinding.localName || exportedName);
       }
-      // No export binding found — fall back to direct symbol lookup
-      const fileSyms = fileSymbolIndex.get(filePath);
-      return fileSyms?.get(exportedName);
+      if (expBinding.exportKind === 're_export_named' || expBinding.exportKind === 're_export_alias') {
+        if (!expBinding.sourceModule) return undefined;
+        const resolvedFile = resolveModulePath(expBinding.sourceModule, filePath, knownFiles);
+        if (!resolvedFile) return undefined;
+        return resolveExportedSymbol(resolvedFile, expBinding.importedName || exportedName, depth + 1, visited);
+      }
     }
 
-    if (expBinding.exportKind === 'local_named' || expBinding.exportKind === 'local_alias') {
-      // Local export (possibly aliased): look up localName in fileSyms
-      const fileSyms = fileSymbolIndex.get(filePath);
-      return fileSyms?.get(expBinding.localName || exportedName);
+    // R123: No named export found — check ALL star re-exports
+    // Collect all distinct targets from star re-exports
+    const starTargets = new Set<string>();
+    for (const starExp of fileExp.stars) {
+      const starResolvedFile = resolveModulePath(starExp.sourceModule, filePath, knownFiles);
+      if (starResolvedFile) {
+        const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, visited);
+        if (result) starTargets.add(result);
+      }
     }
 
-    if (expBinding.exportKind === 're_export_named' || expBinding.exportKind === 're_export_alias') {
-      // Re-export: resolve sourceModule, then resolve importedName in that file
-      if (!expBinding.sourceModule) return undefined;
-      const resolvedFile = resolveModulePath(expBinding.sourceModule, filePath, knownFiles);
-      if (!resolvedFile) return undefined;
-      return resolveExportedSymbol(resolvedFile, expBinding.importedName || exportedName, depth + 1, visited);
+    if (starTargets.size === 1) {
+      // Exactly one target — exact resolution
+      return starTargets.values().next().value;
+    }
+    if (starTargets.size > 1) {
+      // R123: Multiple distinct targets — ambiguous conflict
+      // In ESM, this is a SyntaxError. We return undefined to avoid
+      // creating a false exact edge. The name-based fallback will
+      // handle it with ambiguous resolution if applicable.
+      return undefined;
     }
 
-    return undefined;
+    // No export binding found — fall back to direct symbol lookup
+    const fileSyms = fileSymbolIndex.get(filePath);
+    return fileSyms?.get(exportedName);
   }
 
   // 4. Resolve each call_site to candidates and insert CALLS edges.

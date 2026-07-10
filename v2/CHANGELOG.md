@@ -1,5 +1,30 @@
 # Changelog — Codebase Memory V2
 
+## 0.53.1 — Round 123 (2026-07-10) Star Export Precision Lock
+
+**47th round (GPT 5.6 audit R123).** 2 bugs fixed. GPT 5.6 found that R122's
+star export implementation had two precision issues: multiple `export *` from
+different files collided under the same Map key `"*"` (only the last survived),
+and star export collisions were treated as exact resolutions instead of
+ambiguous conflicts (ESM runtime throws SyntaxError on conflicting star exports).
+
+### Bugs fixed (2)
+
+50. **Multiple `export *` s'écrasent dans la Map** (`cross-file-resolver.ts`) — `export * from './b'; export * from './c'` stored both under key `"*"` in a `Map<string, ExportBinding>`, so the second overwrote the first. Only one star re-export was visible to the resolver. Fixed: separated star exports into an array (`stars: Array<{ sourceModule: string }>`) alongside named exports (`named: Map<string, ExportBinding>`), so all star re-exports are preserved and traversed.
+
+51. **Star export collision treated as exact** (`cross-file-resolver.ts`) — When two star-re-exported files both export the same name, ESM runtime throws `SyntaxError: conflicting star exports`. The resolver was returning the first found as an exact resolution (confidence 1.0). Fixed: collect all distinct targets from star re-exports; if exactly 1 → exact; if >1 → return `undefined` (ambiguous conflict, no exact edge). Explicit named exports still win over star exports.
+
+### Tests (4)
+
+`v2/tests/indexer/r123-star-precision.test.ts`
+
+1. **Multiple stars don't collide**: `export * from './b'` + `export * from './c'` → both `foo` and `bar` resolve
+2. **Star conflict**: both export `foo` → no exact edge (ambiguous conflict)
+3. **Explicit export wins**: `export { foo } from './b'` + `export * from './c'` → `foo` from `b`
+4. **Star order doesn't matter**: `export * from './c'` first → both resolve
+
+### Total: 42 bugs + 11 optimizations + 149 indexer tests across 47 rounds
+
 ## 0.53.0 — Round 122 (2026-07-09) export * Star Re-exports
 
 **46th round (GPT 5.5 audit R127).** Major feature: `export *` star re-export
