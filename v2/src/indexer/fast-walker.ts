@@ -503,8 +503,46 @@ function extractExports(rootNode: TSNode, filePath: string): ExportBinding[] {
       }
     }
 
-    // Skip type-only exports
-    if (isTypeOnly) continue;
+    // R135: IDX-R135-02 — don't skip type-only statements before inspecting specifiers.
+    // `export type { Foo as default }` has isTypeOnly=true at the statement level.
+    // We need to inspect the export_clause to find specifiers aliasing to 'default',
+    // persist them as type_only_default for collision detection, THEN skip.
+    // Stars and other type-only exports are still skipped immediately.
+    if (isTypeOnly) {
+      // R135: check if this is a star — skip type-only stars
+      let isStarTypeOnly = false;
+      for (let i = 0; i < exp.childCount; i++) {
+        const child = exp.child(i);
+        if (child && (child.type === 'namespace_export' || child.type === '*') && child.text === '*') {
+          isStarTypeOnly = true; break;
+        }
+      }
+      if (isStarTypeOnly) continue;
+
+      // R135: inspect export_clause for type-only default specifiers
+      if (exportClause) {
+        for (let i = 0; i < exportClause.childCount; i++) {
+          const spec = exportClause.child(i);
+          if (!spec || spec.type !== 'export_specifier') continue;
+          const nameNode = spec.childForFieldName('name');
+          const aliasNode = spec.childForFieldName('alias');
+          if (!nameNode) continue;
+          const exportedName = aliasNode ? aliasNode.text : nameNode.text;
+          if (exportedName === 'default') {
+            exports.push({
+              exportedName: 'default',
+              localName: nameNode.text,
+              sourceModule: sourceModule,
+              importedName: sourceModule ? nameNode.text : null,
+              exportKind: 'type_only_default',
+              line,
+              filePath,
+            });
+          }
+        }
+      }
+      continue;
+    }
 
     // Skip default exports (handled by extractDefaultExport)
     let isDefault = false;

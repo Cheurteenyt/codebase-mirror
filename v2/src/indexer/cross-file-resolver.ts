@@ -56,9 +56,10 @@ import type Database from 'better-sqlite3';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
 import { BUILTIN_METHOD_NAMES } from './fast-walker.js';
 import { CURRENT_EXTRACTOR_SEMANTICS_VERSION } from './schema.js';
-// R134: IDX-R134-03 — Node.js builtinModules for bare specifier validation.
-import { builtinModules as BUILTIN_MODULES_ARRAY } from 'node:module';
-const BUILTIN_MODULES_SET = new Set(BUILTIN_MODULES_ARRAY);
+// R135: IDX-R135-01 — use isBuiltin() instead of manual Set.
+// isBuiltin() correctly handles node:test, node:test/reporters, node:sqlite
+// which are NOT in builtinModules array but ARE valid builtins.
+import { isBuiltin } from 'node:module';
 // R126: CURRENT_EXTRACTOR_SEMANTICS_VERSION is re-exported via the helper
 // isExtractorSemanticsCurrent() for callers that need to check the stored
 // version (e.g. incremental mode deciding whether to pass semanticsCurrent=true).
@@ -555,13 +556,27 @@ export function rebuildCrossFileCallsEdges(
     for (const starExp of fileExp.stars) {
       // R132: only check relative paths (./ or ../)
       if (!starExp.sourceModule.startsWith('.')) {
-        // R134: IDX-R134-03 — check Node.js builtins.
+        // R135: IDX-R135-01 — use isBuiltin() for proper builtin validation.
+        // R134 had a dead code bug: both builtin-valid and unknown branches
+        // did `continue`, so node:fake was never rejected.
+        // R135: node: prefixed specifiers that are NOT valid builtins → invalid.
         const spec = starExp.sourceModule;
-        const bareName = spec.startsWith('node:') ? spec.slice(5) : spec;
-        if (BUILTIN_MODULES_SET.has(bareName)) {
-          continue; // Valid Node builtin
+        if (spec.startsWith('node:')) {
+          if (!isBuiltin(spec)) {
+            // R135: invalid builtin like node:fake → ERR_UNKNOWN_BUILTIN_MODULE
+            fileExp.fileInvalidReason = 'unresolved_reexport_module';
+            break;
+          }
+          // Valid Node builtin — module is valid for this star source.
+          continue;
         }
-        // Unknown bare specifier — can't verify, don't mark invalid.
+        if (isBuiltin(spec)) {
+          // Bare builtin without node: prefix (e.g. 'fs', 'path')
+          continue;
+        }
+        // R135: Unknown bare specifier (package, alias) — can't verify without
+        // createRequire.resolve. Conservative: don't mark invalid (avoids false
+        // negatives on valid packages). Full package resolution deferred.
         continue;
       }
       const starResolvedFile = resolveModulePath(starExp.sourceModule, filePath, knownFiles);

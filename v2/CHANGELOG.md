@@ -1,5 +1,50 @@
 # Changelog — Codebase Memory V2
 
+## 0.55.2 — Round 135 (2026-07-10) Builtin Truth Lock + export type default
+
+**60th round (GPT 5.6 Sol audit R134).** 2 P1 bugs fixed. This round fixes a
+dead-code bug in R134's builtin check (both branches did `continue`, so
+`node:fake` was never rejected) and adds support for `export type { Foo as default }`
+(top-level type-only default clause).
+
+**No semantics version bump** — these are resolver-only and extractor-only
+changes that don't alter the persisted data format (the `type_only_default`
+exportKind was already introduced in R134).
+
+### Bugs fixed (2 P1)
+
+88. **Builtin check had no effect (dead code)** (`cross-file-resolver.ts`) —
+    R134's `BUILTIN_MODULES_SET.has(bareName)` check had two branches that both
+    did `continue`: valid builtins continued, unknown specifiers also continued.
+    `node:fake` was never rejected. Fixed: replaced the manual `Set` with
+    `isBuiltin()` from `node:module` (which correctly handles prefix-only
+    builtins like `node:test`, `node:test/reporters`, `node:sqlite`). Now,
+    `node:` prefixed specifiers that are NOT valid builtins →
+    `fileInvalidReason = 'unresolved_reexport_module'`. Node throws
+    `ERR_UNKNOWN_BUILTIN_MODULE` for these — the module is invalid.
+    (IDX-R135-01)
+
+89. **`export type { Foo as default }` not detected** (`fast-walker.ts`) —
+    R134 only detected inline type-only specifiers (`export { type Foo as default }`).
+    The top-level form `export type { Foo as default }` was skipped entirely
+    by `if (isTypeOnly) continue` before the specifiers were inspected. tsc
+    rejects this with TS2323 when combined with `export default function`.
+    Fixed: the type-only statement skip now inspects `export_clause` for
+    specifiers aliasing to `default` before continuing. These are persisted
+    as `type_only_default` for collision detection. (IDX-R135-02)
+
+### Tests (7 new)
+
+- **IDX-R135-01**: `node:fake` → 0 edges (invalid builtin)
+- `node:fs` → valid (positive control)
+- `node:test` → valid (prefix-only builtin)
+- `fs` (bare) → valid
+- `node:definitely_not_real` → 0 edges
+- **IDX-R135-02**: `export type { Foo as default }` + function → 0 edges
+- R134 inline form preserved → 0 edges
+
+### Total: 89 bugs + 11 optimizations + 229 indexer tests across 60 rounds
+
 ## 0.55.1 — Round 134 (2026-07-10) Type Namespace Default Validity + BuiltinModules
 
 **59th round (GPT 5.6 Sol audit R133).** 2 P1 bugs fixed. Persists
