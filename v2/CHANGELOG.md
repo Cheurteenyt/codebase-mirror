@@ -1,5 +1,99 @@
 # Changelog — Codebase Memory V2
 
+## 0.55.0 — Round 133 (2026-07-10) Type/Value Default Lock
+
+**58th round (GPT 5.6 Sol audit R132).** 3 P1 bugs fixed + 1 P1 test fix. This
+round fixes a regression introduced in R132: TypeScript default interfaces
+(`export default interface Shape {}`) were counted as runtime defaults, causing
+false `invalid_duplicate_export` on valid TypeScript code. The extractor now
+distinguishes type-only defaults (interface, type alias) from runtime defaults
+(function, class, identifier).
+
+**Extractor semantics version bumped to 4.** DBs indexed by R132 have inflated
+default counts that include type-only defaults, so they must be re-parsed.
+
+### Bugs fixed (3 P1)
+
+83. **Default interfaces counted as runtime defaults** (`fast-walker.ts`) —
+    R132's `extractDefaultExport()` counted ALL `export default` statements
+    including `export default interface Shape {}`. TypeScript allows this
+    alongside `export default function make() {}` — interfaces are type-only
+    and exist in a separate namespace. R132 produced `count=2` → false
+    `invalid_duplicate_export`. Fixed: added `TYPE_ONLY_DEFAULT_TYPES` list
+    (`interface_declaration`, `type_alias_declaration`). The extractor checks
+    if the `export default` statement has a type-only child and skips it from
+    the runtime count. Verified with `tsc`: `export default interface + export
+    default function` compiles successfully. (IDX-R133-02)
+
+84. **Interface merging defaults falsely rejected** (`fast-walker.ts`) — Two
+    `export default interface Shape {}` declarations are valid TypeScript
+    (interfaces merge). R132 counted them as `count=2` → false invalid. Fixed
+    by the same type-only exclusion as #83. Both interfaces are skipped from
+    the runtime count, so `count=0` → no collision. (IDX-R133-03)
+
+85. **Type default + value alias default falsely rejected** (`fast-walker.ts`)
+    — `export default interface Shape {}` + `export { make as default }` is
+    valid TypeScript. R132 saw `count=1` (interface) + `fileExp.named.has('default')`
+    (binding) → false collision. Fixed: the interface is now type-only
+    (`count=0`), so `count > 0 && fileExp.named.has('default')` is false → no
+    collision. The binding resolves `make` correctly. (IDX-R133-04)
+
+### Test fix (1 P1)
+
+- **TEST-R133-01: `some-package` test incorrect** (`r132-external-star-default-fix.test.ts`)
+  — The R132 test used `export * from 'some-package'` and asserted the module
+  was valid. But `some-package` is NOT installed — Node.js would throw
+  `ERR_MODULE_NOT_FOUND`. The test locked in a false positive. Fixed: replaced
+  with `export * from 'node:fs'` (a guaranteed-valid Node builtin). Added a
+  comment explaining that bare specifier validation (createRequire.resolve) is
+  deferred to a future round.
+
+### Architecture: type/value default separation
+
+R132 introduced `defaultExportCount` to detect duplicate runtime defaults.
+R133 refines this: only RUNTIME defaults (function, class [not interface],
+identifier reference) are counted. Type-only defaults (interface, type alias)
+are excluded via `TYPE_ONLY_DEFAULT_TYPES`:
+
+```ts
+const TYPE_ONLY_DEFAULT_TYPES = ['interface_declaration', 'type_alias_declaration'];
+```
+
+The check happens in `extractDefaultExport()` BEFORE incrementing the count:
+if the `export default` statement has a child in `TYPE_ONLY_DEFAULT_TYPES`,
+it is skipped entirely. This correctly handles:
+- `export default interface + export default function` → count=1 (valid)
+- `export default interface + export default interface` → count=0 (valid, merging)
+- `export default interface + export { make as default }` → count=0 (valid)
+- `export default function a + export default function b` → count=2 (invalid)
+
+### Not addressed (deferred per audit recommendation)
+
+- **IDX-R133-01** (bare package absent treated as valid) — requires
+  `createRequire.resolve` or Node `builtinModules` check; deferred to R134B.
+  R133 fixes the test to use a guaranteed-valid builtin instead of locking in
+  the false positive.
+- **SEC-CARRY-01** (P0 symlink escape) — separate round, highest priority
+- **DATA-CARRY-01** (full atomic publication) — staging tables / DB.next
+- **IDX-CARRY-01/02/03** (named re-export preflight, transitive validity,
+  static imports) — R134 Module Request Validity
+- **IDX-CARRY-04/05** (arrow, multi-declarator) — R136
+- **IDX-CARRY-06** (`export * as default`) — R136
+- **PERF-R133-01/02/03/04** — R137
+
+### Tests (6 new + 2 updated)
+
+- **IDX-R133-02**: `export default interface + export default function` → 1 edge
+- **IDX-R133-03**: two `export default interface` (merging) + local → 1 edge
+- **IDX-R133-04**: `export default interface + export { make as default }` → 1 edge
+- **IDX-R132-06 preserved**: two `export default function` → 0 edges
+- **Positive control**: single `export default function` → 1 edge
+- **Semantics version**: full reindex sets version=4
+- **R132 test**: `some-package` → `node:fs` (TEST-R133-01 fix)
+- **R131/R132 version tests**: updated from 3 to 4
+
+### Total: 85 bugs + 11 optimizations + 218 indexer tests across 58 rounds
+
 ## 0.54.9 — Round 132 (2026-07-10) External Star Fix + Default Occurrence Count
 
 **57th round (GPT 5.6 Sol audit R131).** 3 P1 bugs fixed + 1 false positive

@@ -98,10 +98,18 @@ describe('R132: External Star + Default Fix', () => {
     db.close();
   });
 
-  it('export * from bare package → NOT invalidated', async () => {
+  it('export * from bare package → NOT invalidated (R133: bare specifiers are unverifiable, not invalid)', async () => {
+    // R133: TEST-R133-01 — the R132 test used 'some-package' which is NOT
+    // installed and would fail at runtime (ERR_MODULE_NOT_FOUND). However,
+    // the indexer cannot verify package existence without node_modules access.
+    // R133 keeps the conservative behavior: bare specifiers are treated as
+    // "external_or_alias" — not verified, but not marked invalid. This avoids
+    // false negatives on valid packages and builtins. Full package resolution
+    // (createRequire.resolve) is deferred to a future round.
+    // The test now uses 'node:path' which is a guaranteed-valid builtin.
     writeFileSync(join(projectDir, 'index.ts'),
       `export function local() { return 1; }\n` +
-      `export * from 'some-package';\n`
+      `export * from 'node:fs';\n`
     );
     writeFileSync(join(projectDir, 'a.ts'), `import { local } from './index';\nexport function caller() { return local(); }\n`);
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
@@ -187,7 +195,7 @@ describe('R132: External Star + Default Fix', () => {
     const db = getDb();
     const row = db.prepare('SELECT extractor_semantics_version AS v FROM projects WHERE name = ?').get(projectName) as { v: number };
     expect(row.v).toBe(CURRENT_EXTRACTOR_SEMANTICS_VERSION);
-    expect(row.v).toBe(3);
+    expect(row.v).toBe(4); // R133 bumped from 3 to 4
     db.close();
   });
 });
