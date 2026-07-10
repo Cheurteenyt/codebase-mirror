@@ -554,6 +554,62 @@ function extractExports(rootNode: TSNode, filePath: string): ExportBinding[] {
       }
     }
   }
+  // R124: Also extract direct export declarations (export function/class/const)
+  // These are NOT in export_clause but are runtime exports.
+  // Without this, `export function foo()` in a barrel wouldn't win over
+  // `export * from './b'` (where b also exports foo), and the resolver
+  // would incorrectly resolve to b::foo instead of the local foo.
+  const exportDecls = rootNode.descendantsOfType([
+    'function_declaration', 'class_declaration', 'generator_function_declaration',
+    'lexical_declaration', 'variable_declaration',
+  ]);
+  for (const decl of exportDecls) {
+    // Check if this declaration is directly exported (has export_statement parent)
+    let parent = decl.parent;
+    if (!parent || parent.type !== 'export_statement') continue;
+
+    // Skip if it's a default export (handled by extractDefaultExport)
+    let isDefault = false;
+    for (let i = 0; i < parent.childCount; i++) {
+      const child = parent.child(i);
+      if (child && child.type === 'default') { isDefault = true; break; }
+    }
+    if (isDefault) continue;
+
+    // Get the name
+    let declName = '';
+    if (decl.type === 'function_declaration' || decl.type === 'class_declaration' || decl.type === 'generator_function_declaration') {
+      const nameNode = decl.childForFieldName('name');
+      if (nameNode) declName = nameNode.text;
+    } else if (decl.type === 'lexical_declaration' || decl.type === 'variable_declaration') {
+      // const foo = ... → get first identifier
+      for (let i = 0; i < decl.childCount; i++) {
+        const child = decl.child(i);
+        if (child && child.type === 'variable_declarator') {
+          const nameNode = child.childForFieldName('name');
+          if (nameNode) declName = nameNode.text;
+          break;
+        }
+      }
+    }
+    if (!declName) continue;
+
+    const declLine = decl.startPosition.row + 1;
+    // Check if we already have this export (avoid duplicates with export { foo })
+    const alreadyExported = exports.some((e: ExportBinding) => e.exportedName === declName);
+    if (!alreadyExported) {
+      exports.push({
+        exportedName: declName,
+        localName: declName,
+        sourceModule: null,
+        importedName: null,
+        exportKind: 'local_named',
+        line: declLine,
+        filePath,
+      });
+    }
+  }
+
   return exports;
 }
 
