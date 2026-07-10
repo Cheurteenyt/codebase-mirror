@@ -1,5 +1,39 @@
 # Changelog — Codebase Memory V2
 
+## 0.55.5 — Round 138 (2026-07-10) Migration Causal Closure
+
+**63rd round (GPT 5.6 Sol audit R137).** Quality round — no new bugs, no
+semantics bump. Completes the causal migration proof from R137 with real
+`node:fake` fixture, default consumer, exact counts, and delete assertion.
+
+### Test fixes (6 improvements)
+
+- **TEST-R138-01**: The R137 test comment said `node:fake` but the fixture
+  used `node:fs` (valid builtin). Replaced with actual `node:fake` fixture
+  that produces an invalid module. The causal test now proves the real R134
+  bug: `node:fake` star → 0 edges (module invalid), not just a valid builtin.
+
+- **TEST-R138-02**: `type-index.ts` had no default consumer. The row
+  `type_only_default` was tested for existence but not for resolver effect.
+  Added `import value from './type-index'` consumer. Now verifies 0 edges
+  for `value` (module invalid due to type default + runtime default collision).
+
+- **TEST-R138-03**: Replaced `>0` assertions with exact counts:
+  `type_only_default` rows = 1, `local` edges = 0, `value` edges = 0.
+  Prevents accidental duplicates from passing.
+
+- **TEST-R138-04**: The DELETE of `type_only_default` rows was not asserted.
+  Added `expect(deleteInfo.changes).toBe(1)` and verified count=0 after
+  deletion. The simulation itself is now non-vacu.
+
+- **QUAL-R138-01**: R131–R134 tests had duplicate `CURRENT_EXTRACTOR_SEMANTICS_VERSION`
+  assertions (from mechanical sed). Removed the duplicate from each file.
+
+- **QUAL-R138-02**: Changelog wording corrected — no longer claims the test
+  simulates `node:fake` when it now actually does.
+
+### Total: 91 bugs + 11 optimizations + 232 indexer tests across 63 rounds
+
 ## 0.55.4 — Round 137 (2026-07-10) Migration Proof Lock
 
 **62nd round (GPT 5.6 Sol audit R136).** Quality round — no new bugs, no
