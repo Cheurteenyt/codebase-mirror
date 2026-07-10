@@ -452,6 +452,28 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     deletedRelPaths = indexedPaths
       .map(r => r.file_path)
       .filter(p => !currentRelPaths.has(p));
+
+    // R147 (DATA-R147-01/02): Deletion-safe race lock. Uncertain paths
+    // (ENOENT race — file temporarily absent during discovery) and
+    // uncertain subtrees (directory temporarily absent) MUST NOT be
+    // treated as confirmed deletions. The file/directory may have been
+    // temporarily absent (atomic save, codegen, package manager). Without
+    // this filter, a single TOCTOU race could silently delete nodes,
+    // hashes, call_sites, imports, and exports for a file that still
+    // exists on disk.
+    if (discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0) {
+      const uncertainPathSet = new Set(discovery.uncertainPaths);
+      const uncertainSubtreePrefixes = discovery.uncertainSubtrees;
+      deletedRelPaths = deletedRelPaths.filter(p => {
+        // Exact match — the file was seen as uncertain.
+        if (uncertainPathSet.has(p)) return false;
+        // Subtree match — the path is under an uncertain directory.
+        for (const prefix of uncertainSubtreePrefixes) {
+          if (p === prefix || p.startsWith(prefix + '/')) return false;
+        }
+        return true;
+      });
+    }
   }
 
   // R127: Centralized semantic-state read. ALL fast paths and the main path

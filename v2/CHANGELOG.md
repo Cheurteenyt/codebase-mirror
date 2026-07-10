@@ -1,5 +1,85 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.8 — Round 147 (2026-07-11) Deletion-Safe Race Lock
+
+**72nd round (GPT 5.6 Sol audit R146).** 2 P1 + 3 P1/P2 + 2 P1/P2 fixed.
+Closes the 7 confirmed P1 code findings of the R146 audit.
+
+### Deletion-safe race lock (2 P1)
+
+150. **P1 ENOENT warning race → silent deletion** (`wasm-extractor.ts`,
+     `indexer.ts`) — R146 treated `lstatSync` ENOENT as a warning (skip,
+     `discovery.complete=true`). But the disappeared file was NOT in
+     `currentRelPaths`, so the incremental indexer computed it as a
+     confirmed deletion in `deletedRelPaths` → nodes, edges, file_hashes,
+     call_sites, imports, exports all deleted. An atomic-save race (editor,
+     codegen, package manager) could silently destroy graph data and
+     publish it as fresh. Fixed: `DiscoveryResult` now includes
+     `uncertainPaths` (files that disappeared during traversal) and
+     `uncertainSubtrees` (directories that disappeared). The indexer
+     filters `deletedRelPaths` to exclude any path matching an uncertain
+     path or under an uncertain subtree prefix. The old data is preserved
+     until the next successful index confirms the deletion. (DATA-R147-01,
+     DATA-R147-02)
+
+### Timestamp migration lock (2 P1/P2)
+
+151. **P1/P2 backfill not idempotent when column exists but NULL**
+     (`schema.ts`) — R146's backfill only ran when the column was freshly
+     created (`addedLastSuccess=true`). If the column already existed but
+     was NULL (crash after ALTER, partial migration, R144 DB with failed
+     first index), no backfill. Fixed: the backfill UPDATE now runs every
+     time `migrateProjectsIndexStateColumns` is called — it's idempotent
+     (only affects NULL rows). (STATE-R147-01)
+
+152. **P1/P2 backfill from indexed_at may copy a failed attempt**
+     (`schema.ts`) — `indexed_at` is updated by ANY write (including
+     failed index attempts). Blindly copying it to
+     `last_successful_index_at` could transform a failed attempt into a
+     historical "success". Fixed: the backfill now only runs when
+     `cross_file_calls_stale=0` (the old state was reliable). If stale=1,
+     `last_successful_index_at` stays NULL — we don't know when the last
+     SUCCESSFUL index was. (STATE-R147-02)
+
+### Discovery race classification (1 P1/P2)
+
+153. **P1/P2 fileIdentityKey ENOENT race fatal** (`wasm-extractor.ts`) —
+     If a file disappeared between `lstatSync` and the `statSync` inside
+     `fileIdentityKey`, the function returned `null`, and the caller did
+     `recordError` → discovery incomplete. The same ENOENT race is a
+     warning everywhere else. Fixed: `fileIdentityKey` returning `null`
+     now calls `recordWarning('ENOENT_IDENTITY')` and records the path as
+     uncertain (preserving old data). Discovery stays complete.
+     (DISC-R147-01)
+
+### CLI outcome contract (2 P1/P2)
+
+154. **P1/P2 CLI success banner with errors/stale** (`cli/commands/index.ts`)
+     — R146 printed "✓ Project indexed successfully" if `result.nodes > 0`,
+     even with errors and stale=true. Fixed: the success banner now
+     requires `errors.length === 0 AND !crossFileCallsStale`. Otherwise,
+     a warning message is printed instead ("indexed with N error(s)" /
+     "Cross-file CALLS are stale"). (OUTCOME-R147-01)
+
+155. **P1/P2 exit code 0 for stale without errors**
+     (`cli/commands/index.ts`) — R146 exited 0 when `errors.length === 0`,
+     even if `crossFileCallsStale=true` (semantics mismatch, partial
+     discovery). CI could treat a stale graph as valid. Fixed: exit code
+     is now 2 when stale without errors (distinct from 1 = failure, so CI
+     can distinguish). Exit 0 only when fresh success. (OUTCOME-R147-02)
+
+### Tests (9 new)
+
+- **DATA-R147-01** (1 test): broken symlink ENOENT produces warnings.
+- **STATE-R147-01** (1 test): backfill runs when column exists but NULL.
+- **STATE-R147-02** (1 test): backfill does NOT run when stale=1.
+- **DISC-R147-01** (1 test): normal discovery with broken symlinks stays complete.
+- **OUTCOME-R147-01** (1 test): incremental with errors → stale=true.
+- **OUTCOME-R147-02** (1 test): stale without errors → verified via IndexResult.
+- **Regression** (3 tests): incremental extraction error, semantics v8, hardlink extensions.
+
+### Total: 155 bugs + 11 optimizations + 352 indexer tests across 72 rounds
+
 ## 0.56.7 — Round 146 (2026-07-11) Index Outcome Lock
 
 **71st round (GPT 5.6 Sol audit R145).** 1 P1 + 1 P1/P2 + 1 P1/P2 fixed.
