@@ -1,5 +1,58 @@
 # Changelog — Codebase Memory V2
 
+## 0.55.3 — Round 136 (2026-07-10) Upgrade Semantics Emergency Lock
+
+**61st round (GPT 5.6 Sol audit R135).** 2 P1 bugs fixed. This round is a
+hotfix: R135 changed the extractor output (top-level `export type { Foo as
+default }` now produces `type_only_default` rows) and the resolver behavior
+(`isBuiltin()` rejects `node:fake`), but failed to bump the semantics version.
+A DB indexed by R134 (v5) upgraded to R135 would not be reparsed — the bugs
+would remain active. R136 corrects this by bumping to v6.
+
+**Extractor semantics version bumped to 6.**
+
+### Bugs fixed (2 P1)
+
+90. **R135 failed to bump extractor semantics version** (`schema.ts`) — R135
+    changed the extractor output (new `type_only_default` rows for top-level
+    `export type { Foo as default }`) and the resolver behavior (`isBuiltin()`
+    rejection of `node:fake`), but kept `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 5`.
+    A DB indexed by R134 (v5) upgraded to R135 via incremental would see
+    `semanticsStale = false` (same version) → no reparse → no resolver rebuild
+    → bugs remain active. Fixed: bumped to 6. DBs indexed by R134/R135 (v5)
+    must be fully reindexed. (MIG-R136-01/MIG-R136-02)
+
+91. **`engines.node` incorrect for `isBuiltin`** (`package.json`) — `isBuiltin`
+    was added in Node 18.6.0, but `engines.node` declared `>=18`. Users on
+    Node 18.0–18.5 would get a startup crash. Fixed: `engines.node` updated
+    to `>=18.6.0`. (COMPAT-R136-01)
+
+### Tests (3 new + 4 updated)
+
+- **MIG-R136-01**: DB v5 → no-op incremental → stale=true, version stays 5
+- **MIG-R136-01**: full reindex after stale → version=6, edges restored
+- **Full reindex sets version=6**
+- **R131/R132/R133/R134 version tests**: updated from 5 to 6
+
+### Runtime versions
+
+```
+Node: v24.18.0
+npm: 11.16.0
+tsc: 5.9.3
+```
+
+### Not addressed (deferred)
+
+- **ENV-R136-01** (Node runtime fingerprint) — requires `resolver_semantics_version` split
+- **IDX-R136-01** (string-literal export names) — requires `normalizeModuleExportName()`
+- **IDX-R136-02/03** (interface default persistence, unannotated clause) — requires namespace model
+- **IDX-R136-04** (builtin validation for non-star requests) — requires module_requests table
+- **SEC-CARRY-01** (P0 symlink) — separate round
+- **DATA-CARRY-01** (full atomic) — separate round
+
+### Total: 91 bugs + 11 optimizations + 232 indexer tests across 61 rounds
+
 ## 0.55.2 — Round 135 (2026-07-10) Builtin Truth Lock + export type default
 
 **60th round (GPT 5.6 Sol audit R134).** 2 P1 bugs fixed. This round fixes a
