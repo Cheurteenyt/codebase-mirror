@@ -485,7 +485,7 @@ function extractExports(rootNode: TSNode, filePath: string): ExportBinding[] {
     let starSourceModule: string | null = null;
     for (let i = 0; i < exp.childCount; i++) {
       const child = exp.child(i);
-      if (child && child.type === 'namespace_export' && child.text === '*') { isStar = true; }
+      if (child && (child.type === 'namespace_export' || child.type === '*') && child.text === '*') { isStar = true; }
       if (child && child.type === 'string') {
         starSourceModule = child.text.replace(/^["'`]/, '').replace(/["'`]$/, '');
       }

@@ -1,6 +1,29 @@
 # Changelog — Codebase Memory V2
 
-## 0.54.1 — Round 125A (2026-07-10) Test Truth Lock
+## 0.54.2 — Round 125B (2026-07-10) Semantic Test Lock + Star Detection Fix
+
+**50th round (GPT 5.6 Sol audit R125A).** 1 runtime bug fixed + test lock.
+GPT 5.6 found that R125A's tests were still permissive (only checking `0 exact
+edges` instead of `0 total edges`), cycle assertions were tautological, and
+the star export detection was broken.
+
+### Bug fixed (1)
+
+57. **Star export `export *` not detected by extractExports** (`fast-walker.ts`) — tree-sitter parses `export * from './b'` with a child node of type `*` (asterisk), not `namespace_export`. The code only checked for `namespace_export`, so `export *` was never extracted as `star_re_export`. This means star re-exports were silently ignored since R122. Fixed: also check for `child.type === '*'`.
+
+### Test fixes
+
+- **R122 collision**: `0 exact edges` → `0 total edges` (ESM SyntaxError = no valid CALLS)
+- **R122 cycle**: `fooB >= 0` → `fooB >= 1, contains b.ts` (fooB must resolve)
+- **R124 star conflict**: `0 exact edges` → `0 total edges`
+- **R124 private symbol**: `0 exact edges` → `0 total edges`
+- **R124 nested ambiguity**: `0 exact edges` → `0 total edges`
+- **R124 titles/comments**: Aligned with actual assertions
+- **Added `it.todo`** for IDX-R125-01 (private-only file) and IDX-R125-02 (unresolved module)
+
+### Total: 57 bugs + 11 optimizations + 154 tests (2 todo) across 50 rounds
+
+## 0.54.1 — Round 125A (2026-07-10) Test Truth Lock (2026-07-10) Test Truth Lock
 
 **49th round (GPT 5.6 Sol audit R124).** 0 runtime bugs — test coherence fix.
 GPT 5.6 found that R124's test changes created contradictions: R122 collision

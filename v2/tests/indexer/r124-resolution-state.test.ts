@@ -11,12 +11,16 @@ import { defaultCodeDbPath } from '../../src/bridge/sqlite-ro.js';
 describe('R124: Resolution State Machine', () => {
   let tmpDir: string, projectDir: string, cacheDir: string, projectName: string;
   beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'r124-')); projectDir = join(tmpDir, 'project'); cacheDir = join(tmpDir, 'cache'); mkdirSync(projectDir, { recursive: true }); mkdirSync(join(cacheDir, 'codebase-memory-mcp'), { recursive: true }); projectName = `r124-${Date.now()}`; process.env.XDG_CACHE_HOME = cacheDir; });
+
+  // Known P1 limitations (IDX-R125-01, IDX-R125-02)
+  it.todo('private-only file (no export tracking) must not fall back globally — IDX-R125-01');
+  it.todo('unresolved import source must be terminal — IDX-R125-02');
   afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); delete process.env.XDG_CACHE_HOME; });
   function getDb() { return new Database(defaultCodeDbPath(projectName), { readonly: true }); }
   function getEdges(db: Database.Database, callee: string) { return db.prepare(`SELECT t.qualified_name AS target_qn, e.properties_json FROM edges e JOIN nodes t ON t.id = e.target_id AND t.project = e.project WHERE e.project = ? AND e.type = 'CALLS' AND e.properties_json LIKE '%"callee":"' || ? || '"%' AND e.properties_json LIKE '%cross_file%'`).all(projectName, callee) as Array<{ target_qn: string; properties_json: string }>; }
 
   // IDX-R124-01: Star conflict should NOT produce ANY edges (no name-based fallback)
-  it('star conflict: both export foo → ZERO edges (no fallback to name-based)', async () => {
+  it('star conflict: both export foo → 0 total edges (no fallback)', async () => {
     writeFileSync(join(projectDir, 'b.ts'), 'export function foo() { return 1; }\n');
     writeFileSync(join(projectDir, 'c.ts'), 'export function foo() { return 2; }\n');
     writeFileSync(join(projectDir, 'index.ts'), `export * from './b';\nexport * from './c';\n`);
@@ -24,10 +28,8 @@ describe('R124: Resolution State Machine', () => {
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r.errors.length).toBe(0);
     const db = getDb();
-    // R125A: star conflict → no EXACT edges (import-aware returns ambiguous)
-    const edges = getEdges(db, 'foo');
-    const exactEdges = edges.filter((_: any) => { const p = JSON.parse(_.properties_json); return p.resolution === 'cross_file_import_exact'; });
-    expect(exactEdges.length).toBe(0);
+    // R125B: star conflict → 0 TOTAL edges (ESM SyntaxError, no fallback)
+    expect(getEdges(db, 'foo').length).toBe(0);
     db.close();
   });
 
@@ -54,10 +56,8 @@ describe('R124: Resolution State Machine', () => {
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r.errors.length).toBe(0);
     const db = getDb();
-    // R125A: hidden is private → no EXACT edges
-    const edges = getEdges(db, 'hidden');
-    const exactEdges = edges.filter((_: any) => { const p = JSON.parse(_.properties_json); return p.resolution === 'cross_file_import_exact'; });
-    expect(exactEdges.length).toBe(0);
+    // R125B: hidden is private → 0 TOTAL edges
+    expect(getEdges(db, 'hidden').length).toBe(0);
     db.close();
   });
 
@@ -74,9 +74,8 @@ describe('R124: Resolution State Machine', () => {
     const db = getDb();
     // R124: inner has ambiguous foo, index has inner(ambiguous) + e(resolved)
     // Overall: ambiguous → no exact edge, no name-based fallback
-    const edges = getEdges(db, 'foo');
-    const exactEdges = edges.filter((_: any) => { const p = JSON.parse(_.properties_json); return p.resolution === 'cross_file_import_exact'; });
-    expect(exactEdges.length).toBe(0);
+    // R125B: nested ambiguity → 0 TOTAL edges
+    expect(getEdges(db, 'foo').length).toBe(0);
     db.close();
   });
 

@@ -48,7 +48,7 @@ describe('R122: export * Star Re-exports', () => {
     const db = getDb();
     // Both should resolve through the star re-export chain (with cycle detection)
     const eA = getEdges(db, 'fooA'); expect(eA.length).toBeGreaterThanOrEqual(1); expect(eA.some((_: any) => _.target_qn.includes('a.ts'))).toBe(true);
-    const eB = getEdges(db, 'fooB'); expect(eB.length).toBeGreaterThanOrEqual(0);
+    const eB = getEdges(db, 'fooB'); expect(eB.length).toBeGreaterThanOrEqual(1); expect(eB.some((_: any) => _.target_qn.includes('b.ts'))).toBe(true);
     db.close();
   });
 
@@ -61,10 +61,8 @@ describe('R122: export * Star Re-exports', () => {
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r.errors.length).toBe(0);
     const db = getDb(); const e = getEdges(db, 'foo');
-    // R125A: Star conflict (both export foo) → no EXACT edges (R124 semantics)
-    // Name-based fallback may still create ambiguous edges if import-aware doesn't fire
-    const exactEdges = e.filter((_: any) => { const p = JSON.parse(_.properties_json); return p.resolution === 'cross_file_import_exact'; });
-    expect(exactEdges.length).toBe(0);
+    // R125B: Star conflict (both export foo) → 0 TOTAL edges (ESM SyntaxError)
+    expect(e.length).toBe(0);
     db.close();
   });
 
