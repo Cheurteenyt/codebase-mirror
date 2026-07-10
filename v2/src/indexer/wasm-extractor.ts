@@ -585,11 +585,10 @@ export function discoverSourceFilesStructured(
             // there's nothing to delete — blocking would prevent the project
             // from ever being indexed. The first full creates the initial
             // graph; subsequent runs with broken symlinks protect it.
-            recordWarning('ENOENT', fullPath);
-            // R151: globalDeletionUncertainty is set by the indexer (not
-            // discovery) based on whether the project already has nodes.
-            // Discovery just records the warning + path. The indexer will
-            // decide based on `existingInitialized`.
+            // R152 (SEC-R152-01): Use root-relative path for privacy and portability.
+            recordWarning('ENOENT', relative(realRoot, fullPath));
+            // R152: globalDeletionUncertainty is no longer set by discovery
+            // for broken symlinks. See indexer.ts R152 comment for rationale.
             continue;
           }
           if (code === 'ELOOP') {
@@ -597,7 +596,8 @@ export function discoverSourceFilesStructured(
             // A symlink loop is a configuration error, not a transient
             // I/O issue. Skip (discovery remains complete).
             // R145 (DISC-R145-01): track as warning so it's visible.
-            recordWarning('ELOOP');
+            // R152 (OBS-R152-02): include path for diagnostics.
+            recordWarning('ELOOP', relative(realRoot, fullPath));
             continue;
           }
           // R144 (DISC-R144-01): EACCES, EIO, ENOMEM, EMFILE — FATAL.

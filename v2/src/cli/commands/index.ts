@@ -106,6 +106,18 @@ export function registerIndexCommand(program: Command): void {
           }
         }
 
+        // R152 (OBS-R152-01): Show discovery warnings even on success.
+        // R151's first-full with broken symlinks printed "success" without
+        // mentioning the broken links. Now warnings are always visible.
+        if (!opts.dryRun && result.warnings && result.warnings.total > 0) {
+          console.log();
+          console.log(`⚠ ${result.warnings.total} discovery warning(s):`);
+          for (const [code, count] of Object.entries(result.warnings.countsByCode)) {
+            const samplePaths = result.warnings.samples.filter(s => s.code === code).slice(0, 5).map(s => s.path);
+            console.log(`  ${code} (${count}): ${samplePaths.join(', ')}${count > 5 ? ` (and ${count - 5} more)` : ''}`);
+          }
+        }
+
         // R82: Bug 22 fix — exit non-zero if ANY extraction errors, unless --allow-partial.
         // R147 (OUTCOME-R147-02): Also exit non-zero when stale without errors
         // (semantics mismatch, partial discovery). A stale graph is NOT fresh —

@@ -39,24 +39,24 @@ describe('R151: Broken Symlink Liveness', () => {
     expect(r.nodes).toBeGreaterThan(0);
   });
 
-  it('AVAIL-R151-01b: second full with broken symlink blocks (existing graph)', async () => {
+  it('AVAIL-R151-01b: second full with broken symlink succeeds (R152 idempotence)', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     // Now add a broken symlink and run another full.
     symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
-    // R151: Second full WITH existing graph blocks (protects old graph).
-    expect(r.errors.length).toBeGreaterThan(0);
-    expect(r.crossFileCallsStale).toBe(true);
+    // R152: Second full WITH existing graph also succeeds (idempotence).
+    expect(r.errors.length).toBe(0);
+    expect(r.crossFileCallsStale).toBe(false);
   });
 
   // ── OBS-R151-01: Warning samples with paths ───────────────────────────
 
-  it('OBS-R151-01a: broken symlink warning includes path (code inspection)', () => {
+  it('OBS-R151-01a: broken symlink warning includes relative path (R152)', () => {
     const source = require('node:fs').readFileSync(
       join(__dirname, '..', '..', 'src', 'indexer', 'wasm-extractor.ts'), 'utf-8'
     );
-    expect(source).toContain("recordWarning('ENOENT', fullPath)");
+    expect(source).toContain("recordWarning('ENOENT', relative(realRoot, fullPath))");
     expect(source).toContain('warningSamples');
   });
 

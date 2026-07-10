@@ -42,12 +42,12 @@ describe('R150: Directory-Target Lock', () => {
 
   // ── DATA-R150-02: broken symlink → globalDeletionUncertainty ──────────
 
-  it('DATA-R150-02a: broken symlink records warning with path (R151 code inspection)', () => {
+  it('DATA-R150-02a: broken symlink records warning with relative path (R152)', () => {
     const source = require('node:fs').readFileSync(
       join(__dirname, '..', '..', 'src', 'indexer', 'wasm-extractor.ts'), 'utf-8'
     );
-    // R151: recordWarning now accepts path parameter.
-    expect(source).toContain("recordWarning('ENOENT', fullPath)");
+    // R152: recordWarning uses relative path, not absolute.
+    expect(source).toContain("recordWarning('ENOENT', relative(realRoot, fullPath))");
   });
 
   it('DATA-R150-02b: broken symlink on first full does NOT block (R151)', async () => {
@@ -58,13 +58,13 @@ describe('R150: Directory-Target Lock', () => {
     expect(r.errors.length).toBe(0);
   });
 
-  it('DATA-R150-02c: broken symlink forces stale in incremental with existing graph (R151)', async () => {
+  it('DATA-R150-02c: broken symlink in incremental does NOT force stale (R152)', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
-    // R151: Incremental with existing graph + broken symlink → stale.
+    // R152: broken symlinks are warnings, not blockers. Incremental succeeds.
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: true, useWasm: true, workers: 0 });
-    expect(r.crossFileCallsStale).toBe(true);
+    expect(r.errors.length).toBe(0);
   });
 
   it('DATA-R150-02d: effectiveGlobalDeletionUncertainty blocks ALL deletions (code inspection)', () => {

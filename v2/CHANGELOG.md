@@ -1,5 +1,69 @@
 # Changelog — Codebase Memory V2
 
+## 0.57.3 — Round 152 (2026-07-11) Symlink Idempotence + Warning Propagation
+
+**77th round (GPT 5.6 Sol audit R151).** 2 P1 + 1 P1/P2 + 2 P2 fixed.
+Closes the 5 confirmed P1 code findings of the R151 audit.
+
+### Idempotence (2 P1)
+
+172. **P1 broken symlink permanent blocks all fulls after first**
+     (`indexer.ts`) — R151's first-index policy created non-idempotent
+     behavior: first full succeeded, second full blocked — same filesystem,
+     different outcomes. The root cause was that `globalDeletionUncertainty`
+     was set based on whether nodes existed, creating a state-dependent
+     policy. Fixed: broken symlinks (ENOENT on realpath) are ALWAYS
+     warnings, NEVER block. They don't produce `uncertainPaths` or
+     `globalDeletionUncertainty`. Without alias history, we cannot
+     distinguish permanently broken from temporarily broken — blocking
+     ALL fulls (R150) or only subsequent fulls (R151) both create
+     unacceptable trade-offs. The correct long-term fix is alias history
+     (future round), which will persist alias→canonical mappings and only
+     protect targets that were previously seen as valid. Until then,
+     broken symlinks are treated as permanently broken — the old data for
+     the symlink path is stale but the graph is not blocked.
+     (AVAIL-R152-01, CONSIST-R152-01)
+
+### Warning propagation (1 P1/P2)
+
+173. **P1/P2 first full silences broken symlink warnings**
+     (`indexer.ts`, `cli/commands/index.ts`) — R151's `DiscoveryResult`
+     had `warningSamples` but `IndexResult` had no `warnings` field. The
+     first full with broken symlinks printed "success" without mentioning
+     the broken links. Fixed: `IndexResult` now includes a `warnings`
+     field (`{ total, countsByCode, samples }`). The CLI prints warnings
+     even on success: "⚠ N discovery warning(s): ENOENT (1): broken.ts".
+     This makes broken symlinks visible from the first run.
+     (OBS-R152-01)
+
+### Privacy & diagnostics (2 P2)
+
+174. **P2 warning samples expose absolute paths** (`wasm-extractor.ts`)
+     — R151 stored `fullPath` (absolute) in warning samples. This
+     exposed home directories in logs, MCP, and UI. Fixed: warning
+     samples now use `relative(realRoot, fullPath)` — root-relative
+     canonical paths. Absolute paths are only in local debug logs.
+     (SEC-R152-01)
+
+175. **P2 ELOOP and other warnings without path samples**
+     (`wasm-extractor.ts`) — R151 only included paths for ENOENT (broken
+     symlink). ELOOP, ENOENT_LSTAT, ENOENT_STAT, ENOENT_IDENTITY had no
+     path samples. Fixed: ELOOP now includes `relative(realRoot, fullPath)`.
+     All warning events use the same structured type. (OBS-R152-02)
+
+### Tests (9 new, 5 updated)
+
+- **CONSIST-R152-01** (3 tests): first full succeeds, second full succeeds
+  (idempotence), incremental does NOT force stale.
+- **OBS-R152-01** (2 tests): IndexResult warnings field (code inspection),
+  first full returns warnings.
+- **SEC-R152-01** (1 test): warning samples use relative paths.
+- **Regression** (3 tests): semantics v8, hardlink extensions, extraction error.
+- **Updated**: 5 tests (R148/R150/R151) adjusted for R152 idempotence behavior
+  change (broken symlinks no longer block or force stale).
+
+### Total: 175 bugs + 11 optimizations + 394 indexer tests across 77 rounds
+
 ## 0.57.2 — Round 151 (2026-07-11) Broken Symlink Liveness Lock
 
 **76th round (GPT 5.6 Sol audit R150).** 1 P1 + 2 P1/P2 + 1 P1/P2 fixed.

@@ -136,6 +136,16 @@ export interface IndexResult {
   // R100: true when incremental mode changed files and cross-file CALLS
   // edges may be stale (not rebuilt). Consumers should recommend full reindex.
   crossFileCallsStale?: boolean;
+  /**
+   * R152 (OBS-R152-01): Discovery warnings propagated to the caller.
+   * Includes broken symlinks, ELOOP, ENOENT_LSTAT, etc.
+   * Lets the CLI/UI/MCP show warnings even when the index succeeded.
+   */
+  warnings?: {
+    total: number;
+    countsByCode: Record<string, number>;
+    samples: Array<{ path: string; code: string }>;
+  };
 }
 
 /**
@@ -370,6 +380,15 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     };
   }
 
+  // R152 (OBS-R152-01): Build warnings field from discovery for all return paths.
+  const discoveryWarnings = discovery.totalWarnings > 0
+    ? {
+        total: discovery.totalWarnings,
+        countsByCode: discovery.warningCountsByCode,
+        samples: discovery.warningSamples,
+      }
+    : undefined;
+
   // R142 (PATH-R142-01): use canonicalRoot (from assertDiscoveryRoot) for
   // all relative-path computation. This ensures file_path values never
   // contain `..` even when the configured root is a symlink.
@@ -388,42 +407,39 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // triggers the full lock — the symlink may have been valid at the previous
   // run, so the full could destroy old data for a target that's temporarily
   // absent.
-  // R151 (AVAIL-R151-01): Only set globalDeletionUncertainty from broken
-  // symlinks when the project already has an existing graph to protect.
-  // On a FIRST full index (no existing nodes), there's nothing to delete —
-  // blocking would prevent the project from ever being indexed. The first
-  // full creates the initial graph; subsequent runs with broken symlinks
-  // protect it. This restores availability without sacrificing safety.
-  // R151 (DATA-R151-01): If relTarget is empty (''), the root itself is
-  // uncertain. Set globalDeletionUncertainty — an empty prefix doesn't
-  // protect descendants in the subtree filter.
-  const hasBrokenSymlinks = discovery.warningCountsByCode['ENOENT'] !== undefined;
-  const projectHasExistingGraph = opts.incremental
-    ? (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c > 0
-    : false; // full mode: we haven't cleared yet, so check before clear
-  // For full mode, check if there are existing nodes BEFORE clear.
-  const fullModeHasExistingGraph = !opts.incremental
-    ? (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c > 0
-    : false;
-  const shouldSetGlobalUncertainty = hasBrokenSymlinks && (opts.incremental ? projectHasExistingGraph : fullModeHasExistingGraph);
-  // Also check for empty relTarget in uncertainSubtrees (DATA-R151-01)
+  // R152 (AVAIL-R152-01 + CONSIST-R152-01): Broken symlink idempotence.
+  // R151 introduced non-idempotent behavior: first full (no existing graph)
+  // succeeded but second full (with existing graph) blocked — same filesystem,
+  // different outcomes. The root cause was that R150's globalDeletionUncertainty
+  // was applied only when nodes existed, creating a state-dependent policy.
+  //
+  // R152 fix: broken symlinks (ENOENT on realpath) are ALWAYS warnings, NEVER
+  // block. They don't produce uncertainPaths or globalDeletionUncertainty.
+  // The rationale: without alias history, we cannot distinguish permanently
+  // broken from temporarily broken. Blocking ALL fulls permanently (R150) or
+  // blocking only subsequent fulls (R151) both create unacceptable trade-offs.
+  //
+  // The correct long-term fix is alias history (R152B in the roadmap), which
+  // will persist alias→canonical mappings and only protect targets that were
+  // previously seen as valid. Until then, broken symlinks are treated as
+  // permanently broken — the old data for the symlink path (if any) is stale
+  // but not deleted (the path just doesn't appear in currentRelPaths, so it
+  // would be deleted in incremental; but the incremental stale flag ensures
+  // the graph is marked stale, not fresh).
+  //
+  // The only remaining sources of `hasUncertainty` are:
+  //   - uncertainPaths (ENOENT_LSTAT, ENOENT_IDENTITY — TOCTOU races on files
+  //     that were confirmed to exist by readdir)
+  //   - uncertainSubtrees (ENOENT_REALPATH_DIR — TOCTOU races on directories)
+  //   - empty relTarget (DATA-R151-01 — root-level uncertainty)
+  // These are all genuine TOCTOU races (the entry was seen by readdir but
+  // disappeared before lstat/realpath/stat), not broken symlinks.
   const hasEmptyRelTarget = discovery.uncertainSubtrees.some(s => s === '');
-  const effectiveGlobalDeletionUncertainty = shouldSetGlobalUncertainty || hasEmptyRelTarget;
+  const effectiveGlobalDeletionUncertainty = hasEmptyRelTarget;
   const hasUncertainty = discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0 || effectiveGlobalDeletionUncertainty;
   if (!opts.incremental && hasUncertainty) {
     db.close();
-    // R151 (OBS-R151-02): Include warning samples in the message so the
-    // user knows which symlinks to fix. R150 showed "0 path(s)" when only
-    // globalDeletionUncertainty was set — now we include the broken symlink
-    // paths from warningSamples.
-    const brokenSymlinkPaths = discovery.warningSamples
-      .filter(w => w.code === 'ENOENT')
-      .slice(0, 10)
-      .map(w => w.path);
-    const brokenMsg = brokenSymlinkPaths.length > 0
-      ? `. Broken symlinks: ${brokenSymlinkPaths.join(', ')}${discovery.warningCountsByCode['ENOENT'] > 10 ? ` (and ${discovery.warningCountsByCode['ENOENT'] - 10} more)` : ''}`
-      : '';
-    const uncertainMsg = `Discovery uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent${effectiveGlobalDeletionUncertainty ? `, global deletion uncertainty (broken symlinks${brokenMsg})` : ''}. Full index aborted to preserve existing graph. Fix broken symlinks or retry when filesystem is stable.`;
+    const uncertainMsg = `Discovery uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Full index aborted to preserve existing graph. Retry when filesystem is stable.`;
     markProjectStalePreservingGraph(dbPath, opts.project, uncertainMsg);
     return {
       dbPath,
@@ -632,6 +648,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       parallel: false,
       workerCount: 0,
       crossFileCallsStale: noOpStale,
+      warnings: discoveryWarnings,
     };
   }
 
@@ -746,6 +763,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       parallel: false,
       workerCount: 0,
       crossFileCallsStale: crossFileStale,
+      warnings: discoveryWarnings,
     };
   }
 
@@ -903,6 +921,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     parallel: useParallel,
     workerCount: useParallel ? numWorkers : 0,
     crossFileCallsStale: crossFileStale,
+    warnings: discoveryWarnings,
   };
 }
 
