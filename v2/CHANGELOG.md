@@ -1,5 +1,36 @@
 # Changelog — Codebase Memory V2
 
+## 0.54.0 — Round 124 (2026-07-10) Resolution State Machine
+
+**48th round (GPT 5.6 Sol audit).** Major refactor: resolution state machine
+for `resolveExportedSymbol()`. Replaces `string | undefined` return with
+`ResolutionResult` type: `resolved | missing | ambiguous | unknown`. This
+fixes 5 precision bugs identified by GPT 5.6.
+
+### Bugs fixed (5)
+
+52. **Star conflict falls back to name-based** (`cross-file-resolver.ts`) — When `resolveExportedSymbol` returned `undefined` for ambiguous star exports, the resolver fell through to name-based fallback, creating false CALLS edges for code that ESM would refuse to load. Fixed: `ambiguous` result now triggers `continue`, skipping name-based fallback entirely.
+
+53. **`export function/class/const` not registered as explicit exports** (`fast-walker.ts`) — Direct export declarations (`export function foo()`) were only in `fileSymbolIndex`, not in the `exports` table. Star exports could incorrectly win over local exports. Fixed: `extractExports()` now extracts direct export declarations as `local_named` bindings.
+
+54. **Private symbols exposed via fallback** (`cross-file-resolver.ts`) — When no export binding existed for a file, the resolver fell back to `fileSyms.get()`, treating any local function as exported. Fixed: `resolveExportedSymbol()` returns `{ kind: 'unknown' }` for files without export tracking, and `{ kind: 'missing' }` for files WITH tracking but no matching export. Callers handle `unknown` (legacy fallback) vs `missing` (no fallback) differently.
+
+55. **Nested ambiguity not propagated** (`cross-file-resolver.ts`) — When a star re-export chain had an ambiguous branch, `undefined` was treated as "missing" by the parent, potentially resolving to a different branch as exact. Fixed: `ambiguous` is a distinct state that propagates through star chains. If any branch is ambiguous and no explicit export wins, the overall result is ambiguous.
+
+56. **Order-dependent resolution via shared visited set** (`cross-file-resolver.ts`) — The `visited` Set was shared across all star branches, causing order-dependent results. Fixed: each star branch gets a `new Set(visited)` copy, so branches are independent.
+
+### Tests (5)
+
+`v2/tests/indexer/r124-resolution-state.test.ts`
+
+1. **Star conflict → ZERO exact edges** (no name-based fallback)
+2. **Direct export wins over star** (`export function foo()` + `export * from './b'`)
+3. **Private symbol not resolved** (`import { hidden }` where hidden is not exported)
+4. **Nested ambiguity propagates** (inner has conflict, index has star from inner + e)
+5. **Multiple stars order-independent** (both foo and bar resolve regardless of order)
+
+### Total: 42 bugs + 11 optimizations + 154 indexer tests across 48 rounds
+
 ## 0.53.1 — Round 123 (2026-07-10) Star Export Precision Lock
 
 **47th round (GPT 5.6 audit R123).** 2 bugs fixed. GPT 5.6 found that R122's

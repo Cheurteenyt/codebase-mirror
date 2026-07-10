@@ -384,18 +384,31 @@ export function rebuildCrossFileCallsEdges(
     }
   }
 
-  // R119: Resolve an exported name to a target QN, following re-exports.
-  function resolveExportedSymbol(filePath: string, exportedName: string, depth: number, visited: Set<string>): string | undefined {
-    if (depth > 10) return undefined; // depth cap
+  // R124: Resolution result type — distinguishes resolved/missing/ambiguous/unknown
+  type ResolutionResult =
+    | { kind: 'resolved'; qn: string }
+    | { kind: 'missing' }
+    | { kind: 'ambiguous' }
+    | { kind: 'unknown' };
+
+  // R124: Resolve an exported name to a target QN, following re-exports.
+  // Returns a structured result so callers can distinguish:
+  // - resolved: exactly one target found
+  // - missing: no export binding and no symbol found
+  // - ambiguous: multiple distinct targets (ESM SyntaxError)
+  // - unknown: no export tracking for this file (legacy DB or no exports)
+  function resolveExportedSymbol(filePath: string, exportedName: string, depth: number, visited: Set<string>): ResolutionResult {
+    if (depth > 10) return { kind: 'missing' }; // depth cap
     const key = `${filePath}::${exportedName}`;
-    if (visited.has(key)) return undefined; // cycle
+    if (visited.has(key)) return { kind: 'missing' }; // cycle — treat as missing
     visited.add(key);
 
     const fileExp = exportsByFile.get(filePath);
     if (!fileExp) {
-      // No exports tracked — fall back to direct symbol lookup
-      const fileSyms = fileSymbolIndex.get(filePath);
-      return fileSyms?.get(exportedName);
+      // R124: No exports tracked — return unknown (not missing).
+      // This means we don't know if the symbol is exported or not.
+      // The caller should NOT fall back to fileSyms for private symbols.
+      return { kind: 'unknown' };
     }
 
     // R123: Check named exports first (explicit exports win over star)
@@ -403,42 +416,54 @@ export function rebuildCrossFileCallsEdges(
     if (expBinding) {
       if (expBinding.exportKind === 'local_named' || expBinding.exportKind === 'local_alias') {
         const fileSyms = fileSymbolIndex.get(filePath);
-        return fileSyms?.get(expBinding.localName || exportedName);
+        const qn = fileSyms?.get(expBinding.localName || exportedName);
+        return qn ? { kind: 'resolved', qn } : { kind: 'missing' };
       }
       if (expBinding.exportKind === 're_export_named' || expBinding.exportKind === 're_export_alias') {
-        if (!expBinding.sourceModule) return undefined;
+        if (!expBinding.sourceModule) return { kind: 'missing' };
         const resolvedFile = resolveModulePath(expBinding.sourceModule, filePath, knownFiles);
-        if (!resolvedFile) return undefined;
-        return resolveExportedSymbol(resolvedFile, expBinding.importedName || exportedName, depth + 1, visited);
+        if (!resolvedFile) return { kind: 'missing' };
+        return resolveExportedSymbol(resolvedFile, expBinding.importedName || exportedName, depth + 1, new Set(visited));
       }
     }
 
-    // R123: No named export found — check ALL star re-exports
-    // Collect all distinct targets from star re-exports
+    // R123/R124: No named export found — check ALL star re-exports
+    // R124: Use a per-branch visited set (copy) to avoid order-dependent results
     const starTargets = new Set<string>();
+    let hasAmbiguous = false;
     for (const starExp of fileExp.stars) {
       const starResolvedFile = resolveModulePath(starExp.sourceModule, filePath, knownFiles);
       if (starResolvedFile) {
-        const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, visited);
-        if (result) starTargets.add(result);
+        const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, new Set(visited));
+        if (result.kind === 'resolved') {
+          starTargets.add(result.qn);
+        } else if (result.kind === 'ambiguous') {
+          // R124: Propagate ambiguous — don't treat as missing
+          hasAmbiguous = true;
+        }
+        // 'missing' and 'unknown' don't add targets
       }
     }
 
+    if (hasAmbiguous && starTargets.size === 0) {
+      // R124: All branches were ambiguous or missing — ambiguous wins
+      return { kind: 'ambiguous' };
+    }
+    if (hasAmbiguous && starTargets.size > 0) {
+      // R124: At least one resolved + at least one ambiguous → overall ambiguous
+      return { kind: 'ambiguous' };
+    }
     if (starTargets.size === 1) {
-      // Exactly one target — exact resolution
-      return starTargets.values().next().value;
+      return { kind: 'resolved', qn: starTargets.values().next().value! };
     }
     if (starTargets.size > 1) {
-      // R123: Multiple distinct targets — ambiguous conflict
-      // In ESM, this is a SyntaxError. We return undefined to avoid
-      // creating a false exact edge. The name-based fallback will
-      // handle it with ambiguous resolution if applicable.
-      return undefined;
+      return { kind: 'ambiguous' };
     }
 
-    // No export binding found — fall back to direct symbol lookup
-    const fileSyms = fileSymbolIndex.get(filePath);
-    return fileSyms?.get(exportedName);
+    // R124: No export binding found, no star targets.
+    // Return 'missing' (not 'unknown') because we DO have export tracking
+    // for this file — the symbol is just not exported.
+    return { kind: 'missing' };
   }
 
   // 4. Resolve each call_site to candidates and insert CALLS edges.
@@ -473,7 +498,12 @@ export function rebuildCrossFileCallsEdges(
               const fileSyms = fileSymbolIndex.get(resolvedFile);
               if (fileSyms) {
                 // Look up the last segment (method name) in the source file
-                const targetQn = resolveExportedSymbol(resolvedFile, cs.last_segment, 0, new Set());
+                const nsResult = resolveExportedSymbol(resolvedFile, cs.last_segment, 0, new Set());
+                const targetQn = nsResult.kind === 'resolved' ? nsResult.qn : undefined;
+                if (nsResult.kind === 'ambiguous' || nsResult.kind === 'missing') {
+                  // R124: namespace call to ambiguous/missing export — no edge
+                  continue;
+                }
                 if (targetQn && targetQn !== cs.source_qn) {
                   const sourceId = qnToId.get(cs.source_qn);
                   const targetId = qnToId.get(targetQn);
@@ -547,22 +577,32 @@ export function rebuildCrossFileCallsEdges(
                 } else {
                   // Fallback: try the local name (old R110 behavior — works when
                   // the default export name matches the local import name)
-                  targetQn = resolveExportedSymbol(resolvedFile, cs.callee, 0, new Set());
-                  if (targetQn) {
+                  const defaultResult = resolveExportedSymbol(resolvedFile, cs.callee, 0, new Set());
+                  if (defaultResult.kind === 'resolved') {
+                    targetQn = defaultResult.qn;
                     resolution = 'cross_file_import_exact';
                     confidence = 1.0;
+                  } else if (defaultResult.kind === 'ambiguous' || defaultResult.kind === 'missing') {
+                    continue; // R124: no fallback for invalid explicit import
                   }
                 }
               } else {
                 // Named or alias import: import { foo } or import { foo as bar }
                 // Look up the imported name (original name in source module)
-                targetQn = resolveExportedSymbol(resolvedFile, impBinding.importedName, 0, new Set());
-                if (targetQn) {
+                const namedResult = resolveExportedSymbol(resolvedFile, impBinding.importedName, 0, new Set());
+                if (namedResult.kind === 'resolved') {
+                  targetQn = namedResult.qn;
                   resolution = impBinding.importKind === 'alias'
                     ? 'cross_file_import_alias'
                     : 'cross_file_import_exact';
                   confidence = 1.0;
+                } else if (namedResult.kind === 'ambiguous' || namedResult.kind === 'missing') {
+                  // R124: Import is explicit but export is ambiguous/missing.
+                  // Do NOT fall back to name-based resolution — the import is invalid.
+                  // Skip this call_site entirely.
+                  continue;
                 }
+                // 'unknown' — fall through to name-based fallback (legacy DB)
               }
 
               if (targetQn && resolution) {
