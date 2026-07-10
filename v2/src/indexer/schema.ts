@@ -38,14 +38,21 @@ import type Database from 'better-sqlite3';
  *        The extractor now counts all `export default` statements (not just
  *        the first resolvable one), enabling detection of two direct defaults
  *        (IDX-R132-06) and identifier-reference default + binding default
- *        collision (IDX-R132-07). DBs indexed by R131–R132 have markers
- *        without the count field, so they must be re-parsed.
+ *        collision (IDX-R132-07). DBs indexed by R131 and earlier have
+ *        markers without the count field, so they must be re-parsed.
+ *   - 4: R133 — Type/Value Default Lock. The extractor now distinguishes
+ *        runtime defaults (function, class, identifier) from type-only
+ *        defaults (interface, type alias). `export default interface Shape {}`
+ *        is type-only and does NOT count toward the runtime default count,
+ *        so it can coexist with `export default function make() {}` (valid
+ *        TypeScript). DBs indexed by R132 have inflated counts that include
+ *        type-only defaults, so they must be re-parsed.
  *
  * When bumping this constant, also add a migration test that simulates an
  * upgrade from the previous version (delete the relevant rows, keep
  * file_hashes, run incremental, assert crossFileCallsStale=true).
  */
-export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 3;
+export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 4;
 
 /**
  * Tables created by the native indexer. Matches V1's schema so that
@@ -106,6 +113,7 @@ const SCHEMA_SQL = `
     --   1 = R126+ (star detection + terminal unknown/unresolved)
     --   2 = R131+ (module validity lock, no export dedup)
     --   3 = R132+ (external star fix, default occurrence count)
+    --   4 = R133+ (type/value default lock, interface excluded from runtime count)
     extractor_semantics_version INTEGER DEFAULT 0
   );
 

@@ -362,18 +362,30 @@ export function extractFast(
   return { nodes, edges, astNodeCount: 0, unresolvedCalls, imports, defaultExportQn, defaultExportCount, exports };
 }
 
+// R133: Type-only default export node types. These are TypeScript constructs
+// that exist only at compile time and do NOT create a runtime default export.
+// `export default interface Shape {}` is type-only — TypeScript allows it
+// alongside `export default function make() {}` without a SyntaxError.
+// Counting these as runtime defaults (R132's bug) causes false
+// invalid_duplicate_export on valid TypeScript.
+const TYPE_ONLY_DEFAULT_TYPES = [
+  'interface_declaration', 'type_alias_declaration',
+];
+
 /**
- * R111/R132: Extract the default export QN and count all `export default` occurrences.
+ * R111/R132/R133: Extract the default export QN and count all RUNTIME
+ * `export default` occurrences.
  *
  * Returns `{ qn, count }`:
- *   - qn: QN of the FIRST resolvable default (function/class), or null
- *     (identifier reference or no default)
- *   - count: total number of `export default` statements (for collision detection)
+ *   - qn: QN of the FIRST resolvable runtime default (function/class), or null
+ *   - count: total number of RUNTIME `export default` statements (for collision detection)
  *
- * R132: IDX-R132-06 — count > 1 means duplicate defaults (ESM SyntaxError).
- * R132: IDX-R132-07 — count > 0 with qn=null means identifier reference;
- *   the resolver still knows a direct default exists for collision detection
- *   with `export { foo as default }`.
+ * R132: count ALL `export default` statements (IDX-R132-06/07).
+ * R133: IDX-R133-02/03/04 — do NOT count type-only defaults (interface, type
+ * alias). TypeScript allows `export default interface Shape {}` alongside
+ * `export default function make() {}` — they coexist in separate type/value
+ * namespaces. Only runtime defaults (function, class [not interface],
+ * identifier reference) are counted.
  */
 function extractDefaultExport(
   rootNode: TSNode,
@@ -393,7 +405,21 @@ function extractDefaultExport(
     }
     if (!isDefault) continue;
 
-    // R132: count ALL `export default` statements.
+    // R133: IDX-R133-02/03/04 — check if this is a type-only default.
+    // `export default interface Shape {}` has an `interface_declaration` child.
+    // `export default type Foo = ...` has a `type_alias_declaration` child.
+    // These are type-only — do NOT count them as runtime defaults.
+    let isTypeOnly = false;
+    for (let i = 0; i < exp.childCount; i++) {
+      const child = exp.child(i);
+      if (child && TYPE_ONLY_DEFAULT_TYPES.includes(child.type)) {
+        isTypeOnly = true;
+        break;
+      }
+    }
+    if (isTypeOnly) continue;
+
+    // R132: count ALL RUNTIME `export default` statements.
     count++;
 
     if (qnFound) continue; // already have a QN from an earlier default
@@ -403,7 +429,11 @@ function extractDefaultExport(
       if (!child) continue;
       const childType = child.type;
 
-      if (FUNCTION_TYPES.includes(childType) || CLASS_TYPES.includes(childType) || METHOD_TYPES.includes(childType)) {
+      // R133: exclude interface_declaration from CLASS_TYPES check for defaults.
+      // CLASS_TYPES includes interface_declaration for node extraction, but
+      // for default export resolution, interfaces are type-only.
+      if ((FUNCTION_TYPES.includes(childType) || METHOD_TYPES.includes(childType)) ||
+          (CLASS_TYPES.includes(childType) && !TYPE_ONLY_DEFAULT_TYPES.includes(childType))) {
         const resolvedQn = qnByNode.get(child.id);
         qn = resolvedQn ?? fileQn;
         qnFound = true;
@@ -411,8 +441,6 @@ function extractDefaultExport(
       }
 
       // export default foo; — identifier reference
-      // R132: can't resolve, but count is already incremented. qn stays null
-      // but qnFound is NOT set, so a later function/class default can still set it.
       if (childType === 'identifier') {
         break;
       }
