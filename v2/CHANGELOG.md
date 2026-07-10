@@ -1,5 +1,67 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.7 — Round 146 (2026-07-11) Index Outcome Lock
+
+**71st round (GPT 5.6 Sol audit R145).** 1 P1 + 1 P1/P2 + 1 P1/P2 fixed.
+Closes the 3 confirmed P1 code findings of the R145 audit.
+
+### Index outcome contract (1 P1)
+
+147. **P1 incremental extraction errors published as fresh** (`indexer.ts`)
+     — In incremental mode, `crossFileStale` was `false` when
+     `result.crossFileCallsResolved === true`, even if
+     `result.errors.length > 0`. The resolver can rebuild edges from OLD
+     call_sites even when extraction of a changed file failed (the old
+     nodes are preserved). This meant `crossFileStale=false` +
+     `indexError=null` → `last_successful_index_at=now` → the graph
+     appeared FRESH despite extraction errors. The CLI exited non-zero,
+     but the UI/MCP saw a fresh graph. Fixed: `result.errors.length > 0`
+     now forces `crossFileStale=true` in BOTH full and incremental modes.
+     The `indexError` is also set for incremental extraction errors, so
+     `last_successful_index_at` is NOT updated and `last_index_error`
+     records the failure. (STATE-R146-01)
+
+### Legacy timestamp backfill (1 P1/P2)
+
+148. **P1/P2 last_successful_index_at not backfilled on migration**
+     (`schema.ts`) — The R144 migration added `last_successful_index_at`
+     as NULL but didn't copy `indexed_at` into it. After upgrading from
+     R143, a root failure (which only sets `last_index_attempt_at`) left
+     `last_successful_index_at=NULL` → Graph Status fell back to
+     `dbMtime` (which was the failure time) → false "last_indexed: now".
+     Fixed: the migration now backfills `last_successful_index_at` from
+     `indexed_at` for all existing rows:
+     `UPDATE projects SET last_successful_index_at = indexed_at WHERE
+     last_successful_index_at IS NULL AND indexed_at IS NOT NULL`.
+     (STATE-R146-02)
+
+### Discovery race classification (1 P1/P2)
+
+149. **P1/P2 lstat ENOENT + regular realpath ENOENT fatal**
+     (`wasm-extractor.ts`) — R145 treated ALL `lstatSync` errors as
+     fatal (`recordError` → discovery incomplete). A file that disappears
+     between `readdirSync` and `lstatSync` (TOCTOU race) is common in
+     build directories, codegen, and package managers. ENOENT should be
+     a warning (skip), not fatal. Same issue for regular-directory
+     `realpathSync` ENOENT. Fixed: both catches now classify by code:
+     ENOENT → warning (`recordWarning`), EACCES/EIO → fatal
+     (`recordError`). New warning codes: `ENOENT_LSTAT`,
+     `ENOENT_REALPATH_DIR`. (DISC-R146-01)
+
+### Tests (8 new)
+
+- **STATE-R146-01** (2 tests): incremental with extraction error →
+  stale=true + last_success unchanged (causal via CBM_TEST_FAIL_ON_FILE),
+  incremental without errors → stale=false + last_success updated.
+- **STATE-R146-02** (1 test): migration backfills last_successful from
+  indexed_at.
+- **DISC-R146-01** (2 tests): broken symlink warning + complete,
+  subdir EACCES still fatal.
+- **Regression** (3 tests): dry-run no DB write, semantics v8,
+  hardlink extensions.
+
+### Total: 149 bugs + 11 optimizations + 343 indexer tests across 71 rounds
+
 ## 0.56.6 — Round 145 (2026-07-11) Legacy Schema + WAL Coherence
 
 **70th round (GPT 5.6 Sol audit R144).** 5 P1 + 3 P1/P2 + 4 P2 fixed.

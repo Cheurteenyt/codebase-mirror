@@ -471,7 +471,18 @@ export function discoverSourceFilesStructured(
       try {
         lst = lstatSync(fullPath);
       } catch (error) {
-        // R142 (DATA-R142-02): record and skip.
+        // R146 (DISC-R146-01): Classify lstat errors by code.
+        // R145 treated ALL lstat errors as fatal (recordError → incomplete).
+        // A file that disappears between readdirSync and lstatSync (TOCTOU
+        // race) is common in build directories, codegen, package managers.
+        // ENOENT should be a warning (skip), not fatal.
+        const code = (error as { code?: string }).code ?? 'unknown';
+        if (code === 'ENOENT') {
+          // Entry disappeared between readdir and lstat — warning, skip.
+          recordWarning('ENOENT_LSTAT');
+          continue;
+        }
+        // EACCES, EIO, etc. — fatal.
         recordError(fullPath, error);
         continue;
       }
@@ -619,7 +630,17 @@ export function discoverSourceFilesStructured(
         try {
           realDir = realpathSync(fullPath);
         } catch (error) {
-          // R142 (DATA-R142-02): record the error (was: silent skip).
+          // R146 (DISC-R146-01): Classify regular-directory realpath errors.
+          // R145 treated ALL realpath errors as fatal. A directory that
+          // disappears between lstat and realpath (TOCTOU race) should be
+          // a warning, not fatal. ENOENT → warning (skip). EACCES/EIO → fatal.
+          const code = (error as { code?: string }).code ?? 'unknown';
+          if (code === 'ENOENT') {
+            // Directory disappeared between lstat and realpath — warning, skip.
+            recordWarning('ENOENT_REALPATH_DIR');
+            continue;
+          }
+          // EACCES, EIO, ELOOP, etc. — fatal.
           recordError(fullPath, error);
           continue;
         }

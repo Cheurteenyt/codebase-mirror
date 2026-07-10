@@ -726,9 +726,18 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // was skipped (MIG-R127-03), so result.crossFileCallsResolved=false, which
   // correctly makes crossFileStale=true. No separate version read needed here.
   // R127: DATA-R127-01 — full mode only certifies CURRENT if no errors.
+  // R146 (STATE-R146-01): Extraction errors MUST force stale=true regardless
+  // of whether the resolver succeeded. R145's logic only set stale when
+  // `crossFileCallsResolved=false`, but the resolver can rebuild edges from
+  // OLD call_sites even when extraction of a changed file failed (the old
+  // nodes are preserved). This meant `crossFileStale=false` + `indexError=null`
+  // → `last_successful_index_at=now` → graph appeared fresh despite extraction
+  // errors. Now: `result.errors.length > 0` forces `crossFileStale=true`
+  // in BOTH full and incremental modes.
   const fullModeHadErrors = !opts.incremental && result.errors.length > 0;
+  const incrementalHadErrors = opts.incremental && result.errors.length > 0;
   const crossFileStale = opts.incremental
-    ? semanticsStale
+    ? semanticsStale || incrementalHadErrors
         ? true
         : (result.crossFileCallsResolved ?? false)
           ? false
@@ -747,19 +756,22 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     : (fullModeHadErrors ? 0 : CURRENT_EXTRACTOR_SEMANTICS_VERSION);
   // R145 (STATE-R145-03): Pass indexError when there were extraction errors
   // or when stale. R144 always passed null (success), which set
-  // last_successful_index_at=now even on partial/failed extraction. Now:
-  //   - full mode with errors → indexError = first error message
-  //   - incremental stale (semantics mismatch) → indexError = reason
-  //   - success → indexError = null (last_successful_index_at updated)
+  // last_successful_index_at=now even on partial/failed extraction.
+  // R146 (STATE-R146-01): incremental extraction errors ALSO set indexError.
+  // R145 only set it when `crossFileStale && (semanticsStale || ...)`, but
+  // crossFileStale is now always true when there are extraction errors.
+  // So: errors → indexError → last_successful NOT updated.
   let indexError: string | null = null;
   if (!opts.incremental && fullModeHadErrors) {
     indexError = result.errors.length > 0
       ? `Extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`
       : 'Full index completed with errors';
-  } else if (opts.incremental && crossFileStale && (semanticsStale || (result.files > 0 && result.errors.length > 0))) {
-    indexError = semanticsStale
-      ? `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`
-      : `Incremental index with errors (${result.errors.length})`;
+  } else if (opts.incremental && incrementalHadErrors) {
+    // R146: incremental extraction errors → set indexError so last_successful
+    // is NOT updated and last_error records the failure.
+    indexError = `Incremental extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`;
+  } else if (opts.incremental && crossFileStale && semanticsStale) {
+    indexError = `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`;
   }
   updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion, indexError);
   db.close();
