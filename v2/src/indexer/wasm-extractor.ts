@@ -162,16 +162,70 @@ function hasSkippedComponent(realRoot: string, realTarget: string): boolean {
 }
 
 /**
- * R141 (IDX-R141-01): Build a stable identity key for a regular file.
+ * R142 (DATA-R142-02): A structured discovery error. The walker collects
+ * these instead of silently swallowing them. The indexer uses the list to
+ * decide whether the discovery is "complete" (0 errors) or "partial"
+ * (>0 errors). A partial discovery in full mode must NOT clear the
+ * existing graph; in incremental mode it must NOT compute deletedRelPaths
+ * for the affected subtrees.
+ */
+export interface DiscoveryError {
+  /** Absolute path of the directory or file that triggered the error. */
+  path: string;
+  /** Node.js error code (EACCES, ELOOP, EIO, ENOMEM, etc.). */
+  code: string;
+  /** Human-readable message for diagnostics. */
+  message: string;
+}
+
+/**
+ * R142 (DATA-R142-02): Structured discovery result. Replaces the bare
+ * `string[]` return type of `discoverSourceFilesWasm` for callers that
+ * need to distinguish "valid empty project" from "errored partial
+ * discovery". The legacy `discoverSourceFilesWasm` still returns `string[]`
+ * for backward compatibility but delegates to the structured version.
+ */
+export interface DiscoveryResult {
+  /** Canonical realpath of the root (following any root symlinks). */
+  realRoot: string;
+  /** Discovered source files (canonical absolute paths, sorted). */
+  files: string[];
+  /** Errors encountered during traversal (readdir/lstat/realpath/stat failures). */
+  errors: DiscoveryError[];
+  /**
+   * `true` iff `errors.length === 0`. When false, the discovery is partial:
+   * some subtrees were inaccessible and `files` may be incomplete. The
+   * indexer must NOT treat missing files as deleted in this case.
+   */
+  complete: boolean;
+  /** Diagnostic counters. */
+  skippedExternalSymlinks: number;
+  skippedPolicyPaths: number;
+  duplicates: number;
+}
+
+/**
+ * R141/R142 (IDX-R141-01, ID-R142-01): Build a stable identity key for a
+ * regular file.
  *
  * `dev:ino` is the most robust identifier — it distinguishes two distinct
  * files even when they share a name, and identifies two paths pointing to
  * the same file (hardlinks, file symlinks). On most platforms this is
  * unique and stable across readdir order.
  *
- * Fallback: realpath canonical. Used when stat fails (extremely rare for a
- * file we just lstat'd successfully, but defensively covers exotic
- * filesystems like FUSE that may not expose dev/ino reliably).
+ * R142 (ID-R142-01): Some filesystems (network mounts, FUSE, certain
+ * Windows volumes) return `dev=0, ino=0` for ALL files. Using `0:0` as
+ * the identity key would collapse every file into one entry — only the
+ * first file encountered would be indexed. We now detect this case and
+ * fall back to `path:<realpath>` for files whose dev/ino are both zero.
+ * This is less robust (two paths to the same file get two entries) but
+ * avoids the catastrophic collision.
+ *
+ * Fallback chain:
+ *   1. stat → if dev/ino both non-zero → `inode:<dev>:<ino>`
+ *   2. stat → if dev/ino both zero → `path:<realpath>`
+ *   3. stat fails → `path:<realpath>` (exotic FUSE)
+ *   4. stat + realpath both fail → null (skip)
  *
  * Returns null only if both stat AND realpath fail — at which point the
  * caller skips the file (treat as inaccessible).
@@ -179,10 +233,24 @@ function hasSkippedComponent(realRoot: string, realTarget: string): boolean {
 function fileIdentityKey(fullPath: string): string | null {
   try {
     const st = statSync(fullPath, { bigint: true });
-    return `${st.dev}:${st.ino}`;
+    // R142 (ID-R142-01): detect untrustworthy dev:ino (both zero).
+    // Network filesystems and some FUSE mounts return 0:0 for all files.
+    // Using it as-is would collapse all files into one identity → only
+    // the first file encountered would be indexed.
+    if (st.dev === 0n && st.ino === 0n) {
+      // Fall back to realpath-based identity. Two distinct paths get two
+      // distinct keys — we lose hardlink dedup but avoid the collision.
+      try {
+        return `path:${realpathSync(fullPath)}`;
+      } catch {
+        // realpath failed too — use the lexical path as last resort.
+        return `path:${fullPath}`;
+      }
+    }
+    return `inode:${st.dev}:${st.ino}`;
   } catch {
     try {
-      return realpathSync(fullPath);
+      return `path:${realpathSync(fullPath)}`;
     } catch {
       return null;
     }
@@ -190,60 +258,86 @@ function fileIdentityKey(fullPath: string): string | null {
 }
 
 /**
- * Walk a directory and return all supported source files.
+ * R142 (DATA-R142-02): Walk a directory and return all supported source
+ * files PLUS a structured list of errors encountered during traversal.
  *
- * R141 (DATA-R141-01): If the root path is missing, not a directory, or
- * unreadable, this function THROWS (was: silently returned []). The
- * indexer must propagate the error so the caller can decide not to wipe
- * the existing graph. The preflight is also performed by
- * assertDiscoveryRoot() in safe-path.ts for callers that need to check
- * BEFORE opening the DB.
+ * This is the canonical implementation. The legacy `discoverSourceFilesWasm`
+ * (below) delegates to this and discards the errors — it exists only for
+ * backward compatibility with external callers.
  *
- * R141 (IDX-R141-01): File symlinks are deduplicated via a visitedFiles
- * Set keyed by `dev:ino` (with realpath fallback). Two aliases to the
- * same file produce exactly one result.
+ * R142 changes vs R141:
+ *   - Accepts an optional `canonicalRoot` (the realpath-resolved root from
+ *     `assertDiscoveryRoot`). When provided, skips the redundant
+ *     stat+realpath+readdir on the root (PERF-R142-01) and uses the
+ *     canonical root for all relative-path computation (PATH-R142-01).
+ *   - Collects readdir/lstat/realpath/stat errors into `errors[]` instead
+ *     of swallowing them (DATA-R142-02). The indexer uses `complete` to
+ *     decide whether to clear/publish (full mode) or compute deletedRelPaths
+ *     (incremental mode).
+ *   - `detectLanguage` is now called BEFORE `visitedFiles.add` (IDX-R142-01).
+ *     Previously a non-code hardlink (a.txt) seen first would mark the inode
+ *     visited, causing the code hardlink (z.ts, same inode) to be skipped.
+ *   - Special files (FIFO, socket, device) are now rejected via
+ *     `realStat.isFile()` (SEC-R142-01). Previously the `else` branch of
+ *     `isDirectory()` treated ALL non-dir types as file candidates, which
+ *     could cause `readFileSync` to block forever on a FIFO.
+ *   - `fileIdentityKey` detects `dev:ino = 0n` and falls back to
+ *     `path:<realpath>` (ID-R142-01).
  *
- * R141 (IDX-R141-02): The CANONICAL real path (relative to realRoot)
- * is the one pushed onto the stack and persisted — never the lexical
- * alias. This makes discovery deterministic across readdir order.
- *
- * R141 (PERF-R141-01): SKIP_DIRS is checked against every component of
- * the canonical target path, not just the basename. An alias to
- * `node_modules/pkg/src` is now correctly skipped.
- *
- * R141 (SEC-R141-02): Regular-directory realpath failures are
- * fail-CLOSED (skip the entry, do not push the lexical path). The
- * previous behavior was fail-open: realpath failure was swallowed and
- * the lexical `fullPath` was pushed anyway, allowing traversal past an
- * EACCES/ELOOP/EIO boundary.
+ * Throws if the root is missing, not a directory, or not readable
+ * (including readdir-EACCES — the R142 preflight). The caller should
+ * have already validated via `assertDiscoveryRoot` and passed the
+ * canonical root to avoid a redundant validation round.
  */
-export function discoverSourceFilesWasm(rootPath: string): string[] {
-  // R141 (DATA-R141-01): Validate root BEFORE any work. Throw with a
-  // descriptive error so callers can distinguish root failure from
-  // "valid root with 0 source files". The previous behavior (return [])
-  // silently produced an empty graph and was certified as fresh.
+export function discoverSourceFilesStructured(
+  rootPath: string,
+  canonicalRoot?: string,
+): DiscoveryResult {
+  // R142 (PERF-R142-01, PATH-R142-01): If the caller already validated the
+  // root via assertDiscoveryRoot and passed the canonical realpath, reuse
+  // it. This eliminates a redundant stat+realpath+readdir on the root.
   let realRoot: string;
-  let rootStat;
-  try {
-    rootStat = statSync(rootPath);
-  } catch (error) {
-    const code = (error as { code?: string }).code;
-    if (code === 'ENOENT') {
-      throw new Error(`Discovery root not found: "${rootPath}"`);
+  if (canonicalRoot !== undefined) {
+    realRoot = canonicalRoot;
+  } else {
+    // Legacy path: validate inline. This is the same logic as
+    // assertDiscoveryRoot but throws a generic Error (not DiscoveryRootError)
+    // for backward compatibility with external callers that don't use the
+    // structured API.
+    let rootStat;
+    try {
+      rootStat = statSync(rootPath);
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === 'ENOENT') {
+        throw new Error(`Discovery root not found: "${rootPath}"`);
+      }
+      throw new Error(`Discovery root not readable: "${rootPath}" (${code ?? 'unknown'})`);
     }
-    throw new Error(`Discovery root not readable: "${rootPath}" (${code ?? 'unknown'})`);
-  }
-  if (!rootStat.isDirectory()) {
-    throw new Error(`Discovery root is not a directory: "${rootPath}"`);
-  }
-  try {
-    realRoot = realpathSync(rootPath);
-  } catch (error) {
-    const code = (error as { code?: string }).code;
-    throw new Error(`Discovery root not readable: "${rootPath}" (${code ?? 'realpath failed'})`);
+    if (!rootStat.isDirectory()) {
+      throw new Error(`Discovery root is not a directory: "${rootPath}"`);
+    }
+    try {
+      realRoot = realpathSync(rootPath);
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      throw new Error(`Discovery root not readable: "${rootPath}" (${code ?? 'realpath failed'})`);
+    }
+    // R142 (DATA-R142-01): also verify readdir works on the root.
+    try {
+      readdirSync(realRoot);
+    } catch (error) {
+      const code = (error as { code?: string }).code ?? 'unknown';
+      throw new Error(`Discovery root not readable: "${rootPath}" (${code}: readdir failed)`);
+    }
   }
 
   const results: string[] = [];
+  const errors: DiscoveryError[] = [];
+  let skippedExternalSymlinks = 0;
+  let skippedPolicyPaths = 0;
+  let duplicates = 0;
+
   // R140: Track visited realpaths for ALL directories (regular + symlink)
   // to prevent duplicate indexing and cycles.
   const visitedDirs = new Set<string>([realRoot]);
@@ -255,15 +349,27 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
   // This makes discovery deterministic across readdir order.
   const stack: string[] = [realRoot];
 
+  /**
+   * R142 (DATA-R142-02): Record a discovery error. The error is pushed to
+   * `errors[]` so the indexer can detect partial discovery. The caller
+   * (indexer) uses `result.complete` to decide whether to clear/publish.
+   */
+  function recordError(path: string, error: unknown): void {
+    const code = (error as { code?: string }).code ?? 'unknown';
+    const message = (error as Error).message ?? String(error);
+    errors.push({ path, code, message });
+  }
+
   while (stack.length > 0) {
     const dir = stack.pop()!;
     let entries: string[];
     try {
       entries = readdirSync(dir);
-    } catch {
-      // R141 (SEC-R141-02): fail-closed — skip directories we can't read
-      // rather than silently continuing (which could miss files but
-      // never produce wrong paths).
+    } catch (error) {
+      // R142 (DATA-R142-02): record the error instead of silently
+      // continuing. The indexer will see `complete=false` and refuse to
+      // clear/publish (full mode) or compute deletedRelPaths (incremental).
+      recordError(dir, error);
       continue;
     }
 
@@ -272,23 +378,26 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
       let lst;
       try {
         lst = lstatSync(fullPath);
-      } catch {
-        // skip inaccessible entry
+      } catch (error) {
+        // R142 (DATA-R142-02): record and skip.
+        recordError(fullPath, error);
         continue;
       }
 
       if (lst.isSymbolicLink()) {
-        // R139/R140/R141: Resolve symlink target and check containment.
+        // R139/R140/R141/R142: Resolve symlink target and check containment.
         let realTarget: string;
         try {
           realTarget = realpathSync(fullPath);
-        } catch {
-          // Broken or unreadable symlink — skip (fail-closed).
+        } catch (error) {
+          // R142: record broken symlink (was: silent skip).
+          recordError(fullPath, error);
           continue;
         }
         // R141 (QUAL-R141-01): use the unified isPathInside — same predicate
         // as vault writes. No more drift between discovery and vault.
         if (!isPathInside(realRoot, realTarget)) {
+          skippedExternalSymlinks++;
           continue; // External symlink — skip
         }
         // R141 (PERF-R141-01): Check SKIP_DIRS against ALL components of the
@@ -296,12 +405,14 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
         // Catches `link -> node_modules/pkg/src` (basename=`src` is fine,
         // but `node_modules` is in the path).
         if (hasSkippedComponent(realRoot, realTarget)) {
+          skippedPolicyPaths++;
           continue;
         }
         // R140: Also check the entry name itself (alias name) — an alias
         // named `node_modules` pointing inside the project is rare but
         // should still be skipped for consistency.
         if (SKIP_DIRS.has(entry) || entry.startsWith('.')) {
+          skippedPolicyPaths++;
           continue;
         }
 
@@ -311,8 +422,10 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
           // type of the target, not the symlink. They're equivalent on most
           // platforms, but using realTarget is more explicit.
           realStat = statSync(realTarget);
-        } catch {
-          continue; // Target disappeared between realpath and stat — skip
+        } catch (error) {
+          // R142: record target disappearance.
+          recordError(realTarget, error);
+          continue;
         }
 
         if (realStat.isDirectory()) {
@@ -321,30 +434,48 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
           // the real path, so all descendant files are persisted with
           // canonical paths.
           if (visitedDirs.has(realTarget)) {
+            duplicates++;
             continue;
           }
           visitedDirs.add(realTarget);
           stack.push(realTarget);
-        } else {
-          // R141 (IDX-R141-01): Dedup file symlinks via dev:ino identity.
-          // Two aliases to the same file (or an alias + the original) yield
-          // exactly one entry in results.
+        } else if (realStat.isFile()) {
+          // R142 (SEC-R142-01): Only treat REGULAR files as candidates.
+          // Previously the `else` branch of isDirectory() accepted ALL
+          // non-dir types, including FIFOs, sockets, and devices. A symlink
+          // to a FIFO with a .ts extension would be pushed as a candidate,
+          // and readFileSync would block forever waiting for a writer.
+          // R142 (IDX-R142-01): detect language BEFORE marking visited.
+          // A non-code hardlink seen first would otherwise poison the
+          // visitedFiles set and suppress the code hardlink.
+          const lang = detectLanguage(realTarget);
+          if (!lang) {
+            continue; // unsupported extension — don't mark visited
+          }
           const identity = fileIdentityKey(realTarget);
           if (identity === null) {
-            continue; // Couldn't identify the file — skip (fail-closed)
+            recordError(realTarget, new Error('fileIdentityKey returned null'));
+            continue;
           }
           if (visitedFiles.has(identity)) {
+            duplicates++;
             continue;
           }
           visitedFiles.add(identity);
           // R141 (IDX-R141-02): Persist the CANONICAL path relative to realRoot.
           // The alias name is intentionally dropped — qualified names and
           // file_hashes must be stable across readdir order.
-          const lang = detectLanguage(realTarget);
-          if (lang) results.push(realTarget);
+          results.push(realTarget);
+        } else {
+          // R142 (SEC-R142-01): FIFO, socket, character device, block device.
+          // Silently skip — these are not source files and reading them
+          // could block or error. No need to record an error; the user
+          // intentionally created a special file.
+          continue;
         }
       } else if (lst.isDirectory()) {
         if (SKIP_DIRS.has(entry) || entry.startsWith('.')) {
+          skippedPolicyPaths++;
           continue;
         }
         // R141 (SEC-R141-02): Fail-CLOSED realpath for regular directories.
@@ -352,17 +483,17 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
         // lexical fullPath anyway. That was fail-OPEN: an EACCES or ELOOP
         // on a regular directory would silently let traversal continue
         // past the boundary. Now we push only the canonical realTarget —
-        // if realpath fails, we skip the directory entirely.
+        // if realpath fails, we record the error and skip the directory.
         let realDir: string;
         try {
           realDir = realpathSync(fullPath);
-        } catch {
-          // EACCES, ELOOP, EIO, etc. — fail-closed: skip the directory.
-          // We do NOT push fullPath because that could traverse a path
-          // we couldn't canonicalize (potential TOCTOU/security risk).
+        } catch (error) {
+          // R142 (DATA-R142-02): record the error (was: silent skip).
+          recordError(fullPath, error);
           continue;
         }
         if (visitedDirs.has(realDir)) {
+          duplicates++;
           continue; // Already visited via symlink or another path
         }
         visitedDirs.add(realDir);
@@ -372,21 +503,49 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
         // R141 (IDX-R141-01): Dedup regular files too (hardlinks). Without
         // this, two hardlinks to the same file would produce two File nodes
         // with different paths — same problem as file symlinks.
+        // R142 (IDX-R142-01): detect language BEFORE marking visited.
+        const lang = detectLanguage(fullPath);
+        if (!lang) {
+          continue; // unsupported extension — don't mark visited
+        }
         const identity = fileIdentityKey(fullPath);
         if (identity === null) {
-          continue; // stat failed — skip
+          recordError(fullPath, new Error('fileIdentityKey returned null'));
+          continue;
         }
         if (visitedFiles.has(identity)) {
+          duplicates++;
           continue;
         }
         visitedFiles.add(identity);
-        const lang = detectLanguage(fullPath);
-        if (lang) results.push(fullPath);
+        results.push(fullPath);
       }
+      // R142 (SEC-R142-01): non-file, non-dir, non-symlink regular entries
+      // (FIFO, socket, device) are silently skipped.
     }
   }
 
-  return results.sort();
+  return {
+    realRoot,
+    files: results.sort(),
+    errors,
+    complete: errors.length === 0,
+    skippedExternalSymlinks,
+    skippedPolicyPaths,
+    duplicates,
+  };
+}
+
+/**
+ * Legacy wrapper around `discoverSourceFilesStructured`. Returns only the
+ * file list (no errors). Kept for backward compatibility with external
+ * callers and tests that expect `string[]`.
+ *
+ * R142: throws on root failure (same as R141). Internal callers should
+ * prefer `discoverSourceFilesStructured` to get the error list.
+ */
+export function discoverSourceFilesWasm(rootPath: string): string[] {
+  return discoverSourceFilesStructured(rootPath).files;
 }
 
 // ── WASM grammar loading ───────────────────────────────────────────────

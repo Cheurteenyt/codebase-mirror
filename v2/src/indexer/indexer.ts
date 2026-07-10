@@ -10,7 +10,8 @@
 import Database from 'better-sqlite3';
 import { defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { initIndexerSchema, clearProjectData, updateProjectStats, CURRENT_EXTRACTOR_SEMANTICS_VERSION } from './schema.js';
-import { discoverSourceFilesWasm, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
+import { discoverSourceFilesStructured, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
+import type { DiscoveryResult } from './wasm-extractor.js';
 import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFiles, rebuildCrossFileCallsEdges, clearCrossFileCallEdges, isCallSitesInitialized } from './cross-file-resolver.js';
 import { assertDiscoveryRoot, DiscoveryRootError } from '../utils/safe-path.js';
 import { Worker } from 'node:worker_threads';
@@ -71,23 +72,44 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // falls back to single-threaded.
   const numWorkers = opts.workers ?? Math.max(2, cpus().length - 1);
 
-  // R141 (DATA-R141-01): Validate the discovery root BEFORE opening the DB
-  // (dry-run) or BEFORE clearProjectData (full mode) or BEFORE computing
-  // deletedRelPaths (incremental mode). The previous flow let a missing or
-  // unreadable root silently produce an empty result that wiped the graph.
+  // R141/R142 (DATA-R142-01, PATH-R142-01, STATE-R142-01): Validate the
+  // discovery root BEFORE opening the DB (dry-run) or BEFORE
+  // clearProjectData (full mode) or BEFORE computing deletedRelPaths
+  // (incremental mode). The previous flow let a missing or unreadable
+  // root silently produce an empty result that wiped the graph.
   //
-  // dry-run:  no DB opened — just report the error in IndexResult.errors.
-  // full:     no clearProjectData — the existing graph is preserved; the
-  //           caller can retry later when the root is reachable again.
-  // incr:     deletedRelPaths is NOT computed (would be the entire project);
-  //           stale=true is set so the caller knows the index is stale;
-  //           the existing graph is preserved.
+  // R142 changes:
+  //   - assertDiscoveryRoot now ALSO verifies readdir works (mode 000
+  //     closes). This was the gap that let R141 still wipe the graph.
+  //   - The return value (canonicalRoot) is captured and propagated to
+  //     ALL downstream operations (discovery, extraction, relative path
+  //     computation, project stats). Previously it was ignored, which
+  //     meant a symlinked root produced file_path values containing `..`.
+  //   - On root failure, we now open the DB (if it exists) and persist
+  //     cross_file_calls_stale=1 so Graph Status reflects the failure.
+  //     Previously the stale flag was only in the in-memory IndexResult.
+  let canonicalRoot: string;
   try {
-    assertDiscoveryRoot(opts.rootPath);
+    canonicalRoot = assertDiscoveryRoot(opts.rootPath);
   } catch (error) {
     const message = error instanceof DiscoveryRootError
       ? `Discovery root error (${error.reason}): "${error.rootPath}"`
       : `Discovery root error: "${opts.rootPath}" (${(error as Error).message})`;
+    // R142 (STATE-R142-01): persist stale=true in the DB if it exists.
+    // We open the DB read-write but do NOT create it if missing (a project
+    // that never had a successful index shouldn't get a DB just to record
+    // a failure). We only update the projects row if it already exists.
+    try {
+      const db = new Database(dbPath);
+      const existing = db.prepare('SELECT name FROM projects WHERE name = ?').get(opts.project);
+      if (existing) {
+        db.prepare('UPDATE projects SET cross_file_calls_stale = 1 WHERE name = ?').run(opts.project);
+      }
+      db.close();
+    } catch {
+      // DB doesn't exist or is corrupt — nothing to persist. The
+      // in-memory IndexResult still carries the error and stale flag.
+    }
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -99,17 +121,15 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       languages: new Set(),
       parallel: false,
       workerCount: 0,
-      crossFileCallsStale: true, // R141: root failure → stale (don't trust any prior state)
+      crossFileCallsStale: true,
     };
   }
 
   if (opts.dryRun) {
-    // R141: discovery root is already validated above; discoverSourceFilesWasm
-    // is now guaranteed not to throw for root reasons. We still wrap in
-    // try/catch as a defensive safety net for transient I/O errors mid-walk.
-    let files: string[];
+    // R142: pass canonicalRoot to avoid redundant stat+realpath+readdir.
+    let discovery: DiscoveryResult;
     try {
-      files = discoverSourceFilesWasm(opts.rootPath);
+      discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot);
     } catch (error) {
       return {
         dbPath, durationMs: Date.now() - start, nodes: 0, edges: 0,
@@ -122,13 +142,18 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       };
     }
     const langs = new Set<string>();
-    for (const f of files) {
+    for (const f of discovery.files) {
       const lang = detectLanguage(f);
       if (lang) langs.add(lang);
     }
     return {
       dbPath, durationMs: Date.now() - start, nodes: 0, edges: 0,
-      files: files.length, skipped: 0, errors: [], languages: langs,
+      files: discovery.files.length, skipped: 0,
+      errors: discovery.errors.map(e => ({ file: e.path, error: `${e.code}: ${e.message}` })),
+      languages: langs,
+      parallel: false,
+      workerCount: 0,
+      crossFileCallsStale: !discovery.complete,
     };
   }
 
@@ -141,13 +166,17 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // - Incremental mode: don't clear; per-file deletes happen in extractFromFilesWasm
   //   for files that have changed (identified by hash mismatch)
   // R141 (DATA-R141-01): root was already validated above. As an additional
-  // TOCTOU safeguard, we run discoverSourceFilesWasm BEFORE clearProjectData
-  // in full mode. If discovery throws (extremely unlikely after the root
-  // preflight, but possible for exotic filesystems), the existing graph is
-  // preserved instead of being wiped.
-  let files: string[];
+  // TOCTOU safeguard, we run discoverSourceFilesStructured BEFORE
+  // clearProjectData in full mode. If discovery throws (extremely unlikely
+  // after the root preflight, but possible for exotic filesystems), the
+  // existing graph is preserved instead of being wiped.
+  // R142 (PERF-R142-01): pass canonicalRoot to avoid redundant stat+realpath.
+  // R142 (DATA-R142-02): capture discovery.errors — if non-empty, the
+  // discovery is partial. In full mode we do NOT clearProjectData; in
+  // incremental mode we do NOT compute deletedRelPaths.
+  let discovery: DiscoveryResult;
   try {
-    files = discoverSourceFilesWasm(opts.rootPath);
+    discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot);
   } catch (error) {
     // R141 (DATA-R141-01): discovery failed AFTER root validation — likely a
     // transient I/O error or a TOCTOU race. Do NOT clearProjectData. Close
@@ -168,6 +197,70 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
     };
   }
+
+  // R142 (DATA-R142-02): Partial discovery lock. If discovery encountered
+  // errors (subtree EACCES, broken symlinks, etc.), the file list may be
+  // incomplete. In full mode, clearing the existing graph would destroy
+  // valid nodes we can't rediscover. In incremental mode, computing
+  // deletedRelPaths would treat the missing files as deleted.
+  //
+  // Policy:
+  //   - Full mode + partial discovery: do NOT clearProjectData. Return an
+  //     error with the partial file list. The caller can retry when the
+  //     filesystem is healthy.
+  //   - Incremental mode + partial discovery: do NOT compute
+  //     deletedRelPaths. Set stale=true so the caller knows the index is
+  //     not trustworthy. The existing graph is preserved.
+  if (!discovery.complete) {
+    if (!opts.incremental) {
+      // R142 (DATA-R142-02): full mode + partial → preserve graph, return error.
+      db.close();
+      const errorMsgs = discovery.errors.map(e => `${e.path}: ${e.code} (${e.message})`).join('; ');
+      return {
+        dbPath,
+        durationMs: Date.now() - start,
+        nodes: 0,
+        edges: 0,
+        files: 0,
+        skipped: 0,
+        errors: [{ file: opts.rootPath, error: `Discovery incomplete (${discovery.errors.length} errors): ${errorMsgs}` }],
+        languages: new Set(),
+        parallel: false,
+        workerCount: 0,
+        crossFileCallsStale: true,
+      };
+    }
+    // R142 (DATA-R142-02): incremental mode + partial → persist stale=true,
+    // preserve graph, return early. We do NOT compute deletedRelPaths.
+    // R142 (STATE-R142-01): persist the stale flag so Graph Status reflects
+    // the partial discovery.
+    const partialTx = db.transaction(() => {
+      db.prepare('UPDATE projects SET cross_file_calls_stale = 1 WHERE name = ?').run(opts.project);
+    });
+    try { partialTx(); } catch { /* project row may not exist yet */ }
+    db.close();
+    const errorMsgs = discovery.errors.map(e => `${e.path}: ${e.code} (${e.message})`).join('; ');
+    return {
+      dbPath,
+      durationMs: Date.now() - start,
+      nodes: 0,
+      edges: 0,
+      files: 0,
+      skipped: 0,
+      errors: [{ file: opts.rootPath, error: `Discovery incomplete (${discovery.errors.length} errors): ${errorMsgs}` }],
+      languages: new Set(),
+      parallel: false,
+      workerCount: 0,
+      crossFileCallsStale: true,
+    };
+  }
+
+  // R142 (PATH-R142-01): use canonicalRoot (from assertDiscoveryRoot) for
+  // all relative-path computation. This ensures file_path values never
+  // contain `..` even when the configured root is a symlink.
+  const files = discovery.files;
+  const effectiveRoot = canonicalRoot;
+
   if (!opts.incremental) {
     clearProjectData(db, opts.project);
   }
@@ -198,7 +291,8 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       'SELECT mtime_ns, mtime, size FROM file_hashes WHERE project = ? AND file_path = ?'
     );
     for (const f of files) {
-      const relPath = nodeRelative(opts.rootPath, f);
+      // R142 (PATH-R142-01): use canonicalRoot for relative path.
+      const relPath = nodeRelative(effectiveRoot, f);
       const stat = statSync(f, { bigint: true });
       const fileMtimeNs = stat.mtimeNs.toString();
       const fileSize = Number(stat.size);
@@ -231,9 +325,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // R104/R105: Bug 37 fix — detect deleted files in incremental mode.
   // R105: use nodes ∪ file_hashes to catch legacy DBs where file_hashes
   // may be incomplete (pre-R79 full mode didn't store hashes).
+  // R142 (PATH-R142-01): use canonicalRoot for relative paths.
   let deletedRelPaths: string[] = [];
   if (opts.incremental) {
-    const currentRelPaths = new Set(files.map(f => nodeRelative(opts.rootPath, f)));
+    const currentRelPaths = new Set(files.map(f => nodeRelative(effectiveRoot, f)));
     const indexedPaths = db.prepare(
       `SELECT DISTINCT file_path FROM nodes WHERE project = ?
        UNION
@@ -293,7 +388,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
       `).get(opts.project, opts.project) as { nodes: number; edges: number };
       const noOpStale = existingStale || semanticsStale;
-      updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, noOpStale, existingInitialized, existingSemanticsVersion);
+      updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, noOpStale, existingInitialized, existingSemanticsVersion);
       return { noOpStale };
     });
     const { noOpStale } = noOpTx();
@@ -397,7 +492,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         : (callSitesInitialized ? existingStale : true);
     // R107: preserve call_sites_initialized (deletion-only doesn't change it)
     // R126: preserve extractor_semantics_version (deletion-only doesn't change it)
-    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, existingSemanticsVersion);
+    updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, existingSemanticsVersion);
     db.close();
     return {
       dbPath,
@@ -422,10 +517,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
 
   let result;
   if (useParallel) {
-    result = await indexParallel(db, opts.project, opts.rootPath, langGroups, numWorkers, opts.incremental ?? false);
+    result = await indexParallel(db, opts.project, effectiveRoot, langGroups, numWorkers, opts.incremental ?? false);
   } else {
     result = await extractFromFilesWasm(
-      db, opts.project, opts.rootPath, files, opts.incremental ?? false,
+      db, opts.project, effectiveRoot, files, opts.incremental ?? false,
     );
   }
 
@@ -522,7 +617,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   const semanticsVersion = opts.incremental
     ? existingSemanticsVersion
     : (fullModeHadErrors ? 0 : CURRENT_EXTRACTOR_SEMANTICS_VERSION);
-  updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion);
+  updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion);
   db.close();
 
   return {

@@ -14,7 +14,7 @@
 // R141: Safe root discovery validation API (assertDiscoveryRoot) used by
 // indexer.ts BEFORE clearProjectData to prevent silent graph wipe.
 
-import { realpathSync, statSync } from 'node:fs';
+import { realpathSync, statSync, readdirSync } from 'node:fs';
 import { resolve, join, dirname, basename, sep, relative, isAbsolute } from 'node:path';
 
 /**
@@ -184,7 +184,7 @@ export class DiscoveryRootError extends Error {
 }
 
 /**
- * R141 (DATA-R141-01): Validate a discovery root BEFORE any DB mutation.
+ * R141/R142 (DATA-R142-01): Validate a discovery root BEFORE any DB mutation.
  *
  * The full indexer previously did:
  *   1. open DB
@@ -195,16 +195,22 @@ export class DiscoveryRootError extends Error {
  * This meant a network drive unmount or temporary EACCES would silently
  * destroy the valid graph and certify an empty DB as fresh.
  *
- * This function performs the same validation steps that
- * discoverSourceFilesWasm needs internally (existence + directory +
- * readability + realpath), but does so up front so the indexer can
- * bail out BEFORE clearProjectData() runs.
+ * R141 added stat + realpath validation. R142 adds readdir validation:
+ * on POSIX, a directory can be stat-able and realpath-able but NOT
+ * readdir-able (mode 000 without read permission). The R141 preflight
+ * accepted such a root, then `discoverSourceFilesWasm` swallowed the
+ * EACCES from `readdirSync(root)` and returned `[]`, which still
+ * triggered the silent graph wipe. R142 closes this by actually
+ * attempting to read the root directory during preflight.
  *
- * Returns the realpath-resolved root (so the caller can pass it
- * directly to discoverSourceFilesWasm without a second realpath call).
+ * Returns the realpath-resolved canonical root. The caller MUST use this
+ * return value (not the original `rootPath`) for all downstream operations
+ * (discovery, extraction, relative path computation, project stats) —
+ * see PATH-R142-01.
  *
  * Throws DiscoveryRootError on any failure. The caller MUST propagate
- * the error to IndexResult.errors and exit with a non-zero code (CLI).
+ * the error to IndexResult.errors and persist stale=true in the DB
+ * (see STATE-R142-01).
  */
 export function assertDiscoveryRoot(rootPath: string): string {
   let rootStat;
@@ -230,9 +236,32 @@ export function assertDiscoveryRoot(rootPath: string): string {
   // R141: realpathSync to detect symlinked roots and match the discovery
   // behavior. If realpath fails on a stat'd directory (race condition),
   // treat it as not_readable.
+  let realRoot: string;
   try {
-    return realpathSync(rootPath);
+    realRoot = realpathSync(rootPath);
   } catch (error) {
     throw new DiscoveryRootError(rootPath, 'not_readable', error);
   }
+
+  // R142 (DATA-R142-01): Actually attempt to read the directory contents.
+  // On POSIX, stat + realpath can succeed even when readdir would fail
+  // (mode 000, ACL deny, NFS export restrictions). Without this check,
+  // the root passes preflight, then discoverSourceFilesWasm swallows
+  // the EACCES from readdirSync(root) and returns [] — re-introducing
+  // the silent graph wipe that R141 was supposed to close.
+  //
+  // We don't need the entries — we just need to prove the directory is
+  // readable. readdirSync is the cheapest cross-platform way to do this
+  // (opendirSync + closeSync is equivalent but more verbose).
+  try {
+    // R142: discard the result — we only care that the call succeeds.
+    // A small allocation is acceptable; the root directory typically has
+    // O(10-1000) entries.
+    readdirSync(realRoot);
+  } catch (error) {
+    // EACCES, EIO, ENOMEM, etc. — the root exists but we can't traverse it.
+    throw new DiscoveryRootError(rootPath, 'not_readable', error);
+  }
+
+  return realRoot;
 }

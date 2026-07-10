@@ -1,5 +1,133 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.3 — Round 142 (2026-07-11) Discovery Completeness Lock
+
+**67th round (GPT 5.6 Sol audit R141).** 2 P1 + 3 P1/P2 + 2 P2 fixed + 1 CI
+fix. Closes the 7 confirmed findings of the R141 audit. R141 was accepted
+as major progress but left DATA-R141-01 partially open: a root with mode
+000 passed `stat + realpath` preflight, then `discoverSourceFilesWasm`
+swallowed the `readdirSync` EACCES and returned `[]`, still triggering the
+silent graph wipe.
+
+### Data integrity (2 P1 — very high)
+
+104. **P1 root mode 000 still wipes graph** (`safe-path.ts`) —
+     `assertDiscoveryRoot` did `statSync + realpathSync` but NOT
+     `readdirSync`. On POSIX, a directory with mode 000 (no read
+     permission) passes stat+realpath but fails readdir. The R141 preflight
+     accepted such a root, then `discoverSourceFilesWasm` swallowed the
+     EACCES from `readdirSync(root)` (line 263 `catch { continue }`) and
+     returned `[]`. The full indexer then ran `clearProjectData()` → empty
+     graph certified as fresh. Fixed: `assertDiscoveryRoot` now also
+     attempts `readdirSync(realRoot)` and throws `DiscoveryRootError` with
+     `reason: 'not_readable'` if it fails. (DATA-R142-01)
+
+105. **P1 subtree EACCES silently swallowed** (`wasm-extractor.ts`,
+     `indexer.ts`) — All `readdirSync`/`lstatSync`/`realpathSync`/`statSync`
+     errors in the walker were caught with `catch { continue }` and
+     silently discarded. An inaccessible subtree disappeared from
+     `currentRelPaths` → incremental treated all its files as deleted →
+     nodes/edges/file_hashes/call_sites/imports/exports wiped. Fixed: new
+     `discoverSourceFilesStructured()` returns a `DiscoveryResult` with an
+     `errors[]` array and a `complete` flag. The indexer checks
+     `discovery.complete`: in full mode, partial discovery does NOT
+     `clearProjectData`; in incremental mode, it does NOT compute
+     `deletedRelPaths`. Both modes persist `cross_file_calls_stale=1` in
+     the DB. (DATA-R142-02)
+
+### Canonical root propagation (1 P1)
+
+106. **P1 canonical root ignored — file_path contains `..`** (`indexer.ts`)
+     — `assertDiscoveryRoot(opts.rootPath)` returned the canonical realpath
+     but the return value was IGNORED. The indexer passed `opts.rootPath`
+     (the symlink) to `discoverSourceFilesWasm`, `extractFromFilesWasm`,
+     `indexParallel`, `nodeRelative`, and `updateProjectStats`. With a
+     symlinked root (`/tmp/link-root -> /tmp/real-root`), the discovered
+     files were under `/tmp/real-root/`, so `relative('/tmp/link-root',
+     '/tmp/real-root/src/a.ts')` = `../real-root/src/a.ts` — `file_path`
+     contained `..`, qualified names were non-canonical, hash keys were
+     unstable. Fixed: `canonicalRoot` is captured from
+     `assertDiscoveryRoot()` and propagated as `effectiveRoot` to ALL
+     downstream operations. `file_path` now never contains `..`.
+     (PATH-R142-01)
+
+### File identity contract (2 P1/P2)
+
+107. **P1/P2 hardlink non-code suppresses source** (`wasm-extractor.ts`) —
+     `visitedFiles.add(identity)` ran BEFORE `detectLanguage(fullPath)`.
+     A non-code hardlink (`a.txt`) seen first would mark the inode
+     visited, causing the code hardlink (`z.ts`, same inode) to be
+     skipped — the source file was lost. Non-deterministic depending on
+     readdir order. Fixed: `detectLanguage` is now called BEFORE
+     `visitedFiles.add`. Unsupported extensions do NOT poison the visited
+     set. (IDX-R142-01)
+
+108. **P1/P2 symlink to FIFO/socket/device treated as file**
+     (`wasm-extractor.ts`) — The symlink branch used
+     `if (realStat.isDirectory()) { ... } else { ... }`. The `else`
+     branch treated ALL non-dir types (FIFO, socket, character device,
+     block device) as file candidates. A symlink to a FIFO with a `.ts`
+     extension would be pushed as a candidate, and `readFileSync` would
+     block forever waiting for a writer. Fixed: replaced `else` with
+     `else if (realStat.isFile())`. Only regular files are candidates;
+     special files are silently skipped. (SEC-R142-01)
+
+### Freshness persistence (1 P1/P2)
+
+109. **P1/P2 root failure stale flag not persisted** (`indexer.ts`) — On
+     root failure, the indexer returned `crossFileCallsStale: true` in
+     the in-memory `IndexResult` but never opened the DB to persist it.
+     The DB retained `cross_file_calls_stale=0`, `version=7`. Graph
+     Status could show FRESH despite the root being unreachable. Fixed:
+     on root failure, the indexer opens the DB (if it exists) and
+     updates `cross_file_calls_stale=1` in the `projects` row. The
+     existing graph (nodes/edges/version) is preserved. Partial
+     discovery also persists `stale=1`. (STATE-R142-01)
+
+### Filesystem identity (1 P2)
+
+110. **P2 dev:ino = 0n collision** (`wasm-extractor.ts`) —
+     `fileIdentityKey` returned `${st.dev}:${st.ino}` without checking
+     for zero values. Network filesystems and some FUSE mounts return
+     `dev=0, ino=0` for ALL files — using `0:0` as the identity key
+     would collapse every file into one entry, so only the first file
+     encountered would be indexed. Fixed: when `dev === 0n && ino === 0n`,
+     fall back to `path:<realpath>`. This loses hardlink dedup but
+     avoids the catastrophic collision. The fallback is also applied
+     when `statSync` throws (exotic FUSE). (ID-R142-01)
+
+### CI / test baseline (1 fix)
+
+111. **CI 10 MCP server test failures — missing build** (`package.json`)
+     — The MCP server test spawns `dist/cli/index.js` as a subprocess.
+     Without a prior `tsc` build, the file didn't exist and all 10
+     dispatch tests failed with `MODULE_NOT_FOUND`. These failures were
+     flagged as "pre-existing" in R141 but were actually a missing
+     `pretest` script. Fixed: added `"pretest": "tsc -p tsconfig.json"`
+     to `package.json`. `npm test` now builds `dist/` before running
+     vitest. All 639 tests pass (was 620 + 10 failures). (CI-R142-01)
+
+### Tests (19 new)
+
+- **DATA-R142-01** (2 tests): root mode 000 rejected by assertDiscoveryRoot,
+  root mode 000 → IndexResult.errors, no DB wipe.
+- **DATA-R142-02** (2 tests): subtree EACCES errors collected,
+  full mode + partial → no clearProjectData.
+- **PATH-R142-01** (2 tests): symlinked root → file_path has no `..`,
+  assertDiscoveryRoot returns canonical realpath.
+- **IDX-R142-01** (2 tests): hardlink a.txt+z.ts → z.ts indexed,
+  hardlink code+code → one result.
+- **SEC-R142-01** (2 tests): FIFO not treated as source, symlink to FIFO
+  not indexed.
+- **ID-R142-01** (1 test): normal filesystem dev:ino dedup works.
+- **STATE-R142-01** (2 tests): root failure persists stale=1,
+  partial discovery persists stale=1.
+- **PERF-R142-01** (1 test): canonicalRoot skips redundant validation.
+- **Regression** (5 tests): R141 nonexistent root, file symlinks, deep
+  SKIP_DIRS, R140 P0 depth bypass, semantics version 7.
+
+### Total: 111 bugs + 11 optimizations + 284 indexer tests across 67 rounds
+
 ## 0.56.2 — Round 141 (2026-07-10) Discovery Canonical Lock
 
 **66th round (GPT 5.6 Sol audit R140).** 1 P1 + 4 P1/P2 + 1 P2 + 1 P2/P3
