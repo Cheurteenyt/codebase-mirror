@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import type { WorkerBatch, WorkerBatchResult } from './worker.js';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
+import { existsSync } from 'node:fs';
 
 export interface IndexOptions {
   project: string;
@@ -33,6 +34,49 @@ export interface IndexOptions {
   useWasm?: boolean;
   /** Number of worker threads (0 = single-threaded). Default: auto (cpu count - 1). */
   workers?: number;
+}
+
+/**
+ * R143 (STATE-R143-01, DATA-R143-01): Mark a project as stale in the DB
+ * WITHOUT touching nodes/edges/version. Used by all error branches
+ * (root failure, partial discovery) so that Graph Status reflects the
+ * failure and the existing graph is preserved.
+ *
+ * Safety guarantees:
+ *   - Does NOT create the DB if it doesn't exist (DATA-R143-01: the previous
+ *     `new Database(dbPath)` created an empty file for projects that never
+ *     had a successful index). Uses existsSync first.
+ *   - Uses try/finally to guarantee the DB handle is closed even if the
+ *     UPDATE throws.
+ *   - Only updates the projects row if it already exists — a non-existent
+ *     row means the project was never indexed, so there's nothing to mark.
+ *
+ * Returns true if the stale flag was persisted, false otherwise (DB missing,
+ * project row missing, or error).
+ */
+function markProjectStalePreservingGraph(dbPath: string, project: string): boolean {
+  // R143 (DATA-R143-01): do NOT create the DB file. existsSync check first.
+  if (!existsSync(dbPath)) {
+    return false;
+  }
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath);
+    const existing = db.prepare('SELECT name FROM projects WHERE name = ?').get(project);
+    if (!existing) {
+      return false; // project row doesn't exist — nothing to mark
+    }
+    db.prepare('UPDATE projects SET cross_file_calls_stale = 1 WHERE name = ?').run(project);
+    return true;
+  } catch {
+    // DB is corrupt or locked — nothing we can do. The in-memory
+    // IndexResult still carries the error and stale flag.
+    return false;
+  } finally {
+    if (db !== null) {
+      try { db.close(); } catch { /* ignore close error */ }
+    }
+  }
 }
 
 export interface IndexResult {
@@ -95,21 +139,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     const message = error instanceof DiscoveryRootError
       ? `Discovery root error (${error.reason}): "${error.rootPath}"`
       : `Discovery root error: "${opts.rootPath}" (${(error as Error).message})`;
-    // R142 (STATE-R142-01): persist stale=true in the DB if it exists.
-    // We open the DB read-write but do NOT create it if missing (a project
-    // that never had a successful index shouldn't get a DB just to record
-    // a failure). We only update the projects row if it already exists.
-    try {
-      const db = new Database(dbPath);
-      const existing = db.prepare('SELECT name FROM projects WHERE name = ?').get(opts.project);
-      if (existing) {
-        db.prepare('UPDATE projects SET cross_file_calls_stale = 1 WHERE name = ?').run(opts.project);
-      }
-      db.close();
-    } catch {
-      // DB doesn't exist or is corrupt — nothing to persist. The
-      // in-memory IndexResult still carries the error and stale flag.
-    }
+    // R143 (STATE-R143-01, DATA-R143-01): persist stale=true in the DB
+    // via the unified helper. Does NOT create the DB if it doesn't exist
+    // (was: `new Database(dbPath)` created an empty file). Uses try/finally
+    // to guarantee the handle is closed.
+    markProjectStalePreservingGraph(dbPath, opts.project);
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -198,24 +232,57 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     };
   }
 
+  // R143 (PERF-R143-01): Bound diagnostics. A repo with thousands of broken
+  // symlinks could produce a multi-megabyte error string and OOM. We cap
+  // the inline message at 20 samples and include the total count.
+  function formatDiscoveryErrors(errors: { path: string; code: string; message: string }[]): string {
+    const total = errors.length;
+    const samples = errors.slice(0, 20);
+    const sampleStr = samples.map(e => `${e.path}: ${e.code}`).join('; ');
+    if (total > samples.length) {
+      return `${total} discovery errors (showing ${samples.length}): ${sampleStr}; ...`;
+    }
+    return `${total} discovery error(s): ${sampleStr}`;
+  }
+
   // R142 (DATA-R142-02): Partial discovery lock. If discovery encountered
   // errors (subtree EACCES, broken symlinks, etc.), the file list may be
   // incomplete. In full mode, clearing the existing graph would destroy
   // valid nodes we can't rediscover. In incremental mode, computing
   // deletedRelPaths would treat the missing files as deleted.
   //
+  // R143 (MIG-R143-01): Semantic gate dominance. The partial branch MUST
+  // read the project's semantic version BEFORE the early return. If the
+  // stored version ≠ CURRENT, we must clear cross-file edges (the old
+  // edges were produced by a previous extractor version and are not
+  // trustworthy). R142 returned before the semantic gate, leaving stale
+  // v6 exact edges in the DB.
+  //
   // Policy:
-  //   - Full mode + partial discovery: do NOT clearProjectData. Return an
-  //     error with the partial file list. The caller can retry when the
-  //     filesystem is healthy.
+  //   - Full mode + partial discovery: do NOT clearProjectData. Persist
+  //     stale=1 (STATE-R143-01). Return an error.
   //   - Incremental mode + partial discovery: do NOT compute
-  //     deletedRelPaths. Set stale=true so the caller knows the index is
-  //     not trustworthy. The existing graph is preserved.
+  //     deletedRelPaths. Persist stale=1. Clear cross-file edges if
+  //     semantic version mismatches (MIG-R143-01).
   if (!discovery.complete) {
+    // R143 (MIG-R143-01): Read semantic state BEFORE the early return.
+    // This ensures the semantic gate fires even when discovery is partial.
+    const projectStateRow = opts.incremental
+      ? (db.prepare(
+          'SELECT extractor_semantics_version AS version FROM projects WHERE name = ?'
+        ).get(opts.project) as { version?: number } | undefined)
+      : undefined;
+    const storedSemanticsVersion = projectStateRow?.version ?? 0;
+    const semanticsStale = opts.incremental
+      ? storedSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION
+      : false;
+
     if (!opts.incremental) {
-      // R142 (DATA-R142-02): full mode + partial → preserve graph, return error.
+      // R143 (STATE-R143-01): full mode + partial → persist stale=1, preserve graph.
+      // R142 bug: this branch closed the DB without persisting stale.
       db.close();
-      const errorMsgs = discovery.errors.map(e => `${e.path}: ${e.code} (${e.message})`).join('; ');
+      markProjectStalePreservingGraph(dbPath, opts.project);
+      const errorMsg = formatDiscoveryErrors(discovery.errors);
       return {
         dbPath,
         durationMs: Date.now() - start,
@@ -223,23 +290,29 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         edges: 0,
         files: 0,
         skipped: 0,
-        errors: [{ file: opts.rootPath, error: `Discovery incomplete (${discovery.errors.length} errors): ${errorMsgs}` }],
+        errors: [{ file: opts.rootPath, error: `Discovery incomplete: ${errorMsg}` }],
         languages: new Set(),
         parallel: false,
         workerCount: 0,
         crossFileCallsStale: true,
       };
     }
-    // R142 (DATA-R142-02): incremental mode + partial → persist stale=true,
-    // preserve graph, return early. We do NOT compute deletedRelPaths.
-    // R142 (STATE-R142-01): persist the stale flag so Graph Status reflects
-    // the partial discovery.
+    // R143 (DATA-R142-02, MIG-R143-01): incremental mode + partial →
+    // persist stale=1, clear cross-file edges if semantic version
+    // mismatches, preserve graph, return early.
     const partialTx = db.transaction(() => {
       db.prepare('UPDATE projects SET cross_file_calls_stale = 1 WHERE name = ?').run(opts.project);
+      // R143 (MIG-R143-01): if the stored semantic version ≠ CURRENT,
+      // the cross-file edges were produced by a previous extractor version
+      // and are not trustworthy. Clear them. The version is preserved so
+      // the next full reindex still detects the mismatch.
+      if (semanticsStale) {
+        clearCrossFileCallEdges(db, opts.project);
+      }
     });
     try { partialTx(); } catch { /* project row may not exist yet */ }
     db.close();
-    const errorMsgs = discovery.errors.map(e => `${e.path}: ${e.code} (${e.message})`).join('; ');
+    const errorMsg = formatDiscoveryErrors(discovery.errors);
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -247,7 +320,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       edges: 0,
       files: 0,
       skipped: 0,
-      errors: [{ file: opts.rootPath, error: `Discovery incomplete (${discovery.errors.length} errors): ${errorMsgs}` }],
+      errors: [{ file: opts.rootPath, error: `Discovery incomplete: ${errorMsg}` }],
       languages: new Set(),
       parallel: false,
       workerCount: 0,

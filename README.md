@@ -1,37 +1,26 @@
 # Codebase Memory V2
 
-> Human memory graph + Obsidian vault sync for [Codebase Memory MCP](https://github.com/DeusData/codebase-memory-mcp).
-> Adds ADRs, bug notes, refactor plans, conventions, and more — layered on top of the C engine's code graph.
+> **Hybrid code intelligence** — native WASM indexer (112 languages) + human memory graph + Obsidian vault sync.
+> V1 (C engine, 158 languages) is now a **fallback** for languages V2 doesn't cover natively.
 
 [![CI](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## What is this?
 
-Codebase Memory V1 understands the **structure** of your code (functions, modules, routes, 158 languages via tree-sitter).
+Codebase Memory V2 is a **hybrid** code intelligence system:
 
-Codebase Memory V2 adds the **human context**:
-- Architecture Decision Records (ADRs)
-- Known bugs and their impact
-- Refactor plans
-- Coding conventions
-- Legacy zone markers
-- Risk assessments
-- Activity journal
+1. **Native WASM indexer** (V2) — 112 languages via tree-sitter WASM grammars. The most advanced semantic precision on TypeScript/JavaScript: cross-file CALLS resolution, module validity lock, type/value default separation, builtin truth lock. Semantics version 7.
 
-It syncs everything to an **Obsidian-compatible Markdown vault** so you can read and edit notes in your favorite editor, with backlinks and tags.
+2. **Human memory graph** (V2) — ADRs, bug notes, refactor plans, conventions, legacy zone markers, risk assessments, activity journal — synced to an Obsidian-compatible Markdown vault.
+
+3. **V1 C engine** (fallback) — 158 languages via tree-sitter C. Used as a reference and fallback for languages V2 doesn't cover natively. V2 reads V1's SQLite DB transparently via `CodeGraphReader`.
+
+V2 is **partially autonomous**: it can index TS/JS projects natively without V1, and falls back to V1 for other languages.
 
 ## Current version
 
 See `v2/package.json` and `v2/CHANGELOG.md` for the authoritative version, test counts, and bug/optimization history.
-- **Graph UI** with 2D d3-force canvas, dashboard, filters, **real-time WebSocket**, ARIA tablist, stale-while-revalidate refetch, AbortController timeouts
-- **Watch daemon** — auto-sync when vault files change (fs.watch recursive)
-- **FTS5 full-text search** on human notes (BM25 ranking, AND-of-terms, migration V4)
-- **Hardened API** — project_name validation + `--` separator, process-kill allowlist (cbm/cbm-v2 only), browse restricted to home (realpath-resolved), project-health path-traversal guard
-- **Transactional writes** — updateNode/deleteNode/createEdge/syncCbmLinks wrapped in transactions (atomicity guarantee)
-- **N+1 elimination** — getBulkNeighbors in prepare_edit_context (40→3 queries), generator module/route export (200+→6 queries), routeDashboard reuses SWR-cached counts
-- **Frontend test infrastructure** — Vitest + @testing-library/react + jsdom (21 tests covering C1 regression, WS zombie race, sim reuse, viewport flip, pointer cancel, kill confirmation, corrupt-state gate)
-- **Optimized SQLite storage** (junction table, composite indexes, FTS5, PRAGMAs)
 
 ## Quick start
 
@@ -41,7 +30,11 @@ npm install
 npm run build
 npm test                    # see v2/CHANGELOG.md for current test count
 
-# Try the demo (no V1 needed)
+# Index a project natively (no V1 needed for TS/JS)
+cbm-v2 index --project my-app --root /path/to/repo
+cbm-v2 index --project my-app --root /path/to/repo --incremental   # fast incremental
+
+# Try the demo
 node dist/cli/index.js demo
 
 # Initialize your project
@@ -60,6 +53,9 @@ node dist/cli/index.js ui --project my-app
 
 | Command | Description |
 |---|---|
+| `cbm-v2 index --project <p> --root <r>` | Index a project natively (WASM, 112 languages) |
+| `cbm-v2 index --project <p> --root <r> --incremental` | Fast incremental index (skip unchanged files) |
+| `cbm-v2 index --project <p> --root <r> --dry-run` | Preview without writing to DB |
 | `cbm-v2 init` | Initialize `.codebase-memory.json` configuration |
 | `cbm-v2 doctor` | Run diagnostics (Node version, DB, vault path) |
 | `cbm-v2 stats` | Show a pretty statistics dashboard |
@@ -142,25 +138,59 @@ Add to your MCP client config (Claude Desktop, Cursor, Zed, etc.):
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Codebase Memory V2                                          │
+│  Codebase Memory V2 (hybrid)                                 │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│   ┌─────────────────────┐    ┌──────────────────────────┐   │
-│   │  C Engine (V1)      │    │  TS Sidecar (V2)         │   │
-│   │  tree-sitter 158    │    │  Human Memory DB         │   │
-│   │  SQLite code graph  │◄───┤  Obsidian vault sync     │   │
-│   │  14 MCP tools (V1)  │    │  7 MCP tools (V2)        │   │
-│   │                     │    │  Graph UI (d3-force 2D)  │   │
-│   └─────────────────────┘    └──────────────────────────┘   │
+│   ┌─────────────────────────┐  ┌──────────────────────────┐  │
+│   │  V2 Native Indexer      │  │  V1 C Engine (fallback)  │  │
+│   │  tree-sitter WASM       │  │  tree-sitter C           │  │
+│   │  112 languages          │  │  158 languages           │  │
+│   │  cross-file resolver    │  │  reference/fallback      │  │
+│   │  semantics v7           │  │                          │  │
+│   └───────────┬─────────────┘  └──────────┬───────────────┘  │
+│               │                           │                  │
+│               v                           v                  │
+│   ┌─────────────────────────────────────────────────────────┐│
+│   │  SQLite code graph (shared, V1-compatible schema)       ││
+│   └─────────────────────────────────────────────────────────┘│
+│               │                                              │
+│               v                                              │
+│   ┌─────────────────────────────────────────────────────────┐│
+│   │  V2 Human Memory Layer                                  ││
+│   │  Human Memory DB • Obsidian vault sync • Graph UI       ││
+│   │  7 MCP tools • Reports • Intelligence layer             ││
+│   └─────────────────────────────────────────────────────────┘│
 │                                                              │
 │   Storage:                                                   │
 │   ~/.cache/codebase-memory-mcp/                              │
-│     <project>.db           ← code graph (V1, C)             │
-│     <project>.human.db     ← human memory (V2, TS)          │
-│   <repo>/.codebase-memory-vault/  ← Obsidian vault (MD)     │
-│   <repo>/.codebase-memory.json    ← project config          │
+│     <project>.db           ← code graph (V2 native or V1 C)  │
+│     <project>.human.db     ← human memory (V2, TS)           │
+│   <repo>/.codebase-memory-vault/  ← Obsidian vault (MD)      │
+│   <repo>/.codebase-memory.json    ← project config           │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+## Native indexer (V2 WASM)
+
+V2 includes a **native code indexer** that does NOT require the V1 C binary:
+
+- **112 languages** via pre-built tree-sitter WASM grammars (`tree-sitter-wasm`)
+- **Cross-file CALLS resolution** — persistent `call_sites`, `imports`, `exports` tables; resolver matches call-sites to definitions across files
+- **Module validity lock** — detects duplicate exports, default marker collisions, unresolved star sources, invalid builtins
+- **Type/value default separation** — `interface`/`type alias` defaults excluded from runtime count
+- **Builtin truth lock** — `isBuiltin()` from `node:module`; `node:fake` rejected, `node:test` accepted
+- **Incremental indexing** — content hash + mtime_ns fast-skip; deletion-only fast path
+- **Parallel workers** — multi-threaded WASM parsing for large projects
+- **Semantics versioning** — `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 7`; incremental mode forces full reindex when extractor output changes
+- **Discovery completeness lock** — `DiscoveryResult` with structured errors; partial discovery preserves the existing graph (no silent wipe)
+- **Canonical root propagation** — symlinked roots produce `file_path` without `..`
+- **File identity contract** — `dev:ino` dedup with `0:0` fallback; deterministic hardlink selection
+
+### Limitations
+
+- V2 native indexer is most precise on **TypeScript/JavaScript**. Other languages (Python, Go, Rust, etc.) are parsed structurally but without cross-file resolution.
+- For full 158-language support with V1-grade precision, use the V1 C binary as a fallback.
+- Graph UI is capped at ~2000 nodes for performance. Use filters and the dashboard for large projects.
 
 ## Human memory node types
 
@@ -250,28 +280,31 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 
 ## Documentation
 
-### Design Documents
-- [V2 Audit](docs/V2_AUDIT.md) — Analysis of V1 (C11 codebase, 65K LOC)
-- [V2 Architecture](docs/V2_ARCHITECTURE.md) — Sidecar TypeScript design
-- [V2 Roadmap](docs/V2_ROADMAP.md) — Current state + roadmap (updated 0.8.2)
+### Architecture & Current State
+- [V2 Architecture](docs/V2_ARCHITECTURE.md) — Hybrid indexer, discovery, resolver, semantics
+- [V2 Current State](docs/V2_CURRENT_STATE.md) — Versions, stable features, limitations, blockers
+- [V2 Roadmap](docs/V2_ROADMAP.md) — Historical archive (0.15.9 era)
 - [Obsidian Integration](docs/OBSIDIAN_INTEGRATION.md) — Vault format and sync
 - [Human Memory Schema](docs/HUMAN_MEMORY_GRAPH_SCHEMA.md) — SQL schema
 
 ### Reference
 - [MCP Tools](docs/MCP_TOOLS.md) — All 7 MCP tools with input/output examples
-- [CLI Reference](docs/CLI_REFERENCE.md) — All 15+ CLI commands with examples
+- [CLI Reference](docs/CLI_REFERENCE.md) — All CLI commands including `cbm-v2 index`
 - [Intelligence Layer](docs/INTELLIGENCE.md) — Graph awareness + prepare_edit_context
 - [Token Economy](docs/TOKEN_ECONOMY.md) — How V2 saves API tokens (-67% to -87%)
 
 ### Project
 - [Contributing](CONTRIBUTING.md) — How to contribute
+- [Maintainers Guide](MAINTAINERS_GUIDE.md) — Internal conventions and invariants
 - [License](LICENSE) — MIT
 
 ## Security
 
 - **Local-first**: no network calls, no telemetry
 - **HUMAN NOTES preserved**: the `## HUMAN NOTES` section is never overwritten (regression-tested)
-- **Path traversal protection**: `obsidian_path` validated against `..` and backslashes
+- **Path traversal protection**: `obsidian_path` validated against `..` and backslashes; `assertPathInsideRoot` uses `path.relative` for cross-platform containment
+- **Discovery completeness lock**: partial discovery (subtree EACCES, broken symlinks) preserves the existing graph — no silent wipe
+- **Root discovery validation**: `assertDiscoveryRoot` verifies stat + isDirectory + realpath + readdir before any DB mutation
 - **Backup rotation**: max 5 `.bak` files per note
 - **Dry-run**: available on `obsidian sync`, `obsidian export`, `obsidian import`, `backup import`
 - **Consistent sync hashes**: `markSynced` computes the same DB-derived hash for both export and import directions, making conflict detection reliable (R14 fix)
@@ -280,9 +313,9 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 
 - **N+1 query elimination**: all hot paths use bulk fetches (`getBulkNotesByCbmNodeIds`, `getBulkNodeDegrees`, `getBulkEdges`)
 - **SQL-level limit**: `getBulkNotesByCbmNodeIds` uses `ROW_NUMBER() OVER (PARTITION BY ...)` to cap per-node at the database level
+- **Incremental indexing**: content hash + mtime_ns fast-skip; deletion-only fast path avoids re-parsing unchanged files
+- **Parallel workers**: multi-threaded WASM parsing for projects with >20 changed files
 - **Stable UI listeners**: `GraphCanvas` uses refs for callbacks — no listener rebinds on filter toggle
-- **Cursor-following tooltip**: `NodeTooltip` tracks mouse position
-- **Zoom-to-mouse**: `GraphCanvas` zoom centers on the cursor, not the origin
 
 ## License
 

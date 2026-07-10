@@ -1,5 +1,161 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.4 — Round 143 (2026-07-11) Persistent Discovery State
+
+**68th round (GPT 5.6 Sol audit R142).** 3 P1 + 2 P1/P2 + 4 P2 + 6 docs
+fixed. Closes the 9 confirmed code findings of the R142 audit plus the
+documentation recovery (DOC-R143-01 through DOC-R143-06).
+
+### Freshness persistence (2 P1)
+
+112. **P1 full partial discovery did not persist stale=1** (`indexer.ts`)
+     — The R142 changelog claimed both full and incremental partial
+     discovery persisted `cross_file_calls_stale=1`, but the full-mode
+     partial branch closed the DB without running the UPDATE. The DB
+     retained `stale=0` while the in-memory `IndexResult` returned
+     `crossFileCallsStale=true`. Graph Status could show FRESH despite a
+     failed discovery. Fixed: unified helper
+     `markProjectStalePreservingGraph()` used by ALL error branches (root
+     failure, full partial, incremental partial). Uses `existsSync` first
+     (does NOT create the DB), `try/finally` to guarantee close.
+     (STATE-R143-01, DATA-R143-01)
+
+113. **P1 Graph Status ignored DB stale/version** (`graph-status.ts`) —
+     `computeGraphStatus` only used DB mtime, git changes, and node counts.
+     It never read `cross_file_calls_stale` or `extractor_semantics_version`
+     from the `projects` table. A DB with `stale=1` (root failure, partial
+     discovery) or a non-current semantics version was reported FRESH if
+     the DB file was recent and git showed no changes. Fixed: Graph Status
+     now opens the DB read-only and reads both fields. DB state DOMINATES
+     the age/git heuristics: `db_stale=true` → STALE;
+     `db_semantics_current=false` → STALE with version mismatch reason.
+     `getFreshnessScore` returns 0.0 for both cases. (STATE-R143-02)
+
+### Semantic gate dominance (1 P1)
+
+114. **P1 partial incremental bypassed semantic gate** (`indexer.ts`) —
+     The partial-discovery early return (incremental mode) ran BEFORE the
+     centralized semantic-state read. A DB with `extractor_semantics_version=6`
+     (pre-R141) + partial discovery returned `stale=1` but left old v6
+     cross-file edges in the DB — the R127/R128 invariant (clear edges on
+     semantic mismatch) was violated. Fixed: the partial branch now reads
+     `extractor_semantics_version` BEFORE the early return. If the version
+     mismatches, `clearCrossFileCallEdges` runs in the same transaction as
+     the stale flag update. The version is preserved (not upgraded) so the
+     next full reindex still detects the mismatch. (MIG-R143-01)
+
+### Error classification (1 P1/P2)
+
+115. **P1/P2 broken symlink made all full index fail** (`wasm-extractor.ts`)
+     — A broken symlink (target deleted, stale alias) caused
+     `realpathSync` to fail, which called `recordError`, which set
+     `discovery.complete=false`. A single broken symlink (common in npm,
+     git worktrees, IDEs) blocked the ENTIRE full index. The SKIP_DIRS
+     check ran AFTER `realpathSync`, so even a broken symlink named
+     `node_modules-link` wasn't filtered by entry name. Fixed: SKIP_DIRS
+     and hidden-entry check now run BEFORE `realpathSync`. Broken symlinks
+     (ENOENT from realpath) are treated as a WARNING (skip), not fatal —
+     they don't call `recordError` and don't make discovery incomplete.
+     Truly fatal errors (subtree EACCES on a real directory) are still
+     recorded. (DISC-R143-01)
+
+### File identity (2 P1/P2 + 1 P2)
+
+116. **P1/P2 hardlink code+code non-deterministic** (`wasm-extractor.ts`)
+     — R142 fixed the non-code+code case, but two CODE paths to the same
+     inode (`module.ts` + `module.js`) still used "first seen wins" — the
+     result depended on `readdirSync` order (OS/filesystem dependent).
+     Fixed: `visitedFiles` is now a `Map<identity, chosenPath>`. When a
+     second candidate for the same identity is found, the
+     lexicographically smaller path wins. This makes hardlink selection
+     deterministic across readdir order, OS, and filesystem. The chosen
+     path is stable across runs. (ID-R143-01)
+
+117. **P2 lexical fallback in 0:0 case contradicts fail-closed**
+     (`wasm-extractor.ts`) — When `dev:ino = 0n` AND `realpathSync` failed,
+     `fileIdentityKey` returned `path:${fullPath}` (lexical path). This
+     contradicted the fail-closed policy — a lexical path can be unstable
+     across readdir order. Fixed: if `realpathSync` fails in the 0:0 case,
+     return `null` (fail-closed). The caller skips the file and records
+     an error. (ID-R143-02)
+
+### Diagnostics & API (2 P2)
+
+118. **P2 discovery diagnostics unbounded** (`wasm-extractor.ts`,
+     `indexer.ts`) — All errors were stored in `errors[]` and concatenated
+     into a single string. A repo with thousands of inaccessible entries
+     could OOM. Fixed: `errors[]` is capped at 100 samples. `DiscoveryResult`
+     now includes `totalErrors` (real count, not capped) and `countsByCode`
+     (per-error-code counts, not capped). The indexer's error message is
+     capped at 20 samples with the total count. (PERF-R143-01)
+
+119. **P2 legacy wrapper discarded diagnostics** (`wasm-extractor.ts`) —
+     `discoverSourceFilesWasm()` returned only `.files`, discarding
+     `errors` and `complete`. External callers could treat a partial
+     discovery as complete — silent data loss. Fixed: the wrapper now
+     THROWS on partial discovery (with a sample of the first 5 errors).
+     External callers that want partial results must use
+     `discoverSourceFilesStructured()` directly. (API-R143-01)
+
+### CI / build (1 P2)
+
+120. **P2 dist/ not cleaned before build** (`package.json`) — `pretest`
+     ran `tsc` but didn't clean `dist/` first. A stale artifact (deleted
+     source file still present in `dist/`) could mask a regression. Fixed:
+     added `"clean": "rm -rf dist"` script. `"build"` now runs
+     `npm run clean && tsc`. `"pretest"` runs `npm run build` (which
+     cleans first). (TEST-R143-03)
+
+### Documentation recovery (6 docs)
+
+121. **DOC-R143-01**: README.md rewritten — hybrid architecture (V2 WASM
+     native + V1 fallback), `cbm-v2 index` in Quick Start and CLI table,
+     native indexer section with features and limitations, updated
+     security section with discovery completeness lock.
+
+122. **DOC-R143-02**: docs/CLI_REFERENCE.md — added `cbm-v2 index` command
+     with all options (`--project`, `--root`, `--incremental`, `--dry-run`,
+     `--workers`), behavior notes (discovery completeness lock, root
+     validation, semantics versioning), and exit codes. Removed "0.15.9".
+
+123. **DOC-R143-03**: docs/V2_CURRENT_STATE.md created — authoritative
+     snapshot of current architecture, versions (references package.json/
+     CHANGELOG, no hardcoding), stable features, limitations, blockers,
+     roadmap, validation date.
+
+124. **DOC-R143-04**: MAINTAINERS_GUIDE.md — removed "0.15.9" and hardcoded
+     counts, added extractor semantics version, added 7 invariants section
+     (persisted output change → version bump, partial discovery → no
+     publish/delete, stale returned → stale persisted, canonical root
+     propagated, tests non-root + cross-platform, declared ≠ certified,
+     workflow Git hybrid).
+
+125. **DOC-R143-05**: CONTRIBUTING.md — updated project structure (added
+     `indexer/`, `intelligence/`, `ui/`, `utils/`), added native indexer
+     section, updated prerequisites (V1 optional), updated workflow
+     (branch naming, push with MR options), removed hardcoded test counts.
+
+126. **DOC-R143-06**: docs/V2_ROADMAP.md — labeled as historical archive
+     in README and V2_CURRENT_STATE. V2_CURRENT_STATE.md is the new
+     authoritative current-state document.
+
+### Tests (19 new)
+
+- **STATE-R143-01** (1 test): full partial persists stale=1.
+- **STATE-R143-02** (3 tests): Graph Status reports STALE on db_stale=1,
+  on semantics mismatch, FRESH when clean.
+- **MIG-R143-01** (1 test): partial incremental + v6 DB clears cross-file edges.
+- **DISC-R143-01** (3 tests): broken symlink not fatal, policy-skipped
+  broken symlink, broken symlink doesn't block full index.
+- **ID-R143-01** (1 test): two code hardlinks → deterministic pick.
+- **DATA-R143-01** (1 test): root failure on never-indexed project doesn't create DB.
+- **PERF-R143-01** (2 tests): errors capped, totalErrors + countsByCode tracked.
+- **API-R143-01** (2 tests): legacy wrapper throws on partial, returns on complete.
+- **ID-R143-02** (1 test): identity failures handled gracefully.
+- **Regression** (4 tests): root mode 000, hardlink non-code, FIFO, semantics v7.
+
+### Total: 120 bugs + 11 optimizations + 303 indexer tests across 68 rounds
+
 ## 0.56.3 — Round 142 (2026-07-11) Discovery Completeness Lock
 
 **67th round (GPT 5.6 Sol audit R141).** 2 P1 + 3 P1/P2 + 2 P2 fixed + 1 CI

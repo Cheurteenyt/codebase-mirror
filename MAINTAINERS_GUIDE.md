@@ -189,12 +189,50 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 
 - **Package version** (`v2/package.json`): semver, bumped per round.
   - 0.x.y for pre-1.0. Each round = one minor or patch bump.
-  - Currently 0.15.9 (R77).
+  - See `v2/package.json` for the current version. Do NOT hardcode version numbers in docs.
+- **Extractor semantics version** (`v2/src/indexer/schema.ts` `CURRENT_EXTRACTOR_SEMANTICS_VERSION`):
+  bumped whenever the extractor's semantic output changes in a way that invalidates existing
+  `file_hashes`. Incremental mode compares the stored version to this constant; a mismatch
+  forces a full reindex before any cross-file resolution is published. Currently 7.
 - **Backup format version** (`backup.ts`): independent schema version,
-  bumped only when the JSON shape changes. Currently `0.10.3` (frozen
-  since R36 — the schema hasn't changed).
+  bumped only when the JSON shape changes.
 - **DB migration version**: 4 migrations (initial_schema, optimize_indexes,
   cbm_links_junction_table, human_nodes_fts).
+
+## Invariants (R143+)
+
+These invariants MUST hold for every round. Violations are P1 bugs.
+
+1. **Persisted output change → semantics version bump.** If the extractor's
+   output changes in a way that invalidates existing `file_hashes` (new rows,
+   changed rows, removed rows), `CURRENT_EXTRACTOR_SEMANTICS_VERSION` MUST be
+   bumped. Incremental mode relies on this to force a full reindex.
+
+2. **Partial discovery → no publish, no delete.** If `discovery.complete=false`,
+   the indexer MUST NOT `clearProjectData` (full mode) or compute
+   `deletedRelPaths` (incremental mode). The existing graph is preserved.
+
+3. **Stale returned → stale persisted and read by UI/MCP.** If the indexer
+   returns `crossFileCallsStale=true`, it MUST also persist
+   `cross_file_calls_stale=1` in the `projects` table. Graph Status MUST read
+   this field and report STALE regardless of DB age or git changes.
+
+4. **Canonical root propagated.** `assertDiscoveryRoot` returns the canonical
+   realpath. This value MUST be used for ALL downstream operations (discovery,
+   extraction, `nodeRelative`, `updateProjectStats`). `file_path` must NEVER
+   contain `..`.
+
+5. **Tests filesystem: Linux non-root + cross-platform.** Permission tests
+   (chmod 000) must run as a non-root user. Cross-platform tests (Windows
+   junction, macOS) are a known gap (PKG-CARRY-01).
+
+6. **Declared results ≠ CI-certified results.** "All tests pass" in a commit
+   message is a declared result. GitHub Actions CI is the certified result.
+   Do not claim CI-green without a workflow run on the SHA.
+
+7. **Workflow Git hybrid.** GitHub HTTPS for clone/history (fast), GitLab SSH
+   deploy key for push/MR. Use `git -C <abs>` (bash loses CWD). Verify
+   `local SHA = remote SHA` after push.
 
 ## Round history (last 10 rounds)
 

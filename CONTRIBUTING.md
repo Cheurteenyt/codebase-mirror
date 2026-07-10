@@ -12,7 +12,7 @@ cd cheurteen-project/v2
 # Install dependencies
 npm install
 
-# Build
+# Build (cleans dist/ first to avoid stale artifacts)
 npm run build
 
 # Run tests (builds first via pretest hook)
@@ -20,94 +20,115 @@ npm test
 
 # Run in dev mode (no build needed)
 npm run dev -- --help
+
+# Index a project natively (no V1 needed for TS/JS)
+npm run dev -- index --project my-app --root /path/to/repo
 ```
 
 ## Prerequisites
 
-- **Node.js** ≥ 18 (tested on 18, 20, 22, 24)
+- **Node.js** ≥ 18.6.0 (tested on 22, 24; see `v2/package.json` engines)
 - **Python 3** (for `better-sqlite3` native build, or use prebuild-install)
-- **Codebase Memory V1** (the C engine) — optional, only needed for code graph features
+- **Codebase Memory V1** (the C engine) — optional. V2 has a native WASM indexer (112 languages) and is partially autonomous for TS/JS. V1 is a fallback for other languages.
 
 ## Project Structure
 
 ```
 v2/
 ├── src/
+│   ├── indexer/       # Native WASM indexer (discovery, extraction, cross-file resolver)
 │   ├── human/          # Human memory DB (SQLite, CRUD, schema)
 │   ├── obsidian/       # Vault sync (generator, importer, frontmatter, wikilinks)
-│   ├── bridge/         # Read-only access to V1 code graph
+│   ├── bridge/         # Read-only access to code graph (V1 or V2 native)
 │   ├── mcp/            # MCP server + 7 tools
-│   ├── cli/            # CLI commands (commander-based)
+│   ├── intelligence/   # Graph status, freshness, SWR cache
+│   ├── cli/            # CLI commands (commander-based, including `index`)
 │   ├── reports/        # Hotspots, undocumented, risk reports
+│   ├── ui/             # Graph UI backend (routes, WebSocket)
+│   ├── utils/          # Shared utilities (safe-path.ts)
 │   ├── config.ts       # .codebase-memory.json loader
 │   └── constants.ts    # Shared constants (no magic numbers)
-├── tests/              # Vitest test files (378 tests: 355 backend + 23 frontend)
-├── docs/               # Design documents (9 files)
-├── examples/           # Sample vault and demo data
+├── tests/              # Vitest test files (see v2/CHANGELOG.md for current count)
+├── docs/               # Design documents and current state
+├── scripts/            # Benchmarks and debug tools
 ├── package.json
 └── tsconfig.json
 ```
+
+## Native Indexer
+
+V2 includes a native code indexer (`v2/src/indexer/`) that does NOT require V1:
+
+- **`wasm-extractor.ts`** — tree-sitter WASM parsing, discovery (`discoverSourceFilesStructured`), language detection
+- **`fast-walker.ts`** — AST walker for exports, imports, call-sites
+- **`cross-file-resolver.ts`** — matches call-sites to definitions across files
+- **`indexer.ts`** — orchestrator: full/incremental, parallel workers, semantic versioning
+- **`schema.ts`** — SQLite schema, `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 7`
+- **`worker.ts`** — worker thread for parallel WASM parsing
+
+Key invariants (see [MAINTAINERS_GUIDE.md](MAINTAINERS_GUIDE.md)):
+- Partial discovery preserves the existing graph (no silent wipe)
+- Canonical root is propagated to all downstream operations
+- Stale flag is persisted in DB and read by Graph Status
+- Semantics version bump forces full reindex when extractor output changes
 
 ## Development Workflow
 
 ### 1. Create a branch
 
 ```bash
-git checkout -b feature/your-feature-name
-# or
-git checkout -b fix/issue-description
+git checkout -b v2/r<n>-<short-name>
+# Example: v2/r143-persistent-discovery-state
 ```
 
-### 2. Make changes
-
-Follow the existing code style:
-- **TypeScript strict mode** (no `any` unless absolutely necessary)
-- **ESM modules** (`"type": "module"` — use `import/export`, not `require`)
-- **No magic numbers** — add to `src/constants.ts`
-- **Error messages** must include the offending value and valid options
-- **Tests** — every bug fix must include a regression test
-
-### 3. Test
+### 2. Implement + test
 
 ```bash
-# Type-check
-npm run typecheck
-
-# Build
-npm run build
-
-# Run all tests
-npm test
-
-# Run a specific test file
-npx vitest run tests/human/store.test.ts
-
-# Watch mode
-npm run test:watch
+npm run typecheck      # tsc --noEmit
+npm run build          # clean + tsc
+npm test               # pretest (build) + vitest run
 ```
 
-### 4. Commit
+The full suite must pass with 0 regressions. See `v2/CHANGELOG.md` for the current test count.
 
-Use conventional commit messages:
+### 3. Update docs
 
-```
-feat(v2): add backup command
-fix(v2): handle empty title in updateNode
-docs(v2): update README with all CLI commands
-test(v2): add computeRiskScore tests
-refactor(v2): decompose generateVault into helpers
-```
+- `v2/CHANGELOG.md` — add a round entry with bugs fixed, tests added
+- `v2/package.json` — bump version (patch for hotfix, minor for feature)
+- `README.md` / `docs/` — update if architecture or CLI changed
+- `docs/V2_CURRENT_STATE.md` — update if stable features or limitations changed
 
-### 5. Push and create a Merge Request
+### 4. Commit + push
 
 ```bash
-git push origin feature/your-feature-name
+git add -A
+git commit -m "fix(v2): R<n> <short description> — <priority summary>"
+git push gitlab v2/r<n>-<short-name> \
+  -o merge_request.create \
+  -o merge_request.target=main \
+  -o merge_request.title="R<n> <short description>" \
+  -o merge_request.description="<one-line summary>"
 ```
 
-Then create a PR on GitHub. Include:
-- What changed and why
-- Test results (`npm test` output)
-- Breaking changes (if any)
+### 5. Merge
+
+GitLab MR → merge → mirror to GitHub → GitHub Actions CI.
+
+## Testing
+
+- **Indexer tests**: `v2/tests/indexer/` — `r<n>-*.test.ts` per round
+- **MCP tests**: `v2/tests/mcp/` — spawns `dist/cli/index.js` (requires build)
+- **Graph UI tests**: `graph-ui/` — Vitest + @testing-library/react
+- **Permission tests**: chmod 000 tests require non-root user
+
+## CI
+
+GitHub Actions (Ubuntu, Node 20). Known gaps:
+- No Windows/macOS matrix (PKG-CARRY-01)
+- No lockfile (dependency drift risk)
+- Node 20 EOL in 2026
+
+See [MAINTAINERS_GUIDE.md](MAINTAINERS_GUIDE.md) for the full workflow and invariants.
 
 ## Code Style Guidelines
 

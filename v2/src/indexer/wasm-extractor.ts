@@ -193,11 +193,22 @@ export interface DiscoveryResult {
   /** Errors encountered during traversal (readdir/lstat/realpath/stat failures). */
   errors: DiscoveryError[];
   /**
-   * `true` iff `errors.length === 0`. When false, the discovery is partial:
+   * `true` iff `totalErrors === 0`. When false, the discovery is partial:
    * some subtrees were inaccessible and `files` may be incomplete. The
    * indexer must NOT treat missing files as deleted in this case.
    */
   complete: boolean;
+  /**
+   * R143 (PERF-R143-01): Total number of errors encountered. May exceed
+   * `errors.length` (which is capped at 100 samples). Use this for the
+   * `complete` check and for diagnostics.
+   */
+  totalErrors: number;
+  /**
+   * R143 (PERF-R143-01): Per-error-code counts. E.g. `{ EACCES: 5, ELOOP: 1 }`.
+   * Always complete (not capped) — useful for diagnostics dashboards.
+   */
+  countsByCode: Record<string, number>;
   /** Diagnostic counters. */
   skippedExternalSymlinks: number;
   skippedPolicyPaths: number;
@@ -238,17 +249,21 @@ function fileIdentityKey(fullPath: string): string | null {
     // Using it as-is would collapse all files into one identity → only
     // the first file encountered would be indexed.
     if (st.dev === 0n && st.ino === 0n) {
-      // Fall back to realpath-based identity. Two distinct paths get two
-      // distinct keys — we lose hardlink dedup but avoid the collision.
+      // R143 (ID-R143-02): Fall back to realpath-based identity. If
+      // realpath ALSO fails, return null (fail-closed) — do NOT use the
+      // lexical path, which contradicts the fail-closed policy and could
+      // produce unstable keys across readdir order. The caller will skip
+      // the file and record an error.
       try {
         return `path:${realpathSync(fullPath)}`;
       } catch {
-        // realpath failed too — use the lexical path as last resort.
-        return `path:${fullPath}`;
+        return null;
       }
     }
     return `inode:${st.dev}:${st.ino}`;
   } catch {
+    // R143 (ID-R143-02): stat failed — try realpath. If realpath also
+    // fails, return null (fail-closed).
     try {
       return `path:${realpathSync(fullPath)}`;
     } catch {
@@ -344,20 +359,60 @@ export function discoverSourceFilesStructured(
   // R141 (IDX-R141-01): Track visited file identities so two aliases to the
   // same file produce exactly one result. The key is `dev:ino` (with
   // realpath fallback) — see fileIdentityKey.
-  const visitedFiles = new Set<string>();
+  // R143 (ID-R143-01): Map identity → chosen canonical path. When a second
+  // candidate for the same identity is found, we keep the lexicographically
+  // smaller path. This makes hardlink code+code selection deterministic
+  // across readdir order. Two paths to the same inode (module.ts + module.js)
+  // will always pick the same one regardless of OS/filesystem.
+  const visitedFiles = new Map<string, string>();
+  // R143 (ID-R143-01): Helper to add a file with deterministic tie-breaking.
+  // Returns true if the file was added (or replaced an existing entry),
+  // false if the existing entry was kept.
+  function addFileCandidate(identity: string, canonicalPath: string): boolean {
+    const existing = visitedFiles.get(identity);
+    if (existing === undefined) {
+      visitedFiles.set(identity, canonicalPath);
+      return true;
+    }
+    // R143 (ID-R143-01): deterministic tie-break — keep the lexicographically
+    // smaller path. This ensures module.js + module.ts (same inode) always
+    // picks `module.js` regardless of readdir order.
+    if (canonicalPath < existing) {
+      // Replace the existing entry in the results array.
+      const idx = results.indexOf(existing);
+      if (idx >= 0) results.splice(idx, 1);
+      visitedFiles.set(identity, canonicalPath);
+      return true;
+    }
+    return false;
+  }
   // R141 (IDX-R141-02): Push the canonical real path, not the lexical alias.
   // This makes discovery deterministic across readdir order.
   const stack: string[] = [realRoot];
+
+  // R143 (PERF-R143-01): Cap the errors array at 100 samples. A repo with
+  // thousands of inaccessible entries could OOM. We track the total count
+  // separately so the caller knows the real number.
+  const MAX_STORED_ERRORS = 100;
+  let totalErrorCount = 0;
+  const countsByCode = new Map<string, number>();
 
   /**
    * R142 (DATA-R142-02): Record a discovery error. The error is pushed to
    * `errors[]` so the indexer can detect partial discovery. The caller
    * (indexer) uses `result.complete` to decide whether to clear/publish.
+   *
+   * R143 (PERF-R143-01): Cap at MAX_STORED_ERRORS samples. The total count
+   * and per-code counts are always tracked.
    */
   function recordError(path: string, error: unknown): void {
     const code = (error as { code?: string }).code ?? 'unknown';
     const message = (error as Error).message ?? String(error);
-    errors.push({ path, code, message });
+    totalErrorCount++;
+    countsByCode.set(code, (countsByCode.get(code) ?? 0) + 1);
+    if (errors.length < MAX_STORED_ERRORS) {
+      errors.push({ path, code, message });
+    }
   }
 
   while (stack.length > 0) {
@@ -385,13 +440,38 @@ export function discoverSourceFilesStructured(
       }
 
       if (lst.isSymbolicLink()) {
-        // R139/R140/R141/R142: Resolve symlink target and check containment.
+        // R143 (DISC-R143-01): Check SKIP_DIRS/hidden by ENTRY NAME before
+        // realpathSync. A broken symlink named `node_modules-link` or
+        // `.cache-link` should be skipped by policy WITHOUT calling
+        // realpath (which would fail and make the entire discovery
+        // incomplete). R142 called realpath first, so a single broken
+        // symlink blocked the entire full index.
+        if (SKIP_DIRS.has(entry) || entry.startsWith('.')) {
+          skippedPolicyPaths++;
+          continue;
+        }
+
+        // R139/R140/R141/R142/R143: Resolve symlink target and check containment.
         let realTarget: string;
         try {
           realTarget = realpathSync(fullPath);
         } catch (error) {
-          // R142: record broken symlink (was: silent skip).
-          recordError(fullPath, error);
+          // R143 (DISC-R143-01): Broken symlinks are a WARNING, not fatal.
+          // A broken symlink (target deleted, stale alias) should NOT
+          // block the entire full index. R142 recorded this as a fatal
+          // error (discovery.complete=false), which meant a single
+          // broken symlink prevented ANY indexing. Now we skip the entry
+          // and continue — the discovery remains complete.
+          //
+          // We do NOT call recordError here because:
+          // 1. Broken symlinks are common (npm, git worktrees, IDEs).
+          // 2. They don't indicate a filesystem health problem that
+          //    should block indexing.
+          // 3. The entry is simply not a source file — skip it.
+          //
+          // Truly fatal errors (subtree EACCES on a real directory) are
+          // still recorded by the readdirSync catch above and the regular
+          // directory branch below.
           continue;
         }
         // R141 (QUAL-R141-01): use the unified isPathInside — same predicate
@@ -405,13 +485,6 @@ export function discoverSourceFilesStructured(
         // Catches `link -> node_modules/pkg/src` (basename=`src` is fine,
         // but `node_modules` is in the path).
         if (hasSkippedComponent(realRoot, realTarget)) {
-          skippedPolicyPaths++;
-          continue;
-        }
-        // R140: Also check the entry name itself (alias name) — an alias
-        // named `node_modules` pointing inside the project is rare but
-        // should still be skipped for consistency.
-        if (SKIP_DIRS.has(entry) || entry.startsWith('.')) {
           skippedPolicyPaths++;
           continue;
         }
@@ -457,15 +530,13 @@ export function discoverSourceFilesStructured(
             recordError(realTarget, new Error('fileIdentityKey returned null'));
             continue;
           }
-          if (visitedFiles.has(identity)) {
+          // R143 (ID-R143-01): deterministic tie-breaking. If this identity
+          // was already seen, keep the lexicographically smaller path.
+          if (addFileCandidate(identity, realTarget)) {
+            results.push(realTarget);
+          } else {
             duplicates++;
-            continue;
           }
-          visitedFiles.add(identity);
-          // R141 (IDX-R141-02): Persist the CANONICAL path relative to realRoot.
-          // The alias name is intentionally dropped — qualified names and
-          // file_hashes must be stable across readdir order.
-          results.push(realTarget);
         } else {
           // R142 (SEC-R142-01): FIFO, socket, character device, block device.
           // Silently skip — these are not source files and reading them
@@ -513,23 +584,31 @@ export function discoverSourceFilesStructured(
           recordError(fullPath, new Error('fileIdentityKey returned null'));
           continue;
         }
-        if (visitedFiles.has(identity)) {
+        // R143 (ID-R143-01): deterministic tie-breaking for hardlinks.
+        if (addFileCandidate(identity, fullPath)) {
+          results.push(fullPath);
+        } else {
           duplicates++;
-          continue;
         }
-        visitedFiles.add(identity);
-        results.push(fullPath);
       }
       // R142 (SEC-R142-01): non-file, non-dir, non-symlink regular entries
       // (FIFO, socket, device) are silently skipped.
     }
   }
 
+  // R143 (PERF-R143-01): convert countsByCode Map to a plain object.
+  const countsByCodeObj: Record<string, number> = {};
+  for (const [code, count] of countsByCode) {
+    countsByCodeObj[code] = count;
+  }
+
   return {
     realRoot,
     files: results.sort(),
     errors,
-    complete: errors.length === 0,
+    complete: totalErrorCount === 0,
+    totalErrors: totalErrorCount,
+    countsByCode: countsByCodeObj,
     skippedExternalSymlinks,
     skippedPolicyPaths,
     duplicates,
@@ -541,11 +620,25 @@ export function discoverSourceFilesStructured(
  * file list (no errors). Kept for backward compatibility with external
  * callers and tests that expect `string[]`.
  *
- * R142: throws on root failure (same as R141). Internal callers should
- * prefer `discoverSourceFilesStructured` to get the error list.
+ * R143 (API-R143-01): If the discovery is PARTIAL (errors present), this
+ * wrapper THROWS instead of silently returning an incomplete file list.
+ * The previous behavior discarded `errors` and `complete`, which could
+ * cause external callers to treat a partial discovery as complete —
+ * leading to silent data loss in incremental mode. External callers
+ * that want partial results should use `discoverSourceFilesStructured`
+ * directly and inspect `result.complete`.
+ *
+ * R142: throws on root failure (same as R141).
  */
 export function discoverSourceFilesWasm(rootPath: string): string[] {
-  return discoverSourceFilesStructured(rootPath).files;
+  const result = discoverSourceFilesStructured(rootPath);
+  if (!result.complete) {
+    const sample = result.errors.slice(0, 5).map(e => `${e.path}: ${e.code}`).join('; ');
+    throw new Error(
+      `Discovery incomplete (${result.totalErrors} errors). Use discoverSourceFilesStructured() for partial results. First errors: ${sample}`
+    );
+  }
+  return result.files;
 }
 
 // ── WASM grammar loading ───────────────────────────────────────────────
