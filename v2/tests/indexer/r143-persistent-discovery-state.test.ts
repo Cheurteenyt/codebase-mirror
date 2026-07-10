@@ -196,20 +196,17 @@ describe('R143: Persistent Discovery State', () => {
     expect(result.skippedPolicyPaths).toBeGreaterThanOrEqual(0); // may or may not count
   });
 
-  it('DISC-R143-01c: broken symlink does NOT block full index', async () => {
+  it('DISC-R143-01c: broken symlink triggers uncertainty lock (R150)', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     symlinkSync('/nonexistent/target', join(projectDir, 'stale-alias.ts'));
 
-    // R143: the full index must succeed despite the broken symlink.
+    // R150 (DATA-R150-02): broken symlinks now set globalDeletionUncertainty.
+    // A full index with a broken symlink must abort (preserve old graph)
+    // because the symlink may have been valid at the previous run.
+    // R143 behavior (succeed despite broken symlink) is superseded by R150.
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
-    expect(r.errors.length).toBe(0);
-    expect(r.crossFileCallsStale).toBe(false);
-
-    const db = new Database(defaultCodeDbPath(projectName), { readonly: true });
-    const nodes = (db.prepare("SELECT file_path FROM nodes WHERE project = ? AND label = 'File'").all(projectName) as Array<{ file_path: string }>);
-    expect(nodes.some(n => n.file_path.endsWith('a.ts'))).toBe(true);
-    expect(nodes.some(n => n.file_path.includes('stale-alias'))).toBe(false);
-    db.close();
+    expect(r.errors.length).toBeGreaterThan(0);
+    expect(r.crossFileCallsStale).toBe(true);
   });
 
   // ── ID-R143-01: deterministic hardlink code+code selection ───────────

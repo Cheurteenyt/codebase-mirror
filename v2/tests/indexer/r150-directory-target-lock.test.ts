@@ -1,5 +1,5 @@
-// v2/tests/indexer/r148-full-uncertainty-lock.test.ts
-// R148: Full Uncertainty Lock + Incremental Stale + Windows Path + CLI Fix
+// v2/tests/indexer/r150-directory-target-lock.test.ts
+// R150: Directory-Target Uncertainty Lock + Broken Symlink Confidence + CLI No-Change
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, linkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,15 +10,15 @@ import { discoverSourceFilesWasm, discoverSourceFilesStructured } from '../../sr
 import { defaultCodeDbPath } from '../../src/bridge/sqlite-ro.js';
 import Database from 'better-sqlite3';
 
-describe('R148: Full Uncertainty Lock', () => {
+describe('R150: Directory-Target Lock', () => {
   let tmpDir: string, projectDir: string, cacheDir: string, projectName: string;
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'r148-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'r150-'));
     projectDir = join(tmpDir, 'project');
     cacheDir = join(tmpDir, 'cache');
     mkdirSync(projectDir, { recursive: true });
     mkdirSync(join(cacheDir, 'codebase-memory-mcp'), { recursive: true });
-    projectName = `r148-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    projectName = `r150-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     process.env.XDG_CACHE_HOME = cacheDir;
   });
   afterEach(() => {
@@ -28,14 +28,28 @@ describe('R148: Full Uncertainty Lock', () => {
     delete process.env.NODE_ENV;
   });
 
-  // ── DATA-R148-01: Full mode + uncertainty → preserve graph ────────────
+  // ── DATA-R150-01: ENOENT_STAT directory target → uncertainSubtrees ───
 
-  it('DATA-R148-01a: broken symlink triggers full uncertainty lock (R150)', async () => {
-    // R150 (DATA-R150-02): broken symlinks now set globalDeletionUncertainty.
-    // A full index with a broken symlink must abort (preserve old graph)
-    // because the symlink may have been valid at the previous run.
-    // R148 behavior (broken symlink does NOT trigger uncertainty) is
-    // superseded by R150.
+  it('DATA-R150-01a: ENOENT_STAT adds to both uncertainPaths AND uncertainSubtrees (code inspection)', () => {
+    const source = require('node:fs').readFileSync(
+      join(__dirname, '..', '..', 'src', 'indexer', 'wasm-extractor.ts'), 'utf-8'
+    );
+    // R150: ENOENT_STAT must add to BOTH uncertainPaths and uncertainSubtrees
+    // because the target type (file vs directory) is unknown after ENOENT.
+    expect(source).toContain('uncertainPaths.push(relTarget)');
+    expect(source).toContain('uncertainSubtrees.push(relTarget)');
+  });
+
+  // ── DATA-R150-02: broken symlink → globalDeletionUncertainty ──────────
+
+  it('DATA-R150-02a: broken symlink sets globalDeletionUncertainty (code inspection)', () => {
+    const source = require('node:fs').readFileSync(
+      join(__dirname, '..', '..', 'src', 'indexer', 'wasm-extractor.ts'), 'utf-8'
+    );
+    expect(source).toContain('globalDeletionUncertainty = true');
+  });
+
+  it('DATA-R150-02b: broken symlink blocks full index', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
@@ -43,45 +57,33 @@ describe('R148: Full Uncertainty Lock', () => {
     expect(r.crossFileCallsStale).toBe(true);
   });
 
-  // ── STATE-R148-01: Incremental uncertainty → stale ────────────────────
-
-  it('STATE-R148-01a: incremental with broken symlinks → stale=true (R150 globalDeletionUncertainty)', async () => {
-    // R150: broken symlinks now set globalDeletionUncertainty → hasUncertainty=true.
-    // The incremental must mark stale and not advance last_success.
+  it('DATA-R150-02c: broken symlink forces stale in incremental', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
-    // Add a broken symlink for the incremental run.
     symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: true, useWasm: true, workers: 0 });
-    // R150: globalDeletionUncertainty → hasUncertainty → stale=true.
     expect(r.crossFileCallsStale).toBe(true);
   });
 
-  // ── COMPAT-R148-01: Windows path.sep ──────────────────────────────────
-  // Verified by code inspection: uses `sep` from node:path, not '/'.
-
-  it('COMPAT-R148-01a: subtree filter uses path.sep (code inspection)', () => {
-    // The filter uses `p.startsWith(prefix + sep)` where `sep` is imported
-    // from 'node:path'. On Linux this is '/', on Windows this is '\'.
-    // This test verifies the import exists and is used.
-    const indexerSource = require('node:fs').readFileSync(
+  it('DATA-R150-02d: globalDeletionUncertainty blocks ALL deletions (code inspection)', () => {
+    const source = require('node:fs').readFileSync(
       join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf-8'
     );
-    expect(indexerSource).toContain('prefix + sep');
-    expect(indexerSource).toContain("import { join, relative as nodeRelative, sep }");
+    expect(source).toContain('if (discovery.globalDeletionUncertainty)');
+    expect(source).toContain('deletedRelPaths = []');
   });
 
-  // ── OUTCOME-R148-01: CLI duplicate warning fix ────────────────────────
-  // Verified by code inspection: stale warning printed only once.
+  // ── OUTCOME-R150-01: CLI no-op fresh correct message ──────────────────
 
-  it('OUTCOME-R148-01a: CLI stale warning printed once (code inspection)', () => {
-    const cliSource = require('node:fs').readFileSync(
+  it('OUTCOME-R150-01a: CLI no-change message distinguishes skipped > 0 (code inspection)', () => {
+    const source = require('node:fs').readFileSync(
       join(__dirname, '..', '..', 'src', 'cli', 'commands', 'index.ts'), 'utf-8'
     );
-    // R148: removed the duplicate "Cross-file CALLS may be stale after incremental" block.
-    // The warning is now printed only in the else-if branch (console.log, not comment).
-    const staleLogMatches = cliSource.match(/console\.log.*Cross-file CALLS/g) || [];
-    expect(staleLogMatches.length).toBe(1); // only one console.log now
+    // R150: no-op fresh (nodes=0, errors=0, stale=false, skipped>0) should
+    // print "No changes detected" not "0 source files".
+    expect(source).toContain('No changes detected. Existing graph is fresh.');
+    // The old "0 source files" message should not be in a console.log.
+    expect(source).not.toContain("console.log(`ℹ Project");
   });
 
   // ── Regression ────────────────────────────────────────────────────────

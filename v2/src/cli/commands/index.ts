@@ -91,10 +91,18 @@ export function registerIndexCommand(program: Command): void {
             console.log(`  Run "cbm-v2 index --project ${project} --root ${rootPath}" (full reindex) to rebuild them.`);
           }
           if (result.errors.length === 0 && !result.crossFileCallsStale && result.nodes === 0) {
-            // R149: nodes=0 but no errors and not stale — likely a no-op
-            // incremental with 0 source files. This is technically a success
-            // but may be surprising.
-            console.log(`ℹ Project "${project}" has 0 source files. Nothing to index.`);
+            // R150 (OUTCOME-R150-01): R149 incorrectly printed "0 source
+            // files" for a no-op incremental (nodes=0 means 0 nodes
+            // PRODUCED in this run, not 0 files in the project). A no-op
+            // incremental on a 50k-node project would say "0 source files".
+            // Now we distinguish:
+            // - skipped > 0 → "No changes detected" (no-op incremental)
+            // - skipped = 0 → "No supported source files found" (empty project)
+            if (result.skipped > 0) {
+              console.log(`✓ No changes detected. Existing graph is fresh.`);
+            } else {
+              console.log(`ℹ No supported source files found in "${rootPath}".`);
+            }
           }
         }
 

@@ -1,5 +1,66 @@
 # Changelog — Codebase Memory V2
 
+## 0.57.1 — Round 150 (2026-07-11) Directory-Target Lock + Broken Symlink Confidence
+
+**75th round (GPT 5.6 Sol audit R149).** 2 P1 + 1 P1/P2 fixed.
+Closes the 3 confirmed P1 code findings of the R149 audit.
+
+### Directory-target uncertainty (1 P1)
+
+165. **P1 ENOENT_STAT on directory target only protects exact path**
+     (`wasm-extractor.ts`) — R149 added `realTarget` to `uncertainPaths`
+     (exact match) but NOT to `uncertainSubtrees` (prefix match). If the
+     target was a directory, its descendants (`target/a.ts`,
+     `target/b.ts`) would only be protected by the subtree prefix filter.
+     Without it, an incremental index could delete all old nodes under
+     the directory. Fixed: `ENOENT_STAT` now adds the path to BOTH
+     `uncertainPaths` AND `uncertainSubtrees`. Since the target type
+     (file vs directory) is no longer observable after ENOENT, the safe
+     approach is to protect both exact and prefix matches.
+     (DATA-R150-01)
+
+### Broken symlink historical confidence (1 P1)
+
+166. **P1 broken symlink realpath ENOENT not deletion-safe**
+     (`wasm-extractor.ts`, `indexer.ts`) — R148/R149 assumed broken
+     symlinks are permanently broken (target never existed during this
+     run). But the symlink MAY have been valid at the previous run — its
+     target may be temporarily absent (TOCTOU race). Without alias
+     history, the system cannot distinguish permanently broken from
+     temporarily broken. Fixed: `realpath(symlink) ENOENT` now sets
+     `globalDeletionUncertainty = true` on `DiscoveryResult`. When set,
+     the indexer blocks ALL deletions (`deletedRelPaths = []`) and
+     triggers the full uncertainty lock. The next successful run (when
+     the target is back) will re-index normally. This is conservative
+     but prevents silent data loss from historical alias targets.
+     (DATA-R150-02)
+
+### CLI no-op message (1 P1/P2)
+
+167. **P1/P2 CLI false "0 source files" on no-op fresh**
+     (`cli/commands/index.ts`) — R149 added a message for `nodes=0`:
+     "Project has 0 source files. Nothing to index." But `nodes=0`
+     means 0 nodes PRODUCED in this run, not 0 files in the project.
+     A no-op incremental on a 50k-node project would say "0 source
+     files". Fixed: now distinguishes `skipped > 0` (no-op incremental
+     on non-empty project → "No changes detected. Existing graph is
+     fresh.") from `skipped = 0` (empty project → "No supported source
+     files found"). (OUTCOME-R150-01)
+
+### Tests (9 new, 3 updated)
+
+- **DATA-R150-01** (1 test): code inspection of uncertainPaths + uncertainSubtrees.
+- **DATA-R150-02** (4 tests): code inspection of globalDeletionUncertainty,
+  broken symlink blocks full, broken symlink forces stale incremental,
+  code inspection of deletion block.
+- **OUTCOME-R150-01** (1 test): code inspection of no-change message.
+- **Regression** (3 tests): semantics v8, hardlink extensions, extraction error.
+- **Updated**: 3 tests adjusted for R150 broken symlink behavior change
+  (R143/R144/R148 tests that expected broken symlinks to NOT block full
+  index now expect them to block — R150 supersedes R143 behavior).
+
+### Total: 167 bugs + 11 optimizations + 376 indexer tests across 75 rounds
+
 ## 0.57.0 — Round 149 (2026-07-11) Fast-Path Uncertainty Dominance
 
 **74th round (GPT 5.6 Sol audit R148).** 2 P1 + 1 P1 + 1 P1/P2 fixed.

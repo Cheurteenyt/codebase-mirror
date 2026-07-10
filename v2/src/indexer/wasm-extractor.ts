@@ -235,6 +235,12 @@ export interface DiscoveryResult {
    * NOT delete any path under these prefixes.
    */
   uncertainSubtrees: string[];
+  /**
+   * R150 (DATA-R150-02): Global deletion uncertainty. When true, the indexer
+   * MUST NOT treat ANY path as a confirmed deletion. Set when a broken
+   * symlink is encountered that may have been valid at the previous run.
+   */
+  globalDeletionUncertainty: boolean;
   /** Diagnostic counters. */
   skippedExternalSymlinks: number;
   skippedPolicyPaths: number;
@@ -442,6 +448,12 @@ export function discoverSourceFilesStructured(
   // confirmed deletions — they may have been temporarily absent.
   const uncertainPaths: string[] = [];
   const uncertainSubtrees: string[] = [];
+  // R150 (DATA-R150-02): Global deletion uncertainty. Set when a broken
+  // symlink is encountered that may have been valid at the previous run.
+  // Without alias history, we cannot distinguish permanently broken from
+  // temporarily broken. When set, ALL deletions are blocked — the indexer
+  // must not treat ANY path as a confirmed deletion.
+  let globalDeletionUncertainty = false;
 
   /**
    * R145 (DISC-R145-01): Record a discovery warning. Warnings don't make
@@ -545,7 +557,16 @@ export function discoverSourceFilesStructured(
             // are uncertain (atomic save race). Broken symlinks are just
             // permanently broken — the old data (if any) is for the symlink
             // path, not the target, so there's nothing to preserve.
+            // R150 (DATA-R150-02): However, the symlink MAY have been valid
+            // at the previous run, and its target may be temporarily absent
+            // (TOCTOU). Without alias history, we cannot distinguish
+            // permanently broken from temporarily broken. To be safe, we
+            // set a global deletion uncertainty flag that prevents ALL
+            // deletions in this run. The next successful run (when the
+            // target is back) will re-index normally. This is conservative
+            // but prevents silent data loss.
             recordWarning('ENOENT');
+            globalDeletionUncertainty = true;
             continue;
           }
           if (code === 'ELOOP') {
@@ -598,12 +619,17 @@ export function discoverSourceFilesStructured(
             // Don't call recordError — discovery stays complete.
             // R145 (DISC-R145-02): track as warning for diagnostics.
             // R149 (DATA-R149-02): realTarget IS known (realpath succeeded).
-            // Add to uncertainPaths so the indexer doesn't delete old data
-            // for this canonical path. R148 incorrectly said "canonical
-            // unknown" — but realTarget is the canonical path, returned by
-            // realpathSync. The audit was right: we CAN map it.
+            // R150 (DATA-R150-01): Since the target type (file vs directory)
+            // is no longer observable after ENOENT on stat, we add the path
+            // to BOTH uncertainPaths (exact match) AND uncertainSubtrees
+            // (prefix match). If the target was a directory, its descendants
+            // (target/a.ts, target/b.ts) would only be protected by the
+            // subtree prefix filter. Without this, an incremental index
+            // could delete all old nodes under the directory.
             recordWarning('ENOENT_STAT');
-            uncertainPaths.push(relative(realRoot, realTarget));
+            const relTarget = relative(realRoot, realTarget);
+            uncertainPaths.push(relTarget);
+            uncertainSubtrees.push(relTarget);
             continue;
           }
           // EACCES, EIO, etc. — fatal.
@@ -756,6 +782,7 @@ export function discoverSourceFilesStructured(
     warningCountsByCode: warningCountsByCodeObj,
     uncertainPaths,
     uncertainSubtrees,
+    globalDeletionUncertainty,
     skippedExternalSymlinks,
     skippedPolicyPaths,
     duplicates,

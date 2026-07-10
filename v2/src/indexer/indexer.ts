@@ -384,10 +384,14 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // An atomic-save race could thus lose nodes/edges for a file that still
   // exists on disk. Now: if there's ANY uncertainty in full mode, we do NOT
   // clear — we preserve the old graph and return stale+error.
-  const hasUncertainty = discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0;
+  // R150 (DATA-R150-02): globalDeletionUncertainty (broken symlinks) also
+  // triggers the full lock — the symlink may have been valid at the previous
+  // run, so the full could destroy old data for a target that's temporarily
+  // absent.
+  const hasUncertainty = discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0 || discovery.globalDeletionUncertainty;
   if (!opts.incremental && hasUncertainty) {
     db.close();
-    const uncertainMsg = `Discovery uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Full index aborted to preserve existing graph. Retry when filesystem is stable.`;
+    const uncertainMsg = `Discovery uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent${discovery.globalDeletionUncertainty ? ', global deletion uncertainty (broken symlinks)' : ''}. Full index aborted to preserve existing graph. Retry when filesystem is stable.`;
     markProjectStalePreservingGraph(dbPath, opts.project, uncertainMsg);
     return {
       dbPath,
@@ -489,7 +493,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // this filter, a single TOCTOU race could silently delete nodes,
     // hashes, call_sites, imports, and exports for a file that still
     // exists on disk.
-    if (discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0) {
+    // R150 (DATA-R150-02): If globalDeletionUncertainty is set, block ALL
+    // deletions — we can't distinguish permanently broken from temporarily
+    // broken symlinks without alias history.
+    if (discovery.globalDeletionUncertainty) {
+      deletedRelPaths = [];
+    } else if (discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0) {
       const uncertainPathSet = new Set(discovery.uncertainPaths);
       const uncertainSubtreePrefixes = discovery.uncertainSubtrees;
       // R148 (COMPAT-R148-01): Use path.sep instead of hardcoded '/' for

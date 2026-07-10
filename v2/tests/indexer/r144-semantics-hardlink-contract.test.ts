@@ -371,11 +371,12 @@ describe('R144: Semantics v8 + Hardlink Language Contract', () => {
     db.close();
   });
 
-  it('regression: broken symlink does not block full index (R143 DISC-R143-01)', async () => {
+  it('regression: broken symlink triggers uncertainty lock (R150)', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
+    // R150: broken symlinks now set globalDeletionUncertainty → full abort.
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
-    expect(r.errors.length).toBe(0);
+    expect(r.errors.length).toBeGreaterThan(0);
   });
 
   it('regression: root mode 000 rejected (R142 DATA-R142-01)', () => {
