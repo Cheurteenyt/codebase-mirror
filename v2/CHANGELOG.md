@@ -1,5 +1,114 @@
 # Changelog — Codebase Memory V2
 
+## 0.54.3 — Round 126 (2026-07-10) Extractor Semantics Migration Lock + Terminal Unknown/Unresolved
+
+**51st round (GPT 5.6 Sol audit R125B).** 6 bugs fixed + 2 P1 limitations closed +
+1 performance comment corrected. This round addresses the migration and precision
+issues identified in the R125B audit: existing DBs indexed by R122–R125A have valid
+`file_hashes` but missing `star_re_export` rows (Bug 57 fix not backfilled), and
+`unknown`/unresolved states fell through to name-based fallback, creating
+false-positive CALLS edges.
+
+### Bugs fixed (6)
+
+58. **Old DBs not backfilled after Bug 57** (`schema.ts`, `indexer.ts`) — DBs
+    indexed by R122–R125A have valid `file_hashes` but missing `star_re_export`
+    rows. After upgrading to R125B+, incremental mode skipped unchanged barrels,
+    so the Bug 57 fix was only applied after a full reindex or barrel modification.
+    The graph could remain wrong while `crossFileCallsStale=false`. Fixed: added
+    `extractor_semantics_version` column to `projects` table. Full reindex sets
+    version=CURRENT; incremental detects stale version and forces
+    `crossFileCallsStale=true` so the caller must reindex. (MIG-R126-01)
+
+59. **`crossFileCallsStale=false` despite incomplete exports** (`indexer.ts`) —
+    The R120 legacy test locked in the dangerous behavior of marking the graph
+    fresh even when the exports table was empty. Fixed: the test now verifies
+    that a modern DB (version=current) with deleted exports produces 0 edges
+    (terminal unknown) with `stale=false` (resolver ran successfully). A new
+    migration test verifies that a legacy DB (version=0) forces `stale=true`.
+    (MIG-R126-02)
+
+60. **Missing star source ignored → false exact edge** (`cross-file-resolver.ts`)
+    — When `export * from './missing'` was used alongside `export * from './b'`,
+    the missing star source was silently ignored, and the resolved target from
+    `b` became a false "exact" edge. ESM would throw `ERR_MODULE_NOT_FOUND`.
+    Fixed: unresolved star sources now set `hasUnknown=true`, which propagates
+    as `{ kind: 'unknown', reason: 'unresolved_reexport_module' }`. When
+    semantics are current, this is terminal — no edge, no fallback. (IDX-R126-01)
+
+61. **`unknown` in star branch ignored → false exact edge** (`cross-file-resolver.ts`)
+    — When one star branch returned `unknown` (e.g. legacy DB with incomplete
+    export tracking) and another returned `resolved`, the resolved target became
+    a false "exact" edge. Fixed: `unknown` is now propagated from star branches.
+    The precedence is: `ambiguous > unknown > resolved-count`. Any `unknown`
+    branch makes the overall result `unknown`, preventing false-positive edges.
+    (IDX-R126-02)
+
+62. **Private-only file falls back to name-based** (`cross-file-resolver.ts`) —
+    `import { hidden } from './hidden'` where `hidden.ts` has `function hidden()`
+    (not exported) returned `unknown` (no exports row), which fell through to
+    name-based fallback. A same-named symbol in another file would receive a
+    false CALLS edge. Fixed: when `semanticsCurrent=true` (full reindex or
+    incremental with current version), `unknown` is TERMINAL — no name-based
+    fallback. (IDX-R125-01, previously `it.todo`)
+
+63. **Unresolved import source falls back to name-based** (`cross-file-resolver.ts`)
+    — `import { foo } from './missing'` where `./missing` doesn't exist fell
+    through to name-based fallback. A same-named symbol in another file would
+    receive a false CALLS edge. ESM would throw `ERR_MODULE_NOT_FOUND`. Fixed:
+    when `semanticsCurrent=true`, unresolved source modules are TERMINAL — no
+    name-based fallback. (IDX-R125-02, previously `it.todo`)
+
+### Precision improvements
+
+- **Structured `UnknownReason`**: `resolveExportedSymbol` now returns
+  `{ kind: 'unknown', reason: 'legacy_export_tracking' | 'unresolved_reexport_module' | 'depth_limit' | 'untracked_export_form' }`
+  instead of a bare `{ kind: 'unknown' }`. The reason is informational and does
+  not change terminal semantics.
+- **Depth cap returns `unknown`**: `if (depth > 10) return { kind: 'unknown', reason: 'depth_limit' }`
+  instead of `{ kind: 'missing' }`. A depth-limit hit is an unknown (we can't
+  verify the symbol is not exported through a deeper path), not a definitive
+  "not exported".
+- **Re-export source unresolved returns `unknown`**: `export { foo } from './missing'`
+  now returns `{ kind: 'unknown', reason: 'unresolved_reexport_module' }` instead
+  of `{ kind: 'missing' }`, consistent with star source behavior.
+
+### Performance
+
+- **O(1) comment corrected**: the previous "O(1) per call_site" comment was
+  correct only when star re-exports were not detected (pre-R125B). With R125B's
+  Bug 57 fix, barrels are actually traversed, so the worst case is now
+  `O(N + M + E × U)` where E is the number of `export *` edges and U is the
+  number of distinct (file, name) pairs resolved. A per-rebuild cache is
+  planned for R128. (PERF-R126-02)
+
+### Tests (10 new + 2 converted from `it.todo` + 1 rewritten)
+
+- **R126 migration test**: R125A-style DB (version=0, missing star rows) →
+  incremental forces `stale=true`
+- **R126 full reindex test**: version=CURRENT, stale=false
+- **IDX-R126-01**: missing star source → 0 edges (terminal unknown)
+- **IDX-R125-01**: private-only file → 0 edges (terminal unknown, no fallback)
+- **IDX-R125-02**: unresolved import source → 0 edges (terminal unknown)
+- **IDX-R126-05**: type-only named export (`export type { Foo }`) → 0 star rows
+- **IDX-R126-03**: depth 10 resolves, depth 11 → 0 edges (depth_limit unknown)
+- **TEST-R126-02**: workers=2 star export (skipped in vitest env, same as R94)
+- **Happy path**: `export *` + import → 1 exact edge (positive control)
+- **R120 test C rewritten**: modern DB with deleted exports → 0 edges (was: >=1)
+- **R112 test 1 updated**: default export expression → 0 edges (was: name-based fallback)
+- **R124 `it.todo` removed**: IDX-R125-01/02 now have green tests in R126
+
+### Documentation fixes
+
+- **DOC-R126-01**: Fixed duplicated R125A title in changelog
+  (`## 0.54.1 — Round 125A (2026-07-10) Test Truth Lock (2026-07-10) Test Truth Lock`)
+- **DOC-R126-02**: Renamed R122 collision test from "resolves to first found"
+  to "star conflict: duplicate exports produce zero CALLS edges"
+- **DOC-R126-03**: Renamed R124 nested ambiguity test from "no exact edge" to
+  "nested ambiguity: inner star conflict + outer star → 0 total edges"
+
+### Total: 63 bugs + 11 optimizations + 164 indexer tests across 51 rounds
+
 ## 0.54.2 — Round 125B (2026-07-10) Semantic Test Lock + Star Detection Fix
 
 **50th round (GPT 5.6 Sol audit R125A).** 1 runtime bug fixed + test lock.
@@ -23,7 +132,7 @@ the star export detection was broken.
 
 ### Total: 57 bugs + 11 optimizations + 154 tests (2 todo) across 50 rounds
 
-## 0.54.1 — Round 125A (2026-07-10) Test Truth Lock (2026-07-10) Test Truth Lock
+## 0.54.1 — Round 125A (2026-07-10) Test Truth Lock
 
 **49th round (GPT 5.6 Sol audit R124).** 0 runtime bugs — test coherence fix.
 GPT 5.6 found that R124's test changes created contradictions: R122 collision

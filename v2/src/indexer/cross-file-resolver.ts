@@ -22,22 +22,37 @@
 //      containing "resolution":"cross_file_*"). Intra-file CALLS edges
 //      (resolution="intra_file") are preserved.
 //   4. For each call_site in the persistent table:
-//      - Look up candidates by callee name (or last segment if not found).
-//      - Cap at 5 candidates. Compute confidence = 1/n (or 0.3 max for member calls).
-//      - Skip self-calls (source QN == candidate QN).
-//      - Insert a CALLS edge with properties_json containing resolution metadata.
+//      - Try import-aware resolution (named/alias/default/namespace).
+//      - R126: if the import binding is explicit but the source module is
+//        unresolved, OR the export resolution returns `unknown`/`missing`/
+//        `ambiguous`, the call-site is TERMINAL — no name-based fallback —
+//        when the project's extractor_semantics_version is current.
+//      - Otherwise (no import binding, or legacy semantics version), fall
+//        back to name-based resolution with up to 5 candidates.
 //
 // Performance:
 //   - O(N) for nodes table scan (N = nodes in project)
 //   - O(M) for call_sites scan (M = call_sites in project)
 //   - O(1) per call_site for symbol lookup (Map)
-//   - For a typical 10k-node project with 5k call_sites: ~50-100ms
-//   - Acceptable for Phase 1. Future optimization: only re-resolve call_sites
-//     from changed files + only delete cross-file edges touching changed files.
+//   - O(E × U) worst-case for star re-export traversal, where E is the number
+//     of `export *` edges and U is the number of distinct (file, name) pairs
+//     resolved in a single rebuild. The depth is capped at 10 and each branch
+//     carries its own visited set, so the traversal is bounded.
+//   - R126 NOTE: the previous "O(1) per call_site" comment was correct only
+//     when star re-exports were not detected (pre-R125B). With R125B's Bug 57
+//     fix, barrels are actually traversed, so the worst case is now
+//     O(N + M + E × U). A per-rebuild (file, name) cache is planned for R128.
+//   - For a typical 10k-node project with 5k call_sites and <100 barrels:
+//     ~50-150ms. Deep barrel chains (10+) or diamond topologies may add
+//     20-50ms. Acceptable for Phase 1.
 
 import type Database from 'better-sqlite3';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
 import { BUILTIN_METHOD_NAMES } from './fast-walker.js';
+import { CURRENT_EXTRACTOR_SEMANTICS_VERSION } from './schema.js';
+// R126: CURRENT_EXTRACTOR_SEMANTICS_VERSION is re-exported via the helper
+// isExtractorSemanticsCurrent() for callers that need to check the stored
+// version (e.g. incremental mode deciding whether to pass semanticsCurrent=true).
 
 // R116: moved from extraction-time to resolution-time filter
 const BUILTIN_METHOD_NAMES_SET = BUILTIN_METHOD_NAMES;
@@ -245,6 +260,14 @@ function resolveModulePath(
  * checks if the callee name matches an import binding in the call-site's file.
  * If so, it resolves to the imported symbol with high confidence.
  *
+ * R126: the `semanticsCurrent` parameter controls whether `unknown` and
+ * unresolved-source states are TERMINAL (no name-based fallback). Callers
+ * MUST pass true for full reindex (the extractor just produced fresh data).
+ * For incremental, callers MUST pass true iff the stored
+ * extractor_semantics_version equals CURRENT_EXTRACTOR_SEMANTICS_VERSION.
+ * When in doubt, passing false preserves the pre-R126 behavior (safe default
+ * that avoids false negatives on legacy DBs).
+ *
  * Returns the number of cross-file CALLS edges inserted.
  *
  * R109: safe to call when nodesCount=0 — deletes any stale cross-file edges,
@@ -256,6 +279,7 @@ function resolveModulePath(
 export function rebuildCrossFileCallsEdges(
   db: Database.Database,
   project: string,
+  semanticsCurrent: boolean = false,
 ): number {
   // 1. Delete ALL existing cross-file CALLS edges for this project.
   //    Identify by properties_json containing "resolution":"cross_file".
@@ -385,30 +409,46 @@ export function rebuildCrossFileCallsEdges(
   }
 
   // R124: Resolution result type — distinguishes resolved/missing/ambiguous/unknown
+  // R126: `unknown` now carries a structured reason so callers and diagnostics
+  // can distinguish "no export tracking" from "unresolved star source" from
+  // "depth limit hit". The reason is informational and does NOT change the
+  // terminal semantics: any `unknown` is terminal when the project's extractor
+  // semantics version is current (no name-based fallback).
+  type UnknownReason =
+    | 'legacy_export_tracking'    // file has no row in exports table (pre-R119 DB or never indexed)
+    | 'unresolved_reexport_module' // `export * from './missing'` — source module not found
+    | 'depth_limit'                // barrel chain exceeded the depth cap (10)
+    | 'untracked_export_form';     // export form not yet supported (e.g. `export * as ns`)
   type ResolutionResult =
     | { kind: 'resolved'; qn: string }
     | { kind: 'missing' }
     | { kind: 'ambiguous' }
-    | { kind: 'unknown' };
+    | { kind: 'unknown'; reason: UnknownReason };
 
   // R124: Resolve an exported name to a target QN, following re-exports.
   // Returns a structured result so callers can distinguish:
   // - resolved: exactly one target found
-  // - missing: no export binding and no symbol found
+  // - missing: no export binding and no symbol found (file IS tracked)
   // - ambiguous: multiple distinct targets (ESM SyntaxError)
-  // - unknown: no export tracking for this file (legacy DB or no exports)
+  // - unknown: no export tracking for this file, OR an unresolved re-export
+  //   source, OR depth limit hit. R126: `unknown` is TERMINAL for modern DBs
+  //   (extractor_semantics_version current) — the caller must NOT fall back
+  //   to name-based resolution, because we cannot trust that the symbol is
+  //   not exported through a path we couldn't follow.
   function resolveExportedSymbol(filePath: string, exportedName: string, depth: number, visited: Set<string>): ResolutionResult {
-    if (depth > 10) return { kind: 'missing' }; // depth cap
+    if (depth > 10) return { kind: 'unknown', reason: 'depth_limit' }; // R126: was `missing` — depth limit is an unknown, not a definitive "not exported"
     const key = `${filePath}::${exportedName}`;
-    if (visited.has(key)) return { kind: 'missing' }; // cycle — treat as missing
+    if (visited.has(key)) return { kind: 'missing' }; // cycle — treat as missing (definitive: we'd just loop)
     visited.add(key);
 
     const fileExp = exportsByFile.get(filePath);
     if (!fileExp) {
-      // R124: No exports tracked — return unknown (not missing).
+      // R124/R126: No exports tracked — return unknown (not missing).
       // This means we don't know if the symbol is exported or not.
-      // The caller should NOT fall back to fileSyms for private symbols.
-      return { kind: 'unknown' };
+      // R126: for modern DBs, the caller treats this as terminal and does
+      // NOT fall back to fileSyms for private symbols. For legacy DBs
+      // (extractor_semantics_version=0), the caller may still fall back.
+      return { kind: 'unknown', reason: 'legacy_export_tracking' };
     }
 
     // R123: Check named exports first (explicit exports win over star)
@@ -422,36 +462,71 @@ export function rebuildCrossFileCallsEdges(
       if (expBinding.exportKind === 're_export_named' || expBinding.exportKind === 're_export_alias') {
         if (!expBinding.sourceModule) return { kind: 'missing' };
         const resolvedFile = resolveModulePath(expBinding.sourceModule, filePath, knownFiles);
-        if (!resolvedFile) return { kind: 'missing' };
+        if (!resolvedFile) {
+          // R126: re-export source module unresolved. ESM would throw
+          // ERR_MODULE_NOT_FOUND at runtime. Treat as unknown (terminal for
+          // modern DBs) rather than missing, because the symbol MAY exist
+          // in the unresolved module — we just can't verify.
+          return { kind: 'unknown', reason: 'unresolved_reexport_module' };
+        }
         return resolveExportedSymbol(resolvedFile, expBinding.importedName || exportedName, depth + 1, new Set(visited));
       }
     }
 
     // R123/R124: No named export found — check ALL star re-exports
     // R124: Use a per-branch visited set (copy) to avoid order-dependent results
+    // R126: Propagate `unknown` from any star branch — a single unknown branch
+    //   means we cannot trust the resolved target from another branch (the
+    //   unknown branch might also export the same name, making the result
+    //   ambiguous). This prevents false-positive "exact" edges when a star
+    //   source is missing or a legacy DB has incomplete export tracking.
     const starTargets = new Set<string>();
     let hasAmbiguous = false;
+    let hasUnknown = false;
     for (const starExp of fileExp.stars) {
       const starResolvedFile = resolveModulePath(starExp.sourceModule, filePath, knownFiles);
-      if (starResolvedFile) {
-        const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, new Set(visited));
-        if (result.kind === 'resolved') {
-          starTargets.add(result.qn);
-        } else if (result.kind === 'ambiguous') {
-          // R124: Propagate ambiguous — don't treat as missing
-          hasAmbiguous = true;
-        }
-        // 'missing' and 'unknown' don't add targets
+      if (!starResolvedFile) {
+        // R126: IDX-R126-01 — star source unresolved. Don't silently ignore;
+        // mark this branch as unknown so the parent can't claim an exact
+        // target from a different branch.
+        hasUnknown = true;
+        continue;
       }
+      const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, new Set(visited));
+      if (result.kind === 'resolved') {
+        starTargets.add(result.qn);
+      } else if (result.kind === 'ambiguous') {
+        // R124: Propagate ambiguous — don't treat as missing
+        hasAmbiguous = true;
+      } else if (result.kind === 'unknown') {
+        // R126: IDX-R126-02 — propagate unknown. Previously this was silently
+        // ignored, which let another branch's resolved target become a false
+        // "exact" edge even when the unknown branch could have produced a
+        // different target or an ambiguity.
+        hasUnknown = true;
+      }
+      // 'missing' doesn't add targets and is NOT propagated (a star branch
+      // that definitively doesn't export the name is fine).
     }
 
-    if (hasAmbiguous && starTargets.size === 0) {
-      // R124: All branches were ambiguous or missing — ambiguous wins
+    // R126: precedence — ambiguous > unknown > resolved-count.
+    //   - If any branch is ambiguous, the overall result is ambiguous (ESM
+    //     would throw SyntaxError).
+    //   - Else if any branch is unknown, the overall result is unknown (we
+    //     cannot trust the resolved count from other branches).
+    //   - Else the result is determined by the number of distinct resolved
+    //     targets (0=missing, 1=resolved, >1=ambiguous).
+    if (hasAmbiguous) {
       return { kind: 'ambiguous' };
     }
-    if (hasAmbiguous && starTargets.size > 0) {
-      // R124: At least one resolved + at least one ambiguous → overall ambiguous
-      return { kind: 'ambiguous' };
+    if (hasUnknown && starTargets.size === 0) {
+      // All branches were unknown or missing — unknown wins over missing.
+      return { kind: 'unknown', reason: 'unresolved_reexport_module' };
+    }
+    if (hasUnknown && starTargets.size > 0) {
+      // At least one resolved + at least one unknown — we cannot trust the
+      // resolved target to be the unique answer.
+      return { kind: 'unknown', reason: 'unresolved_reexport_module' };
     }
     if (starTargets.size === 1) {
       return { kind: 'resolved', qn: starTargets.values().next().value! };
@@ -460,15 +535,33 @@ export function rebuildCrossFileCallsEdges(
       return { kind: 'ambiguous' };
     }
 
-    // R124: No export binding found, no star targets.
+    // R124: No export binding found, no star targets, no unknown/ambiguous.
     // Return 'missing' (not 'unknown') because we DO have export tracking
     // for this file — the symbol is just not exported.
     return { kind: 'missing' };
   }
 
+  // R126: `semanticsCurrent` is now a parameter (see function doc). When true,
+  // `unknown` and unresolved source modules are TERMINAL — the caller must NOT
+  // fall back to name-based resolution, because the file_hashes are valid for
+  // the current extractor and we can trust that "no export tracking" really
+  // means "no export". When false (legacy / pre-R126 DB or incremental with
+  // stale version), we preserve the pre-R126 behavior and fall back, so we
+  // don't introduce false negatives on DBs that haven't been fully reindexed.
+  //
+  // NOTE: callers MUST pass the correct value. The resolver does NOT read
+  // extractor_semantics_version from the DB itself, because in full mode the
+  // projects row may not have been updated yet (updateProjectStats runs AFTER
+  // the extraction transaction). The caller knows the correct value:
+  //   - full reindex → true (the extractor just produced fresh data)
+  //   - incremental → true iff stored version == CURRENT
+
   // 4. Resolve each call_site to candidates and insert CALLS edges.
   //    R110: import-aware resolution — try imports first, then name-based fallback.
   //    R111: default imports now use the default export marker for correct resolution.
+  //    R126: when semanticsCurrent, an explicit import whose source module is
+  //    unresolved, OR whose exported symbol resolves to `unknown`/`missing`/
+  //    `ambiguous`, is TERMINAL — no name-based fallback.
   const insertEdge = db.prepare(
     `INSERT INTO edges (project, source_id, target_id, type, properties_json)
      VALUES (?, ?, ?, ?, ?)`
@@ -492,9 +585,15 @@ export function rebuildCrossFileCallsEdges(
           const objectName = cs.callee.substring(0, dotIndex);
           const nsBinding = fileImports.get(objectName);
           if (nsBinding && nsBinding.importKind === 'namespace') {
-            // Resolve the source module to a file path
+            // R126: IDX-R125-02 — if the namespace import's source module is
+            // unresolved, the call-site is TERMINAL when semanticsCurrent.
+            // ESM would throw ERR_MODULE_NOT_FOUND; we must not publish a
+            // false-positive edge via name-based fallback.
             const resolvedFile = resolveModulePath(nsBinding.sourceModule, cs.file_path, knownFiles);
-            if (resolvedFile) {
+            if (!resolvedFile) {
+              if (semanticsCurrent) continue;
+              // legacy DB: fall through to name-based fallback below
+            } else {
               const fileSyms = fileSymbolIndex.get(resolvedFile);
               if (fileSyms) {
                 // Look up the last segment (method name) in the source file
@@ -503,6 +602,12 @@ export function rebuildCrossFileCallsEdges(
                 if (nsResult.kind === 'ambiguous' || nsResult.kind === 'missing') {
                   // R124: namespace call to ambiguous/missing export — no edge
                   continue;
+                }
+                if (nsResult.kind === 'unknown') {
+                  // R126: namespace call to unknown export. Terminal when
+                  // semanticsCurrent (don't fall back to name-based); fall
+                  // through for legacy DBs.
+                  if (semanticsCurrent) continue;
                 }
                 if (targetQn && targetQn !== cs.source_qn) {
                   const sourceId = qnToId.get(cs.source_qn);
@@ -547,9 +652,15 @@ export function rebuildCrossFileCallsEdges(
       if (fileImports) {
         const impBinding = fileImports.get(cs.callee) || fileImports.get(cs.last_segment);
         if (impBinding) {
-          // Resolve the source module to a file path
+          // R126: IDX-R125-02 — if the import's source module is unresolved,
+          // the call-site is TERMINAL when semanticsCurrent. ESM would throw
+          // ERR_MODULE_NOT_FOUND; we must not publish a false-positive edge
+          // via name-based fallback. For legacy DBs, fall through.
           const resolvedFile = resolveModulePath(impBinding.sourceModule, cs.file_path, knownFiles);
-          if (resolvedFile) {
+          if (!resolvedFile) {
+            if (semanticsCurrent) continue;
+            // legacy DB: fall through to name-based fallback below
+          } else {
             const fileSyms = fileSymbolIndex.get(resolvedFile);
             if (fileSyms) {
               // For named/alias imports, look up the imported name
@@ -584,6 +695,10 @@ export function rebuildCrossFileCallsEdges(
                     confidence = 1.0;
                   } else if (defaultResult.kind === 'ambiguous' || defaultResult.kind === 'missing') {
                     continue; // R124: no fallback for invalid explicit import
+                  } else if (defaultResult.kind === 'unknown') {
+                    // R126: IDX-R125-01 — terminal when semanticsCurrent.
+                    if (semanticsCurrent) continue;
+                    // legacy DB: fall through to name-based fallback
                   }
                 }
               } else {
@@ -601,8 +716,15 @@ export function rebuildCrossFileCallsEdges(
                   // Do NOT fall back to name-based resolution — the import is invalid.
                   // Skip this call_site entirely.
                   continue;
+                } else if (namedResult.kind === 'unknown') {
+                  // R126: IDX-R125-01 — terminal when semanticsCurrent.
+                  // The file has no export tracking (legacy_export_tracking),
+                  // or a re-export source is unresolved (unresolved_reexport_module),
+                  // or the depth cap was hit (depth_limit). In all cases, we
+                  // cannot trust name-based fallback for modern DBs.
+                  if (semanticsCurrent) continue;
+                  // legacy DB: fall through to name-based fallback
                 }
-                // 'unknown' — fall through to name-based fallback (legacy DB)
               }
 
               if (targetQn && resolution) {
@@ -646,6 +768,11 @@ export function rebuildCrossFileCallsEdges(
     }
 
     // R110: Name-based fallback (only if import-aware resolution didn't match)
+    // R126: this branch is reached for legacy DBs (semantics not current) or
+    // for call-sites with no import binding. When semanticsCurrent, an
+    // explicit import that didn't match has already `continue`d above, so
+    // name-based fallback here is safe — it only fires for call-sites with
+    // no import binding at all (genuine global symbol lookup).
     // Try exact callee name first, then last segment (e.g. for obj.method)
     const candidates =
       globalSymbolIndex.get(cs.callee) ||
@@ -751,4 +878,32 @@ export function isCallSitesInitialized(db: Database.Database, project: string): 
     'SELECT call_sites_initialized FROM projects WHERE name = ?'
   ).get(project) as { call_sites_initialized?: number } | undefined;
   return row?.call_sites_initialized === 1;
+}
+
+/**
+ * R126: Read the project's stored extractor_semantics_version.
+ *
+ * Returns 0 for legacy / pre-R126 DBs (the column's default), or the integer
+ * version written by the last successful full reindex. Callers compare this
+ * to CURRENT_EXTRACTOR_SEMANTICS_VERSION to decide whether the file_hashes
+ * can be trusted for the current extractor's semantics.
+ */
+export function getExtractorSemanticsVersion(db: Database.Database, project: string): number {
+  const row = db.prepare(
+    'SELECT extractor_semantics_version AS v FROM projects WHERE name = ?'
+  ).get(project) as { v?: number } | undefined;
+  return row?.v ?? 0;
+}
+
+/**
+ * R126: Convenience wrapper — returns true iff the project's stored
+ * extractor_semantics_version matches CURRENT_EXTRACTOR_SEMANTICS_VERSION.
+ *
+ * When this returns true, `unknown` / unresolved-source / missing-export
+ * states are TERMINAL (no name-based fallback). When false (legacy or stale
+ * DB), the resolver preserves the pre-R126 behavior to avoid false negatives
+ * on DBs that haven't been fully reindexed yet.
+ */
+export function isExtractorSemanticsCurrent(db: Database.Database, project: string): boolean {
+  return getExtractorSemanticsVersion(db, project) === CURRENT_EXTRACTOR_SEMANTICS_VERSION;
 }

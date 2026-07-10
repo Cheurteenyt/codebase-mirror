@@ -10,6 +10,28 @@
 import type Database from 'better-sqlite3';
 
 /**
+ * R126: Current extractor semantics version.
+ *
+ * Bumped whenever the extractor's semantic output changes in a way that
+ * invalidates existing file_hashes. Incremental mode compares the project's
+ * stored version to this constant; a mismatch forces a full reindex before
+ * any cross-file resolution is published (crossFileCallsStale=true).
+ *
+ * Version history:
+ *   - 0 (implicit default): pre-R126. Treated as "unknown / legacy".
+ *   - 1: R126 — `export *` star detection (R125B Bug 57) + terminal
+ *        unknown/unresolved resolution (R126 IDX-R125-01/02 + IDX-R126-01/02).
+ *        DBs indexed by R122–R125A have valid file_hashes but missing
+ *        star_re_export rows, so they must be re-parsed before the new
+ *        resolution semantics can be trusted.
+ *
+ * When bumping this constant, also add a migration test that simulates an
+ * upgrade from the previous version (delete the relevant rows, keep
+ * file_hashes, run incremental, assert crossFileCallsStale=true).
+ */
+export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 1;
+
+/**
  * Tables created by the native indexer. Matches V1's schema so that
  * CodeGraphReader (sqlite-ro.ts) can read the DB transparently.
  */
@@ -58,7 +80,16 @@ const SCHEMA_SQL = `
     -- the call_sites table (even if it found 0 call-sites). This distinguishes
     -- a valid R106 DB with 0 call-sites from a legacy pre-R106 DB that never
     -- had call_sites. Without this flag, hasCallSites()===false is ambiguous.
-    call_sites_initialized INTEGER DEFAULT 0
+    call_sites_initialized INTEGER DEFAULT 0,
+    -- R126: extractor semantics version. Bumped whenever the extractor's
+    -- semantic output changes in a way that requires re-parsing existing files
+    -- (e.g. R125B fixed "export *" detection — DBs indexed by R122–R125A have
+    -- valid file_hashes but missing star_re_export rows). Incremental mode
+    -- compares this to CURRENT_EXTRACTOR_SEMANTICS_VERSION; a mismatch forces
+    -- a full reindex before any cross-file resolution is published.
+    --   0 = pre-R126 (legacy, never set explicitly)
+    --   1 = R126+ (star detection + terminal unknown/unresolved)
+    extractor_semantics_version INTEGER DEFAULT 0
   );
 
   -- R106: Call-sites persistent table.
@@ -166,6 +197,8 @@ export function initIndexerSchema(db: Database.Database): void {
   migrateProjectsCrossFileStale(db);
   // R107: add call_sites_initialized column to projects if missing
   migrateProjectsCallSitesInitialized(db);
+  // R126: add extractor_semantics_version column to projects if missing
+  migrateProjectsExtractorSemanticsVersion(db);
   // R106: call_sites table is created by SCHEMA_SQL (CREATE IF NOT EXISTS),
   // but the index idx_call_sites_project_file must exist for legacy DBs that
   // already had the table created without it. CREATE INDEX IF NOT EXISTS in
@@ -308,6 +341,28 @@ function migrateProjectsCallSitesInitialized(db: Database.Database): void {
 }
 
 /**
+ * R126: Add `extractor_semantics_version` column to projects if missing.
+ *
+ * Stored as an INTEGER. 0 = legacy / pre-R126 (never set explicitly by
+ * R126+ code). After a successful full reindex, the indexer writes
+ * CURRENT_EXTRACTOR_SEMANTICS_VERSION. Incremental mode compares the stored
+ * value to the current constant; a mismatch forces crossFileCallsStale=true
+ * so the caller must run a full reindex before trusting cross-file edges.
+ *
+ * Why a version column instead of invalidating file_hashes in-place:
+ *   - file_hashes may be shared across runs / projects / machines;
+ *   - a version column is observable in the DB for diagnostics;
+ *   - the cost of a forced full reindex is paid once per semantics bump.
+ */
+function migrateProjectsExtractorSemanticsVersion(db: Database.Database): void {
+  const cols = db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+  const hasCol = cols.some(c => c.name === 'extractor_semantics_version');
+  if (!hasCol) {
+    db.exec('ALTER TABLE projects ADD COLUMN extractor_semantics_version INTEGER DEFAULT 0');
+  }
+}
+
+/**
  * Clear all data for a project (nodes, edges, file_hashes, call_sites, imports) before re-indexing.
  * Does NOT clear the projects table — that's updated separately.
  * R106: also clears call_sites (persistent cross-file resolution table).
@@ -329,6 +384,8 @@ export function clearProjectData(db: Database.Database, project: string): void {
  * Update the projects table with final counts after indexing.
  * R101: also persists cross_file_calls_stale flag.
  * R107: also persists call_sites_initialized flag (set to true after full reindex).
+ * R126: also persists extractor_semantics_version (set to CURRENT after full
+ *   reindex; preserved by incremental so the gate can detect stale semantics).
  */
 export function updateProjectStats(
   db: Database.Database,
@@ -338,16 +395,18 @@ export function updateProjectStats(
   edgeCount: number,
   crossFileCallsStale: boolean = false,
   callSitesInitialized: boolean = false,
+  extractorSemanticsVersion: number = 0,
 ): void {
   db.prepare(`
-    INSERT INTO projects (name, root_path, indexed_at, node_count, edge_count, cross_file_calls_stale, call_sites_initialized)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO projects (name, root_path, indexed_at, node_count, edge_count, cross_file_calls_stale, call_sites_initialized, extractor_semantics_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
       root_path = excluded.root_path,
       indexed_at = excluded.indexed_at,
       node_count = excluded.node_count,
       edge_count = excluded.edge_count,
       cross_file_calls_stale = excluded.cross_file_calls_stale,
-      call_sites_initialized = excluded.call_sites_initialized
-  `).run(project, rootPath, new Date().toISOString(), nodeCount, edgeCount, crossFileCallsStale ? 1 : 0, callSitesInitialized ? 1 : 0);
+      call_sites_initialized = excluded.call_sites_initialized,
+      extractor_semantics_version = excluded.extractor_semantics_version
+  `).run(project, rootPath, new Date().toISOString(), nodeCount, edgeCount, crossFileCallsStale ? 1 : 0, callSitesInitialized ? 1 : 0, extractorSemanticsVersion);
 }

@@ -29,7 +29,7 @@ import { readFileSync, statSync, readdirSync } from 'node:fs';
 import { relative, extname, basename, dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { extractFast, type UnresolvedCallSite, type ImportBinding, type ExportBinding } from './fast-walker.js';
-import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
+import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized, isExtractorSemanticsCurrent } from './cross-file-resolver.js';
 const require2 = createRequire(import.meta.url);
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -624,7 +624,11 @@ export async function extractFromFilesWasm(
         // R108: initialized=true → call_sites is authoritative (even if empty).
         // Always rebuild: inserts new edges if call_sites has entries, OR
         // cleans up stale cross-file edges if call_sites is empty.
-        const added = rebuildCrossFileCallsEdges(db, project);
+        // R126: pass semanticsCurrent so the resolver knows whether to treat
+        // unknown/unresolved as terminal. For incremental, this is true iff
+        // the stored extractor_semantics_version matches CURRENT.
+        const semanticsCurrent = isExtractorSemanticsCurrent(db, project);
+        const added = rebuildCrossFileCallsEdges(db, project, semanticsCurrent);
         result.edges += added;
         result.crossFileCallsResolved = true;
       } else {
@@ -639,7 +643,9 @@ export async function extractFromFilesWasm(
       }
     } else {
       // Full mode: always rebuild (table was cleared, all call_sites are new).
-      const added = rebuildCrossFileCallsEdges(db, project);
+      // R126: full reindex → semanticsCurrent=true (the extractor just
+      // produced fresh data with the current semantics).
+      const added = rebuildCrossFileCallsEdges(db, project, true);
       result.edges += added;
       result.crossFileCallsResolved = true;
     }

@@ -9,7 +9,7 @@
 
 import Database from 'better-sqlite3';
 import { defaultCodeDbPath } from '../bridge/sqlite-ro.js';
-import { initIndexerSchema, clearProjectData, updateProjectStats } from './schema.js';
+import { initIndexerSchema, clearProjectData, updateProjectStats, CURRENT_EXTRACTOR_SEMANTICS_VERSION } from './schema.js';
 import { discoverSourceFilesWasm, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
 import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFiles, rebuildCrossFileCallsEdges, isCallSitesInitialized } from './cross-file-resolver.js';
 import { Worker } from 'node:worker_threads';
@@ -185,12 +185,14 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // be stale from a previous incremental that changed files. Only a full
     // reindex can reset stale to false.
     const existingRow = db.prepare(
-      'SELECT cross_file_calls_stale, call_sites_initialized FROM projects WHERE name = ?'
-    ).get(opts.project) as { cross_file_calls_stale?: number; call_sites_initialized?: number } | undefined;
+      'SELECT cross_file_calls_stale, call_sites_initialized, extractor_semantics_version FROM projects WHERE name = ?'
+    ).get(opts.project) as { cross_file_calls_stale?: number; call_sites_initialized?: number; extractor_semantics_version?: number } | undefined;
     const existingStale = existingRow?.cross_file_calls_stale === 1;
     // R107: preserve existing call_sites_initialized (no-op doesn't change it)
     const existingInitialized = existingRow?.call_sites_initialized === 1;
-    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, existingStale, existingInitialized);
+    // R126: preserve existing extractor_semantics_version (no-op doesn't change it)
+    const existingSemanticsVersion = existingRow?.extractor_semantics_version ?? 0;
+    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, existingStale, existingInitialized, existingSemanticsVersion);
     db.close();
     return {
       dbPath,
@@ -251,9 +253,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       //    R109: when callSitesInitialized=true && nodesCount=0 (all files
       //    deleted), the empty graph is COMPLETE — mark resolved=true without
       //    calling rebuild (nothing to rebuild).
+      //    R126: pass semanticsCurrent for incremental (deletion-only is always
+      //    incremental). Read the stored version to decide.
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c;
       if (callSitesInitialized && nodesCount > 0) {
-        rebuildCrossFileCallsEdges(db, opts.project);
+        const semCurrent = (db.prepare('SELECT extractor_semantics_version AS v FROM projects WHERE name = ?').get(opts.project) as { v?: number } | undefined)?.v === CURRENT_EXTRACTOR_SEMANTICS_VERSION;
+        rebuildCrossFileCallsEdges(db, opts.project, semCurrent);
         crossFileResolved = true;
       } else if (callSitesInitialized && nodesCount === 0) {
         // R109: empty graph is complete — no rebuild needed.
@@ -270,15 +275,19 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     `).get(opts.project, opts.project) as { nodes: number; edges: number };
     // R107: if resolver ran, stale=false. If legacy DB (not initialized),
     // stale=true to force full reindex. Otherwise preserve existing stale.
+    // R126: also read extractor_semantics_version so we can preserve it
+    // (deletion-only doesn't change extractor semantics).
     const existingStaleRow = db.prepare(
-      'SELECT cross_file_calls_stale FROM projects WHERE name = ?'
-    ).get(opts.project) as { cross_file_calls_stale?: number } | undefined;
+      'SELECT cross_file_calls_stale, extractor_semantics_version FROM projects WHERE name = ?'
+    ).get(opts.project) as { cross_file_calls_stale?: number; extractor_semantics_version?: number } | undefined;
     const existingStale = existingStaleRow?.cross_file_calls_stale === 1;
+    const existingSemanticsVersion = existingStaleRow?.extractor_semantics_version ?? 0;
     const crossFileStale = crossFileResolved
       ? false
       : (callSitesInitialized ? existingStale : true);
     // R107: preserve call_sites_initialized (deletion-only doesn't change it)
-    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale, callSitesInitialized);
+    // R126: preserve extractor_semantics_version (deletion-only doesn't change it)
+    updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, existingSemanticsVersion);
     db.close();
     return {
       dbPath,
@@ -351,8 +360,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       // This second rebuild uses the post-cleanup state.
       // R108: use isCallSitesInitialized (not hasCallSites) — always rebuild
       // when initialized=true, even if call_sites is empty.
+      // R126: pass semanticsCurrent. This is the incremental post-cleanup path,
+      // so read the stored version (the extraction transaction may have just
+      // updated call_sites/imports/exports for changed files, but the version
+      // flag is only bumped by a full reindex).
       if (isCallSitesInitialized(db, opts.project)) {
-        rebuildCrossFileCallsEdges(db, opts.project);
+        const semCurrent = (db.prepare('SELECT extractor_semantics_version AS v FROM projects WHERE name = ?').get(opts.project) as { v?: number } | undefined)?.v === CURRENT_EXTRACTOR_SEMANTICS_VERSION;
+        rebuildCrossFileCallsEdges(db, opts.project, semCurrent);
       }
     });
     deleteTx();
@@ -371,22 +385,42 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // (legacy DB without call_sites), preserve existing stale or set to true.
   // R107: call_sites_initialized is set to true after full reindex, preserved
   // by incremental. This is the authoritative legacy DB signal.
+  // R126: extractor_semantics_version is set to CURRENT_EXTRACTOR_SEMANTICS_VERSION
+  // after a full reindex; preserved by incremental. When incremental detects
+  // that the stored version is stale (≠ CURRENT), it forces crossFileStale=true
+  // so the caller must run a full reindex before trusting cross-file edges.
+  // This prevents publishing edges from a DB whose file_hashes are valid but
+  // whose exports/call_sites/imports rows were produced by an older extractor
+  // (e.g. R122–R125A DBs missing star_re_export rows after R125B Bug 57 fix).
   const existingRow = opts.incremental
-    ? db.prepare('SELECT cross_file_calls_stale, call_sites_initialized FROM projects WHERE name = ?').get(opts.project) as { cross_file_calls_stale?: number; call_sites_initialized?: number } | undefined
+    ? db.prepare('SELECT cross_file_calls_stale, call_sites_initialized, extractor_semantics_version FROM projects WHERE name = ?').get(opts.project) as { cross_file_calls_stale?: number; call_sites_initialized?: number; extractor_semantics_version?: number } | undefined
     : undefined;
   const existingStale = existingRow?.cross_file_calls_stale === 1;
   const existingInitialized = existingRow?.call_sites_initialized === 1;
+  const existingSemanticsVersion = existingRow?.extractor_semantics_version ?? 0;
+  // R126: detect stale extractor semantics. If the stored version doesn't
+  // match CURRENT, the file_hashes can't be trusted for the new resolution
+  // semantics — force stale=true so the caller must run a full reindex.
+  const semanticsStale = opts.incremental
+    ? existingSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION
+    : false;
   const crossFileStale = opts.incremental
-    ? // R106: if resolver ran successfully, not stale. Otherwise, preserve
-      // existing stale (could be true from a previous run) or set true if
-      // files changed but resolver couldn't run (legacy DB case).
-      (result.crossFileCallsResolved ?? false)
-        ? false
-        : (existingStale || result.files > 0 || deletedRelPaths.length > 0)
+    ? // R126: semanticsStale forces stale=true regardless of resolution success.
+      // R106: if resolver ran successfully AND semantics are current, not stale.
+      // Otherwise, preserve existing stale (could be true from a previous run)
+      // or set true if files changed but resolver couldn't run (legacy DB case).
+      semanticsStale
+        ? true
+        : (result.crossFileCallsResolved ?? false)
+          ? false
+          : (existingStale || result.files > 0 || deletedRelPaths.length > 0)
     : false; // full reindex always resets stale (resolver always runs in full mode)
   // R107: full reindex sets call_sites_initialized=true; incremental preserves it.
   const callSitesInitialized = opts.incremental ? existingInitialized : true;
-  updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale, callSitesInitialized);
+  // R126: full reindex sets extractor_semantics_version=CURRENT; incremental
+  // preserves it (so the stale-version gate can fire on the next incremental).
+  const semanticsVersion = opts.incremental ? existingSemanticsVersion : CURRENT_EXTRACTOR_SEMANTICS_VERSION;
+  updateProjectStats(db, opts.project, opts.rootPath, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion);
   db.close();
 
   return {
@@ -788,13 +822,16 @@ async function indexParallel(
     // (even if call_sites is empty). See wasm-extractor.ts for full explanation.
     // R109: when callSitesInitialized=true && nodesCount=0, mark resolved=true
     // without calling rebuild (empty graph is complete).
+    // R126: pass semanticsCurrent. Full mode → true (fresh extraction).
+    // Incremental → read stored version to decide.
     if (incremental) {
       const nodesCount = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(project) as { c: number }).c;
       if (!callSitesInitialized) {
         // R107: Legacy DB. Skip resolution. Caller marks stale=true.
       } else if (nodesCount > 0) {
         // R108: initialized=true → always rebuild (even if call_sites=0).
-        const added = rebuildCrossFileCallsEdges(db, project);
+        const semCurrent = (db.prepare('SELECT extractor_semantics_version AS v FROM projects WHERE name = ?').get(project) as { v?: number } | undefined)?.v === CURRENT_EXTRACTOR_SEMANTICS_VERSION;
+        const added = rebuildCrossFileCallsEdges(db, project, semCurrent);
         edgeCount += added;
         crossFileResolved = true;
       } else {
@@ -803,7 +840,8 @@ async function indexParallel(
       }
     } else {
       // Full mode: always rebuild.
-      const added = rebuildCrossFileCallsEdges(db, project);
+      // R126: full reindex → semanticsCurrent=true.
+      const added = rebuildCrossFileCallsEdges(db, project, true);
       edgeCount += added;
       crossFileResolved = true;
     }

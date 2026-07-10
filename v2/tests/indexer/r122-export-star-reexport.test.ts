@@ -53,7 +53,10 @@ describe('R122: export * Star Re-exports', () => {
   });
 
   // D. Collision: export * from two files that both export foo
-  it('collision: export * from b and c, both export foo → resolves to first found (no crash)', async () => {
+  // R126/DOC-R126-02: title was "resolves to first found" but the test
+  // asserts 0 total edges (ESM SyntaxError on star conflict). Renamed to
+  // match the actual contract.
+  it('star conflict: duplicate exports produce zero CALLS edges', async () => {
     writeFileSync(join(projectDir, 'b.ts'), 'export function foo() { return 1; }\n');
     writeFileSync(join(projectDir, 'c.ts'), 'export function foo() { return 2; }\n');
     writeFileSync(join(projectDir, 'index.ts'), `export * from './b';\nexport * from './c';\n`);

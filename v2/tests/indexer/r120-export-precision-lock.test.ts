@@ -60,14 +60,21 @@ describe('R120: Export Tracking Precision Lock', () => {
     db.close();
   });
 
-  // C. Legacy DB: exports table empty but call_sites_initialized=1
-  // resolveExportedSymbol falls back to fileSyms.get() — no crash, no stale
-  it('legacy DB: empty exports table → resolver falls back gracefully', async () => {
+  // C. Modern DB (R126+, extractor_semantics_version=current) with manually
+  // deleted exports: resolver returns `unknown` for the import target, which
+  // is TERMINAL — no name-based fallback. crossFileCallsStale=false because
+  // the resolver ran successfully (just found nothing to publish).
+  //
+  // R126: this test was rewritten from the pre-R126 expectation
+  // (`stale=false && edges >= 1`) which locked in the dangerous behavior
+  // described in MIG-R126-02: a graph could be marked fresh despite exports
+  // being incomplete, leading to false-positive edges via name-based fallback.
+  it('modern DB: deleted exports → terminal unknown, 0 edges, stale=false', async () => {
     writeFileSync(join(projectDir, 'api.ts'), 'export function foo() { return 1; }\n');
     writeFileSync(join(projectDir, 'a.ts'), `import { foo } from './api';\nexport function caller() { return foo(); }\n`);
-    // Full index (populates exports)
+    // Full index (populates exports, sets extractor_semantics_version=1)
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
-    // Simulate legacy: delete all exports
+    // Simulate data loss: delete all exports
     const dbPath = defaultCodeDbPath(projectName);
     const dbW = new Database(dbPath);
     dbW.prepare('DELETE FROM exports WHERE project = ?').run(projectName);
@@ -76,10 +83,13 @@ describe('R120: Export Tracking Precision Lock', () => {
     writeFileSync(join(projectDir, 'a.ts'), `import { foo } from './api';\nexport function caller() { return foo() + 1; }\n`);
     const r2 = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: true, useWasm: true, workers: 0 });
     expect(r2.errors.length).toBe(0);
-    // Should still resolve (fallback to fileSyms.get)
+    // R126: resolver ran (crossFileCallsResolved=true) AND semantics are
+    // current (version=1), so stale=false. But `foo` resolves to `unknown`
+    // (api.ts has no exports row → legacy_export_tracking), which is terminal
+    // — no name-based fallback. 0 edges is the CORRECT precision behavior.
     expect(r2.crossFileCallsStale).toBe(false);
     const db = getDb();
-    expect(getEdges(db, 'foo').length).toBeGreaterThanOrEqual(1);
+    expect(getEdges(db, 'foo').length).toBe(0);
     db.close();
   });
 });

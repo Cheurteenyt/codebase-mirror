@@ -43,8 +43,15 @@ describe('R112: Precision + Default Export Scope', () => {
   // `export default realName` where realName is a const/variable is NOT
   // supported in Phase 1. extractDefaultExport returns null for identifier
   // references because qnByNode is keyed by declaration nodes, not references.
-  // This test documents the limitation so future improvements are tracked.
-  it('default export expression (export default realName) is Phase 2 — falls back to name-based', async () => {
+  //
+  // R126: previously this fell back to name-based resolution (creating a
+  // false-positive edge to c::foo). With R126's terminal unknown semantics,
+  // the default import resolves to `unknown` (b.ts has no exports row →
+  // legacy_export_tracking), which is TERMINAL — no name-based fallback.
+  // This is the CORRECT precision behavior: we should not publish an edge
+  // when the import target is unknown, even if a same-named symbol exists
+  // elsewhere. The test now documents the improved R126 behavior.
+  it('default export expression (export default realName) is Phase 2 — R126: terminal unknown, no name-based fallback', async () => {
     writeFileSync(join(projectDir, 'b.ts'), 'const realName = () => 42;\nexport default realName;\n');
     writeFileSync(join(projectDir, 'c.ts'), 'export function foo() { return 99; }\n');
     writeFileSync(join(projectDir, 'a.ts'), `import foo from './b';\nexport function caller() { return foo(); }\n`);
@@ -62,9 +69,6 @@ describe('R112: Precision + Default Export Scope', () => {
     ).get(projectName, 'b.ts') as { imported_name: string } | undefined;
     expect(marker).toBeUndefined();
 
-    // The import-aware resolver falls back to name-based.
-    // Since a.ts calls foo() and c.ts exports foo, the edge goes to c::foo
-    // (name-based fallback). b.ts doesn't export a function named foo.
     const edges = db.prepare(
       `SELECT t.qualified_name AS target_qn, e.properties_json
        FROM edges e
@@ -74,11 +78,10 @@ describe('R112: Precision + Default Export Scope', () => {
          AND e.properties_json LIKE '%cross_file%'`
     ).all(projectName) as Array<{ target_qn: string; properties_json: string }>;
 
-    // Should create an edge via name-based fallback (to c::foo)
-    expect(edges.length).toBeGreaterThanOrEqual(1);
-    const props = JSON.parse(edges[0].properties_json);
-    // Resolution should be name_fallback (not import_exact)
-    expect(props.resolution).toBe('cross_file_name_fallback');
+    // R126: default import to a file with no default export marker and no
+    // exports row → resolveExportedSymbol returns `unknown` → terminal.
+    // No name-based fallback to c::foo. 0 edges is the correct precision.
+    expect(edges.length).toBe(0);
 
     db.close();
   });

@@ -12,9 +12,11 @@ describe('R124: Resolution State Machine', () => {
   let tmpDir: string, projectDir: string, cacheDir: string, projectName: string;
   beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'r124-')); projectDir = join(tmpDir, 'project'); cacheDir = join(tmpDir, 'cache'); mkdirSync(projectDir, { recursive: true }); mkdirSync(join(cacheDir, 'codebase-memory-mcp'), { recursive: true }); projectName = `r124-${Date.now()}`; process.env.XDG_CACHE_HOME = cacheDir; });
 
-  // Known P1 limitations (IDX-R125-01, IDX-R125-02)
-  it.todo('private-only file (no export tracking) must not fall back globally — IDX-R125-01');
-  it.todo('unresolved import source must be terminal — IDX-R125-02');
+  // R126: the two P1 limitations (IDX-R125-01, IDX-R125-02) are now fixed.
+  // The `it.todo` placeholders have been replaced by green tests in
+  // r126-extractor-semantics-lock.test.ts. See:
+  //   - "private-only file (no export tracking) → no name-based fallback"
+  //   - "unresolved import source → no name-based fallback"
   afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); delete process.env.XDG_CACHE_HOME; });
   function getDb() { return new Database(defaultCodeDbPath(projectName), { readonly: true }); }
   function getEdges(db: Database.Database, callee: string) { return db.prepare(`SELECT t.qualified_name AS target_qn, e.properties_json FROM edges e JOIN nodes t ON t.id = e.target_id AND t.project = e.project WHERE e.project = ? AND e.type = 'CALLS' AND e.properties_json LIKE '%"callee":"' || ? || '"%' AND e.properties_json LIKE '%cross_file%'`).all(projectName, callee) as Array<{ target_qn: string; properties_json: string }>; }
@@ -62,7 +64,9 @@ describe('R124: Resolution State Machine', () => {
   });
 
   // IDX-R124-04: Nested ambiguity should propagate
-  it('nested ambiguity: inner.ts has star conflict, index.ts has star from inner → no exact edge', async () => {
+  // R126/DOC-R126-03: title was "no exact edge" but the test asserts 0 total
+  // edges. Renamed to match the actual contract.
+  it('nested ambiguity: inner star conflict + outer star → 0 total edges', async () => {
     writeFileSync(join(projectDir, 'c.ts'), 'export function foo() { return 1; }\n');
     writeFileSync(join(projectDir, 'd.ts'), 'export function foo() { return 2; }\n');
     writeFileSync(join(projectDir, 'inner.ts'), `export * from './c';\nexport * from './d';\n`);
