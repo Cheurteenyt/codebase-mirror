@@ -25,7 +25,7 @@
 import { Parser, Language } from 'web-tree-sitter';
 import type Database from 'better-sqlite3';
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, statSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
 import { relative, extname, basename, dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { extractFast, type UnresolvedCallSite, type ImportBinding, type ExportBinding } from './fast-walker.js';
@@ -139,6 +139,18 @@ export function detectLanguage(filePath: string): string | null {
  */
 export function discoverSourceFilesWasm(rootPath: string): string[] {
   const results: string[] = [];
+  // R139: Resolve the real root path once. All discovered paths must be
+  // inside this real root to prevent symlink-based escapes.
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(rootPath);
+  } catch {
+    realRoot = rootPath; // rootPath itself doesn't exist — nothing to discover
+    return results;
+  }
+  const realRootWithSep = realRoot + '/'; // Use '/' not sep for cross-platform comparison
+  // R139: Track visited realpaths to prevent symlink cycles and duplicate indexing.
+  const visitedDirs = new Set<string>([realRoot]);
   const stack: string[] = [rootPath];
 
   while (stack.length > 0) {
@@ -153,12 +165,43 @@ export function discoverSourceFilesWasm(rootPath: string): string[] {
     for (const entry of entries) {
       const fullPath = join(dir, entry);
       try {
-        const stat = statSync(fullPath);
-        if (stat.isDirectory()) {
+        // R139: Use lstatSync to detect symlinks before following them.
+        const lst = lstatSync(fullPath);
+        if (lst.isSymbolicLink()) {
+          // R139: Resolve the symlink target and check containment.
+          try {
+            const realTarget = realpathSync(fullPath);
+            // Check if the resolved target is inside the real root.
+            if (realTarget !== realRoot && !realTarget.startsWith(realRootWithSep) && !realTarget.startsWith(realRoot + '/')) {
+              // Symlink points outside the project root — skip it.
+              continue;
+            }
+            // Check if we've already visited this real path (cycle/duplicate prevention).
+            if (visitedDirs.has(realTarget)) {
+              continue;
+            }
+            // Determine if the symlink target is a directory or file.
+            const realStat = statSync(fullPath); // follows the symlink
+            if (realStat.isDirectory()) {
+              if (!SKIP_DIRS.has(entry) && !entry.startsWith('.')) {
+                visitedDirs.add(realTarget);
+                stack.push(fullPath);
+              }
+            } else {
+              const lang = detectLanguage(fullPath);
+              if (lang) results.push(fullPath);
+            }
+          } catch {
+            // Broken symlink — skip.
+            continue;
+          }
+        } else if (lst.isDirectory()) {
+          // Regular directory (not a symlink).
           if (!SKIP_DIRS.has(entry) && !entry.startsWith('.')) {
+            // For regular dirs, the path is already inside root (we started from root)
             stack.push(fullPath);
           }
-        } else {
+        } else if (lst.isFile()) {
           const lang = detectLanguage(fullPath);
           if (lang) results.push(fullPath);
         }

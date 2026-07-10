@@ -6,28 +6,76 @@
 // routeIndex via safeRealpathStrict). Before R55 this file existed but was
 // never imported, leaving the two call sites with their own inline copies —
 // the exact duplication risk Round 8 warned about.
+// R139: Unified Path Containment — fixed the P0 vault write escape by walking
+// up to the nearest existing ancestor instead of falling back to lexical
+// resolve. This prevents symlink-based escapes when multiple path segments
+// don't exist yet.
 
 import { realpathSync } from 'node:fs';
 import { resolve, join, dirname, basename, sep } from 'node:path';
 
 /**
+ * R139: Find the nearest existing ancestor of a path and resolve it.
+ *
+ * Walks up the path tree until it finds a component that exists on disk,
+ * then resolves that ancestor with realpathSync (following symlinks).
+ * Returns `{ realAncestor, remainingParts }` where `remainingParts` are the
+ * non-existent path segments to append to `realAncestor`.
+ *
+ * This replaces the old 2-level fallback (path → parent → lexical resolve)
+ * which was vulnerable to symlink escapes when multiple descendants don't
+ * exist. Now, a symlink anywhere in the existing ancestor chain is resolved
+ * and checked for containment.
+ *
+ * Returns `{ realAncestor: null, remainingParts: [] }` if no ancestor exists
+ * (e.g., the path is on a non-existent drive on Windows).
+ */
+function nearestExistingAncestor(absPath: string): { realAncestor: string | null; remainingParts: string[] } {
+  const parts: string[] = [];
+  let current = absPath;
+  for (let i = 0; i < 100; i++) { // depth cap to prevent infinite loops
+    try {
+      const real = realpathSync(current);
+      return { realAncestor: real, remainingParts: parts.reverse() };
+    } catch {
+      parts.push(basename(current));
+      const parent = dirname(current);
+      if (parent === current) {
+        // Reached filesystem root without finding an existing path
+        return { realAncestor: null, remainingParts: [] };
+      }
+      current = parent;
+    }
+  }
+  return { realAncestor: null, remainingParts: [] };
+}
+
+/**
  * Resolve a path to its real (symlink-followed) location, with a fallback
  * for paths that don't exist yet (e.g., a file being created).
  *
- * Used by routeBrowse (path may not exist yet — the handler returns 404
- * later via existsSync, not here) and assertPathInsideRoot (writes to
- * not-yet-existing files must still be containment-checked).
+ * R139: Replaced the old 3-level fallback (path → parent → lexical) with
+ * nearestExistingAncestor walk. This closes the P0 vault write escape where
+ * a symlink ancestor could redirect writes outside the vault when multiple
+ * descendants don't exist.
+ *
+ * Used by routeBrowse (path may not exist yet) and assertPathInsideRoot
+ * (writes to not-yet-existing files must still be containment-checked).
  */
 export function safeRealpath(absPath: string): string {
   try {
     return realpathSync(absPath);
   } catch {
-    try {
-      const realParent = realpathSync(dirname(absPath));
-      return join(realParent, basename(absPath));
-    } catch {
-      return resolve(absPath);
+    // R139: walk up to nearest existing ancestor, resolve it, reattach
+    const { realAncestor, remainingParts } = nearestExistingAncestor(absPath);
+    if (realAncestor !== null && remainingParts.length > 0) {
+      return join(realAncestor, ...remainingParts);
     }
+    if (realAncestor !== null) {
+      return realAncestor;
+    }
+    // No ancestor exists at all — return lexical resolve (root filesystem itself)
+    return resolve(absPath);
   }
 }
 

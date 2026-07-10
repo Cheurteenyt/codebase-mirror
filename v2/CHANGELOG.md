@@ -1,5 +1,69 @@
 # Changelog — Codebase Memory V2
 
+## 0.56.0 — Round 139 (2026-07-10) Unified Path Containment
+
+**64th round (GPT 5.6 Sol audit R138).** 2 P1 security bugs fixed + 1 P0
+carry-over fixed + 1 test contract added. This round closes the longest-
+standing security issues in the project: the P0 vault write symlink escape
+(open since R8) and the P1 discovery symlink traversal (identified in R138
+audit). Also adds a schema version contract test.
+
+### Security fixes (1 P0 + 1 P1)
+
+92. **Vault write symlink escape (P0)** (`safe-path.ts`) — `safeRealpath()`
+    had a 3-level fallback: try path → try parent → lexical `resolve()`. When
+    both the path and its parent didn't exist (e.g., `vault/symlink/new/deep/
+    note.md` where `new/deep/` don't exist), the fallback returned a lexical
+    path without resolving the symlink ancestor. `mkdirSync(recursive)` then
+    followed the symlink and created directories outside the vault. Fixed:
+    replaced the 3-level fallback with `nearestExistingAncestor()` — walks up
+    the path tree to find the nearest existing component, resolves it with
+    `realpathSync` (following symlinks), then reattaches the non-existent
+    descendants. A symlink anywhere in the existing ancestor chain is now
+    resolved before containment is checked. (SEC-CARRY-01, open since R8)
+
+93. **Discovery symlink traversal (P1)** (`wasm-extractor.ts`) —
+    `discoverSourceFilesWasm()` used `statSync()` which follows symlinks
+    without containment check or cycle prevention. A symlink directory
+    pointing outside the project root would be traversed, reading external
+    files into the index. A symlink cycle (`a/loop → a`) could cause
+    infinite traversal. Fixed: added `lstatSync()` to detect symlinks,
+    `realpathSync()` to resolve them, containment check against `realRoot`,
+    and a `visitedDirs` set of realpaths to prevent cycles and duplicates.
+    External symlinks are skipped. Internal symlinks are followed. Cycles
+    terminate. (SEC-R139-01)
+
+### Test contract (1 new)
+
+- **TEST-R139-07**: Added a single test pinning `CURRENT_EXTRACTOR_SEMANTICS_VERSION === 6`.
+  Other tests use the constant dynamically; this one catches accidental changes.
+
+### Tests (7 new)
+
+- **SEC-R139-01**: symlink to external directory → NOT traversed
+- **SEC-R139-01**: symlink cycle → does NOT hang, file found ≤2 paths
+- **SEC-R139-01**: internal symlink → IS traversed
+- **SEC-CARRY-01**: safeRealpath resolves non-existent path under symlink
+- **SEC-CARRY-01**: assertPathInsideRoot rejects symlink escape
+- **SEC-CARRY-01**: assertPathInsideRoot allows internal path
+- **TEST-R139-07**: CURRENT_EXTRACTOR_SEMANTICS_VERSION === 6
+
+### Note on QUAL-R139-01
+
+The test count change from 233→232 in R138 was due to consolidation of
+redundant migration scenarios into a single causal test. Coverage was
+preserved and strengthened.
+
+### Runtime versions
+
+```
+Node: v24.18.0
+npm: 11.16.0
+tsc: 5.9.3
+```
+
+### Total: 93 bugs + 11 optimizations + 239 indexer tests across 64 rounds
+
 ## 0.55.5 — Round 138 (2026-07-10) Migration Causal Closure
 
 **63rd round (GPT 5.6 Sol audit R137).** Quality round — no new bugs, no
