@@ -127,14 +127,21 @@ describe('R128: Stale Edge Dominance + Default Fix', () => {
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r.errors.length).toBe(0);
     const db = getDb();
-    // R128: `export { default } from './b'` creates a named export binding
-    // with exportedName='default'. The default import resolves 'default'
-    // (not cs.callee='foo'), so this should produce an exact edge to b.ts::realName.
+    // R128/R129: `export { default } from './b'` creates a re_export_named
+    // binding with importedName='default'. The resolver consults
+    // defaultExportByFile for b.ts and returns b::realName.
+    // R129: tightened from >=1 to ===1 with exact metadata.
     const edges = getEdges(db, 'foo');
-    expect(edges.length).toBeGreaterThanOrEqual(1);
-    expect(edges.some((e: any) => e.target_qn.includes('b.ts'))).toBe(true);
+    expect(edges.length).toBe(1);
+    expect(edges[0].target_qn).toContain('b.ts');
+    expect(edges[0].target_qn).toContain('realName');
     const props = JSON.parse(edges[0].properties_json);
-    expect(props.resolution).toBe('cross_file_import_exact');
+    expect(props).toMatchObject({
+      resolution: 'cross_file_import_exact',
+      confidence: 1,
+      candidate_count: 1,
+      candidate_index: 0,
+    });
     db.close();
   });
 
@@ -174,8 +181,16 @@ describe('R128: Stale Edge Dominance + Default Fix', () => {
     expect(r.errors.length).toBe(0);
     const db = getDb();
     const edges = getEdges(db, 'foo');
-    expect(edges.length).toBeGreaterThanOrEqual(1);
-    expect(edges.some((e: any) => e.target_qn.includes('b.ts'))).toBe(true);
+    // R129: tightened from >=1 to ===1 with exact metadata.
+    expect(edges.length).toBe(1);
+    expect(edges[0].target_qn).toContain('b.ts');
+    expect(edges[0].target_qn).toContain('realName');
+    const props = JSON.parse(edges[0].properties_json);
+    expect(props).toMatchObject({
+      resolution: 'cross_file_import_exact',
+      confidence: 1,
+      candidate_count: 1,
+    });
     db.close();
   });
 

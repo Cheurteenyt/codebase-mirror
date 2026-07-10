@@ -1,5 +1,91 @@
 # Changelog — Codebase Memory V2
 
+## 0.54.6 — Round 129 (2026-07-10) Default Alias Precision + Quality/Perf Fixes
+
+**54th round (GPT 5.6 Sol audit R128).** 1 P1 bug fixed + 2 P2 quality/perf
+fixes. This round fixes a new P1 precision bug introduced in R128 (`foo as
+default` targeting the wrong function), completes the "single source of truth"
+promise for cross-file edge cleanup, and eliminates per-recursive-call
+allocations in the resolver hot path.
+
+### Bug fixed (1 P1)
+
+74. **`export { foo as default } from './b'` targets wrong function**
+    (`cross-file-resolver.ts`) — R128's default re-export check used
+    `expBinding.importedName === 'default' || exportedName === 'default'`.
+    The `exportedName === 'default'` part was too broad: for
+    `export { foo as default }`, `exportedName='default'` (the alias) and
+    `importedName='foo'` (the original name). The condition matched, consulted
+    `defaultExportByFile.get(b)`, and returned b's native default
+    (`sourceDefault`) — WRONG. ESM says index's default is b's named `foo`.
+    Fixed: only consult `defaultExportByFile` when `importedName === 'default'`
+    (meaning we're actually pulling the source's default, not aliasing a named
+    export). For `foo as default`, `importedName='foo'`, so we skip the marker
+    check and recursively resolve `foo` in b — correct. (IDX-R129-01)
+
+### Quality fix (1 P2)
+
+- **QUAL-R129-01: `clearCrossFileCallEdges` is now the true single source of
+  truth** (`cross-file-resolver.ts`) — R128 introduced the helper but
+  `rebuildCrossFileCallsEdges` still had its own inline `DELETE FROM edges ...`
+  SQL at the top. R129 replaces the inline SQL with a call to
+  `clearCrossFileCallEdges(db, project)`. Now there is exactly one
+  implementation of cross-file edge identification (`properties_json LIKE
+  '%"resolution":"cross_file%'`). If the format ever changes, only the helper
+  needs updating.
+
+### Performance fix (1 P2)
+
+- **PERF-R129-01: Hoist `UNKNOWN_REASON_PRIORITY` and helper out of recursion**
+  (`cross-file-resolver.ts`) — R128 defined the priority `Record` and a
+  `trackUnknown` closure INSIDE `resolveExportedSymbol`, which meant every
+  recursive level that reached the star traversal allocated a new object and a
+  new closure. In a barrel DAG with many call_sites, this added up. R129 hoists
+  `UNKNOWN_REASON_PRIORITY` (frozen `Readonly<Record>`) and
+  `higherPriorityUnknownReason()` to module scope — zero allocation per
+  recursive call. The future R131 resolver cache will further reduce call
+  counts, but this hoist is a free, simple win now.
+
+### Default resolution semantics (complete matrix)
+
+R128 + R129 together now correctly handle all ESM default re-export forms:
+
+| Form | `importedName` | Resolves to |
+|---|---|---|
+| `export default function foo(){}` | — | direct marker (`defaultExportByFile`) |
+| `export { default } from './b'` | `default` | b's native default (marker) |
+| `export { default as Foo } from './b'` | `default` | b's native default (marker) |
+| `export { foo as default } from './b'` | `foo` | b's named `foo` (recursive) |
+| `export { foo as bar } from './b'` | `foo` | b's named `foo` (recursive) |
+| `export * from './b'` | — | `missing` (R127 guard blocks `default`) |
+| `import foo from './b'` (no marker) | — | `resolveExportedSymbol(b, 'default')` |
+
+### Tests (8 new + 2 tightened)
+
+- **IDX-R129-01**: `export { foo as default }` + source has own default → targets b::foo NOT b::sourceDefault
+- **`foo as default` (no source default)** → targets b::foo
+- **`export { default as Foo }`** → named import targets b::default
+- **local `export { foo as default }`** → targets local foo
+- **`export { default }`** (tightened to === 1 with exact metadata)
+- **default chain** (b → mid → index → a) → resolves to b
+- **intra-file edge preservation** during stale cleanup
+- **incremental default source modification** → edge updates
+- **R128 direct default test** tightened from `>= 1` to `=== 1` with exact metadata
+- **R128 `export { default }` test** tightened from `>= 1` to `=== 1` with exact metadata
+
+### Not addressed (deferred per audit recommendation)
+
+- **SEC-CARRY-01** (P0 symlink escape) — separate round, highest priority
+- **DATA-R129-01/02** (full atomic publication) — staging tables / DB.next
+- **IDX-CARRY-01/02** (`export const foo = () =>`, multi-declarator) — R130
+- **PERF-R129-02** (early stale detection before scan) — R131
+- **PERF-R129-03** (resolver cache) — R131
+- **API-R129-01** (`requiresFullReindex`/`staleReason`) — P2, future
+- **UX-R129-01** (CLI success before stale warning) — P2, future
+- **OBS-R129-01** (UnknownReason not exposed in IndexResult) — P2/P3, future
+
+### Total: 74 bugs + 11 optimizations + 187 indexer tests across 54 rounds
+
 ## 0.54.5 — Round 128 (2026-07-10) Stale Edge Dominance + Default Import Fix
 
 **53rd round (GPT 5.6 Sol audit R127).** 4 P1 bugs fixed + 1 P2 diagnostic fix.

@@ -63,6 +63,26 @@ import { CURRENT_EXTRACTOR_SEMANTICS_VERSION } from './schema.js';
 // R116: moved from extraction-time to resolution-time filter
 const BUILTIN_METHOD_NAMES_SET = BUILTIN_METHOD_NAMES;
 
+// R129: PERF-R129-01 — hoist UnknownReason priority table and helper to module
+// scope. R128 defined these INSIDE resolveExportedSymbol, which meant every
+// recursive level that reached the star traversal allocated a new Record
+// object and a new closure. In a barrel DAG with many call_sites, this added
+// up. Hoisting to module scope makes them singletons — zero allocation per call.
+const UNKNOWN_REASON_PRIORITY: Readonly<Record<string, number>> = Object.freeze({
+  'unresolved_reexport_module': 4,
+  'untracked_export_form': 3,
+  'legacy_export_tracking': 2,
+  'depth_limit': 1,
+});
+/**
+ * R129: Pick the higher-priority UnknownReason. Returns `b` if its priority is
+ * strictly greater than `a`'s, otherwise `a`. Module-scope helper (no closure
+ * allocation per recursive call).
+ */
+function higherPriorityUnknownReason(a: string, b: string): string {
+  return UNKNOWN_REASON_PRIORITY[b] > UNKNOWN_REASON_PRIORITY[a] ? b : a;
+}
+
 /**
  * R106: Insert (or replace) call_sites for a set of files.
  *
@@ -320,13 +340,11 @@ export function rebuildCrossFileCallsEdges(
   semanticsCurrent: boolean = false,
 ): number {
   // 1. Delete ALL existing cross-file CALLS edges for this project.
-  //    Identify by properties_json containing "resolution":"cross_file".
+  //    R129: QUAL-R129-01 — use the shared clearCrossFileCallEdges helper
+  //    instead of inline SQL. This makes clearCrossFileCallEdges the true
+  //    single source of truth for cross-file edge identification and cleanup.
   //    Intra-file CALLS edges (resolution="intra_file") are preserved.
-  db.prepare(
-    `DELETE FROM edges
-     WHERE project = ? AND type = 'CALLS'
-       AND properties_json LIKE '%"resolution":"cross_file%'`
-  ).run(project);
+  clearCrossFileCallEdges(db, project);
 
   // 2. Load ALL nodes for the project. Build:
   //    - globalSymbolIndex: name → QN[] (for name-based fallback resolution)
@@ -507,14 +525,31 @@ export function rebuildCrossFileCallsEdges(
           // in the unresolved module — we just can't verify.
           return { kind: 'unknown', reason: 'unresolved_reexport_module' };
         }
-        // R128: IDX-R128-01 — if the re-exported name is 'default', check
-        // defaultExportByFile first. `export { default } from './b'` re-exports
-        // b's default export, which is tracked in defaultExportByFile (not in
-        // the exports table). Without this check, the recursive call to
-        // resolveExportedSymbol(resolvedFile, 'default') would return 'unknown'
-        // (b.ts has no exports table entry for 'default'), making the import
-        // terminal and producing a false negative for a valid ESM import.
-        if (expBinding.importedName === 'default' || exportedName === 'default') {
+        // R128/R129: default re-export handling.
+        //
+        // ESM semantics for re-exports:
+        //   - `export { default } from './b'`       → re-exports b's default as 'default'
+        //   - `export { default as Foo } from './b'` → re-exports b's default as 'Foo'
+        //   - `export { foo as default } from './b'` → re-exports b's named 'foo' as 'default'
+        //   - `export { foo as bar } from './b'`     → re-exports b's named 'foo' as 'bar'
+        //
+        // The key insight: `defaultExportByFile` tracks b's NATIVE default
+        // export (from `export default function ...`). We should only consult
+        // it when the IMPORTED name from the source is 'default' — i.e. when
+        // we're actually pulling b's default, not aliasing a named export.
+        //
+        // R128 had a bug (IDX-R129-01): it checked `exportedName === 'default'`
+        // which is the ALIAS name. For `export { foo as default }`:
+        //   - exportedName = 'default' (alias)
+        //   - importedName = 'foo' (original)
+        // The R128 condition matched on exportedName, consulted
+        // defaultExportByFile, and returned b::sourceDefault — WRONG.
+        // ESM says index's default is b's named 'foo'.
+        //
+        // R129 fix: only consult defaultExportByFile when importedName === 'default'.
+        // For `export { foo as default }`, importedName='foo', so we skip the
+        // marker check and recursively resolve 'foo' in b — correct.
+        if (expBinding.importedName === 'default') {
           const defaultQn = defaultExportByFile.get(resolvedFile);
           if (defaultQn) return { kind: 'resolved', qn: defaultQn };
           // No default marker — fall through to recursive resolution, which
@@ -544,25 +579,14 @@ export function rebuildCrossFileCallsEdges(
     const starTargets = new Set<string>();
     let hasAmbiguous = false;
     let hasUnknown = false;
-    // R128: OBS-R128-01 — priority-based UnknownReason (not last-wins).
+    // R128/R129: priority-based UnknownReason (not last-wins).
     // R127 used "last unknown wins" which made the diagnostic depend on SQL
-    // row order. R128 uses explicit priority so the diagnostic is stable:
-    //   unresolved_reexport_module (4) > untracked_export_form (3)
-    //   > legacy_export_tracking (2) > depth_limit (1)
-    // Higher priority wins. This is informational — the terminal semantics
-    // (no fallback when semanticsCurrent) are unchanged.
-    const unknownReasonPriority: Record<UnknownReason, number> = {
-      'unresolved_reexport_module': 4,
-      'untracked_export_form': 3,
-      'legacy_export_tracking': 2,
-      'depth_limit': 1,
-    };
-    let unknownReason: UnknownReason | null = null;
-    function trackUnknown(reason: UnknownReason) {
-      if (unknownReason === null || unknownReasonPriority[reason] > unknownReasonPriority[unknownReason]) {
-        unknownReason = reason;
-      }
-    }
+    // row order. R128 used a local priority table + closure (PERF-R129-01:
+    // allocated per recursive call). R129 hoists these to module scope.
+    // Priority: unresolved_reexport_module (4) > untracked_export_form (3)
+    // > legacy_export_tracking (2) > depth_limit (1). Higher priority wins.
+    // This is informational — the terminal semantics are unchanged.
+    let unknownReason: string | null = null;
     for (const starExp of fileExp.stars) {
       const starResolvedFile = resolveModulePath(starExp.sourceModule, filePath, knownFiles);
       if (!starResolvedFile) {
@@ -570,7 +594,9 @@ export function rebuildCrossFileCallsEdges(
         // mark this branch as unknown so the parent can't claim an exact
         // target from a different branch.
         hasUnknown = true;
-        trackUnknown('unresolved_reexport_module');
+        unknownReason = unknownReason === null
+          ? 'unresolved_reexport_module'
+          : higherPriorityUnknownReason(unknownReason, 'unresolved_reexport_module');
         continue;
       }
       const result = resolveExportedSymbol(starResolvedFile, exportedName, depth + 1, new Set(visited));
@@ -584,14 +610,16 @@ export function rebuildCrossFileCallsEdges(
         // ignored, which let another branch's resolved target become a false
         // "exact" edge even when the unknown branch could have produced a
         // different target or an ambiguity.
-        // R128: OBS-R128-01 — priority-based reason tracking.
+        // R129: use hoisted helper (no closure allocation).
         hasUnknown = true;
-        trackUnknown(result.reason);
+        unknownReason = unknownReason === null
+          ? result.reason
+          : higherPriorityUnknownReason(unknownReason, result.reason);
       }
       // 'missing' doesn't add targets and is NOT propagated (a star branch
       // that definitively doesn't export the name is fine).
     }
-    const finalUnknownReason: UnknownReason = unknownReason ?? 'unresolved_reexport_module';
+    const finalUnknownReason: UnknownReason = (unknownReason as UnknownReason) ?? 'unresolved_reexport_module';
 
     // R126: precedence — ambiguous > unknown > resolved-count.
     //   - If any branch is ambiguous, the overall result is ambiguous (ESM
