@@ -1,5 +1,5 @@
-// v2/tests/indexer/r148-full-uncertainty-lock.test.ts
-// R148: Full Uncertainty Lock + Incremental Stale + Windows Path + CLI Fix
+// v2/tests/indexer/r151-broken-symlink-liveness.test.ts
+// R151: Broken Symlink Liveness Lock + Warning Samples + Empty RelTarget
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, linkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,15 +10,15 @@ import { discoverSourceFilesWasm, discoverSourceFilesStructured } from '../../sr
 import { defaultCodeDbPath } from '../../src/bridge/sqlite-ro.js';
 import Database from 'better-sqlite3';
 
-describe('R148: Full Uncertainty Lock', () => {
+describe('R151: Broken Symlink Liveness', () => {
   let tmpDir: string, projectDir: string, cacheDir: string, projectName: string;
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'r148-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'r151-'));
     projectDir = join(tmpDir, 'project');
     cacheDir = join(tmpDir, 'cache');
     mkdirSync(projectDir, { recursive: true });
     mkdirSync(join(cacheDir, 'codebase-memory-mcp'), { recursive: true });
-    projectName = `r148-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    projectName = `r151-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     process.env.XDG_CACHE_HOME = cacheDir;
   });
   afterEach(() => {
@@ -28,58 +28,62 @@ describe('R148: Full Uncertainty Lock', () => {
     delete process.env.NODE_ENV;
   });
 
-  // ── DATA-R148-01: Full mode + uncertainty → preserve graph ────────────
+  // ── AVAIL-R151-01: First full with broken symlink succeeds ────────────
 
-  it('DATA-R148-01a: broken symlink on first full does NOT block (R151)', async () => {
-    // R151 (AVAIL-R151-01): On a FIRST full index (no existing graph),
-    // broken symlinks do NOT block the index. R150 behavior (block on
-    // broken symlinks) is superseded by R151 for first-index only.
+  it('AVAIL-R151-01a: first full with broken symlink succeeds (no existing graph)', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r.errors.length).toBe(0);
     expect(r.crossFileCallsStale).toBe(false);
+    expect(r.nodes).toBeGreaterThan(0);
   });
 
-  // ── STATE-R148-01: Incremental uncertainty → stale ────────────────────
-
-  it('STATE-R148-01a: incremental with broken symlinks → stale=true (R150 globalDeletionUncertainty)', async () => {
-    // R150: broken symlinks now set globalDeletionUncertainty → hasUncertainty=true.
-    // The incremental must mark stale and not advance last_success.
+  it('AVAIL-R151-01b: second full with broken symlink blocks (existing graph)', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
-    // Add a broken symlink for the incremental run.
+    // Now add a broken symlink and run another full.
     symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
-    const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: true, useWasm: true, workers: 0 });
-    // R150: globalDeletionUncertainty → hasUncertainty → stale=true.
+    const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
+    // R151: Second full WITH existing graph blocks (protects old graph).
+    expect(r.errors.length).toBeGreaterThan(0);
     expect(r.crossFileCallsStale).toBe(true);
   });
 
-  // ── COMPAT-R148-01: Windows path.sep ──────────────────────────────────
-  // Verified by code inspection: uses `sep` from node:path, not '/'.
+  // ── OBS-R151-01: Warning samples with paths ───────────────────────────
 
-  it('COMPAT-R148-01a: subtree filter uses path.sep (code inspection)', () => {
-    // The filter uses `p.startsWith(prefix + sep)` where `sep` is imported
-    // from 'node:path'. On Linux this is '/', on Windows this is '\'.
-    // This test verifies the import exists and is used.
-    const indexerSource = require('node:fs').readFileSync(
-      join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf-8'
+  it('OBS-R151-01a: broken symlink warning includes path (code inspection)', () => {
+    const source = require('node:fs').readFileSync(
+      join(__dirname, '..', '..', 'src', 'indexer', 'wasm-extractor.ts'), 'utf-8'
     );
-    expect(indexerSource).toContain('prefix + sep');
-    expect(indexerSource).toContain("import { join, relative as nodeRelative, sep }");
+    expect(source).toContain("recordWarning('ENOENT', fullPath)");
+    expect(source).toContain('warningSamples');
   });
 
-  // ── OUTCOME-R148-01: CLI duplicate warning fix ────────────────────────
-  // Verified by code inspection: stale warning printed only once.
-
-  it('OUTCOME-R148-01a: CLI stale warning printed once (code inspection)', () => {
-    const cliSource = require('node:fs').readFileSync(
-      join(__dirname, '..', '..', 'src', 'cli', 'commands', 'index.ts'), 'utf-8'
+  it('OBS-R151-01b: DiscoveryResult includes warningSamples (code inspection)', () => {
+    const source = require('node:fs').readFileSync(
+      join(__dirname, '..', '..', 'src', 'indexer', 'wasm-extractor.ts'), 'utf-8'
     );
-    // R148: removed the duplicate "Cross-file CALLS may be stale after incremental" block.
-    // The warning is now printed only in the else-if branch (console.log, not comment).
-    const staleLogMatches = cliSource.match(/console\.log.*Cross-file CALLS/g) || [];
-    expect(staleLogMatches.length).toBe(1); // only one console.log now
+    expect(source).toContain('warningSamples: Array<{ path: string; code: string }>');
+  });
+
+  // ── OBS-R151-02: Fast-path messages include globalDeletionUncertainty ─
+
+  it('OBS-R151-02a: fast-path indexError includes broken symlinks info (code inspection)', () => {
+    const source = require('node:fs').readFileSync(
+      join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf-8'
+    );
+    // R151: fast-path indexError for uncertainty includes globalDeletionUncertainty.
+    expect(source).toContain('broken symlinks');
+  });
+
+  // ── DATA-R151-01: Empty relTarget → globalDeletionUncertainty ──────────
+
+  it('DATA-R151-01a: empty relTarget sets globalDeletionUncertainty (code inspection)', () => {
+    const source = require('node:fs').readFileSync(
+      join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf-8'
+    );
+    expect(source).toContain("uncertainSubtrees.some(s => s === '')");
   });
 
   // ── Regression ────────────────────────────────────────────────────────

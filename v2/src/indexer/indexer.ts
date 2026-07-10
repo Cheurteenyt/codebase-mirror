@@ -388,10 +388,42 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // triggers the full lock — the symlink may have been valid at the previous
   // run, so the full could destroy old data for a target that's temporarily
   // absent.
-  const hasUncertainty = discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0 || discovery.globalDeletionUncertainty;
+  // R151 (AVAIL-R151-01): Only set globalDeletionUncertainty from broken
+  // symlinks when the project already has an existing graph to protect.
+  // On a FIRST full index (no existing nodes), there's nothing to delete —
+  // blocking would prevent the project from ever being indexed. The first
+  // full creates the initial graph; subsequent runs with broken symlinks
+  // protect it. This restores availability without sacrificing safety.
+  // R151 (DATA-R151-01): If relTarget is empty (''), the root itself is
+  // uncertain. Set globalDeletionUncertainty — an empty prefix doesn't
+  // protect descendants in the subtree filter.
+  const hasBrokenSymlinks = discovery.warningCountsByCode['ENOENT'] !== undefined;
+  const projectHasExistingGraph = opts.incremental
+    ? (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c > 0
+    : false; // full mode: we haven't cleared yet, so check before clear
+  // For full mode, check if there are existing nodes BEFORE clear.
+  const fullModeHasExistingGraph = !opts.incremental
+    ? (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c > 0
+    : false;
+  const shouldSetGlobalUncertainty = hasBrokenSymlinks && (opts.incremental ? projectHasExistingGraph : fullModeHasExistingGraph);
+  // Also check for empty relTarget in uncertainSubtrees (DATA-R151-01)
+  const hasEmptyRelTarget = discovery.uncertainSubtrees.some(s => s === '');
+  const effectiveGlobalDeletionUncertainty = shouldSetGlobalUncertainty || hasEmptyRelTarget;
+  const hasUncertainty = discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0 || effectiveGlobalDeletionUncertainty;
   if (!opts.incremental && hasUncertainty) {
     db.close();
-    const uncertainMsg = `Discovery uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent${discovery.globalDeletionUncertainty ? ', global deletion uncertainty (broken symlinks)' : ''}. Full index aborted to preserve existing graph. Retry when filesystem is stable.`;
+    // R151 (OBS-R151-02): Include warning samples in the message so the
+    // user knows which symlinks to fix. R150 showed "0 path(s)" when only
+    // globalDeletionUncertainty was set — now we include the broken symlink
+    // paths from warningSamples.
+    const brokenSymlinkPaths = discovery.warningSamples
+      .filter(w => w.code === 'ENOENT')
+      .slice(0, 10)
+      .map(w => w.path);
+    const brokenMsg = brokenSymlinkPaths.length > 0
+      ? `. Broken symlinks: ${brokenSymlinkPaths.join(', ')}${discovery.warningCountsByCode['ENOENT'] > 10 ? ` (and ${discovery.warningCountsByCode['ENOENT'] - 10} more)` : ''}`
+      : '';
+    const uncertainMsg = `Discovery uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent${effectiveGlobalDeletionUncertainty ? `, global deletion uncertainty (broken symlinks${brokenMsg})` : ''}. Full index aborted to preserve existing graph. Fix broken symlinks or retry when filesystem is stable.`;
     markProjectStalePreservingGraph(dbPath, opts.project, uncertainMsg);
     return {
       dbPath,
@@ -496,7 +528,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R150 (DATA-R150-02): If globalDeletionUncertainty is set, block ALL
     // deletions — we can't distinguish permanently broken from temporarily
     // broken symlinks without alias history.
-    if (discovery.globalDeletionUncertainty) {
+    // R151 (AVAIL-R151-01): Use effectiveGlobalDeletionUncertainty instead
+    // of discovery.globalDeletionUncertainty — the indexer decides based on
+    // whether the project has existing nodes (first-index policy).
+    if (effectiveGlobalDeletionUncertainty) {
       deletedRelPaths = [];
     } else if (discovery.uncertainPaths.length > 0 || discovery.uncertainSubtrees.length > 0) {
       const uncertainPathSet = new Set(discovery.uncertainPaths);
