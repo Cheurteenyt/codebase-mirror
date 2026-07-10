@@ -1,6 +1,6 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.55.2",
+  "version": "0.55.3",
   "description": "Codebase Memory V2 sidecar \u2014 human memory graph + Obsidian sync",
   "type": "module",
   "main": "dist/cli/index.js",
@@ -37,7 +37,7 @@
     "vitest": "^2.1.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.6.0"
   },
   "license": "MIT"
 }

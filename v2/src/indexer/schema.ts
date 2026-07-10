@@ -47,12 +47,21 @@ import type Database from 'better-sqlite3';
  *        so it can coexist with `export default function make() {}` (valid
  *        TypeScript). DBs indexed by R132 have inflated counts that include
  *        type-only defaults, so they must be re-parsed.
+ *   - 5: R134 — Type Namespace Default Validity + BuiltinModules. The extractor
+ *        now persists `export { type Foo as default }` clauses as `type_only_default`
+ *        bindings. The resolver checks Node.js builtinModules for bare specifiers.
+ *   - 6: R135/R136 — Builtin Truth Lock + top-level `export type { Foo as default }`.
+ *        R135 fixed the dead-code builtin check (isBuiltin) and added top-level
+ *        type-only default detection. R135 failed to bump the version — R136
+ *        corrects this. DBs indexed by R134 (v5) are missing top-level
+ *        `type_only_default` rows and may have stale `node:fake` edges.
+ *        Both must be re-parsed.
  *
  * When bumping this constant, also add a migration test that simulates an
  * upgrade from the previous version (delete the relevant rows, keep
  * file_hashes, run incremental, assert crossFileCallsStale=true).
  */
-export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 5;
+export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 6;
 
 /**
  * Tables created by the native indexer. Matches V1's schema so that
@@ -115,6 +124,7 @@ const SCHEMA_SQL = `
     --   3 = R132+ (external star fix, default occurrence count)
     --   4 = R133+ (type/value default lock, interface excluded from runtime count)
     --   5 = R134+ (type namespace default validity, builtinModules check)
+    --   6 = R135/R136+ (builtin truth lock, top-level type default, version fix)
     extractor_semantics_version INTEGER DEFAULT 0
   );
 
