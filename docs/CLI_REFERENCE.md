@@ -27,7 +27,7 @@ cbm-v2 index --project my-app --root /path/to/repo --allow-partial
 - `--project <name>` — Project name (required)
 - `--root <path>` — Root directory to index (default: current directory)
 - `--incremental` — Skip unchanged files (fast). Without this flag, a full re-index is performed.
-- `--dry-run` — Discover files and detect languages without writing to the DB. R153: warnings are now shown in dry-run.
+- `--dry-run` — Discover files and detect languages without writing to the DB. R153: warnings are now shown in dry-run. R155: dry-run with errors shows "Dry-run failed" instead of "Dry-run complete".
 - `--allow-partial` — Exit 0 even if some files fail extraction (default: exit 1 on any error).
 
 **Behavior:**

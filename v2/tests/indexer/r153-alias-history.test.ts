@@ -89,8 +89,13 @@ describe('R153: Alias History + Historical Target Safety', () => {
     unlinkSync(join(projectDir, 'real.ts'));
     const r2 = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     expect(r2.crossFileCallsStale).toBe(true);
-    expect(r2.errors.length).toBeGreaterThan(0);
-    expect(r2.errors[0].error).toContain('historically-valid alias');
+    // R155 (OUTCOME-R155-01): STALE outcome must NOT carry errors. The contract
+    // is errors>0 → FAILED. R154 put the uncertainty message in errors[] AND
+    // set outcome='STALE'. R155 uses errors=[] and outcome='STALE'. The
+    // human-readable reason is in the DB's last_index_error (set by
+    // markProjectStalePreservingGraph).
+    expect(r2.errors.length).toBe(0);
+    expect(r2.outcome).toBe('STALE');
   });
 
   // ── DATA-R153-01: Directory alias valid → broken → restored ──────────

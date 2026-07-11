@@ -1,5 +1,143 @@
 # Changelog — Codebase Memory V2
 
+## 0.60.0 — Round 155 (2026-07-11) Atomic Alias State + Fingerprint v2 + Special File Safety
+
+**80th round (GPT 5.6 Sol audit R154).** 1 P1 + 3 P1/P2 + 5 P2 + 1 P3 fixed.
+Closes the 10 confirmed code findings of the R154 audit.
+
+### Atomic state (1 P1)
+
+193. **P1 graph marked fresh before alias_history persist (non-atomic)**
+     (`schema.ts`, `indexer.ts`) — R154 called `updateProjectStats` (marks
+     graph fresh + sets `alias_history_initialized=1` +
+     `discovery_policy_version=CURRENT`) THEN `persistAliasHistory` in
+     separate transactions. If persist failed (disk full, SQLite error,
+     corruption), the graph was fresh + initialized=1 + policy=CURRENT but
+     the history was empty/stale. The next run's cold-start check read
+     initialized=1 and did NOT fire the lock — the comment "cold-start
+     catches this" was FALSE. Fixed: new `commitAliasStateAtomically()`
+     helper combines alias_history UPSERT + GC + project stats (fresh +
+     initialized + policy + root_fingerprint) in a SINGLE transaction. If
+     any step fails, the ENTIRE transaction rolls back — the graph stays
+     stale, `alias_history_initialized` stays 0,
+     `last_successful_index_at` is NOT advanced. The next run's cold-start
+     check correctly detects the uninitialized state and applies the lock.
+     All 3 success paths (no-op, deletion-only, main) now use this helper.
+     (TX-R155-01)
+
+### Root identity + special files (3 P1/P2)
+
+194. **P1/P2 root fingerprint omits inode** (`schema.ts`) — R154's
+     `computeRootFingerprint` used `canonicalRoot:st_dev` — no `st_ino`.
+     The comment claimed "st_dev/ino may differ on recreate" but only dev
+     was used. A directory deleted and recreated at the same path on the
+     same filesystem got the SAME fingerprint, inheriting stale history
+     from the old root. Fixed: fingerprint is now
+     `canonicalRoot:st_dev:st_ino`. On recreate, `st_ino` changes on most
+     filesystems, producing a new fingerprint. On untrustworthy filesystems
+     (dev=0, ino=0 — network mounts, FUSE), falls back to
+     `canonicalRoot:untrusted`. Discovery policy version bumped to 2 to
+     force re-population of alias_history under the new fingerprint format.
+     (ROOT-R155-01)
+
+195. **P1/P2 FIFO/socket .ts historized as file** (`wasm-extractor.ts`) —
+     R154 recorded `resolvedAliases` BEFORE checking `isFile/isDirectory`.
+     `targetKind = isDirectory() ? 'directory' : 'file'` classified a FIFO
+     as `file`. `detectLanguage('pipe.ts')=typescript`, so the FIFO alias
+     was historized despite never contributing code. When it broke later,
+     it forced stale/full-abort for no reason. Fixed: `resolvedAliases.push`
+     moved INTO the `isFile()` and `isDirectory()` branches. Special files
+     (FIFO, socket, device) are never historized. (ALIAS-R155-01)
+
+196. **P1/P2 cold-start lock permanent without recovery** (documentation) —
+     R154's cold-start lock stays permanent as long as a broken alias is
+     present. The message "run a successful full first" is impossible
+     because the full is blocked. Documented the recovery path: the user
+     must fix or remove the broken symlink (the warning samples show the
+     exact paths). No automatic baseline — the conservative default is
+     intentional. The CLI message now includes the broken alias paths.
+     (AVAIL-R155-01)
+
+### Scalable GC + concurrency (3 P2)
+
+197. **P2 stamping UPDATE still uses IN(?,?) dynamic** (`schema.ts`) — R154's
+     GC DELETE was O(1) but the stamping step used
+     `alias_path IN (?, ?, ...)` with one placeholder per live alias —
+     risk of hitting SQLite's variable limit on heavily-aliased repos.
+     Fixed: replaced with a prepared UPDATE per alias, reused via a single
+     prepared statement. No dynamic SQL, no variable limit. O(B) prepared-
+     statement executions where B = live aliases, each O(log N) via the
+     UNIQUE index. (PERF-R155-01)
+
+198. **P2 legacy rows root='' never GC'd, NULL != runId** (`schema.ts`) —
+     The R153→R154 migration copied rows with `root_fingerprint=''` and
+     `last_observed_run_id=NULL`. The R154 GC was scoped to
+     `root_fingerprint=current` (never touched `''` rows) and used
+     `last_observed_run_id != runId` which never matched NULL (SQL NULL
+     semantics: `NULL != x` is NULL, not true). Fixed: GC now uses
+     `last_observed_run_id IS NULL OR last_observed_run_id != ?` to also
+     catch legacy NULL rows. A separate `DELETE WHERE root_fingerprint=''`
+     cleans up legacy pre-R154 rows on the first R155 run.
+     (MIG-R155-01)
+
+199. **P2 runId=Date.now() collision** (`indexer.ts`) — R154's
+     `runId = Date.now()` could collide between concurrent indexers started
+     in the same millisecond. Fixed: `runId = randomUUID()` — collision-
+     proof. The `last_observed_run_id` column type changed from INTEGER to
+     TEXT to support UUIDs. The migration detects INTEGER columns and
+     rebuilds to TEXT. (CONC-R155-01)
+
+### Performance + outcome (2 P2 + 1 P3)
+
+200. **P2 COUNT(*) for bootstrap existence check** (`indexer.ts`) — R154
+     used `SELECT COUNT(*) FROM nodes WHERE project=?` to check if the
+     project had existing data. COUNT(*) scans all matching rows. Fixed:
+     `SELECT EXISTS(SELECT 1 FROM nodes WHERE project=? LIMIT 1)` —
+     short-circuits at the first match. Also checks `file_hashes` to catch
+     partial DBs that have hashes but no nodes (pre-R79 full mode).
+     (PERF-R155-04)
+
+201. **P2 full uncertainty = STALE with errors.length > 0** (`indexer.ts`)
+     — R154's full-uncertainty return had `errors: [{...}]` AND
+     `outcome: 'STALE'`. The contract says `errors>0 → FAILED`. CLI and
+     API consumers could diverge; `--allow-partial` depends on the outcome.
+     Fixed: STALE outcome now uses `errors: []`. The human-readable reason
+     is in `crossFileCallsStale=true` + the DB's `last_index_error` (set by
+     `markProjectStalePreservingGraph`). (OUTCOME-R155-01)
+
+202. **P2 dry-run failure shows "Dry-run complete"** (`cli/commands/index.ts`)
+     — R154's CLI printed "Dry-run complete" before checking the outcome.
+     A dry-run with a missing root showed the success banner despite exit 1.
+     Fixed: dry-run with errors now shows "Dry-run failed. N error(s). No
+     DB writes." The success banner only appears when `errors.length === 0`.
+     (OUTCOME-R155-02)
+
+203. **P3 CHECK test non-awaited** (`tests/r154-bootstrap-root-identity-atomic.test.ts`)
+     — R154's CHECK test used `.then()` without returning the Promise and
+     was not `async`. The test could finish before the assertion. Fixed:
+     the test is now `async` and `await`s the `indexProjectWasm` call.
+     (TEST-R155-01)
+
+### Tests (15 new, 3 updated)
+
+- **TX-R155-01** (2 tests): atomic commit sets fresh+initialized+policy,
+  STALE outcome has no errors.
+- **ROOT-R155-01** (3 tests): fingerprint includes st_ino, root recreate
+  → different fingerprint, fingerprint persisted.
+- **ALIAS-R155-01** (1 test): FIFO .ts not historized (skipped if mkfifo
+  unavailable).
+- **CONC-R155-01** (1 test): runId is UUID format.
+- **MIG-R155-01** (2 tests): legacy root='' rows cleaned, NULL run_id
+  rows cleaned.
+- **PERF-R155-04** (1 test): cold-start lock uses EXISTS (behavior).
+- **OUTCOME-R155-02** (2 tests): dry-run with errors shows "Dry-run failed".
+- **Regression** (3 tests): semantics v8, discovery policy v2, alias_history
+  survives full reindex with atomic commit.
+- **Updated** (3 tests): R154 policy version 1→2, R154 CHECK test async,
+  R153 full-uncertainty test errors→[].
+
+### Total: 203 bugs + 11 optimizations + 441 indexer tests across 80 rounds
+
 ## 0.59.0 — Round 154 (2026-07-11) Bootstrap + Root Identity + Atomic State
 
 **79th round (GPT 5.6 Sol audit R153).** 2 P1 + 3 P1/P2 + 3 P2 + 1 P3 fixed.

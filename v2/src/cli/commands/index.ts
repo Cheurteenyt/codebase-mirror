@@ -100,7 +100,13 @@ export function registerIndexCommand(program: Command): void {
         // R153 (OUTCOME-R153-01): Outcome-driven banner. The outcome field is
         // the authoritative source — the previous `nodes > 0 && errors=0 && !stale`
         // check was implicit and didn't distinguish SUCCESS from SUCCESS_WITH_WARNINGS.
-        if (opts.dryRun) {
+        // R155 (OUTCOME-R155-02): Dry-run banner now depends on outcome. A dry-run
+        // with a missing root or fatal discovery shows "Dry-run failed" instead of
+        // the misleading "Dry-run complete".
+        if (opts.dryRun && result.errors.length > 0) {
+          console.log();
+          console.log(`⚠ Dry-run failed. ${result.errors.length} error(s). No DB writes.`);
+        } else if (opts.dryRun) {
           console.log();
           console.log(`ℹ Dry-run complete. No DB writes.`);
         } else if (result.outcome === 'SUCCESS') {

@@ -147,4 +147,17 @@ describe('R153: CLI process tests (TEST-R153-04)', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toContain('Discovery root error');
   });
+
+  // ── R155 (OUTCOME-R155-02): Dry-run failure banner ──────────────────
+
+  it('TEST-R155-02a: missing root + --dry-run → "Dry-run failed" (not "Dry-run complete")', async () => {
+    const result = await runCli(
+      ['index', '--project', projectName, '--root', join(tmpDir, 'does-not-exist'), '--dry-run'],
+      { XDG_CACHE_HOME: cacheDir },
+    );
+    // R155: dry-run with errors shows "Dry-run failed", not "Dry-run complete".
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('Dry-run failed');
+    expect(result.stdout).not.toContain('Dry-run complete');
+  });
 });

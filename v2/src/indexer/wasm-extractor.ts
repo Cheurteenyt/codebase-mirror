@@ -719,15 +719,16 @@ export function discoverSourceFilesStructured(
           continue;
         }
 
-        // R153 (DATA-R153-01): At this point, realpath + stat both succeeded,
-        // the target is inside realRoot and not policy-skipped. Record the
-        // resolved alias so the indexer can persist it to alias_history.
-        // Future runs that find this alias broken will look up the old
-        // canonical target here and protect its data.
+        // R153 (DATA-R153-01) + R155 (ALIAS-R155-01): Record the resolved
+        // alias ONLY for regular files and directories — NOT for special
+        // files (FIFO, socket, device). R154 recorded the alias BEFORE
+        // checking isFile/isDirectory, so a FIFO named `pipe.ts` was
+        // classified as targetKind='file' and historized (because
+        // detectLanguage('pipe.ts')=typescript), despite never contributing
+        // code. R155 moves the push into the isFile/isDirectory branches so
+        // special files are never historized.
         const relAlias = relative(realRoot, fullPath);
         const relTarget = relative(realRoot, realTarget);
-        const targetKind: 'file' | 'directory' = realStat.isDirectory() ? 'directory' : 'file';
-        resolvedAliases.push({ aliasPath: relAlias, canonicalTarget: relTarget, targetKind });
 
         if (realStat.isDirectory()) {
           // R141 (IDX-R141-02): Push the CANONICAL realTarget, not fullPath.
@@ -740,6 +741,10 @@ export function discoverSourceFilesStructured(
           }
           visitedDirs.add(realTarget);
           stack.push(realTarget);
+          // R155 (ALIAS-R155-01): record directory alias AFTER confirming it's
+          // a real directory. The indexer's contribution filter will check if
+          // any files were discovered under it before persisting.
+          resolvedAliases.push({ aliasPath: relAlias, canonicalTarget: relTarget, targetKind: 'directory' });
         } else if (realStat.isFile()) {
           // R142 (SEC-R142-01): Only treat REGULAR files as candidates.
           // Previously the `else` branch of isDirectory() accepted ALL
@@ -753,6 +758,10 @@ export function discoverSourceFilesStructured(
           if (!lang) {
             continue; // unsupported extension — don't mark visited
           }
+          // R155 (ALIAS-R155-01): record file alias AFTER confirming it's a
+          // regular file with a supported language. The indexer's contribution
+          // filter re-checks detectLanguage before persisting.
+          resolvedAliases.push({ aliasPath: relAlias, canonicalTarget: relTarget, targetKind: 'file' });
           const identity = fileIdentityKey(realTarget, lang);
           if (identity === null) {
             // R147 (DISC-R147-01): fileIdentityKey returned null — the file

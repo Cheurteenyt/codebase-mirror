@@ -201,7 +201,8 @@ When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 - **Discovery policy version** (`v2/src/indexer/schema.ts` `CURRENT_DISCOVERY_POLICY_VERSION`):
   R154+. Tracks changes to the broken-symlink / alias-history / contribution / visibility
   policy. When the stored version is less than current, the cold-start lock applies.
-  Currently 1. Separate from extractor semantics (which tracks AST output).
+  Currently 2 (R155: fingerprint v2 + atomic commit + special file safety).
+  Separate from extractor semantics (which tracks AST output).
 - **Backup format version** (`backup.ts`): independent schema version,
   bumped only when the JSON shape changes.
 - **DB migration version**: 4 migrations (initial_schema, optimize_indexes,
@@ -287,6 +288,32 @@ These invariants MUST hold for every round. Violations are P1 bugs.
 15. **R154 — Atomicity + GC.** `persistAliasHistory` MUST be wrapped in
     `try { } finally { db.close() }`. The GC uses `last_observed_run_id`
     stamping (O(1) SQL), NOT dynamic `NOT IN` params.
+
+16. **R155 — Atomic alias state commit.** On successful index, alias_history
+    persist + project stats (fresh + initialized + policy + root_fingerprint)
+    MUST be committed in a SINGLE transaction via `commitAliasStateAtomically()`.
+    If persist fails, the ENTIRE transaction rolls back — the graph stays
+    stale, `alias_history_initialized` stays 0, `last_successful_index_at`
+    is NOT advanced. The R154 non-atomic pattern (updateProjectStats THEN
+    persistAliasHistory in separate transactions) is FORBIDDEN.
+
+17. **R155 — Root fingerprint v2.** The fingerprint is
+    `canonicalRoot:st_dev:st_ino` (NOT just `canonicalRoot:st_dev`). On
+    untrustworthy filesystems (dev=0, ino=0), falls back to
+    `canonicalRoot:untrusted`. A directory deleted and recreated at the
+    same path gets a NEW fingerprint (st_ino changes).
+
+18. **R155 — Special file type safety.** `resolvedAliases.push` MUST be
+    inside the `isFile()` or `isDirectory()` branch — NEVER before the type
+    check. Special files (FIFO, socket, device) MUST NOT be historized.
+
+19. **R155 — STALE outcome contract.** `outcome='STALE'` MUST have
+    `errors: []`. The contract is `errors>0 → FAILED`. STALE carries the
+    reason in `crossFileCallsStale=true` + DB `last_index_error`, NOT in
+    the `errors` array.
+
+20. **R155 — UUID runId.** `runId` MUST be `randomUUID()`, NOT `Date.now()`.
+    The `last_observed_run_id` column is TEXT (not INTEGER).
 
 ## Round history (last 10 rounds)
 
