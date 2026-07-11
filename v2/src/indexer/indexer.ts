@@ -246,6 +246,20 @@ export interface IndexResult {
    */
   recovery?: 'retry_incremental' | 'fix_filesystem' | 'full_reindex' | 'none';
   /**
+   * R163 (API-R163-01): When true, the index did not publish new data but a
+   * previous snapshot exists in the DB. The `nodes=0`/`edges=0` in the result
+   * reflect "no new work published", NOT "empty graph". Consumers (CLI, UI,
+   * MCP) that interpret `nodes=0` as "graph empty" should check this flag
+   * first and, when true, query the DB for actual node/edge counts instead
+   * of trusting the in-memory result.
+   *
+   * Currently set on the two root-change early returns (ROOT_CHANGED and
+   * ROOT_IDENTITY_UNKNOWN) — both refuse the incremental without mutating
+   * the graph, so the previous snapshot is intact. May be set on additional
+   * early-return paths in future rounds.
+   */
+  preservedSnapshot?: boolean;
+  /**
    * R158 (OUTCOME-R158-01): Structured system failure. When the index fails
    * due to a system error (publication failure, DB error, extraction crash),
    * this field carries the specific failure info. `errors[]` is reserved for
@@ -1034,13 +1048,36 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // UNCONDITIONALLY (was inside the `if (!bootstrapComplete && brokenAliases
   // > 0)` block). The R162 legacy root bootstrap lock reuses this EXISTS
   // check to determine whether a NULL root_fingerprint should refuse
-  // incremental. Computing it unconditionally is cheap (two EXISTS queries
+  // incremental. Computing it unconditionally is cheap (EXISTS queries
   // that short-circuit at the first match) and avoids recomputing it later.
+  //
+  // R163 (ROOT-R163-02): Expanded from just `nodes` and `file_hashes` to
+  // ALSO check `edges`, `call_sites`, `imports`, and `exports`. R162's
+  // check missed a partial DB that had edges/call_sites/imports/exports
+  // but no nodes/hashes (e.g., an interrupted full index after the node
+  // DELETE but before the edge DELETE). Such a DB would have
+  // `hasExistingGraphData=false` and slip past the
+  // `rootIdentityUnknown` gate, then the premark UPSERT would create a
+  // fresh projects row and the index would proceed as if no prior snapshot
+  // existed — even though partial graph data is present. R163 detects ANY
+  // of the six structural tables.
   const hasExistingGraphData = (db.prepare(
     'SELECT EXISTS(SELECT 1 FROM nodes WHERE project = ? LIMIT 1) AS e'
   ).get(opts.project) as { e: number }).e === 1
     || (db.prepare(
       'SELECT EXISTS(SELECT 1 FROM file_hashes WHERE project = ? LIMIT 1) AS e'
+    ).get(opts.project) as { e: number }).e === 1
+    || (db.prepare(
+      'SELECT EXISTS(SELECT 1 FROM edges WHERE project = ? LIMIT 1) AS e'
+    ).get(opts.project) as { e: number }).e === 1
+    || (db.prepare(
+      'SELECT EXISTS(SELECT 1 FROM call_sites WHERE project = ? LIMIT 1) AS e'
+    ).get(opts.project) as { e: number }).e === 1
+    || (db.prepare(
+      'SELECT EXISTS(SELECT 1 FROM imports WHERE project = ? LIMIT 1) AS e'
+    ).get(opts.project) as { e: number }).e === 1
+    || (db.prepare(
+      'SELECT EXISTS(SELECT 1 FROM exports WHERE project = ? LIMIT 1) AS e'
     ).get(opts.project) as { e: number }).e === 1;
   let coldStartLock = false;
   if (!bootstrapComplete && discovery.brokenAliases.length > 0) {
@@ -1193,9 +1230,40 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   //   - rootFingerprint computation (computeRootFingerprint(canonicalRoot))
   //   - discovery (needed for warnings: buildDiscoveryWarnings(discovery))
   if (rootChanged) {
-    db.close();
+    // R163 (STATE-R163-01): Persist stale using the SAME connection, not
+    // markProjectStalePreservingGraph which reopens. R162 closed the DB then
+    // reopened via the helper — if the reopen failed (lock, corruption, disk),
+    // stalePersisted=false was ignored and the DB stayed stale=0 while the
+    // API returned STALE. R163 runs the UPDATE on the already-open connection
+    // BEFORE db.close(), so the persist and the API return value agree.
+    //
+    // R163 (COMP-R163-01): "no mutation" — this UPDATE writes trust-state
+    // columns only (`cross_file_calls_stale`, `last_index_attempt_at`,
+    // `last_index_error`). It does NOT modify structural graph data
+    // (nodes, edges, file_hashes, call_sites, imports, exports, root_path,
+    // root_fingerprint). The previous R162 implementation called
+    // markProjectStalePreservingGraph, which on a semantics mismatch would
+    // also clearCrossFileCallEdges — that is a structural mutation. R163
+    // removes the semantics-mismatch edge clear by inlining the trust-state
+    // UPDATE only (the root change is not a semantics mismatch).
     const rootMsg = `Root fingerprint changed — the published graph belongs to a different root. Full reindex required.`;
-    markProjectStalePreservingGraph(dbPath, opts.project, rootMsg);
+    let stalePersisted = false;
+    try {
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE projects SET
+          cross_file_calls_stale = 1,
+          last_index_attempt_at = ?,
+          last_index_error = ?
+        WHERE name = ?
+      `).run(now, rootMsg, opts.project);
+      stalePersisted = true;
+    } catch {
+      // Best-effort — if even this fails, the DB may stay stale=0. The
+      // message below surfaces a WARNING so consumers know the persisted
+      // state may contradict the API return value.
+    }
+    db.close();
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -1206,9 +1274,14 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       warnings: buildDiscoveryWarnings(discovery),
       outcome: 'STALE',
+      // R163 (API-R163-01): preservedSnapshot=true signals that a previous
+      // snapshot still exists in the DB — nodes=0/edges=0 here mean "no new
+      // work published", NOT "graph empty". Consumers should query the DB
+      // for actual counts.
+      preservedSnapshot: true,
       staleReason: {
         code: 'ROOT_CHANGED',
-        message: rootMsg,
+        message: rootMsg + (stalePersisted ? '' : ' [WARNING: stale flag could not be persisted to DB]'),
         paths: [],
         totalPaths: 0,
         pathsTruncated: false,
@@ -1237,9 +1310,31 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     && hasExistingGraphData;
 
   if (rootIdentityUnknown) {
-    db.close();
+    // R163 (STATE-R163-01): Same fix as the rootChanged block above —
+    // persist stale using the SAME connection before db.close(), instead
+    // of markProjectStalePreservingGraph which reopens. R162's reopen could
+    // fail (lock, corruption, disk) and leave the DB stale=0 while the API
+    // returned STALE. R163 inlines the trust-state UPDATE only.
+    //
+    // R163 (COMP-R163-01): "no mutation" — this UPDATE writes trust-state
+    // columns only (`cross_file_calls_stale`, `last_index_attempt_at`,
+    // `last_index_error`). It does NOT modify structural graph data.
     const rootMsg = `Root identity unknown — the published graph predates root fingerprint tracking. Full reindex required to establish root identity.`;
-    markProjectStalePreservingGraph(dbPath, opts.project, rootMsg);
+    let stalePersisted = false;
+    try {
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE projects SET
+          cross_file_calls_stale = 1,
+          last_index_attempt_at = ?,
+          last_index_error = ?
+        WHERE name = ?
+      `).run(now, rootMsg, opts.project);
+      stalePersisted = true;
+    } catch {
+      // Best-effort — see rootChanged block comment above.
+    }
+    db.close();
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -1250,9 +1345,14 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       warnings: buildDiscoveryWarnings(discovery),
       outcome: 'STALE',
+      // R163 (API-R163-01): preservedSnapshot=true — a previous snapshot
+      // exists in the DB (hasExistingGraphData was true, otherwise this
+      // early return wouldn't have fired). nodes=0/edges=0 mean "no new
+      // work published", NOT "graph empty".
+      preservedSnapshot: true,
       staleReason: {
         code: 'ROOT_IDENTITY_UNKNOWN',
-        message: rootMsg,
+        message: rootMsg + (stalePersisted ? '' : ' [WARNING: stale flag could not be persisted to DB]'),
         paths: [],
         totalPaths: 0,
         pathsTruncated: false,

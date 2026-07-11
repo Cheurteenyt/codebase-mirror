@@ -1071,7 +1071,16 @@ export function updateProjectStats(
   rootFingerprint: string | null = null,
 ): void {
   const now = new Date().toISOString();
-  const succeeded = indexError === null;
+  // R163 (STATE-R163-02): Success requires BOTH no error AND not stale.
+  // R162 used only `indexError === null`, but `crossFileCallsStale` can be
+  // true with `indexError === null` (call-sites uninitialized, previously
+  // stale, resolver not published). This would advance
+  // `last_successful_index_at` and clear `last_index_error` for a stale run
+  // without error text — masking the stale state from Graph Status and
+  // downstream consumers that read `last_successful_index_at` to determine
+  // freshness. R163 treats `crossFileCallsStale=true` as a non-success even
+  // when `indexError` is null.
+  const succeeded = indexError === null && !crossFileCallsStale;
   // R144: on success, update last_successful_index_at and clear last_index_error.
   // On failure, set last_index_error but do NOT update last_successful_index_at.
   // R154: on success, also update alias_history_initialized, discovery_policy_version,

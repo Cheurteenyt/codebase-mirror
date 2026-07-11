@@ -739,8 +739,8 @@ describe('R160: Full Orchestrator Failure Taxonomy', () => {
     expect(src).toContain("recovery: dryRunOutcome === 'FAILED' ? 'fix_filesystem' : undefined");
   });
 
-  it('regression (R162 override): package.json version is 0.67.0 (R162 bump)', () => {
+  it('regression (R163 override): package.json version is 0.68.0 (R163 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.67.0"');
+    expect(pkg).toContain('"version": "0.68.0"');
   });
 });
