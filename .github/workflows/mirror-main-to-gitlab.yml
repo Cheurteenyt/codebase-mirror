@@ -1,0 +1,239 @@
+name: Mirror validated GitHub main to GitLab
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitlab-passive-main-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror validated main
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: gitlab-passive-mirror
+
+    env:
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+      GITLAB_URL: ${{ vars.GITLAB_REPOSITORY_SSH_URL }}
+
+    steps:
+      - name: Validate source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid workflow_run head SHA: $TARGET_SHA"
+            exit 1
+          fi
+
+          if [ -z "$GITLAB_URL" ]; then
+            echo "::error::GITLAB_REPOSITORY_SSH_URL is empty."
+            exit 1
+          fi
+
+          case "$GITLAB_URL" in
+            git@gitlab.com:*) ;;
+            *)
+              echo "::error::Expected a git@gitlab.com:... SSH URL."
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout exact CI-validated SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure pinned GitLab SSH identity
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.GITLAB_MIRROR_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ vars.GITLAB_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$KNOWN_HOSTS"
+
+          install -d -m 700 "$HOME/.ssh"
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" \
+            > "$HOME/.ssh/gitlab_mirror_ed25519"
+          chmod 600 "$HOME/.ssh/gitlab_mirror_ed25519"
+
+          printf '%s\n' "$KNOWN_HOSTS" \
+            > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+          cat > "$HOME/.ssh/config" <<'EOF'
+          Host gitlab.com
+            HostName gitlab.com
+            User git
+            IdentityFile ~/.ssh/gitlab_mirror_ed25519
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+          EOF
+          chmod 600 "$HOME/.ssh/config"
+
+      - name: Mirror validated SHA with fast-forward-only semantics
+        id: mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LOCAL_SHA="$(git rev-parse HEAD)"
+
+          if [ "$LOCAL_SHA" != "$TARGET_SHA" ]; then
+            echo "::error::Checkout mismatch."
+            echo "Expected: $TARGET_SHA"
+            echo "Observed: $LOCAL_SHA"
+            exit 1
+          fi
+
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          git cat-file -e "${TARGET_SHA}^{tree}"
+
+          git fetch --no-tags origin \
+            main:refs/remotes/origin/main
+
+          CURRENT_GITHUB_MAIN="$(
+            git rev-parse refs/remotes/origin/main
+          )"
+
+          if ! git merge-base --is-ancestor \
+            "$TARGET_SHA" \
+            "$CURRENT_GITHUB_MAIN"; then
+            echo "::error::Validated SHA is no longer in GitHub main history."
+            echo "Validated:    $TARGET_SHA"
+            echo "GitHub main: $CURRENT_GITHUB_MAIN"
+            exit 1
+          fi
+
+          git remote add gitlab "$GITLAB_URL"
+
+          REMOTE_SHA="$(
+            git ls-remote gitlab refs/heads/main |
+            awk '{print $1}'
+          )"
+
+          if [ -n "$REMOTE_SHA" ]; then
+            git fetch --no-tags gitlab \
+              main:refs/remotes/gitlab/main
+
+            if ! git merge-base --is-ancestor \
+              "$REMOTE_SHA" \
+              "$CURRENT_GITHUB_MAIN"; then
+              echo "::error::DIVERGENCE: GitLab main contains history absent from GitHub main."
+              echo "GitLab main: $REMOTE_SHA"
+              echo "GitHub main: $CURRENT_GITHUB_MAIN"
+              exit 1
+            fi
+          fi
+
+          if [ "$REMOTE_SHA" = "$TARGET_SHA" ]; then
+            echo "GitLab already contains the validated SHA."
+            echo "result=already-mirrored" >> "$GITHUB_OUTPUT"
+            echo "remote_sha=$REMOTE_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "$REMOTE_SHA" ] ||
+             git merge-base --is-ancestor \
+               "$REMOTE_SHA" \
+               "$TARGET_SHA"; then
+
+            git push \
+              -o ci.no_pipeline \
+              gitlab \
+              "$TARGET_SHA:refs/heads/main"
+
+          elif git merge-base --is-ancestor \
+                 "$TARGET_SHA" \
+                 "$REMOTE_SHA"; then
+
+            echo "A newer validated workflow run already advanced GitLab."
+            echo "result=newer-valid-mirror-present" >> "$GITHUB_OUTPUT"
+            echo "remote_sha=$REMOTE_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+
+          else
+            echo "::error::Non-linear mirror state; refusing to modify GitLab."
+            echo "GitLab main: $REMOTE_SHA"
+            echo "Target SHA:  $TARGET_SHA"
+            exit 1
+          fi
+
+          OBSERVED_SHA="$(
+            git ls-remote gitlab refs/heads/main |
+            awk '{print $1}'
+          )"
+
+          if [ "$OBSERVED_SHA" = "$TARGET_SHA" ]; then
+            echo "result=mirrored" >> "$GITHUB_OUTPUT"
+            echo "remote_sha=$OBSERVED_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags gitlab \
+            main:refs/remotes/gitlab/main
+
+          if git merge-base --is-ancestor \
+               "$TARGET_SHA" \
+               refs/remotes/gitlab/main &&
+             git merge-base --is-ancestor \
+               refs/remotes/gitlab/main \
+               "$CURRENT_GITHUB_MAIN"; then
+
+            echo "A newer validated mirror won the race after our push."
+            echo "result=newer-valid-mirror-present" >> "$GITHUB_OUTPUT"
+            echo "remote_sha=$OBSERVED_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::Post-push verification failed."
+          echo "Expected target or validated descendant: $TARGET_SHA"
+          echo "Observed GitLab main:                 $OBSERVED_SHA"
+          exit 1
+
+      - name: Write mirror summary
+        if: always()
+        shell: bash
+        env:
+          MIRROR_RESULT: ${{ steps.mirror.outputs.result }}
+          REMOTE_SHA: ${{ steps.mirror.outputs.remote_sha }}
+        run: |
+          {
+            echo "## GitLab passive mirror"
+            echo
+            echo "- Validated GitHub SHA: \`$TARGET_SHA\`"
+            echo "- Result: \`${MIRROR_RESULT:-failed}\`"
+            echo "- Observed GitLab SHA: \`${REMOTE_SHA:-unknown}\`"
+            echo "- GitLab pipeline requested: \`no\`"
+            echo "- Force push used: \`no\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove SSH material
+        if: always()
+        shell: bash
+        run: |
+          rm -f \
+            "$HOME/.ssh/gitlab_mirror_ed25519" \
+            "$HOME/.ssh/config" \
+            "$HOME/.ssh/known_hosts"

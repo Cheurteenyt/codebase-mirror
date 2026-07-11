@@ -1,133 +1,19 @@
-# GitLab CI — lightweight mirror to GitHub (CI runs on GitHub Actions)
-#
-# R50: added scheduled quota-check job that uses the automatic CI_JOB_TOKEN
-# R52: fixed BusyBox date compatibility, simplified script, added error handling.
-# R54: added workflow:rules + mr-preflight so MR pipelines PASS (not skip).
-#      Without this, "Pipelines must succeed" blocks MRs because all jobs
-#      are filtered out by `if: $CI_COMMIT_BRANCH == "main"` (CI_COMMIT_BRANCH
-#      is undefined for merge_request_event pipelines).
-# R54b: switched all script blocks to block scalars (|). YAML was parsing
-#       lines containing `: ` (e.g. "Source branch: $VAR") as mappings
-#       instead of strings, which fails GitLab's CI validation:
-#       "script config should be a string or a nested array of strings".
+# GitLab is a passive mirror of the canonical GitHub repository.
+# CI, pull-request validation, and releases run on GitHub Actions.
+# No GitLab pipeline must be created for pushes, merge requests, schedules,
+# web/API triggers, or the GitHub-to-GitLab mirror.
 
-# R54: workflow:rules controls WHEN a pipeline is created at all.
-# - merge_request_event: MR pipelines (must have at least one passing job)
-# - push to main: mirror + quota-check
-# - schedule: quota-check only
-# - All other events (push to feature branches, tags, web): no pipeline
-#   (those branches don't need GitLab CI — GitHub Actions handles them).
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - when: never
 
 stages:
-  - preflight
-  - mirror
-  - report
+  - disabled
 
-# ── MR preflight (R54, restored R156) ────────────────────────────
-# R156: The github-ci-gate job was causing pipeline failures because
-# GITHUB_MIRROR_TOKEN may not be available in MR pipelines (protected
-# variable scoping). Restored the simple echo preflight for now.
-# The CI gate (github-ci-gate) will be activated in a follow-up MR once
-# the gitlab-mr-ci.yml workflow is on GitHub main and the token scoping
-# is configured for MR pipelines.
-mr-preflight:
-  stage: preflight
-  image: alpine:latest
+passive-mirror-sentinel:
+  stage: disabled
   script:
     - |
-      echo "MR pipeline OK — GitLab CI is mirror-only."
-      echo "Real CI (typecheck + build + test) runs on GitHub Actions after merge."
-      echo "Source branch: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
-      echo "Target branch:  $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-      echo "Commit:         $CI_COMMIT_SHA"
-      echo "See: https://github.com/Cheurteenyt/codebase-mirror/actions"
-      echo ""
-      echo "R156 note: CI gate (github-ci-gate) will be activated in a follow-up MR."
+      echo "GitLab CI is intentionally disabled. GitHub is canonical."
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-
-# ── Mirror to GitHub (on every main push) ────────────────────────
-mirror-to-github:
-  stage: mirror
-  image: alpine:latest
-  before_script:
-    - apk add --no-cache git
-  script:
-    - |
-      set -euo pipefail
-      echo "Mirroring to GitHub to trigger Actions CI..."
-      # R53 (D1): --force-with-lease instead of --force, so a diverged GitHub
-      # main (e.g. PR merged directly on GitHub) fails loudly instead of being
-      # silently overwritten.
-      # R53 (D2): http.extraHeader for auth — token never appears in URL or
-      # git error output.
-      # R54c: --force-with-lease without an expected SHA fails with "stale
-      # info" on the 2nd+ mirror, because pushing to a bare URL doesn't
-      # populate a remote-tracking ref. Fix: query GitHub's main SHA with
-      # ls-remote first, then pass it explicitly as --force-with-lease=main:<sha>.
-      GH_URL="https://github.com/Cheurteenyt/codebase-mirror.git"
-      AUTH=$(printf '%s' "Cheurteenyt:${GITHUB_MIRROR_TOKEN}" | base64 -w0)
-      # Fetch current GitHub main SHA (empty if first-time mirror).
-      GH_MAIN=$(git -c http.extraHeader="Authorization: basic $AUTH" \
-        ls-remote "$GH_URL" refs/heads/main 2>/dev/null | awk '{print $1}')
-      if [ -z "$GH_MAIN" ]; then
-        echo "First-time mirror — pushing with --force (no remote ref yet)."
-        git -c http.extraHeader="Authorization: basic $AUTH" push "$GH_URL" HEAD:main --force
-      else
-        echo "GitHub main is at: $GH_MAIN"
-        echo "Local  HEAD is at: $(git rev-parse HEAD)"
-        # --force-with-lease=main:<sha> requires the remote ref to still be at <sha>.
-        # If GitHub main moved (direct PR merge), this push fails loudly and the
-        # CI job will be red — operator can investigate.
-        git -c http.extraHeader="Authorization: basic $AUTH" push "$GH_URL" HEAD:main --force-with-lease=main:"$GH_MAIN"
-      fi
-      echo "Mirror complete. CI runs at https://github.com/Cheurteenyt/codebase-mirror/actions"
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-  variables:
-    GIT_STRATEGY: "clone"
-    GIT_DEPTH: "0"
-
-# ── Quota Report (weekly, R50/R52) ───────────────────────────────
-# Uses CI_JOB_TOKEN (automatic, no configuration needed).
-# R52: fixed date command for BusyBox (Alpine), single Python parse.
-quota-check:
-  stage: report
-  image: alpine:latest
-  before_script:
-    - apk add --no-cache curl python3
-  script:
-    - |
-      echo "=== GitLab CI Quota Report ==="
-      echo ""
-      # R52: BusyBox date doesn't support -d or -v. Use epoch math instead.
-      THIRTY_DAYS_AGO=$(date -u -d '-30 days' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || python3 -c "import datetime; print((datetime.datetime.utcnow()-datetime.timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
-      PROJECT_INFO=$(curl -s --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID")
-      echo "Project: $(echo $PROJECT_INFO | python3 -c 'import json,sys; print(json.load(sys.stdin).get("path_with_namespace","?"))')"
-      echo ""
-      echo "=== CI Minutes ==="
-      SHARED_LIMIT=$(echo $PROJECT_INFO | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("shared_runners_minutes_limit","400 (free tier default)"))')
-      echo "Shared runners limit: $SHARED_LIMIT min/month"
-      echo ""
-      echo "=== Pipeline Statistics ==="
-      PIPELINES=$(curl -s --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-        "https://gitlab.com/api/v4/projects/$CI_PROJECT_ID/pipelines?per_page=100&updated_after=$THIRTY_DAYS_AGO")
-      PIPELINE_COUNT=$(echo $PIPELINES | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d) if isinstance(d, list) else 0)')
-      echo "Pipelines (last 30 days): $PIPELINE_COUNT"
-      echo "Estimated CI usage: ~$((PIPELINE_COUNT * 5 / 60)) min ($PIPELINE_COUNT pipelines x ~5s each)"
-      echo ""
-      echo "=== Summary ==="
-      echo "GitLab CI: ~$((PIPELINE_COUNT * 5 / 60)) min used / $SHARED_LIMIT min limit"
-      echo "GitHub Actions: unlimited (public repo)"
-      echo "All quotas healthy"
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_COMMIT_BRANCH == "main"
-  variables:
-    GIT_STRATEGY: "none"
+    - when: never

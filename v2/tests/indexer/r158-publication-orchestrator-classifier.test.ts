@@ -405,20 +405,10 @@ describe('R158: Publication Orchestrator + Unified Classifier', () => {
     expect(premarkCount).toBeGreaterThanOrEqual(2);
   });
 
-  it('regression: sync-graph-ui workflow no longer uses --depth=1 fetch', () => {
+  it('regression: sync-graph-ui workflow was removed in R166 (GitHub canonical cutover)', () => {
     const workflowPath = join(__dirname, '..', '..', '..', '.github', 'workflows', 'sync-graph-ui-to-gitlab.yml');
-    expect(existsSync(workflowPath)).toBe(true);
-    const yml = readFileSync(workflowPath, 'utf8');
-    // R158 (SYNC-R158-01): full fetch (no --depth=1) so merge-base works.
-    expect(yml).toContain('git fetch origin main');
-    expect(yml).not.toContain('git fetch origin main --depth=1');
-    // R158 (SYNC-R158-02): remove_source_branch=true on PUT too.
-    // Count occurrences of remove_source_branch=true — should be at least 2
-    // (POST create + PUT update).
-    const matches = yml.match(/remove_source_branch=true/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(2);
-    // R158: fail loudly if MR_COUNT > 1.
-    expect(yml).toContain('MR_COUNT" -eq 1');
-    expect(yml).toContain('MR_COUNT open MRs for source branch');
+    // R166: GitLab is a passive main-only mirror; the bidirectional
+    // Graph UI bridge workflow was removed as part of the cutover.
+    expect(existsSync(workflowPath)).toBe(false);
   });
 });

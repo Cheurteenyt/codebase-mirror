@@ -1,5 +1,90 @@
 # Changelog — Codebase Memory V2
 
+## 0.71.0 — Round 166 (2026-07-12) GitHub Canonical + GitLab Passive Mirror
+
+**91st round (infrastructure migration).** No code semantics change.
+Closes the GitLab CI quota incident by making GitHub the canonical
+repository and GitLab a passive main-only mirror.
+
+### Architecture cutover
+
+- **GitHub** is now the canonical repository. All CI, pull-request
+  validation, reviews, and merges happen on GitHub.
+- **GitLab** is now a passive main-only mirror. No pipelines, no MRs,
+  no schedules, no runners, no compute minutes consumed.
+- **Mirror direction** is now GitHub → GitLab (unidirectional).
+- **Mirror trigger** is `workflow_run` on the `CI` workflow, gated on
+  `conclusion == 'success' && event == 'push' && head_branch == 'main'
+  && head_repository == github.repository`.
+- **Mirror push** is fast-forward only, with `-o ci.no_pipeline`, and
+  fails closed on any divergence (no force-push, no rollback).
+
+### Files changed
+
+- `.gitlab-ci.yml`: replaced with passive sentinel (`workflow.rules.when
+  never` + `passive-mirror-sentinel` job with `rules.when never`).
+- `.github/workflows/gitlab-mr-ci.yml`: **removed** (was the GitLab MR
+  CI dispatch listener).
+- `.github/workflows/sync-graph-ui-to-gitlab.yml`: **removed** (was the
+  GitLab MR/branch creator for Graph UI changes).
+- `.github/workflows/mirror-main-to-gitlab.yml`: **created** (canonical
+  mirror workflow, fast-forward only, idempotent, fail-closed).
+- `.github/workflows/ci.yml`: updated header comments (removed "GitLab
+  CI is a lightweight mirror only" / "unlimited Actions minutes" claims,
+  added R166 reference).
+- `CONTRIBUTING.md`: rewritten to use GitHub PR workflow (no more
+  `git push gitlab` / `GitLab MR → merge → mirror GitHub`).
+- `MAINTAINERS_GUIDE.md`: removed Paramiko wrapper, `mr-preflight`,
+  `mirror-to-github`, `GITHUB_MIRROR_TOKEN`, hybrid GitLab push
+  architecture; added passive mirror invariants.
+- `docs/GITHUB_GITLAB_BRANCH_BRIDGE.md`: rewritten as
+  "GitHub Canonical → GitLab Passive Mirror" reference.
+- `docs/V2_CURRENT_STATE.md`: updated CI/CD section.
+- `v2/tests/ci/r166-github-canonical-passive-mirror.test.ts`:
+  **created** (regression tests for the new contract).
+- `v2/package.json`: `0.70.0` → `0.71.0`.
+
+### Invariants enforced
+
+1. GitHub `main` is the only source of truth.
+2. GitLab `main` only receives commits already in GitHub `main`.
+3. Mirror never pushes feature branches.
+4. Mirror never creates GitLab MRs.
+5. Mirror never force-pushes.
+6. GitLab-only divergence fails the mirror (never auto-repairs).
+7. No GitLab runner is required.
+8. A failed GitHub CI never reaches GitLab.
+9. An older mirror run never rolls back GitLab.
+10. GitHub and GitLab credentials are separated (GitLab uses a dedicated
+    deploy key stored as `GITLAB_MIRROR_SSH_PRIVATE_KEY` in the
+    `gitlab-passive-mirror` GitHub environment).
+
+### Out of scope (R166)
+
+- Atomic generation publication
+- Project lease/fencing
+- DB dialect V1/V2
+- Dry-run parity
+- Graph trust protocol
+- Lockfiles/npm ci
+- OS matrix
+- Tag mirroring
+- Release automation
+
+### Migration path
+
+1. Freeze GitLab (no new MRs, no pushes).
+2. Verify `GitHub main == GitLab main == R165` (done at cutover).
+3. Probe the new GitLab deploy key on a temporary branch before main.
+4. Deliver R166 via fast-forward SSH (same mechanism as R165).
+5. Wait for CI on push/main to go green.
+6. The `mirror-main-to-gitlab` workflow fires automatically on
+   `workflow_run` success.
+7. GitLab `main` advances to the R166 SHA with `-o ci.no_pipeline`.
+8. Verify GitLab `main == GitHub main`, no pipelines created.
+9. Revoke the old shared SSH key.
+10. Remove obsolete secrets (`GITHUB_MIRROR_TOKEN`, Graph UI tokens).
+
 ## 0.70.0 — Round 165 (2026-07-12) CAS Miss Re-read + Final-state Snapshot Marker
 
 **90th round (R164 audit).** 4 P1/P2 + 2 P2 fixed.

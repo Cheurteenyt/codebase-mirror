@@ -741,6 +741,6 @@ describe('R160: Full Orchestrator Failure Taxonomy', () => {
 
   it('regression (R165 override): package.json version is 0.70.0 (R165 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.70.0"');
+    expect(pkg).toContain('"version": "0.71.0"');
   });
 });

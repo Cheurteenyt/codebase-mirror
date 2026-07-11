@@ -761,8 +761,8 @@ describe('R164: Verified Refusal State + Snapshot Contract', () => {
     expect(setMatches!.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('regression: package.json version is 0.70.0 (R165 bump)', () => {
+  it('regression: package.json version is 0.71.0 (R165 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.70.0"');
+    expect(pkg).toContain('"version": "0.71.0"');
   });
 });

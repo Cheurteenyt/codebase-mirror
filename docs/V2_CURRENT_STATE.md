@@ -415,6 +415,58 @@ publication failure (making programmatic triage impossible).
   full-uncertainty return remains hand-rolled for the message/recovery
   differences. A future round may unify these.
 
+## R166 — GitHub Canonical + GitLab Passive Mirror
+
+R166 (round 91) is an infrastructure migration. No code semantics change.
+Closes the GitLab CI quota incident by making GitHub the canonical
+repository and GitLab a passive main-only mirror.
+
+- **`.gitlab-ci.yml` replaced** with a passive sentinel:
+  `workflow: rules: when never` plus a `passive-mirror-sentinel` job that
+  also has `rules: when never`. Defense in depth: even if one rule is
+  accidentally removed, the other still blocks pipeline creation.
+- **Obsolete GitHub workflows removed**:
+  - `.github/workflows/gitlab-mr-ci.yml` (was the GitLab MR CI dispatch
+    listener)
+  - `.github/workflows/sync-graph-ui-to-gitlab.yml` (was the GitLab MR/branch
+    creator for Graph UI changes)
+- **New mirror workflow created**:
+  `.github/workflows/mirror-main-to-gitlab.yml` — triggers on
+  `workflow_run` of `CI` with `conclusion=success && event=push &&
+  head_branch=main && head_repository=github.repository`. Fast-forward
+  only, `-o ci.no_pipeline`, fails closed on divergence, no force-push,
+  no rollback. Removes SSH material at the end.
+- **Documentation rewritten**: `CONTRIBUTING.md`, `MAINTAINERS_GUIDE.md`,
+  `docs/GITHUB_GITLAB_BRANCH_BRIDGE.md`, `docs/V2_CURRENT_STATE.md`.
+- **Regression tests added**:
+  `v2/tests/ci/r166-github-canonical-passive-mirror.test.ts` checks the
+  passive CI contract, the removed workflows, the new mirror contract,
+  the version bump, and the unchanged semantics versions.
+- **Version**: `0.70.0` → `0.71.0`. Semantics versions untouched
+  (`CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8`,
+  `CURRENT_DISCOVERY_POLICY_VERSION = 2`).
+
+### Invariants enforced
+
+1. GitHub `main` is the only source of truth.
+2. GitLab `main` only receives commits already in GitHub `main`.
+3. The mirror never pushes feature branches.
+4. The mirror never creates GitLab MRs.
+5. The mirror never force-pushes.
+6. GitLab-only divergence fails the mirror (no auto-repair).
+7. No GitLab runner is required.
+8. A failed GitHub CI never reaches GitLab.
+9. An older mirror run never rolls back GitLab.
+10. GitHub and GitLab credentials are separated (GitLab uses a dedicated
+    deploy key stored as `GITLAB_MIRROR_SSH_PRIVATE_KEY` in the
+    `gitlab-passive-mirror` GitHub environment).
+
+### Out of scope (R166)
+
+Atomic generation publication, project lease/fencing, DB dialect V1/V2,
+dry-run parity, Graph trust protocol, lockfiles/npm ci, OS matrix, tag
+mirroring, release automation.
+
 ## R165 — CAS Miss Re-read + Final-state Snapshot Marker
 
 R165 (round 90) closes the 6 confirmed code findings of the R164 audit:
@@ -981,13 +1033,11 @@ Do NOT hardcode version numbers or test counts in documentation — always refer
 - **R147** — CI multi-OS / Node matrix / lockfile (PKG-CARRY-01)
 - **R148** — Performance caches / benchmarks (resolver cache, discovery benchmark)
 
-## Workflow Git (hybrid)
+## Workflow Git (GitHub canonical)
 
 ```
-GitHub HTTPS  →  clone / history (fast)
-GitLab SSH    →  push / MR (deploy key)
-git -C <abs>  →  bash loses CWD between calls
-timeout       →  paramiko wrapper for SSH
+GitHub HTTPS  →  clone / history / PR / merge (canonical)
+GitLab SSH    →  mirror push only (passive, fast-forward, -o ci.no_pipeline)
 SHA verify    →  local SHA = remote SHA after push
 ```
 
@@ -995,4 +1045,4 @@ See [MAINTAINERS_GUIDE.md](../MAINTAINERS_GUIDE.md) for the full workflow.
 
 ## Validation date
 
-This document was validated at R164 (2026-07-12). Always cross-check with `v2/CHANGELOG.md` for the latest state.
+This document was validated at R166 (2026-07-12). Always cross-check with `v2/CHANGELOG.md` for the latest state.

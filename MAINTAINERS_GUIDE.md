@@ -22,15 +22,14 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
    README/docs references, and any affected operational docs.
 5. **Commit** — one commit per round (e.g. R56). Message format:
    `docs(v2): 0.12.3 R56 self-audit + MAINTAINERS_GUIDE (3 improvements)`
-6. **Push** — `git push gitlab v2/r<n>-<short-name> -o merge_request.create
-   -o merge_request.target=main -o merge_request.title="..."` (single line,
-   no newlines in push options).
-   **R141+ hybrid workflow**: clone from GitHub mirror (HTTPS), push to GitLab
-   via paramiko SSH wrapper (`scripts/ssh-wrapper.py`). Use `git -C` with
-   absolute paths (bash loses CWD between calls). Verify SHA after push.
-   See `v2/CHANGELOG.md` R141+ entries for the established pattern.
-7. **MR** — GitLab MR with `mr-preflight` job (R54) passes in ~2s. Merge
-   → mirror auto → GitHub Actions CI (3 jobs: backend, frontend, quota-report).
+6. **Push** — `git push -u origin v2/r<n>-<short-name>` (GitHub is
+   canonical since R166).
+7. **PR** — open a Pull Request on GitHub from `v2/r<n>-<short-name>`
+   to `main`. GitHub Actions CI runs typecheck, build, and tests on the
+   PR. After CI is green and review is complete, the PR is merged into
+   `main`. The `mirror-main-to-gitlab` workflow then fast-forwards the
+   validated SHA to GitLab `main` with `-o ci.no_pipeline` (passive
+   mirror, no GitLab pipelines).
 
 ## Naming conventions
 
@@ -122,10 +121,13 @@ Plus the GraphTab gate: `if (loading && !data)` (not just `if (loading)`)
 — defense-in-depth so the canvas stays mounted even if the hook invariant
 is violated.
 
-### GitLab CI — never `if: $CI_COMMIT_BRANCH == "main"` only
-For MR pipelines, `$CI_COMMIT_BRANCH` is undefined. Use `workflow:rules` +
-a `mr-preflight` job so MR pipelines have at least one passing job (R54).
-Without this, "Pipelines must succeed" blocks MRs.
+### GitLab CI — passive mirror since R166
+The `.gitlab-ci.yml` file declares `workflow: rules: when never` plus a
+`passive-mirror-sentinel` job with `rules: when never`. No pipelines are
+created on GitLab for pushes, MRs, schedules, web/API triggers, or the
+GitHub → GitLab mirror push (`-o ci.no_pipeline` is also passed by the
+`mirror-main-to-gitlab` workflow). If you find yourself adding a real
+GitLab job, stop and reconsider: GitHub Actions is the canonical CI.
 
 ### YAML script blocks — never use unquoted `: ` in echo
 ```yaml
@@ -146,15 +148,20 @@ quota-report API call) must have their own job-level override.
 
 ## CI/CD setup (high-level — for secrets/keys, see local notes)
 
-- **GitLab CI** (`.gitlab-ci.yml`): lightweight mirror to GitHub + weekly
-  quota-check. Uses `GITHUB_MIRROR_TOKEN` CI variable (masked). Deploy key
-  (project-scoped, write access) on both GitLab and GitHub.
-- **GitHub Actions** (`.github/workflows/ci.yml`): primary CI. 3 jobs:
-  backend (typecheck + build + test), frontend (same), quota-report
-  (schedule-only, R55 D5). Workflow-level `permissions: contents: read`;
-  quota-report has job-level `actions: read` override (R55 D3).
+- **GitHub Actions** (`.github/workflows/ci.yml`): canonical CI. Jobs:
+  backend (typecheck + build + test + benchmark smoke), frontend (same,
+  minus benchmark). Workflow-level `permissions: contents: read`.
+- **GitHub Actions mirror** (`.github/workflows/mirror-main-to-gitlab.yml`):
+  triggers on `workflow_run` of `CI` with `conclusion=success &&
+  event=push && head_branch=main`. Fast-forwards the validated SHA to
+  GitLab `main` with `-o ci.no_pipeline`. Uses the `gitlab-passive-mirror`
+  environment with `GITLAB_MIRROR_SSH_PRIVATE_KEY` secret and
+  `GITLAB_REPOSITORY_SSH_URL` / `GITLAB_KNOWN_HOSTS` variables.
+- **GitLab CI** (`.gitlab-ci.yml`): passive sentinel since R166. No
+  pipelines, no MRs, no schedules, no runners. `GITHUB_MIRROR_TOKEN` has
+  been removed.
 - **Branch protection**: `main` is protected. Push to feature branches →
-  MR → merge → mirror auto → GitHub Actions.
+  GitHub PR → CI green → merge → mirror auto → GitLab `main` (passive).
 
 ## Test infrastructure
 
@@ -241,9 +248,11 @@ These invariants MUST hold for every round. Violations are P1 bugs.
    message is a declared result. GitHub Actions CI is the certified result.
    Do not claim CI-green without a workflow run on the SHA.
 
-7. **Workflow Git hybrid.** GitHub HTTPS for clone/history (fast), GitLab SSH
-   deploy key for push/MR. Use `git -C <abs>` (bash loses CWD). Verify
-   `local SHA = remote SHA` after push.
+7. **Workflow Git (GitHub canonical since R166).** GitHub HTTPS for
+   clone/history/PR/merge (canonical). GitLab SSH deploy key for mirror
+   push only (`-o ci.no_pipeline`, fast-forward only, no force-push).
+   Use `git -C <abs>` (bash loses CWD). Verify `local SHA = remote SHA`
+   after push.
 
 8. **R153 — Alias history protection.** A broken alias (ENOENT or ELOOP on
    realpath) that was previously valid (has an entry in `alias_history`)
@@ -409,13 +418,39 @@ every unlisted scope `none`. A job that calls `/repos/.../actions/runs` needs
 job-level `permissions:` override listing ALL scopes it needs.
 
 ### 6. MR pipelines with zero jobs = "Pipelines must succeed" blocked
-**Pattern**: If all jobs have `if: $CI_COMMIT_BRANCH == "main"` and the
-pipeline is a `merge_request_event`, `$CI_COMMIT_BRANCH` is undefined → all
-jobs filtered out → empty pipeline → "Pipelines must succeed" blocks the MR.
-R54 fixed this.
+**Historical pattern (R54, pre-R166)**: GitLab MR pipelines with no jobs
+blocked "Pipelines must succeed". R54 fixed this with a `mr-preflight`
+job. R166 made this entirely moot by making GitLab a passive mirror with
+no pipelines at all.
 
-**Prevention**: Always have `workflow:rules` + at least one job that runs on
-`merge_request_event` (the `mr-preflight` job).
+**Prevention (R166+)**: Do not re-enable GitLab pipelines. If you find
+yourself adding a real GitLab job, stop: GitHub Actions is the canonical
+CI. The `.gitlab-ci.yml` file must keep `workflow: rules: when never`.
+
+### 6b. Passive mirror invariants (R166+)
+
+The `mirror-main-to-gitlab` workflow enforces the following invariants.
+Violating any of them is a regression:
+
+1. **validated SHA only** — the workflow checks out
+   `github.event.workflow_run.head_sha`, not `main` implicitly.
+2. **fast-forward only** — the workflow verifies ancestry with
+   `git merge-base --is-ancestor` before pushing.
+3. **main only** — the workflow triggers only when
+   `head_branch == 'main' && event == 'push'`.
+4. **no GitLab pipelines** — the push uses `-o ci.no_pipeline`, and
+   `.gitlab-ci.yml` enforces `workflow: rules: when never`.
+5. **no rollback** — if GitLab is already at a newer validated SHA, the
+   older run is a no-op.
+6. **divergence fail-closed** — if GitLab has commits not in GitHub
+   `main`, the workflow fails and never force-pushes.
+7. **credentials separated** — the GitLab deploy key is dedicated
+   (`GITLAB_MIRROR_SSH_PRIVATE_KEY`), not the shared key used during
+   R165 recovery.
+8. **strict host checking** — the workflow pins GitLab host keys via
+   `GITLAB_KNOWN_HOSTS` and uses `StrictHostKeyChecking yes`.
+9. **cleanup** — the workflow always removes SSH material at the end
+   (`if: always`).
 
 ### 7. Unconditional `setLoading(true)` unmounts components on refetch
 **Pattern**: `useEffect(() => { setLoading(true); fetch(...) }, [trigger])`

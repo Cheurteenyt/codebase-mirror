@@ -1,7 +1,9 @@
 # GitHub Actions CI for Codebase Memory V2
 # Runs typecheck, build, and tests on every push and pull request.
-# This is the primary CI — GitLab CI is a lightweight mirror only.
-# Public repos on GitHub have unlimited Actions minutes.
+# This is the canonical CI — GitHub is the canonical repository since R166
+# and GitLab is a passive main-only mirror with no pipelines.
+# Standard GitHub-hosted runners are free for public repositories; larger
+# runners and storage follow separate billing/limits.
 #
 # R50: added quota-report job that uses the automatic GITHUB_TOKEN
 # R52: security hardening (least-privilege permissions), perf (npm ci),
@@ -12,8 +14,10 @@
 #      (every unlisted scope becomes `none` once any `permissions:` key
 #      is set at workflow level).
 # R55 (D4): removed unreachable `'v2/**'` pattern from on.push.branches —
-#      only the GitLab mirror pushes to this repo, and it only pushes to
-#      `main`.
+#      pushes arrive only from GitHub PRs/merges to `main`.
+# R166: removed all references to the GitLab → GitHub mirror; GitHub is
+#      now canonical and GitLab only receives fast-forward mirror pushes
+#      from this repository via mirror-main-to-gitlab.yml.
 # R55 (D5): restricted quota-report to schedule-only — running it on every
 #      push to main added noise without value (rate limits reset hourly;
 #      the weekly schedule is the actual trend signal).

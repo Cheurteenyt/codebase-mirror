@@ -104,16 +104,14 @@ The full suite must pass with 0 regressions. See `v2/CHANGELOG.md` for the curre
 ```bash
 git add -A
 git commit -m "fix(v2): R<n> <short description> — <priority summary>"
-git push gitlab v2/r<n>-<short-name> \
-  -o merge_request.create \
-  -o merge_request.target=main \
-  -o merge_request.title="R<n> <short description>" \
-  -o merge_request.description="<one-line summary>"
+git push -u origin v2/r<n>-<short-name>
 ```
 
-### 5. Merge
+### 5. Open a Pull Request on GitHub
 
-GitLab MR → merge → mirror to GitHub → GitHub Actions CI.
+Open a Pull Request on GitHub from `v2/r<n>-<short-name>` to `main`.
+GitHub Actions CI runs typecheck, build, and tests on the PR.
+After CI is green and review is complete, the PR is merged into `main`.
 
 ## Testing
 
@@ -122,9 +120,22 @@ GitLab MR → merge → mirror to GitHub → GitHub Actions CI.
 - **Graph UI tests**: `graph-ui/` — Vitest + @testing-library/react
 - **Permission tests**: chmod 000 tests require non-root user
 
-## CI
+## CI/CD
 
-GitHub Actions (Ubuntu, Node 20). Known gaps:
+GitHub is the canonical repository since R166. All CI, pull-request
+validation, reviews, and merges happen on GitHub Actions.
+
+- **Backend (v2)**: typecheck, build, tests, benchmark smoke
+- **Frontend (graph-ui)**: typecheck, build, tests
+- **Mirror**: after CI on `main` is green, the `mirror-main-to-gitlab`
+  workflow fast-forwards the validated SHA to GitLab `main` with
+  `-o ci.no_pipeline`. GitLab is a passive main-only mirror and runs no
+  pipelines.
+
+Standard GitHub-hosted runners are free for public repositories; larger
+runners and storage follow separate billing/limits.
+
+Known gaps:
 - No Windows/macOS matrix (PKG-CARRY-01)
 - No lockfile (dependency drift risk)
 - Node 20 EOL in 2026
