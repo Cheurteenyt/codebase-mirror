@@ -1055,6 +1055,19 @@ export function clearProjectData(db: Database.Database, project: string): void {
  *   is NOT NULL (i.e., the run succeeded). On stale/failed runs, root_path
  *   is preserved (CASE WHEN excluded.last_successful_index_at IS NOT NULL
  *   THEN excluded.root_path ELSE root_path END).
+ * R164 (STATE-R164-03): last_index_error is now preserved on stale runs
+ *   that pass indexError=null. R163-02 made `succeeded = indexError === null
+ *   && !crossFileCallsStale` so a stale run with no error text no longer
+ *   advances `last_successful_index_at`. But the UPSERT's
+ *   `last_index_error = excluded.last_index_error` still CLEARED the prior
+ *   error when indexError=null was passed (the deletion-only path's
+ *   "previously stale" no-error scenario). Graph Status, which reads
+ *   `last_index_error` for diagnostics, would then show "no error" for a
+ *   project that was stale with a prior diagnostic — the diagnostic was
+ *   lost. R164 changes the clause to a CASE WHEN: when the run is stale
+ *   (excluded.cross_file_calls_stale=1) AND the new error is NULL, preserve
+ *   the prior `last_index_error`. Otherwise (success, or stale with a new
+ *   error message), use the new value.
  */
 export function updateProjectStats(
   db: Database.Database,
@@ -1103,7 +1116,11 @@ export function updateProjectStats(
       extractor_semantics_version = excluded.extractor_semantics_version,
       last_index_attempt_at = excluded.last_index_attempt_at,
       last_successful_index_at = CASE WHEN excluded.last_successful_index_at IS NOT NULL THEN excluded.last_successful_index_at ELSE last_successful_index_at END,
-      last_index_error = excluded.last_index_error,
+      last_index_error = CASE
+        WHEN excluded.cross_file_calls_stale = 1 AND excluded.last_index_error IS NULL
+        THEN last_index_error
+        ELSE excluded.last_index_error
+      END,
       alias_history_initialized = CASE
         WHEN excluded.alias_history_initialized IS NOT NULL THEN excluded.alias_history_initialized
         ELSE alias_history_initialized

@@ -1,5 +1,183 @@
 # Changelog — Codebase Memory V2
 
+## 0.69.0 — Round 164 (2026-07-12) Verified Refusal State + Snapshot Contract
+
+**89th round (R163 audit).** 3 P1/P2 + 2 P2 fixed.
+Closes the 5 confirmed code findings of the R163 audit.
+
+### Verified root refusal state (2 P1/P2)
+
+258. **P1/P2 STATE-R164-01 The stale write catch block swallows errors and
+     returns STALE regardless — if the UPDATE throws (SQLITE_BUSY, disk
+     full, corruption), the API returns STALE but the DB stays stale=0**
+     (`indexer.ts`) — R163's two root-change early returns (`ROOT_CHANGED`
+     and `ROOT_IDENTITY_UNKNOWN`) wrapped the trust-state UPDATE in a
+     try/catch that swallowed ALL exceptions. If the UPDATE threw
+     (SQLITE_BUSY under contention, disk full, page corruption), the catch
+     set `stalePersisted=false` and the early return still returned
+     `outcome='STALE'`. The DB stayed `cross_file_calls_stale=0` while the
+     `IndexResult` claimed `crossFileCallsStale=true` and `outcome='STALE'`
+     — Graph Status would then report the project as fresh, and a
+     subsequent incremental would treat the (still-fresh) graph as a valid
+     baseline for cross-root fast-skip. R164 distinguishes the "UPDATE
+     threw" path (return `FAILED` with `PERSIST_FAILURE`) from the "UPDATE
+     succeeded" path (return `STALE`). Both root-change early returns now
+     set a `persistFailure` flag in the catch; when true, the return is
+     `outcome='FAILED'` with `failure.code='PERSIST_FAILURE'`,
+     `failure.phase='root-refusal-state'`, and `staleReason` carrying the
+     root-change code (ROOT_CHANGED or ROOT_IDENTITY_UNKNOWN) so consumers
+     can still see the underlying cause. The `preservedSnapshot=true` flag
+     is also set on the FAILED return — the early return did NOT mutate
+     structural graph data, so the prior snapshot (if any) is intact.
+
+259. **P1/P2 STATE-R164-02 `stalePersisted = true` set after `.run()`
+     without checking `info.changes` — if the projects row doesn't exist
+     (partial DB), UPDATE affects 0 rows but stalePersisted is still true**
+     (`indexer.ts`) — R163 set `stalePersisted = true` unconditionally
+     after `.run()` returned. But `better-sqlite3`'s `RunResult.changes`
+     reports the number of rows actually written; if the projects row
+     doesn't exist (partial DB with structural data but no projects
+     metadata — e.g., an interrupted full index after `clearProjectData`
+     deleted the projects row but before the structural tables were
+     cleared, or a manual `DELETE FROM projects`), the UPDATE matches 0
+     rows, `info.changes === 0`, but `stalePersisted` was still `true`.
+     The API then returned `outcome='STALE'` while the DB stayed
+     `cross_file_calls_stale=0`. R164 sets `stalePersisted = info.changes
+     === 1`. For the `ROOT_IDENTITY_UNKNOWN` early return, `info.changes
+     === 0` is treated as a `PERSIST_FAILURE` (the projects row is gone or
+     a concurrent indexer populated `root_fingerprint` — either way we
+     can't confirm the refusal was recorded). For the `ROOT_CHANGED` early
+     return, `info.changes === 0` is treated as a concurrent update (see
+     CONC-R164-01 below — we don't mark the new snapshot stale, and return
+     STALE with a CONCURRENT_UPDATE note rather than FAILED, because the
+     other indexer may have published successfully).
+
+### Compare-and-swap on fingerprint (1 P1/P2)
+
+260. **P1/P2 CONC-R164-01 No CAS between projectState read and UPDATE —
+     another indexer can publish between the two, then the stale UPDATE
+     marks the fresh snapshot as stale** (`indexer.ts`) — R163 read
+     `projectState.rootFingerprint` at the start of the run, then ran the
+     trust-state UPDATE later (same function, but logically a separate
+     step). Between the read and the UPDATE, another indexer could
+     `commitAliasStateAtomically` (publishing a fresh snapshot under a new
+     `root_fingerprint`). The stale UPDATE would then mark the fresh
+     snapshot as stale — `cross_file_calls_stale=1` — even though the new
+     snapshot was coherent and fresh. Graph Status would then show the
+     project as stale immediately after a successful publish. R164 adds a
+     CAS (compare-and-swap) WHERE condition:
+       - `ROOT_CHANGED`: `WHERE name = ? AND root_fingerprint = ?` (the
+         expected fingerprint is `publishedRootFingerprint` — what we just
+         read). If `info.changes === 0`, the fingerprint changed between
+         our read and write — we don't mark the (possibly fresh) snapshot
+         stale. Return STALE with a CONCURRENT_UPDATE note (NOT FAILED —
+         the other indexer may have published successfully).
+       - `ROOT_IDENTITY_UNKNOWN`: `WHERE name = ? AND root_fingerprint IS
+         NULL`. If `info.changes === 0`, either the projects row is gone
+         (no metadata despite structural data — partial DB) OR another
+         indexer populated `root_fingerprint` (concurrent publish). Both
+         are treated as `PERSIST_FAILURE` (we can't distinguish the two
+         cases without an extra query, and a missing-row case means the
+         projects metadata is incoherent with the structural graph data —
+         a FAILED return is safer than a silent STALE).
+     The CAS pattern is the same one used by `commitAliasStateAtomically`
+     (R155) for alias_history writes — `last_observed_run_id` CAS. R164
+     extends the pattern to the trust-state UPDATE.
+
+### Preserve last_index_error on stale runs (1 P2)
+
+261. **P2 STATE-R164-03 `last_index_error = excluded.last_index_error`
+     clears the previous diagnostic when a stale run has
+     indexError=null** (`schema.ts`) — R163-02 made
+     `succeeded = indexError === null && !crossFileCallsStale` so a stale
+     run with no error text no longer advances `last_successful_index_at`.
+     But the UPSERT's `last_index_error = excluded.last_index_error` still
+     CLEARED the prior error when `indexError=null` was passed (the
+     deletion-only path's "previously stale" no-error scenario). Graph
+     Status, which reads `last_index_error` for diagnostics, would then
+     show "no error" for a project that was stale with a prior diagnostic
+     — the diagnostic was lost. R164 changes the clause to a CASE WHEN:
+     ```sql
+     last_index_error = CASE
+       WHEN excluded.cross_file_calls_stale = 1 AND excluded.last_index_error IS NULL
+       THEN last_index_error
+       ELSE excluded.last_index_error
+     END,
+     ```
+     When the run is stale (`excluded.cross_file_calls_stale=1`) AND the
+     new error is NULL, preserve the prior `last_index_error`. Otherwise
+     (success, or stale with a new error message), use the new value. The
+     success path (`commitAliasStateAtomically`) still uses the
+     unconditional `last_index_error = excluded.last_index_error` — R164
+     only changed `updateProjectStats` (the stale/failed path).
+
+### Distinguish preservedSnapshot from publishedSnapshotPreserved (1 P1/P2)
+
+262. **P1/P2 API-R164-01 `preservedSnapshot=true` on a partial DB
+     (edges-only, no nodes/hashes) is misleading — it's not a coherent
+     published snapshot** (`indexer.ts`) — R163 added
+     `preservedSnapshot=true` to signal that a previous snapshot exists
+     in the DB. But on a partial DB (e.g., an interrupted full index
+     after `clearProjectData` deleted `nodes` and `file_hashes` but
+     before deleting `edges`), `preservedSnapshot=true` is misleading —
+     there's no coherent published snapshot to query. A consumer that
+     interprets `preservedSnapshot=true` as "the previous snapshot is
+     safe to query" would display stale or broken results. R164 adds a
+     new `publishedSnapshotPreserved?: boolean` field to `IndexResult`:
+       - `preservedSnapshot=true` — structural data exists (nodes, edges,
+         file_hashes, call_sites, imports, OR exports) and was not
+         modified by the early return. Does NOT guarantee a coherent
+         published snapshot.
+       - `publishedSnapshotPreserved=true` — the DB contains a complete,
+         coherent snapshot from a previous successful run (nodes AND
+         file_hashes AND projects row with `last_successful_index_at`).
+     Both flags are set on both root-change early returns.
+     `hasPublishedSnapshot` is computed via two `EXISTS` queries (nodes
+     and file_hashes) plus a `projectState !== undefined` check (projects
+     row exists). A partial DB with edges but no nodes/hashes has
+     `preservedSnapshot=true` (structural data exists) but
+     `publishedSnapshotPreserved=false` (no coherent snapshot). Consumers
+     that need to know whether the DB has a queryable snapshot should
+     check `publishedSnapshotPreserved`, not `preservedSnapshot`.
+
+### Tests
+
+Added `v2/tests/indexer/r164-verified-refusal.test.ts` (12 tests: 8
+behavioral + 7 source-inspection + 1 version-bump). Updated 4 R160/R161/
+R162/R163 version-bump tests (0.68.0 → 0.69.0). Updated R162's
+`ROOT_CHANGED staleReason` source-inspection test to reflect the new
+nested-ternary message pattern (concurrent update vs persist failure).
+
+### Files changed
+
+- `v2/src/indexer/indexer.ts` (ROOT_CHANGED + ROOT_IDENTITY_UNKNOWN early
+  returns + IndexResult.publishedSnapshotPreserved field)
+- `v2/src/indexer/schema.ts` (updateProjectStats CASE WHEN for
+  last_index_error)
+- `v2/package.json` (0.68.0 → 0.69.0)
+- `v2/CHANGELOG.md` (R164 entry)
+- `docs/V2_CURRENT_STATE.md` (R164 section + carryover limitations)
+- `v2/tests/indexer/r164-verified-refusal.test.ts` (NEW)
+- `v2/tests/indexer/r160-full-orchestrator-failure-taxonomy.test.ts` (R164 version bump)
+- `v2/tests/indexer/r161-root-snapshot-identity.test.ts` (R164 version bump)
+- `v2/tests/indexer/r162-root-early-refusal.test.ts` (R164 version bump + message pattern update)
+- `v2/tests/indexer/r163-atomic-refusal-success-predicate.test.ts` (R164 version bump)
+
+### Known limitations (carried over)
+
+- **No cross-process alias_history lock** (carryover).
+- **Full publication non-atomic** (carryover P1): crash after
+  `clearProjectData` but before extraction completes leaves a partial graph.
+- **DB dialect divergence** (carryover P1): V1 uses `rel_path`/`sha256`,
+  V2 uses `file_path`/`content_hash`.
+- **ROOT_CHANGED concurrent update is detected but not retried** (new, R164):
+  when `info.changes === 0` on the ROOT_CHANGED CAS, the early return
+  gives up and returns STALE with a CONCURRENT_UPDATE note. A future round
+  may re-read `projectState` and retry the CAS once, or fall through to
+  the no-op path (which would then detect the fresh publication and
+  short-circuit). The current behavior is conservative: the caller sees
+  STALE + the warning, and can retry.
+
 ## 0.68.0 — Round 163 (2026-07-12) Atomic Refusal State + Success Predicate
 
 **88th round (GPT 5.6 Sol audit R162).** 2 P1/P2 + 3 P2 fixed.

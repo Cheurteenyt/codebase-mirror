@@ -482,8 +482,8 @@ describe('R161: Root Snapshot Identity Lock + Path Precision', () => {
     expect(src).toContain('paths: string[]; totalPaths?: number; pathsTruncated?: boolean } | undefined');
   });
 
-  it('regression (R163 override): package.json version is 0.68.0', () => {
+  it('regression (R164 override): package.json version is 0.69.0', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.68.0"');
+    expect(pkg).toContain('"version": "0.69.0"');
   });
 });

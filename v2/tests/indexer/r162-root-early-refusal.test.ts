@@ -630,14 +630,23 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     // R162 (DATA-R162-01): the early return sets totalPaths=0 + pathsTruncated=false
     // (matching the R161 classifier's contract for ROOT_CHANGED).
-    // R163 (STATE-R163-01): the message now uses
+    // R163 (STATE-R163-01): the message uses
     // `rootMsg + (stalePersisted ? '' : ' [WARNING: ...]')` instead of the
     // bare `rootMsg`. The paths/totalPaths/pathsTruncated fields are unchanged.
+    // R164 (CONC-R164-01): the message uses a nested ternary that distinguishes
+    // concurrent update (info.changes=0) from persist failure (exception). The
+    // '[WARNING: stale flag could not be persisted to DB]' suffix still appears
+    // in the persist-failure branch.
     expect(src).toContain("code: 'ROOT_CHANGED',");
     expect(src).toContain('paths: [],\n        totalPaths: 0,\n        pathsTruncated: false,');
     expect(src).toContain("code: 'ROOT_IDENTITY_UNKNOWN',");
-    // R163 (STATE-R163-01): message uses the stalePersisted suffix pattern.
-    expect(src).toContain("rootMsg + (stalePersisted ? '' : ' [WARNING: stale flag could not be persisted to DB]')");
+    // R164 (CONC-R164-01): the message now uses a nested ternary with both
+    // the concurrent-update warning AND the persist-failure warning. The
+    // '[WARNING: stale flag could not be persisted to DB]' suffix is still
+    // present in the persist-failure branch.
+    expect(src).toContain("' [WARNING: stale flag could not be persisted to DB]'");
+    // R164 (CONC-R164-01): the concurrent-update warning is also present.
+    expect(src).toContain("' [WARNING: concurrent update — another indexer changed root_fingerprint between read and write; new snapshot not marked stale]'");
   });
 
   it('regression: classifier rootChanged param marked DEPRECATED', () => {
@@ -646,8 +655,8 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     expect(src).toContain('R162 (DATA-R162-01 + RES-R162-01 + STATE-R162-02): DEPRECATED.');
   });
 
-  it('regression: package.json version is 0.68.0 (R163 bump)', () => {
+  it('regression: package.json version is 0.69.0 (R164 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.68.0"');
+    expect(pkg).toContain('"version": "0.69.0"');
   });
 });
