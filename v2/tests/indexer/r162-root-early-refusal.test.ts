@@ -566,7 +566,9 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     // R162 (RES-R162-01): the rootChanged early return is BEFORE the premark.
     const rootChangedReturnIdx = src.indexOf("staleReason: {\n        code: 'ROOT_CHANGED',");
-    const premarkIdx = src.indexOf("INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at, last_index_error)");
+    // R165 (STATE-R165-01): the premark UPSERT no longer writes
+    // `last_index_error` — the column list now ends at `last_index_attempt_at`.
+    const premarkIdx = src.indexOf("INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at)");
     expect(rootChangedReturnIdx).toBeGreaterThan(-1);
     expect(premarkIdx).toBeGreaterThan(-1);
     expect(rootChangedReturnIdx).toBeLessThan(premarkIdx);
@@ -585,7 +587,10 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     expect(rootIdentityUnknownReturnIdx).toBeGreaterThan(-1);
     expect(rootIdentityUnknownReturnIdx).toBeGreaterThan(rootChangedReturnIdx);
     // R162 (ROOT-R162-01): the rootIdentityUnknown early return is BEFORE the premark.
-    const premarkIdx = src.indexOf("INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at, last_index_error)");
+    // R165 (STATE-R165-01): the premark UPSERT no longer writes
+    // `last_index_error` — the column list now ends at `last_index_attempt_at`.
+    const premarkIdx = src.indexOf("INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at)");
+    expect(premarkIdx).toBeGreaterThan(-1);
     expect(rootIdentityUnknownReturnIdx).toBeLessThan(premarkIdx);
   });
 
@@ -655,8 +660,8 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     expect(src).toContain('R162 (DATA-R162-01 + RES-R162-01 + STATE-R162-02): DEPRECATED.');
   });
 
-  it('regression: package.json version is 0.69.0 (R164 bump)', () => {
+  it('regression: package.json version is 0.70.0 (R165 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.69.0"');
+    expect(pkg).toContain('"version": "0.70.0"');
   });
 });

@@ -320,7 +320,10 @@ describe('R164: Verified Refusal State + Snapshot Contract', () => {
     expect(r.staleReason).toBeDefined();
     expect(r.staleReason!.code).toBe('ROOT_IDENTITY_UNKNOWN');
     expect(r.crossFileCallsStale).toBe(true);
-    expect(r.recovery).toBe('full_reindex');
+    // R165 (OUTCOME-R165-01): recovery is 'none' (was 'full_reindex'). A
+    // full_reindex recommendation when the DB write itself failed is
+    // circular — the user must fix the DB issue first, then retry.
+    expect(r.recovery).toBe('none');
 
     // R164 (API-R164-01): preservedSnapshot=true (structural data — edges —
     // exists and was not modified by the early return). The early return
@@ -420,11 +423,15 @@ describe('R164: Verified Refusal State + Snapshot Contract', () => {
   it('STATE-R164-03a-end-to-end: deletion-only stale-without-error run does NOT clear last_index_error', async () => {
     // End-to-end variant: the deletion-only path's updateProjectStats call
     // (crossFileStale=true, deletionError=null) does NOT clear the prior
-    // last_index_error. The premark UPSERT (which runs BEFORE the
-    // deletion-only path) sets last_index_error='Index publication in
-    // progress'. Without R164-03, the subsequent updateProjectStats call
-    // (with indexError=null) would CLEAR it to NULL. With R164-03, it's
-    // preserved.
+    // last_index_error.
+    //
+    // R165 (STATE-R165-01): the premark UPSERT no longer writes
+    // `last_index_error = 'Index publication in progress'`. So the prior
+    // `last_index_error` (whatever it was before the run) is preserved
+    // through the premark, and then the CASE WHEN in updateProjectStats
+    // preserves it again (crossFileStale=true, indexError=null). To test
+    // this end-to-end, we set a known prior error message BEFORE Run 2
+    // and assert it survives the deletion-only run.
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     writeFileSync(join(projectDir, 'b.ts'), 'export function b() { return 2; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
@@ -434,32 +441,38 @@ describe('R164: Verified Refusal State + Snapshot Contract', () => {
     expect(fresh.lastError).toBeNull();
     const successBefore = fresh.lastSuccess;
 
-    // Force the stale-without-error scenario: set call_sites_initialized=0
-    // (so crossFileResolved stays false in the deletion-only path) AND
-    // cross_file_calls_stale=1 (existingStale=true). This produces
-    // crossFileStale=true with deletionError=null.
+    // R165 (STATE-R165-01): set a known prior error message. Under R164,
+    // the premark would OVERWRITE this with 'Index publication in progress'
+    // and the test would assert that premark value was preserved. Under
+    // R165, the premark does NOT write last_index_error, so this prior
+    // message survives the premark AND the updateProjectStats CASE WHEN.
+    const priorErrorMsg = 'Prior failure: semantics version mismatch (simulated)';
     const db = new Database(dbPath);
-    db.prepare('UPDATE projects SET call_sites_initialized = 0, cross_file_calls_stale = 1 WHERE name = ?').run(projectName);
+    db.prepare('UPDATE projects SET call_sites_initialized = 0, cross_file_calls_stale = 1, last_index_error = ? WHERE name = ?').run(priorErrorMsg, projectName);
     db.close();
 
     // Delete b.ts to trigger the deletion-only path.
     unlinkSync(join(projectDir, 'b.ts'));
 
     // Run 2: incremental → deletion-only path.
-    // Premark sets last_index_error='Index publication in progress'.
+    // R165 (STATE-R165-01): premark does NOT write last_index_error.
     // Then updateProjectStats(crossFileStale=true, deletionError=null).
-    // R164-03: last_index_error is PRESERVED (not cleared to NULL).
+    // R164-03 CASE WHEN: last_index_error is PRESERVED (not cleared to NULL).
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: true, useWasm: true, workers: 0 });
 
     expect(r.outcome).toBe('STALE');
     expect(r.crossFileCallsStale).toBe(true);
 
     const after = readProjectState(dbPath);
-    // R164 (STATE-R164-03): last_index_error is NOT NULL — the premark's
-    // 'Index publication in progress' was preserved by the CASE WHEN.
-    // Without R164-03, the updateProjectStats call would have cleared it.
+    // R164 (STATE-R164-03) + R165 (STATE-R165-01): last_index_error is the
+    // PRIOR message — the premark no longer overwrites it with 'Index
+    // publication in progress', and the CASE WHEN preserves it on a
+    // stale-without-error run.
     expect(after.lastError).not.toBeNull();
-    expect(after.lastError).toBe('Index publication in progress');
+    expect(after.lastError).toBe(priorErrorMsg);
+    // R165 (STATE-R165-01): the transitory 'Index publication in progress'
+    // marker is GONE — it must NOT appear in the final last_index_error.
+    expect(after.lastError).not.toBe('Index publication in progress');
     // R163-02 (carryover): last_successful_index_at was NOT advanced.
     expect(after.lastSuccess).toBe(successBefore);
     // R164 (STATE-R164-03): cross_file_calls_stale is still 1.
@@ -667,10 +680,18 @@ describe('R164: Verified Refusal State + Snapshot Contract', () => {
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     const rootIdentityUnknownIfIdx = src.indexOf('if (rootIdentityUnknown) {');
     expect(rootIdentityUnknownIfIdx).toBeGreaterThan(-1);
-    // The block has a FAILED return and a STALE return. Find the STALE return
-    // (the second `outcome: 'STALE'` after the if).
-    const staleReturnIdx = src.indexOf("outcome: 'STALE',", rootIdentityUnknownIfIdx);
-    expect(staleReturnIdx).toBeGreaterThan(rootIdentityUnknownIfIdx);
+    // The block has TWO STALE returns and ONE FAILED return. R165 added a
+    // concurrentPublishedCurrentRoot STALE return BEFORE the FAILED return.
+    // To slice a block that includes the FAILED return, we need to find the
+    // SECOND `outcome: 'STALE'` (the final STALE return at the end of the
+    // block, which is the stalePersisted=true case). The slice from
+    // `if (rootIdentityUnknown) {` to that second STALE return includes
+    // both the concurrentPublishedCurrentRoot STALE return AND the FAILED
+    // return.
+    const firstStaleReturnIdx = src.indexOf("outcome: 'STALE',", rootIdentityUnknownIfIdx);
+    expect(firstStaleReturnIdx).toBeGreaterThan(rootIdentityUnknownIfIdx);
+    const staleReturnIdx = src.indexOf("outcome: 'STALE',", firstStaleReturnIdx + 1);
+    expect(staleReturnIdx).toBeGreaterThan(firstStaleReturnIdx);
     const block = src.slice(rootIdentityUnknownIfIdx, staleReturnIdx);
     // R164 (CONC-R164-01): the CAS WHERE clause includes root_fingerprint IS NULL.
     expect(block).toContain('WHERE name = ?');
@@ -740,8 +761,8 @@ describe('R164: Verified Refusal State + Snapshot Contract', () => {
     expect(setMatches!.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('regression: package.json version is 0.69.0', () => {
+  it('regression: package.json version is 0.70.0 (R165 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.69.0"');
+    expect(pkg).toContain('"version": "0.70.0"');
   });
 });

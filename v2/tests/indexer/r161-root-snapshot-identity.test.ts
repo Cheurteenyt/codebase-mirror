@@ -412,7 +412,12 @@ describe('R161: Root Snapshot Identity Lock + Path Precision', () => {
   it('regression: projectState query reads root_fingerprint AS rootFingerprint', () => {
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     // R161 (ROOT-R161-01): the projectState SELECT now includes root_fingerprint.
-    expect(src).toContain('root_fingerprint AS rootFingerprint FROM projects WHERE name = ?');
+    // R165 (API-R165-01): the SELECT ALSO reads last_successful_index_at
+    // AS lastSuccessfulIndexAt (used by hasPublishedSnapshot). The exact
+    // column list now ends with `last_successful_index_at AS
+    // lastSuccessfulIndexAt FROM projects WHERE name = ?`.
+    expect(src).toContain('root_fingerprint AS rootFingerprint');
+    expect(src).toContain('last_successful_index_at AS lastSuccessfulIndexAt FROM projects WHERE name = ?');
   });
 
   it('regression (R162 override): rootChanged computed + early return + semanticsStale NO LONGER includes rootChanged', () => {
@@ -482,8 +487,8 @@ describe('R161: Root Snapshot Identity Lock + Path Precision', () => {
     expect(src).toContain('paths: string[]; totalPaths?: number; pathsTruncated?: boolean } | undefined');
   });
 
-  it('regression (R164 override): package.json version is 0.69.0', () => {
+  it('regression (R165 override): package.json version is 0.70.0', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.69.0"');
+    expect(pkg).toContain('"version": "0.70.0"');
   });
 });

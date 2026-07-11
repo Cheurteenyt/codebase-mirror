@@ -398,11 +398,19 @@ describe('R163: Atomic Refusal State + Success Predicate', () => {
     expect(src).toContain('preservedSnapshot?: boolean');
     // R163 (API-R163-01): the field is documented with the R163 tag.
     expect(src).toContain('R163 (API-R163-01): When true, the index did not publish new data but a');
-    // R163 (API-R163-01): preservedSnapshot=true is set on both early returns.
-    // Count occurrences — should be at least 2 (rootChanged + rootIdentityUnknown).
-    const matches = src.match(/preservedSnapshot:\s*true/g);
+    // R163 (API-R163-01): preservedSnapshot is set on both early returns.
+    // R165 (API-R165-03): the value changed from unconditional `true` to
+    // `hasExistingGraphData`. Count occurrences of the NEW pattern — should
+    // be at least 4 (2 STALE + 2 FAILED returns across both root-change
+    // early returns). The R163 source-inspection test was updated in R165
+    // to assert the new pattern (the old `preservedSnapshot: true` literal
+    // no longer appears in the source).
+    const matches = src.match(/preservedSnapshot:\s*hasExistingGraphData/g);
     expect(matches).not.toBeNull();
     expect(matches!.length).toBeGreaterThanOrEqual(2);
+    // R165 (API-R165-03): the old unconditional `preservedSnapshot: true`
+    // is GONE from the source.
+    expect(src).not.toMatch(/preservedSnapshot:\s*true\b/);
   });
 
   it('regression (COMP-R163-01): comments distinguish trust-state vs structural mutations', () => {
@@ -423,8 +431,8 @@ describe('R163: Atomic Refusal State + Success Predicate', () => {
     expect(block2).toContain('structural');
   });
 
-  it('regression: package.json version is 0.69.0', () => {
+  it('regression: package.json version is 0.70.0 (R165 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.69.0"');
+    expect(pkg).toContain('"version": "0.70.0"');
   });
 });

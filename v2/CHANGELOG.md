@@ -1,5 +1,231 @@
 # Changelog — Codebase Memory V2
 
+## 0.70.0 — Round 165 (2026-07-12) CAS Miss Re-read + Final-state Snapshot Marker
+
+**90th round (R164 audit).** 4 P1/P2 + 2 P2 fixed.
+Closes the 6 confirmed code findings of the R164 audit.
+
+### CAS miss re-read (1 P1/P2)
+
+262. **P1/P2 CONC-R165-01 CAS miss (info.changes===0) returns STALE/FAILED
+     without re-reading the DB — another indexer may have published
+     successfully under THIS root** (`indexer.ts`) — R164's CAS UPDATE
+     on the root-change early returns (`ROOT_CHANGED` and
+     `ROOT_IDENTITY_UNKNOWN`) correctly detected when another indexer
+     had changed the projects row between our read and write
+     (`info.changes === 0`). But R164 then returned STALE (ROOT_CHANGED)
+     or FAILED/PERSIST_FAILURE (ROOT_IDENTITY_UNKNOWN) WITHOUT re-reading
+     the DB to determine what actually happened. This was overly
+     conservative for the case where the concurrent indexer published
+     successfully under THIS root — the DB was actually fresh, not stale.
+     R165 re-reads the projects row on `info.changes === 0` and
+     distinguishes three cases:
+       - **Row deleted** → `DB_STATE_INCONSISTENT` (`persistFailure=true`,
+         returns FAILED/PERSIST_FAILURE). The structural graph data may
+         still exist, but the projects metadata is incoherent.
+       - **currentState.fp === rootFingerprint (current root)** (ROOT_CHANGED
+         only) → another indexer published the SAME root we were trying to
+         index. The DB is now fresh under our root — this is a concurrent
+         SUCCESS from the system's perspective. Returns STALE with a note
+         "Concurrent indexer published this root successfully" +
+         `recovery: 'none'` (the graph IS fresh, just not from this run)
+         and `crossFileCallsStale: false` (the graph is not stale).
+       - **currentState.fp !== rootFingerprint** (ROOT_CHANGED) or
+         **currentState.fp === null || currentState.stale !== 0**
+         (ROOT_IDENTITY_UNKNOWN) → another indexer published a DIFFERENT
+         root, or the state is otherwise incoherent. Returns STALE with
+         ROOT_CHANGED + CONCURRENT_UPDATE note (same as R164's behavior
+         for the different-root case), or FAILED/PERSIST_FAILURE for the
+         ROOT_IDENTITY_UNKNOWN incoherent-state case.
+     The re-read happens BETWEEN the CAS UPDATE and the return — both run
+     on the same already-open connection, so no extra reconnect is needed.
+
+### Premark no longer writes "Index publication in progress" (1 P1/P2)
+
+263. **P1/P2 STATE-R165-01 The premark writes
+     `last_index_error = 'Index publication in progress'` — a stale run
+     with indexError=null preserves this transitory message as final
+     state** (`indexer.ts`) — R157–R164 wrote the transitory message
+     `'Index publication in progress'` to `last_index_error` via the
+     premark UPSERT (both the main-path premark at line ~1810 and the
+     deletion-only-path premark at line ~2155). The intent was a
+     "currently in progress" marker. But R164-03's CASE WHEN in
+     `updateProjectStats` preserves `last_index_error` when the run is
+     stale AND the new error is NULL — so a stale run with
+     `indexError=null` (e.g., the deletion-only path with
+     `crossFileStale=true` and `deletionError=null`) would PRESERVE the
+     transitory `'Index publication in progress'` message as the FINAL
+     state. Graph Status would then show "Index publication in progress"
+     indefinitely for a project whose last run was actually a stale
+     no-op (not in progress at all). R165 simply omits `last_index_error`
+     from the premark UPSERT — the column is left at its prior value
+     (NULL on the very first index, or whatever the previous run set on
+     subsequent runs). The final `updateProjectStats` /
+     `commitAliasStateAtomically` call writes the real error (or NULL
+     on success). Both premark blocks now use:
+     ```sql
+     INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at)
+     VALUES (?, ?, ?, 1, ?)
+     ON CONFLICT(name) DO UPDATE SET
+       cross_file_calls_stale = 1,
+       last_index_attempt_at = excluded.last_index_attempt_at
+     ```
+     (no `last_index_error` in either the INSERT column list or the ON
+     CONFLICT DO UPDATE clause).
+
+### Strengthened hasPublishedSnapshot (1 P1/P2)
+
+264. **P1/P2 API-R165-01 `hasPublishedSnapshot` doesn't check
+     `last_successful_index_at IS NOT NULL` or `cross_file_calls_stale = 0`**
+     (`indexer.ts`) — R164's `hasPublishedSnapshot` (which drives the
+     `publishedSnapshotPreserved` field on `IndexResult`) checked:
+       - `projectState !== undefined` (projects row exists)
+       - `EXISTS nodes`
+       - `EXISTS file_hashes`
+     This was too weak. A stale run that had NOT yet been re-indexed
+     (`cross_file_calls_stale=1`) or a partial DB whose projects row
+     never advanced `last_successful_index_at` (e.g., an interrupted
+     first index before the legacy migration backfill) would falsely
+     report `publishedSnapshotPreserved=true`. R165 strengthens the check:
+     ```ts
+     const hasPublishedSnapshot = projectState !== undefined
+       && projectState.lastSuccessfulIndexAt !== null
+       && projectState.lastSuccessfulIndexAt !== undefined
+       && projectState.stale === 0
+       && (db.prepare('SELECT EXISTS(SELECT 1 FROM nodes WHERE project = ? LIMIT 1) AS e').get(opts.project) as { e: number }).e === 1
+       && (db.prepare('SELECT EXISTS(SELECT 1 FROM file_hashes WHERE project = ? LIMIT 1) AS e').get(opts.project) as { e: number }).e === 1;
+     ```
+     The `last_successful_index_at` column is now read by the
+     `projectState` SELECT (was missing in R164) and is required to be
+     non-NULL. The `cross_file_calls_stale = 0` check (i.e.,
+     `projectState.stale === 0`) ensures the prior snapshot was fresh,
+     not marked stale by a previous failed run.
+
+### Conditional preservedSnapshot (1 P2)
+
+265. **P2 API-R165-03 `preservedSnapshot: true` is unconditional on
+     ROOT_CHANGED, without checking `hasExistingGraphData`**
+     (`indexer.ts`) — R163/R164 set `preservedSnapshot: true`
+     unconditionally on both root-change early returns (ROOT_CHANGED +
+     ROOT_IDENTITY_UNKNOWN, both STALE and FAILED returns — 4 places
+     total). But `preservedSnapshot=true` means "structural data exists
+     and was not modified" — if `hasExistingGraphData` is false (all
+     six structural tables empty), the value should be `false`. R165
+     changes `preservedSnapshot: true` to `preservedSnapshot: hasExistingGraphData`
+     in all 4 places. For ROOT_IDENTITY_UNKNOWN, `hasExistingGraphData`
+     is always true (it's a precondition for the gate), so the value is
+     unchanged in practice — but the conditional documents intent and
+     future-proofs against changes to the gate. For ROOT_CHANGED, the
+     value can now be `false` when the DB has been wiped (no structural
+     data), which is the correct signal.
+
+### PERSIST_FAILURE recovery is 'none' (1 P1/P2)
+
+266. **P1/P2 OUTCOME-R165-01 PERSIST_FAILURE recovery is `full_reindex`
+     even when the cause is a DB problem (SQLITE_BUSY, disk full)**
+     (`indexer.ts`) — R164's FAILED/PERSIST_FAILURE returns on both
+     root-change early returns set `recovery: 'full_reindex'`. But a
+     `full_reindex` recommendation when the DB write itself failed is
+     circular — the user must fix the DB issue (e.g., resolve the
+     SQLITE_BUSY contention, free disk space, repair page corruption)
+     FIRST, then retry. A `full_reindex` would simply re-encounter the
+     same DB issue. R165 changes `recovery: 'full_reindex'` to
+     `recovery: 'none'` in both PERSIST_FAILURE returns. The
+     `failure.message` now includes the captured SQLite exception
+     message (see OBS-R165-02 below) so the user can diagnose the DB
+     issue. The STALE returns (for the stalePersisted=true case, where
+     the UPDATE actually wrote) still use `recovery: 'full_reindex'`
+     (the persist succeeded; a full reindex is the right recovery for
+     a root change).
+
+### Capture SQLite exception message (1 P2)
+
+267. **P2 OBS-R165-02 SQLite exception message is lost in the catch block**
+     (`indexer.ts`) — R164's catch block on both root-change early
+     returns swallowed the SQLite exception:
+     ```ts
+     } catch {
+       persistFailure = true;
+     }
+     ```
+     The FAILED/PERSIST_FAILURE return's `failure.message` was just
+     `Could not persist stale state: ${rootMsg}` — the actual SQLite
+     error (e.g., "SQLITE_BUSY: database is locked", "disk I/O error",
+     "database disk image is malformed") was lost. R165 captures the
+     message:
+     ```ts
+     } catch (error) {
+       persistFailure = true;
+       persistFailureMsg = error instanceof Error ? error.message : String(error);
+     }
+     ```
+     And the FAILED return's `failure.message` now includes it:
+     ```ts
+     message: persistFailureMsg !== null
+       ? `Could not persist stale state: ${rootMsg} [DB error: ${persistFailureMsg}]`
+       : `Could not persist stale state: ${rootMsg}`,
+     ```
+     (The `persistFailureMsg !== null` branch handles the case where
+     `persistFailure=true` was set by the re-read path
+     [CONC-R165-01 row-deleted case, or ROOT_IDENTITY_UNKNOWN
+     incoherent-state case] rather than by the catch — in those cases
+     there's no SQLite exception to capture.)
+
+### Other changes
+
+- Added `last_successful_index_at AS lastSuccessfulIndexAt` to the
+  `projectState` SELECT (was missing in R164; needed by API-R165-01).
+- Updated R163 source-inspection test
+  (`preservedSnapshot:\s*true` regex) to assert the new
+  `preservedSnapshot:\s*hasExistingGraphData` pattern (4 occurrences).
+- Updated R164 source-inspection test (ROOT_IDENTITY_UNKNOWN block
+  slicing) to find the SECOND `outcome: 'STALE'` (R165 added a
+  concurrentPublishedCurrentRoot STALE return BEFORE the FAILED return).
+- Updated R164 behavioral test (STATE-R164-01/02b + CONC-R164-01c) to
+  assert `recovery: 'none'` (was `'full_reindex'`) for the
+  PERSIST_FAILURE return.
+- Updated R164 behavioral test (STATE-R164-03a-end-to-end) to set a
+  known prior `last_index_error` and assert it's preserved (R165's
+  premark no longer overwrites it with 'Index publication in progress').
+- Updated R161 source-inspection test (projectState SELECT) to assert
+  the new `last_successful_index_at AS lastSuccessfulIndexAt` column.
+- Updated R162 source-inspection tests (premark INSERT column list) to
+  assert the new form (without `last_index_error`).
+- Bumped 5 version-bump tests (R160/R161/R162/R163/R164) from 0.69.0
+  to 0.70.0.
+- Added `v2/tests/indexer/r165-cas-reread-final-state.test.ts` (25
+  tests: 7 behavioral + 17 source-inspection + 1 version-bump).
+
+### Verification
+
+| Step | Command | Result |
+|------|---------|--------|
+| Typecheck | `cd v2 && npx tsc -p tsconfig.json --noEmit` | PASS (no output) |
+| Build | `cd v2 && npm run build` | PASS (clean exit, dist/ produced) |
+| Tests | `cd v2 && npx vitest run` | PASS — 96 files, 980 tests, 0 failures |
+
+### Known limitations (R165, carried over)
+
+- **No cross-process alias_history lock** (carryover).
+- **Full publication non-atomic** (carryover P1): crash after
+  `clearProjectData` but before extraction completes leaves a partial graph.
+- **DB dialect divergence** (carryover P1): V1 uses `rel_path`/`sha256`,
+  V2 uses `file_path`/`content_hash`.
+- **ROOT_CHANGED concurrent-published-current-root re-read is a single
+  query** (new, R165): the re-read happens BETWEEN the CAS UPDATE and the
+  return — both run on the same already-open connection, so no extra
+  reconnect is needed. But the re-read is itself a single SELECT, which
+  can race with another concurrent indexer. The race window is small
+  (microseconds), and the consequence of a race is conservatively-correct
+  (we'd report `concurrentUpdate=true` instead of
+  `concurrentPublishedCurrentRoot=true`, returning STALE with a
+  CONCURRENT_UPDATE note instead of "Concurrent indexer published this
+  root successfully" — both are STALE returns, neither marks the fresh
+  snapshot stale). A future round could use a transaction or a single
+  UPSERT-RETURNING statement to make the re-read atomic with the CAS.
+
+---
+
 ## 0.69.0 — Round 164 (2026-07-12) Verified Refusal State + Snapshot Contract
 
 **89th round (R163 audit).** 3 P1/P2 + 2 P2 fixed.

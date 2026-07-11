@@ -1210,10 +1210,16 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // R162 (DATA-R162-01 + ROOT-R162-01): The root_fingerprint read drives
   // TWO early returns (ROOT_CHANGED + ROOT_IDENTITY_UNKNOWN) which fire
   // BEFORE any mutation. See the R162 block below.
+  //
+  // R165 (API-R165-01): also read `last_successful_index_at AS
+  // lastSuccessfulIndexAt`. The `hasPublishedSnapshot` computation in both
+  // root-change early returns now requires this column to be non-NULL (a
+  // coherent published snapshot must come from a successful run, not just
+  // any run that left rows in the structural tables).
   const projectState = opts.incremental
     ? (db.prepare(
-        'SELECT cross_file_calls_stale AS stale, call_sites_initialized AS initialized, extractor_semantics_version AS version, root_fingerprint AS rootFingerprint FROM projects WHERE name = ?'
-      ).get(opts.project) as { stale?: number; initialized?: number; version?: number; rootFingerprint?: string | null } | undefined)
+        'SELECT cross_file_calls_stale AS stale, call_sites_initialized AS initialized, extractor_semantics_version AS version, root_fingerprint AS rootFingerprint, last_successful_index_at AS lastSuccessfulIndexAt FROM projects WHERE name = ?'
+      ).get(opts.project) as { stale?: number; initialized?: number; version?: number; rootFingerprint?: string | null; lastSuccessfulIndexAt?: string | null } | undefined)
     : undefined;
   const existingStale = projectState?.stale === 1;
   const existingInitialized = projectState?.initialized === 1;
@@ -1303,7 +1309,18 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R164 (API-R164-01): compute publishedSnapshotPreserved — requires a
     // coherent prior snapshot (projects row + nodes + file_hashes). A partial
     // DB (edges only) is NOT a coherent snapshot.
+    //
+    // R165 (API-R165-01): ALSO require `last_successful_index_at IS NOT NULL`
+    // and `cross_file_calls_stale = 0`. R164 only checked structural data +
+    // projects row existence; a stale run that had NOT yet been re-indexed
+    // (cross_file_calls_stale=1) or a partial DB whose projects row never
+    // advanced `last_successful_index_at` (e.g., an interrupted first index)
+    // would falsely report `publishedSnapshotPreserved=true`. R165 closes
+    // this by requiring a successful, fresh prior run.
     const hasPublishedSnapshot = projectState !== undefined
+      && projectState.lastSuccessfulIndexAt !== null
+      && projectState.lastSuccessfulIndexAt !== undefined
+      && projectState.stale === 0
       && (db.prepare('SELECT EXISTS(SELECT 1 FROM nodes WHERE project = ? LIMIT 1) AS e').get(opts.project) as { e: number }).e === 1
       && (db.prepare('SELECT EXISTS(SELECT 1 FROM file_hashes WHERE project = ? LIMIT 1) AS e').get(opts.project) as { e: number }).e === 1;
     let stalePersisted = false;
@@ -1314,6 +1331,16 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // (the other indexer may have published successfully).
     let concurrentUpdate = false;
     let persistFailure = false;
+    // R165 (OBS-R165-02): capture the SQLite exception message so the
+    // FAILED/PERSIST_FAILURE return carries the real diagnostic (e.g.,
+    // "SQLITE_BUSY: database is locked") instead of just the rootMsg.
+    let persistFailureMsg: string | null = null;
+    // R165 (CONC-R165-01): track whether a CAS miss (info.changes === 0)
+    // corresponds to ANOTHER indexer publishing THIS root successfully. When
+    // true, the DB is fresh under our root — the run is a concurrent SUCCESS
+    // (from the system's perspective), even though this run did not publish.
+    // Recovery is 'none' (no user action needed); the graph IS fresh.
+    let concurrentPublishedCurrentRoot = false;
     try {
       const now = new Date().toISOString();
       // R164 (CONC-R164-01): CAS on the published root_fingerprint — only
@@ -1332,19 +1359,49 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       if (info.changes === 1) {
         stalePersisted = true;
       } else {
-        // R164 (CONC-R164-01): another indexer changed the state between
-        // our read and write. Don't mark the (possibly fresh) snapshot
-        // stale. Return STALE with a CONCURRENT_UPDATE note below.
-        concurrentUpdate = true;
+        // R165 (CONC-R165-01): CAS miss — re-read the projects row to
+        // determine what happened. R164 returned STALE without re-reading,
+        // which could report stale when another indexer had just published
+        // successfully under THIS root (the DB was actually fresh). Re-read
+        // the row and compare the current root_fingerprint with the root we
+        // were trying to index.
+        const currentState = db.prepare(
+          'SELECT root_fingerprint AS fp, cross_file_calls_stale AS stale FROM projects WHERE name = ?'
+        ).get(opts.project) as { fp?: string | null; stale?: number } | undefined;
+        if (currentState === undefined) {
+          // Row was deleted between our UPDATE and the re-read — treat as
+          // DB_STATE_INCONSISTENT. The structural graph data may still
+          // exist, but the projects metadata is incoherent.
+          persistFailure = true;
+        } else if (currentState.fp === rootFingerprint) {
+          // Another indexer published the SAME root we were trying to
+          // index. The DB is now fresh under our root — this is a
+          // concurrent SUCCESS (from the system's perspective). The graph
+          // IS fresh, just not from this run.
+          concurrentPublishedCurrentRoot = true;
+        } else {
+          // Another indexer published a DIFFERENT root, or the fingerprint
+          // changed in some other way. Still a root change from our
+          // perspective — return STALE with ROOT_CHANGED + CONCURRENT_UPDATE
+          // note below.
+          concurrentUpdate = true;
+        }
       }
-    } catch {
+    } catch (error) {
       // R164 (STATE-R164-01): the UPDATE threw (SQLITE_BUSY, disk full,
       // corruption). The DB may stay stale=0 — surface as FAILED with
       // PERSIST_FAILURE so consumers don't treat the run as a clean STALE.
       persistFailure = true;
+      // R165 (OBS-R165-02): capture the SQLite exception message.
+      persistFailureMsg = error instanceof Error ? error.message : String(error);
     }
     db.close();
     // R164 (STATE-R164-01): FAILED/PERSIST_FAILURE when the UPDATE threw.
+    // R165 (OUTCOME-R165-01): recovery is 'none' (was 'full_reindex'). A
+    // full_reindex recommendation when the DB write itself failed (e.g.,
+    // SQLITE_BUSY, disk full, page corruption) is circular — the user must
+    // fix the DB issue first, then retry. The 'none' recovery surfaces the
+    // failure without suggesting a destructive re-index.
     if (persistFailure) {
       return {
         dbPath,
@@ -1358,12 +1415,18 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         outcome: 'FAILED',
         failure: {
           code: 'PERSIST_FAILURE',
-          message: `Could not persist stale state: ${rootMsg}`,
+          // R165 (OBS-R165-02): include the captured SQLite exception
+          // message instead of just the rootMsg.
+          message: persistFailureMsg !== null
+            ? `Could not persist stale state: ${rootMsg} [DB error: ${persistFailureMsg}]`
+            : `Could not persist stale state: ${rootMsg}`,
           phase: 'root-refusal-state',
         },
-        // R164 (API-R164-01): structural data was not modified — preserve
-        // the prior snapshot (if any).
-        preservedSnapshot: true,
+        // R165 (API-R165-03): structural data was not modified — preserve
+        // the prior snapshot (if any) ONLY when hasExistingGraphData is
+        // true. R164 set this unconditionally to true; a partial DB without
+        // any structural data is not a "preserved snapshot".
+        preservedSnapshot: hasExistingGraphData,
         publishedSnapshotPreserved: hasPublishedSnapshot,
         staleReason: {
           code: 'ROOT_CHANGED',
@@ -1372,13 +1435,51 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           totalPaths: 0,
           pathsTruncated: false,
         },
-        recovery: 'full_reindex',
+        recovery: 'none',
       };
     }
-    // R164 (CONC-R164-01): concurrent update — return STALE with a note.
-    // The other indexer may have published successfully; we don't want to
-    // mark its fresh snapshot stale, so we did NOT UPDATE (info.changes=0).
-    // The message includes the warning suffix so consumers can detect this.
+    // R165 (CONC-R165-01): concurrent indexer published THIS root
+    // successfully. Return STALE with a note explaining the situation and
+    // recovery: 'none' (the graph IS fresh; no user action needed). This is
+    // distinct from the concurrentUpdate case (different root published),
+    // which still requires a full_reindex.
+    if (concurrentPublishedCurrentRoot) {
+      return {
+        dbPath,
+        durationMs: Date.now() - start,
+        nodes: 0, edges: 0, files: 0, skipped: 0,
+        errors: [],
+        languages: new Set(),
+        parallel: false, workerCount: 0,
+        crossFileCallsStale: false,
+        warnings: buildDiscoveryWarnings(discovery),
+        outcome: 'STALE',
+        // R165 (API-R165-03): preservedSnapshot is conditional on
+        // hasExistingGraphData.
+        preservedSnapshot: hasExistingGraphData,
+        // R165 (CONC-R165-01): publishedSnapshotPreserved is true here —
+        // the concurrent indexer just published a coherent snapshot under
+        // this root. (hasPublishedSnapshot may or may not reflect this
+        // depending on whether we re-read; the structural EXISTS queries
+        // above ran before the concurrent publish completed in some race
+        // windows. We re-check via hasExistingGraphData + the known
+        // concurrent-publish state.)
+        publishedSnapshotPreserved: hasPublishedSnapshot || hasExistingGraphData,
+        staleReason: {
+          code: 'ROOT_CHANGED',
+          message: `${rootMsg} [Concurrent indexer published this root successfully — the graph is fresh under the current root; this run did not publish.]`,
+          paths: [],
+          totalPaths: 0,
+          pathsTruncated: false,
+        },
+        recovery: 'none',
+      };
+    }
+    // R164 (CONC-R164-01): concurrent update (different root) — return STALE
+    // with a note. The other indexer may have published successfully under a
+    // DIFFERENT root; we don't want to mark its snapshot stale, so we did
+    // NOT UPDATE (info.changes=0). The message includes the warning suffix
+    // so consumers can detect this.
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -1389,11 +1490,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       warnings: buildDiscoveryWarnings(discovery),
       outcome: 'STALE',
-      // R163 (API-R163-01): preservedSnapshot=true signals that a previous
+      // R163 (API-R163-01): preservedSnapshot signals that a previous
       // snapshot still exists in the DB — nodes=0/edges=0 here mean "no new
       // work published", NOT "graph empty". Consumers should query the DB
       // for actual counts.
-      preservedSnapshot: true,
+      // R165 (API-R165-03): preservedSnapshot is conditional on
+      // hasExistingGraphData (was unconditionally `true` in R164).
+      preservedSnapshot: hasExistingGraphData,
       // R164 (API-R164-01): publishedSnapshotPreserved distinguishes a
       // coherent prior snapshot (nodes + file_hashes + projects row) from
       // mere structural data.
@@ -1466,6 +1569,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // prior snapshot (nodes + file_hashes + projects row) from mere
     // structural data. A partial DB with edges but no nodes/hashes is NOT
     // a coherent published snapshot.
+    //
+    // R165 (API-R165-01): ALSO require `last_successful_index_at IS NOT NULL`
+    // and `cross_file_calls_stale = 0` (see the ROOT_CHANGED block above
+    // for the full rationale). A pre-R154 DB whose projects row never
+    // advanced `last_successful_index_at` (e.g., an interrupted first
+    // index before the legacy migration) would falsely report
+    // `publishedSnapshotPreserved=true` under R164's weaker check.
     const rootMsg = `Root identity unknown — the published graph predates root fingerprint tracking. Full reindex required to establish root identity.`;
     // R164 (API-R164-01): compute publishedSnapshotPreserved — requires a
     // coherent prior snapshot (projects row + nodes + file_hashes). When the
@@ -1474,10 +1584,21 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // hasPublishedSnapshot=false — this is exactly the API-R164-01 case
     // (partial DB without a coherent snapshot).
     const hasPublishedSnapshot = projectState !== undefined
+      && projectState.lastSuccessfulIndexAt !== null
+      && projectState.lastSuccessfulIndexAt !== undefined
+      && projectState.stale === 0
       && (db.prepare('SELECT EXISTS(SELECT 1 FROM nodes WHERE project = ? LIMIT 1) AS e').get(opts.project) as { e: number }).e === 1
       && (db.prepare('SELECT EXISTS(SELECT 1 FROM file_hashes WHERE project = ? LIMIT 1) AS e').get(opts.project) as { e: number }).e === 1;
     let stalePersisted = false;
     let persistFailure = false;
+    // R165 (OBS-R165-02): capture the SQLite exception message.
+    let persistFailureMsg: string | null = null;
+    // R165 (CONC-R165-01): track whether a CAS miss (info.changes === 0)
+    // corresponds to ANOTHER indexer having successfully published the
+    // baseline (root_fingerprint no longer NULL, stale=0). When true, the
+    // graph IS fresh; this run is a concurrent SUCCESS from the system's
+    // perspective. Recovery is 'none'.
+    let concurrentPublishedCurrentRoot = false;
     try {
       const now = new Date().toISOString();
       // R164 (CONC-R164-01): CAS on `root_fingerprint IS NULL` — only mark
@@ -1494,28 +1615,75 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       // R164 (STATE-R164-02): only set stalePersisted if exactly 1 row was
       // updated. info.changes === 0 means either the projects row is gone
       // (no metadata despite structural data — partial DB) OR another
-      // indexer published (root_fingerprint no longer NULL). Both are
-      // treated as PERSIST_FAILURE (we can't confirm the refusal was
-      // recorded).
+      // indexer published (root_fingerprint no longer NULL).
       if (info.changes === 1) {
         stalePersisted = true;
       } else {
-        // R164 (CONC-R164-01 + STATE-R164-02): treat as persist failure —
-        // the refusal state was NOT recorded. Either the projects row is
-        // missing (incoherent DB) or a concurrent indexer populated
-        // root_fingerprint (the snapshot may now be coherent under a
-        // different fingerprint, and our stale UPDATE was a no-op).
-        persistFailure = true;
+        // R165 (CONC-R165-01): CAS miss — re-read the projects row. If
+        // root_fingerprint is now non-NULL AND cross_file_calls_stale=0,
+        // another indexer established the baseline successfully. Otherwise
+        // (row missing, or stale=1, or some other incoherent state) treat
+        // as persist failure.
+        const currentState = db.prepare(
+          'SELECT root_fingerprint AS fp, cross_file_calls_stale AS stale FROM projects WHERE name = ?'
+        ).get(opts.project) as { fp?: string | null; stale?: number } | undefined;
+        if (currentState !== undefined && currentState.fp !== null && currentState.stale === 0) {
+          // Another indexer successfully published — not a failure.
+          concurrentPublishedCurrentRoot = true;
+        } else {
+          persistFailure = true;
+        }
       }
-    } catch {
+    } catch (error) {
       // R164 (STATE-R164-01): the UPDATE threw (SQLITE_BUSY, disk full,
       // corruption). Surface as FAILED/PERSIST_FAILURE.
       persistFailure = true;
+      // R165 (OBS-R165-02): capture the SQLite exception message.
+      persistFailureMsg = error instanceof Error ? error.message : String(error);
     }
     db.close();
+    // R165 (CONC-R165-01): concurrent indexer established the baseline
+    // successfully. Return STALE with a note and recovery: 'none'. The
+    // graph IS fresh under the now-published root_fingerprint; this run did
+    // not publish but no user action is needed.
+    if (concurrentPublishedCurrentRoot) {
+      return {
+        dbPath,
+        durationMs: Date.now() - start,
+        nodes: 0, edges: 0, files: 0, skipped: 0,
+        errors: [],
+        languages: new Set(),
+        parallel: false, workerCount: 0,
+        crossFileCallsStale: false,
+        warnings: buildDiscoveryWarnings(discovery),
+        outcome: 'STALE',
+        // R165 (API-R165-03): preservedSnapshot is conditional on
+        // hasExistingGraphData. (For rootIdentityUnknown, hasExistingGraphData
+        // is always true — it's a precondition for this gate. So this is
+        // effectively `true`, but we keep the conditional for consistency
+        // with the ROOT_CHANGED block and future-proofing.)
+        preservedSnapshot: hasExistingGraphData,
+        // R165 (CONC-R165-01): publishedSnapshotPreserved is true — the
+        // concurrent indexer just established a coherent baseline.
+        publishedSnapshotPreserved: true,
+        staleReason: {
+          code: 'ROOT_IDENTITY_UNKNOWN',
+          message: `${rootMsg} [Concurrent indexer published this root successfully — the baseline root_fingerprint is now established; this run did not publish.]`,
+          paths: [],
+          totalPaths: 0,
+          pathsTruncated: false,
+        },
+        recovery: 'none',
+      };
+    }
     // R164 (STATE-R164-01 + STATE-R164-02 + CONC-R164-01): FAILED if the
     // UPDATE threw OR info.changes=0 (no projects row with NULL fingerprint
-    // to mark stale).
+    // to mark stale, AND the re-read didn't show a successful concurrent
+    // publish).
+    //
+    // R165 (OUTCOME-R165-01): recovery is 'none' (was 'full_reindex'). A
+    // full_reindex recommendation when the DB write itself failed is
+    // circular.
     if (!stalePersisted || persistFailure) {
       return {
         dbPath,
@@ -1529,13 +1697,18 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         outcome: 'FAILED',
         failure: {
           code: 'PERSIST_FAILURE',
-          message: `Could not persist stale state: ${rootMsg}`,
+          // R165 (OBS-R165-02): include the captured SQLite exception
+          // message instead of just the rootMsg.
+          message: persistFailureMsg !== null
+            ? `Could not persist stale state: ${rootMsg} [DB error: ${persistFailureMsg}]`
+            : `Could not persist stale state: ${rootMsg}`,
           phase: 'root-refusal-state',
         },
-        // R164 (API-R164-01): structural data was not modified (the early
+        // R165 (API-R165-03): structural data was not modified (the early
         // return did NOT touch nodes/edges/file_hashes/imports/exports/
         // call_sites — only trust-state columns were attempted).
-        preservedSnapshot: true,
+        // preservedSnapshot is conditional on hasExistingGraphData.
+        preservedSnapshot: hasExistingGraphData,
         publishedSnapshotPreserved: hasPublishedSnapshot,
         staleReason: {
           code: 'ROOT_IDENTITY_UNKNOWN',
@@ -1544,7 +1717,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           totalPaths: 0,
           pathsTruncated: false,
         },
-        recovery: 'full_reindex',
+        recovery: 'none',
       };
     }
     return {
@@ -1557,11 +1730,17 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       warnings: buildDiscoveryWarnings(discovery),
       outcome: 'STALE',
-      // R163 (API-R163-01): preservedSnapshot=true — a previous snapshot
+      // R163 (API-R163-01): preservedSnapshot — a previous snapshot
       // exists in the DB (hasExistingGraphData was true, otherwise this
       // early return wouldn't have fired). nodes=0/edges=0 mean "no new
       // work published", NOT "graph empty".
-      preservedSnapshot: true,
+      // R165 (API-R165-03): preservedSnapshot is conditional on
+      // hasExistingGraphData (was unconditionally `true` in R164). For
+      // rootIdentityUnknown, hasExistingGraphData is always true (a
+      // precondition for this gate), so the value is unchanged in
+      // practice — but the conditional documents intent and future-proofs
+      // against changes to the gate.
+      preservedSnapshot: hasExistingGraphData,
       // R164 (API-R164-01): publishedSnapshotPreserved is true only when a
       // coherent prior snapshot exists (nodes + file_hashes + projects row).
       // A partial DB with edges only has preservedSnapshot=true (structural
@@ -1625,15 +1804,29 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // updates stale/last_index_attempt_at/last_index_error; root_path is
   // written by the INSERT (first full index) and updated only by the final
   // commit on success.
+  //
+  // R165 (STATE-R165-01): REMOVED the `last_index_error = 'Index publication
+  // in progress'` write. R157–R164 wrote this transitory message via the
+  // premark UPSERT, intending it as a "currently in progress" marker. But
+  // the final `updateProjectStats` call's CASE WHEN (R164-03) preserves
+  // `last_index_error` when the run is stale AND the new error is NULL —
+  // so a stale run with indexError=null would PRESERVE the transitory
+  // 'Index publication in progress' message as the FINAL state. Graph
+  // Status would then show "Index publication in progress" indefinitely
+  // for a project whose last run was actually a stale no-op (not in
+  // progress at all). R165 simply omits `last_index_error` from the
+  // premark UPSERT — the column is left at its prior value (NULL on the
+  // very first index, or whatever the previous run set on subsequent
+  // runs). The final `updateProjectStats` / `commitAliasStateAtomically`
+  // call writes the real error (or NULL on success).
   {
     const now = new Date().toISOString();
     db.prepare(`
-      INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at, last_index_error)
-      VALUES (?, ?, ?, 1, ?, 'Index publication in progress')
+      INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at)
+      VALUES (?, ?, ?, 1, ?)
       ON CONFLICT(name) DO UPDATE SET
         cross_file_calls_stale = 1,
-        last_index_attempt_at = excluded.last_index_attempt_at,
-        last_index_error = excluded.last_index_error
+        last_index_attempt_at = excluded.last_index_attempt_at
     `).run(opts.project, effectiveRoot, now, now);
   }
 
@@ -1969,15 +2162,18 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // rationale as the main-path premark above — the premark is an attempted
     // root, not a confirmed snapshot root; only the final commit should
     // update root_path on success).
+    // R165 (STATE-R165-01): REMOVED `last_index_error = 'Index publication
+    // in progress'` (same rationale as the main-path premark above — the
+    // transitory message could be preserved as final state by R164-03's
+    // CASE WHEN on a stale no-error run).
     {
       const now = new Date().toISOString();
       db.prepare(`
-        INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at, last_index_error)
-        VALUES (?, ?, ?, 1, ?, 'Index publication in progress')
+        INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at)
+        VALUES (?, ?, ?, 1, ?)
         ON CONFLICT(name) DO UPDATE SET
           cross_file_calls_stale = 1,
-          last_index_attempt_at = excluded.last_index_attempt_at,
-          last_index_error = excluded.last_index_error
+          last_index_attempt_at = excluded.last_index_attempt_at
       `).run(opts.project, effectiveRoot, now, now);
     }
     // R107: capture initialized flag BEFORE the transaction (it won't change inside).
@@ -2479,9 +2675,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     };
   } catch (error) {
     // R159 (RES-R159-01): outer catch — best-effort persist stale + error.
-    // The premark at line ~857 already set cross_file_calls_stale=1 with
-    // last_index_error='Index publication in progress'. Now overwrite with
-    // the real error message so Graph Status shows the actual failure.
+    // The premark at line ~857 already set cross_file_calls_stale=1 (R157).
+    // R157–R164 also set last_index_error='Index publication in progress'
+    // here; R165 (STATE-R165-01) REMOVED that premark write — the premark
+    // now leaves last_index_error at its prior value. This outer catch
+    // OVERWRITES last_index_error with the real error message so Graph
+    // Status shows the actual failure (not the prior value, not the
+    // transitory 'in progress' marker).
     // R160 (API-R160-04): map the currentPhase to a specific failure code.
     // R159 always returned EXTRACTION_CRASH — too broad. A crash during
     // cleanup/totals/publish is a DB operation, not extraction. R160 splits:
