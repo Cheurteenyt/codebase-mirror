@@ -177,6 +177,10 @@ export interface IndexResult {
   outcome?: 'SUCCESS' | 'SUCCESS_WITH_WARNINGS' | 'STALE' | 'PARTIAL' | 'FAILED';
   /**
    * R156 (OBS-R156-01): Structured stale reason.
+   *
+   * R159 (OBS-R159-03): Added `totalPaths` + `pathsTruncated` so consumers can
+   * display "(showing 100 of N)" when the cap kicks in. R158 silently capped
+   * at 100 with no signal, hiding the magnitude of filesystem breakage.
    */
   staleReason?: {
     code:
@@ -188,6 +192,10 @@ export interface IndexResult {
       | 'PERSIST_FAILURE';
     message: string;
     paths: string[];
+    /** R159: total broken paths before capping. Undefined when not applicable. */
+    totalPaths?: number;
+    /** R159: true when paths were truncated to MAX_STALE_PATHS. */
+    pathsTruncated?: boolean;
   };
   /**
    * R156 (OBS-R156-01): Recovery recommendation.
@@ -265,13 +273,33 @@ function computeOutcome(
  * Used by ALL paths (no-op, deletion-only, main) to ensure consistent
  * staleReason codes, messages, and recovery recommendations.
  *
+ * R159 (OUTCOME-R159-01): Reordered priority. Filesystem blockers
+ * (COLD_START_LOCK, HISTORICAL_ALIAS_BROKEN) now come BEFORE
+ * SEMANTICS_MISMATCH. Rationale: if the filesystem is broken (alias or
+ * cold-start lock), recommending full_reindex is circular — the full
+ * will be blocked by the broken alias. Fix the filesystem FIRST, then
+ * do the full reindex. R158 put SEMANTICS_MISMATCH first, which meant a
+ * project with both semantics mismatch AND a broken alias would be told
+ * to do a full_reindex that immediately aborts with
+ * HISTORICAL_ALIAS_BROKEN — circular recovery.
+ *
  * Priority order (first match wins):
  *   1. PERSIST_FAILURE — publication commit failed (handled by catch blocks)
- *   2. SEMANTICS_MISMATCH — extractor_semantics_version != CURRENT
+ *   2. COLD_START_LOCK — history not initialized, broken aliases present
+ *      (filesystem blocker — full will be blocked)
  *   3. HISTORICAL_ALIAS_BROKEN — previously-valid alias now broken, target absent
- *   4. COLD_START_LOCK — history not initialized, broken aliases present
+ *      (filesystem blocker — full will be blocked)
+ *   4. SEMANTICS_MISMATCH — extractor_semantics_version != CURRENT
+ *      (recommends full_reindex — only useful if filesystem is healthy)
  *   5. DISCOVERY_UNCERTAIN — TOCTOU races (uncertainPaths/subtrees)
  *   6. PREVIOUSLY_STALE — project was already stale, no-op didn't refresh
+ *
+ * R159 (OUTCOME-R159-02): When `hasExtractionErrors=true` AND no other
+ * cause matched, returns `undefined`. The errors are in `result.errors`
+ * and `outcome=PARTIAL` — no staleReason is needed. R158 already did
+ * this, but the main path's staleReason builder fell back to
+ * `PREVIOUSLY_STALE` with the indexError message, mislabeling extraction
+ * errors. R159 fixes the main path builder to respect `undefined`.
  */
 function classifyStaleReason(params: {
   semanticsStale: boolean;
@@ -284,13 +312,18 @@ function classifyStaleReason(params: {
 }): { code: NonNullable<NonNullable<IndexResult['staleReason']>['code']>; message: string; recovery: NonNullable<IndexResult['recovery']>; } | undefined {
   const { semanticsStale, hasEffectiveHistoricalBrokenAliases, coldStartLock, hasUncertainty, existingStale, hasExtractionErrors, callSitesInitialized } = params;
 
-  if (semanticsStale) {
+  // R159 (OUTCOME-R159-01): COLD_START_LOCK first — filesystem blocker.
+  // If we recommend full_reindex here, the full will be blocked by the
+  // cold-start lock on the next run. Fix the filesystem first.
+  if (coldStartLock) {
     return {
-      code: 'SEMANTICS_MISMATCH',
-      message: `Semantics version mismatch — full reindex required`,
-      recovery: 'full_reindex',
+      code: 'COLD_START_LOCK',
+      message: `Cold-start lock: alias_history not yet initialized and broken aliases present. Fix or remove the broken symlinks, then rerun.`,
+      recovery: 'fix_filesystem',
     };
   }
+  // R159 (OUTCOME-R159-01): HISTORICAL_ALIAS_BROKEN second — filesystem blocker.
+  // Same rationale: full_reindex would be blocked by the broken alias.
   if (hasEffectiveHistoricalBrokenAliases) {
     return {
       code: 'HISTORICAL_ALIAS_BROKEN',
@@ -298,11 +331,14 @@ function classifyStaleReason(params: {
       recovery: 'fix_filesystem',
     };
   }
-  if (coldStartLock) {
+  // R159 (OUTCOME-R159-01): SEMANTICS_MISMATCH third — only useful if filesystem
+  // is healthy. Now that filesystem blockers are checked first, recommending
+  // full_reindex here is safe (the full won't be blocked).
+  if (semanticsStale) {
     return {
-      code: 'COLD_START_LOCK',
-      message: `Cold-start lock: alias_history not yet initialized and broken aliases present. Fix or remove the broken symlinks, then rerun.`,
-      recovery: 'fix_filesystem',
+      code: 'SEMANTICS_MISMATCH',
+      message: `Semantics version mismatch — full reindex required`,
+      recovery: 'full_reindex',
     };
   }
   if (hasUncertainty) {
@@ -313,7 +349,7 @@ function classifyStaleReason(params: {
     };
   }
   if (hasExtractionErrors) {
-    return undefined; // errors are in result.errors, outcome=PARTIAL
+    return undefined; // R159 (OUTCOME-R159-02): errors are in result.errors, outcome=PARTIAL
   }
   if (!callSitesInitialized) {
     return {
@@ -380,21 +416,28 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         workerCount: 0,
         crossFileCallsStale: true,
         outcome: 'FAILED',
+        // R159 (API-R159-01): structured failure for programmatic triage.
+        failure: { code: 'DB_ERROR', message, phase: 'dry-run-root' },
+        recovery: 'retry_incremental',
       };
     }
     let discovery: DiscoveryResult;
     try {
       discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot);
     } catch (error) {
+      const discoveryMsg = (error as Error).message;
       return {
         dbPath, durationMs: Date.now() - start, nodes: 0, edges: 0,
         files: 0, skipped: 0,
-        errors: [{ file: opts.rootPath, error: (error as Error).message }],
+        errors: [{ file: opts.rootPath, error: discoveryMsg }],
         languages: new Set(),
         parallel: false,
         workerCount: 0,
         crossFileCallsStale: true,
         outcome: 'FAILED',
+        // R159 (API-R159-01): structured failure for programmatic triage.
+        failure: { code: 'DB_ERROR', message: `Discovery failed: ${discoveryMsg}`, phase: 'dry-run-discovery' },
+        recovery: 'retry_incremental',
       };
     }
     const langs = new Set<string>();
@@ -458,6 +501,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       workerCount: 0,
       crossFileCallsStale: true,
       outcome: 'FAILED',
+      // R159 (API-R159-01): structured failure for programmatic triage.
+      failure: { code: 'DB_ERROR', message, phase: 'root-validation' },
+      recovery: 'retry_incremental',
     };
   }
 
@@ -505,6 +551,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       workerCount: 0,
       crossFileCallsStale: true,
       outcome: 'FAILED',
+      // R159 (API-R159-01): structured failure for programmatic triage.
+      failure: { code: 'DB_ERROR', message: fullMsg, phase: 'discovery' },
+      recovery: 'retry_incremental',
     };
   }
 
@@ -618,6 +667,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         crossFileCallsStale: true,
         warnings: discoveryWarnings,
         outcome: 'FAILED',
+        // R159 (API-R159-01): structured failure for programmatic triage.
+        failure: { code: 'DB_ERROR', message: fullMsg, phase: 'discovery-partial' },
+        recovery: 'retry_incremental',
       };
     }
     // R144 (MIG-R144-02): incremental mode + partial → same unified helper.
@@ -639,6 +691,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       warnings: discoveryWarnings,
       outcome: 'FAILED',
+      // R159 (API-R159-01): structured failure for programmatic triage.
+      failure: { code: 'DB_ERROR', message: fullMsg, phase: 'discovery-partial' },
+      recovery: 'retry_incremental',
     };
   }
 
@@ -810,8 +865,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     markProjectStalePreservingGraph(dbPath, opts.project, staleMsg);
     // R158 (PERF-R158-01): Cap staleReason.paths at 100 so a repo with
     // thousands of broken symlinks doesn't produce a multi-MB IndexResult.
+    // R159 (OBS-R159-03): Also expose `totalPaths` + `pathsTruncated` so
+    // consumers can display "(showing 100 of N)". R158's silent cap hid the
+    // magnitude of filesystem breakage.
     const MAX_STALE_PATHS = 100;
     const cappedPaths = brokenPaths.slice(0, MAX_STALE_PATHS);
+    const pathsTruncated = brokenPaths.length > MAX_STALE_PATHS;
     return {
       dbPath,
       durationMs: Date.now() - start,
@@ -826,7 +885,14 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       warnings: discoveryWarnings,
       outcome: 'STALE',
-      staleReason: { code: staleCode, message: staleMsg, paths: cappedPaths },
+      staleReason: {
+        code: staleCode,
+        message: staleMsg,
+        paths: cappedPaths,
+        // R159 (OBS-R159-03): expose truncation info.
+        totalPaths: brokenPaths.length,
+        pathsTruncated,
+      },
       recovery,
     };
   }
@@ -1352,252 +1418,309 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // R157: The premark stale was already done above (before clearProjectData).
   // No need to re-mark here.
 
-  if (!useParallel) {
-    // Single-thread: main thread needs the grammars
-    await preloadGrammars(allLangs);
-  }
-  // Parallel: workers will load grammars themselves; skip main-thread preload
-
-  let result;
-  if (useParallel) {
-    result = await indexParallel(db, opts.project, effectiveRoot, langGroups, numWorkers, opts.incremental ?? false);
-  } else {
-    result = await extractFromFilesWasm(
-      db, opts.project, effectiveRoot, files, opts.incremental ?? false,
-    );
-  }
-
-  // R104: Bug 37 fix — clean up deleted files in incremental mode.
-  // Delete nodes, edges, and file_hashes for files that no longer exist on disk.
-  // R106: also delete call_sites for deleted files, and rebuild cross-file CALLS
-  // to remove edges that pointed to deleted nodes.
-  // Note: this block only runs when there were BOTH changed files to extract
-  // AND deleted files to clean up. Deletion-only is handled by the fast path above.
-  if (opts.incremental && deletedRelPaths.length > 0) {
-    const deleteTx = db.transaction(() => {
-      const ph = deletedRelPaths.map(() => '?').join(',');
-      // Get node IDs for deleted files
-      const oldNodeIds = db.prepare(
-        `SELECT id FROM nodes WHERE project = ? AND file_path IN (${ph})`
-      ).all(opts.project, ...deletedRelPaths) as Array<{ id: number }>;
-      if (oldNodeIds.length > 0) {
-        const idPh = oldNodeIds.map(() => '?').join(',');
-        const idParams = oldNodeIds.map(r => r.id);
-        db.prepare(
-          `DELETE FROM edges WHERE project = ? AND (source_id IN (${idPh}) OR target_id IN (${idPh}))`
-        ).run(opts.project, ...idParams, ...idParams);
-      }
-      db.prepare(`DELETE FROM nodes WHERE project = ? AND file_path IN (${ph})`)
-        .run(opts.project, ...deletedRelPaths);
-      db.prepare(`DELETE FROM file_hashes WHERE project = ? AND file_path IN (${ph})`)
-        .run(opts.project, ...deletedRelPaths);
-      // R106: clean up call_sites for deleted files.
-      db.prepare(`DELETE FROM call_sites WHERE project = ? AND file_path IN (${ph})`)
-        .run(opts.project, ...deletedRelPaths);
-      // R110: clean up imports for deleted files.
-      db.prepare(`DELETE FROM imports WHERE project = ? AND file_path IN (${ph})`)
-        .run(opts.project, ...deletedRelPaths);
-      // R119: clean up exports for deleted files.
-      db.prepare(`DELETE FROM exports WHERE project = ? AND file_path IN (${ph})`)
-        .run(opts.project, ...deletedRelPaths);
-
-      // R106: rebuild cross-file CALLS to remove edges that pointed to deleted
-      // nodes and re-resolve call_sites that may now match different candidates.
-      // The extraction transaction already rebuilt cross-file CALLS, but that
-      // used the pre-cleanup state (deleted files' nodes were still present).
-      // This second rebuild uses the post-cleanup state.
-      // R108: use isCallSitesInitialized (not hasCallSites) — always rebuild
-      // when initialized=true, even if call_sites is empty.
-      // R127: MIG-R127-03 — when semanticsStale, DON'T run the resolver.
-      // R128: MIG-R128-02 — semanticsStale MUST dominate callSitesInitialized.
-      // Previously this was gated behind `isCallSitesInitialized(...)`, which
-      // meant a DB with initialized=false (partial full index) would skip the
-      // stale-semantics cleanup. Now we check semanticsStale first.
-      if (semanticsStale) {
-        clearCrossFileCallEdges(db, opts.project);
-      } else if (isCallSitesInitialized(db, opts.project)) {
-        rebuildCrossFileCallsEdges(db, opts.project, true);
-      }
-    });
-    deleteTx();
-  }
-
-  // R81: Bug 18 fix — after incremental, projects.node_count/edge_count must
-  // reflect the TOTAL in the DB, not just the nodes/edges inserted in this run.
-  const totals = db.prepare(`
-    SELECT
-      (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
-      (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
-  `).get(opts.project, opts.project) as { nodes: number; edges: number };
-  // R101/R102/R103/R104: persist crossFileCallsStale in DB + return in IndexResult
-  // R106: with persistent call_sites, incremental mode can now rebuild cross-file
-  // CALLS. If result.crossFileCallsResolved is true, stale=false. If false
-  // (legacy DB without call_sites), preserve existing stale or set to true.
-  // R107: call_sites_initialized is set to true after full reindex, preserved
-  // by incremental. This is the authoritative legacy DB signal.
-  // R126/R127: extractor_semantics_version is set to CURRENT after a full
-  // reindex; preserved by incremental. The centralized `semanticsStale`
-  // (computed before the fast paths) is used here. When stale, the resolver
-  // was skipped (MIG-R127-03), so result.crossFileCallsResolved=false, which
-  // correctly makes crossFileStale=true. No separate version read needed here.
-  // R127: DATA-R127-01 — full mode only certifies CURRENT if no errors.
-  // R146 (STATE-R146-01): Extraction errors MUST force stale=true regardless
-  // of whether the resolver succeeded. R145's logic only set stale when
-  // `crossFileCallsResolved=false`, but the resolver can rebuild edges from
-  // OLD call_sites even when extraction of a changed file failed (the old
-  // nodes are preserved). This meant `crossFileStale=false` + `indexError=null`
-  // → `last_successful_index_at=now` → graph appeared fresh despite extraction
-  // errors. Now: `result.errors.length > 0` forces `crossFileStale=true`
-  // in BOTH full and incremental modes.
-  const fullModeHadErrors = !opts.incremental && result.errors.length > 0;
-  const incrementalHadErrors = opts.incremental && result.errors.length > 0;
-  // R148 (STATE-R148-01): Uncertainty forces stale in incremental mode.
-  // When a file was temporarily absent (ENOENT race), its old data is
-  // preserved (excluded from deletedRelPaths). But the old data may not
-  // match the new file content on disk (the file may have been modified
-  // during the atomic save). The graph must NOT be certified as fresh.
-  // R148: reuse hasUncertainty computed earlier (before clearProjectData).
-  // R156 (TX-R156-01): crossFileStale is now `let` — the catch block can
-  // override it to true if the final commit fails.
-  let crossFileStale = opts.incremental
-    ? semanticsStale || incrementalHadErrors || hasUncertainty
-        ? true
-        : (result.crossFileCallsResolved ?? false)
-          ? false
-          : (existingStale || result.files > 0 || deletedRelPaths.length > 0)
-    : fullModeHadErrors; // R127: full with errors → stale=true (don't trust partial graph)
-  // R107: full reindex sets call_sites_initialized=true; incremental preserves it.
-  // R127: DATA-R127-01 — full mode with errors does NOT set initialized=true.
-  const callSitesInitialized = opts.incremental
-    ? existingInitialized
-    : !fullModeHadErrors;
-  // R126: full reindex sets extractor_semantics_version=CURRENT; incremental
-  // preserves it (so the stale-version gate can fire on the next incremental).
-  // R127: DATA-R127-01 — full mode with errors does NOT certify CURRENT.
-  const semanticsVersion = opts.incremental
-    ? existingSemanticsVersion
-    : (fullModeHadErrors ? 0 : CURRENT_EXTRACTOR_SEMANTICS_VERSION);
-  // R145 (STATE-R145-03): Pass indexError when there were extraction errors
-  // or when stale. R144 always passed null (success), which set
-  // last_successful_index_at=now even on partial/failed extraction.
-  // R146 (STATE-R146-01): incremental extraction errors ALSO set indexError.
-  // R145 only set it when `crossFileStale && (semanticsStale || ...)`, but
-  // crossFileStale is now always true when there are extraction errors.
-  // So: errors → indexError → last_successful NOT updated.
-  let indexError: string | null = null;
-  if (!opts.incremental && fullModeHadErrors) {
-    indexError = result.errors.length > 0
-      ? `Extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`
-      : 'Full index completed with errors';
-  } else if (opts.incremental && incrementalHadErrors) {
-    indexError = `Incremental extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`;
-  } else if (opts.incremental && hasUncertainty) {
-    // R148 (STATE-R148-01): uncertainty → stale, last_success unchanged.
-    indexError = `Source snapshot uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Retry incremental when filesystem is stable.`;
-  } else if (opts.incremental && crossFileStale && semanticsStale) {
-    indexError = `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`;
-  }
-  // R155 (TX-R155-01): Atomic alias state commit. On SUCCESS, combine
-  // alias_history persist + project stats in ONE transaction. If persist
-  // fails, the ENTIRE transaction rolls back — graph stays stale,
-  // history_initialized stays 0, last_successful_index_at NOT advanced.
-  // This closes the R154 TX-R155-01 gap where the graph was marked fresh
-  // BEFORE alias_history persist, and a persist failure left the graph
-  // fresh + initialized=1 but history empty/stale.
-  // On STALE/FAILED, use updateProjectStats alone (no alias_history changes).
-  if (crossFileStale) {
-    updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion, indexError);
-    db.close();
-  } else {
-    const liveAliasPaths = new Set<string>();
-    for (const a of contributiveAliases) liveAliasPaths.add(a.aliasPath);
-    for (const a of discovery.brokenAliases) liveAliasPaths.add(a.aliasPath);
-    try {
-      commitAliasStateAtomically(
-        db, opts.project, effectiveRoot, totals.nodes, totals.edges,
-        callSitesInitialized, semanticsVersion,
-        rootFingerprint, runId, contributiveAliases, liveAliasPaths,
-      );
-    } catch (commitError) {
-      // R157 (TX-R156-01 + OUTCOME-R157-01): The atomic commit failed. The
-      // graph has already been mutated. The pre-marked stale=1 is still in
-      // the DB. R156 pushed the error to result.errors and let computeOutcome
-      // return PARTIAL — which --allow-partial could mask as exit 0. R157
-      // returns FAILED with PERSIST_FAILURE instead. Publication failure must
-      // NEVER be masked.
-      // R158 (OUTCOME-R158-01): add structured `failure` field with phase.
-      const errMsg = `Index publication failed: ${commitError instanceof Error ? commitError.message : String(commitError)}`;
-      try {
-        const now = new Date().toISOString();
-        db.prepare(`
-          UPDATE projects SET
-            cross_file_calls_stale = 1,
-            last_index_attempt_at = ?,
-            last_index_error = ?
-          WHERE name = ?
-        `).run(now, errMsg, opts.project);
-      } catch {
-        // Best-effort — if even this fails, the pre-marked stale=1 remains.
-      }
-      crossFileStale = true;
-      // R157: return FAILED immediately — don't fall through to computeOutcome.
-      return {
-        ...result,
-        dbPath,
-        durationMs: Date.now() - start,
-        languages: result.languages ?? allLangs,
-        parallel: useParallel,
-        workerCount: useParallel ? numWorkers : 0,
-        crossFileCallsStale: true,
-        warnings: discoveryWarnings,
-        outcome: 'FAILED',
-        staleReason: { code: 'PERSIST_FAILURE', message: errMsg, paths: [] },
-        recovery: 'retry_incremental',
-        failure: { code: 'PERSIST_FAILURE', message: errMsg, phase: 'main-commit' },
-      };
-    } finally {
-      try { db.close(); } catch { /* ignore close error */ }
+  // R159 (RES-R159-01): Outer try/catch/finally around the ENTIRE main path.
+  // The inner try/catch around `commitAliasStateAtomically` (further below)
+  // remains — it provides specific PERSIST_FAILURE diagnosis. The outer catch
+  // is a fallback for ANY other exception during preloadGrammars,
+  // extractFromFilesWasm/indexParallel, deleteTx, totals computation,
+  // updateProjectStats, or the classifier. Without this outer catch, those
+  // exceptions escaped without a structured `failure` field and without a
+  // guaranteed `db.close()` — leaving the DB handle dangling.
+  //
+  // The outer `finally` is the ONLY place `db.close()` is called for the main
+  // path. The inner `db.close()` calls at the crossFileStale branch and the
+  // PERSIST_FAILURE finally have been removed — the outer finally handles them.
+  // The no-op and deletion-only fast paths return BEFORE this try and have
+  // their own db.close() in their finally blocks (untouched).
+  try {
+    if (!useParallel) {
+      // Single-thread: main thread needs the grammars
+      await preloadGrammars(allLangs);
     }
+    // Parallel: workers will load grammars themselves; skip main-thread preload
+
+    let result;
+    if (useParallel) {
+      result = await indexParallel(db, opts.project, effectiveRoot, langGroups, numWorkers, opts.incremental ?? false);
+    } else {
+      result = await extractFromFilesWasm(
+        db, opts.project, effectiveRoot, files, opts.incremental ?? false,
+      );
+    }
+
+    // R104: Bug 37 fix — clean up deleted files in incremental mode.
+    // Delete nodes, edges, and file_hashes for files that no longer exist on disk.
+    // R106: also delete call_sites for deleted files, and rebuild cross-file CALLS
+    // to remove edges that pointed to deleted nodes.
+    // Note: this block only runs when there were BOTH changed files to extract
+    // AND deleted files to clean up. Deletion-only is handled by the fast path above.
+    if (opts.incremental && deletedRelPaths.length > 0) {
+      const deleteTx = db.transaction(() => {
+        const ph = deletedRelPaths.map(() => '?').join(',');
+        // Get node IDs for deleted files
+        const oldNodeIds = db.prepare(
+          `SELECT id FROM nodes WHERE project = ? AND file_path IN (${ph})`
+        ).all(opts.project, ...deletedRelPaths) as Array<{ id: number }>;
+        if (oldNodeIds.length > 0) {
+          const idPh = oldNodeIds.map(() => '?').join(',');
+          const idParams = oldNodeIds.map(r => r.id);
+          db.prepare(
+            `DELETE FROM edges WHERE project = ? AND (source_id IN (${idPh}) OR target_id IN (${idPh}))`
+          ).run(opts.project, ...idParams, ...idParams);
+        }
+        db.prepare(`DELETE FROM nodes WHERE project = ? AND file_path IN (${ph})`)
+          .run(opts.project, ...deletedRelPaths);
+        db.prepare(`DELETE FROM file_hashes WHERE project = ? AND file_path IN (${ph})`)
+          .run(opts.project, ...deletedRelPaths);
+        // R106: clean up call_sites for deleted files.
+        db.prepare(`DELETE FROM call_sites WHERE project = ? AND file_path IN (${ph})`)
+          .run(opts.project, ...deletedRelPaths);
+        // R110: clean up imports for deleted files.
+        db.prepare(`DELETE FROM imports WHERE project = ? AND file_path IN (${ph})`)
+          .run(opts.project, ...deletedRelPaths);
+        // R119: clean up exports for deleted files.
+        db.prepare(`DELETE FROM exports WHERE project = ? AND file_path IN (${ph})`)
+          .run(opts.project, ...deletedRelPaths);
+
+        // R106: rebuild cross-file CALLS to remove edges that pointed to deleted
+        // nodes and re-resolve call_sites that may now match different candidates.
+        // The extraction transaction already rebuilt cross-file CALLS, but that
+        // used the pre-cleanup state (deleted files' nodes were still present).
+        // This second rebuild uses the post-cleanup state.
+        // R108: use isCallSitesInitialized (not hasCallSites) — always rebuild
+        // when initialized=true, even if call_sites is empty.
+        // R127: MIG-R127-03 — when semanticsStale, DON'T run the resolver.
+        // R128: MIG-R128-02 — semanticsStale MUST dominate callSitesInitialized.
+        // Previously this was gated behind `isCallSitesInitialized(...)`, which
+        // meant a DB with initialized=false (partial full index) would skip the
+        // stale-semantics cleanup. Now we check semanticsStale first.
+        if (semanticsStale) {
+          clearCrossFileCallEdges(db, opts.project);
+        } else if (isCallSitesInitialized(db, opts.project)) {
+          rebuildCrossFileCallsEdges(db, opts.project, true);
+        }
+      });
+      deleteTx();
+    }
+
+    // R81: Bug 18 fix — after incremental, projects.node_count/edge_count must
+    // reflect the TOTAL in the DB, not just the nodes/edges inserted in this run.
+    const totals = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM nodes WHERE project = ?) AS nodes,
+        (SELECT COUNT(*) FROM edges WHERE project = ?) AS edges
+    `).get(opts.project, opts.project) as { nodes: number; edges: number };
+    // R101/R102/R103/R104: persist crossFileCallsStale in DB + return in IndexResult
+    // R106: with persistent call_sites, incremental mode can now rebuild cross-file
+    // CALLS. If result.crossFileCallsResolved is true, stale=false. If false
+    // (legacy DB without call_sites), preserve existing stale or set to true.
+    // R107: call_sites_initialized is set to true after full reindex, preserved
+    // by incremental. This is the authoritative legacy DB signal.
+    // R126/R127: extractor_semantics_version is set to CURRENT after a full
+    // reindex; preserved by incremental. The centralized `semanticsStale`
+    // (computed before the fast paths) is used here. When stale, the resolver
+    // was skipped (MIG-R127-03), so result.crossFileCallsResolved=false, which
+    // correctly makes crossFileStale=true. No separate version read needed here.
+    // R127: DATA-R127-01 — full mode only certifies CURRENT if no errors.
+    // R146 (STATE-R146-01): Extraction errors MUST force stale=true regardless
+    // of whether the resolver succeeded. R145's logic only set stale when
+    // `crossFileCallsResolved=false`, but the resolver can rebuild edges from
+    // OLD call_sites even when extraction of a changed file failed (the old
+    // nodes are preserved). This meant `crossFileStale=false` + `indexError=null`
+    // → `last_successful_index_at=now` → graph appeared fresh despite extraction
+    // errors. Now: `result.errors.length > 0` forces `crossFileStale=true`
+    // in BOTH full and incremental modes.
+    const fullModeHadErrors = !opts.incremental && result.errors.length > 0;
+    const incrementalHadErrors = opts.incremental && result.errors.length > 0;
+    // R148 (STATE-R148-01): Uncertainty forces stale in incremental mode.
+    // When a file was temporarily absent (ENOENT race), its old data is
+    // preserved (excluded from deletedRelPaths). But the old data may not
+    // match the new file content on disk (the file may have been modified
+    // during the atomic save). The graph must NOT be certified as fresh.
+    // R148: reuse hasUncertainty computed earlier (before clearProjectData).
+    // R156 (TX-R156-01): crossFileStale is now `let` — the catch block can
+    // override it to true if the final commit fails.
+    let crossFileStale = opts.incremental
+      ? semanticsStale || incrementalHadErrors || hasUncertainty
+          ? true
+          : (result.crossFileCallsResolved ?? false)
+            ? false
+            : (existingStale || result.files > 0 || deletedRelPaths.length > 0)
+      : fullModeHadErrors; // R127: full with errors → stale=true (don't trust partial graph)
+    // R107: full reindex sets call_sites_initialized=true; incremental preserves it.
+    // R127: DATA-R127-01 — full mode with errors does NOT set initialized=true.
+    const callSitesInitialized = opts.incremental
+      ? existingInitialized
+      : !fullModeHadErrors;
+    // R126: full reindex sets extractor_semantics_version=CURRENT; incremental
+    // preserves it (so the stale-version gate can fire on the next incremental).
+    // R127: DATA-R127-01 — full mode with errors does NOT certify CURRENT.
+    const semanticsVersion = opts.incremental
+      ? existingSemanticsVersion
+      : (fullModeHadErrors ? 0 : CURRENT_EXTRACTOR_SEMANTICS_VERSION);
+    // R145 (STATE-R145-03): Pass indexError when there were extraction errors
+    // or when stale. R144 always passed null (success), which set
+    // last_successful_index_at=now even on partial/failed extraction.
+    // R146 (STATE-R146-01): incremental extraction errors ALSO set indexError.
+    // R145 only set it when `crossFileStale && (semanticsStale || ...)`, but
+    // crossFileStale is now always true when there are extraction errors.
+    // So: errors → indexError → last_successful NOT updated.
+    let indexError: string | null = null;
+    if (!opts.incremental && fullModeHadErrors) {
+      indexError = result.errors.length > 0
+        ? `Extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`
+        : 'Full index completed with errors';
+    } else if (opts.incremental && incrementalHadErrors) {
+      indexError = `Incremental extraction errors (${result.errors.length}): ${result.errors.slice(0, 5).map(e => e.error).join('; ')}`;
+    } else if (opts.incremental && hasUncertainty) {
+      // R148 (STATE-R148-01): uncertainty → stale, last_success unchanged.
+      indexError = `Source snapshot uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Retry incremental when filesystem is stable.`;
+    } else if (opts.incremental && crossFileStale && semanticsStale) {
+      indexError = `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`;
+    }
+    // R155 (TX-R155-01): Atomic alias state commit. On SUCCESS, combine
+    // alias_history persist + project stats in ONE transaction. If persist
+    // fails, the ENTIRE transaction rolls back — graph stays stale,
+    // history_initialized stays 0, last_successful_index_at NOT advanced.
+    // This closes the R154 TX-R155-01 gap where the graph was marked fresh
+    // BEFORE alias_history persist, and a persist failure left the graph
+    // fresh + initialized=1 but history empty/stale.
+    // On STALE/FAILED, use updateProjectStats alone (no alias_history changes).
+    if (crossFileStale) {
+      updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion, indexError);
+      // R159 (RES-R159-01): removed db.close() — outer finally handles it.
+    } else {
+      const liveAliasPaths = new Set<string>();
+      for (const a of contributiveAliases) liveAliasPaths.add(a.aliasPath);
+      for (const a of discovery.brokenAliases) liveAliasPaths.add(a.aliasPath);
+      try {
+        commitAliasStateAtomically(
+          db, opts.project, effectiveRoot, totals.nodes, totals.edges,
+          callSitesInitialized, semanticsVersion,
+          rootFingerprint, runId, contributiveAliases, liveAliasPaths,
+        );
+      } catch (commitError) {
+        // R157 (TX-R156-01 + OUTCOME-R157-01): The atomic commit failed. The
+        // graph has already been mutated. The pre-marked stale=1 is still in
+        // the DB. R156 pushed the error to result.errors and let computeOutcome
+        // return PARTIAL — which --allow-partial could mask as exit 0. R157
+        // returns FAILED with PERSIST_FAILURE instead. Publication failure must
+        // NEVER be masked.
+        // R158 (OUTCOME-R158-01): add structured `failure` field with phase.
+        // R159 (RES-R159-01): removed the inner `finally { db.close() }` —
+        // the outer finally handles db.close(). This avoids double-close when
+        // the PERSIST_FAILURE return path is taken.
+        const errMsg = `Index publication failed: ${commitError instanceof Error ? commitError.message : String(commitError)}`;
+        try {
+          const now = new Date().toISOString();
+          db.prepare(`
+            UPDATE projects SET
+              cross_file_calls_stale = 1,
+              last_index_attempt_at = ?,
+              last_index_error = ?
+            WHERE name = ?
+          `).run(now, errMsg, opts.project);
+        } catch {
+          // Best-effort — if even this fails, the pre-marked stale=1 remains.
+        }
+        crossFileStale = true;
+        // R157: return FAILED immediately — don't fall through to computeOutcome.
+        return {
+          ...result,
+          dbPath,
+          durationMs: Date.now() - start,
+          languages: result.languages ?? allLangs,
+          parallel: useParallel,
+          workerCount: useParallel ? numWorkers : 0,
+          crossFileCallsStale: true,
+          warnings: discoveryWarnings,
+          outcome: 'FAILED',
+          staleReason: { code: 'PERSIST_FAILURE', message: errMsg, paths: [] },
+          recovery: 'retry_incremental',
+          failure: { code: 'PERSIST_FAILURE', message: errMsg, phase: 'main-commit' },
+        };
+      }
+    }
+
+    // R158 (OBS-R158-03): Unified classifier for main path. Replaces the
+    // hand-rolled staleCode builder. The classifier returns the canonical
+    // {code, message, recovery} tuple or undefined (e.g., for extraction
+    // errors, where the failure is per-file in `errors[]` not a staleReason).
+    const mainClassified = crossFileStale
+      ? classifyStaleReason({
+          semanticsStale,
+          hasEffectiveHistoricalBrokenAliases,
+          coldStartLock,
+          hasUncertainty,
+          existingStale,
+          hasExtractionErrors: Boolean(fullModeHadErrors || incrementalHadErrors),
+          callSitesInitialized,
+        })
+      : undefined;
+
+    return {
+      ...result,
+      dbPath,
+      durationMs: Date.now() - start,
+      languages: result.languages ?? allLangs,
+      parallel: useParallel,
+      workerCount: useParallel ? numWorkers : 0,
+      crossFileCallsStale: crossFileStale,
+      warnings: discoveryWarnings,
+      outcome: computeOutcome(result.errors, crossFileStale, discoveryWarnings, false),
+      // R159 (OUTCOME-R159-02): When the classifier returns undefined (e.g.,
+      // extraction errors), DON'T fall back to PREVIOUSLY_STALE with the
+      // indexError message. R158's fallback mislabeled extraction errors as
+      // PREVIOUSLY_STALE, which recommends full_reindex — wrong when the
+      // cause is per-file extraction errors (the right recovery is
+      // retry_incremental). Now: if classifier returned undefined, staleReason
+      // is undefined. The per-file errors are in result.errors[]; outcome is
+      // PARTIAL/FAILED based on errors.length. Recovery falls back to
+      // 'retry_incremental' when crossFileStale && !mainClassified.
+      staleReason: mainClassified
+        ? { code: mainClassified.code, message: mainClassified.message, paths: [] }
+        : undefined,
+      recovery: mainClassified?.recovery ?? (crossFileStale
+        ? 'retry_incremental'
+        : undefined),
+    };
+  } catch (error) {
+    // R159 (RES-R159-01): outer catch — best-effort persist stale + error.
+    // The premark at line ~857 already set cross_file_calls_stale=1 with
+    // last_index_error='Index publication in progress'. Now overwrite with
+    // the real error message so Graph Status shows the actual failure.
+    const errMsg = `Index failed: ${error instanceof Error ? error.message : String(error)}`;
+    try {
+      const now = new Date().toISOString();
+      db.prepare('UPDATE projects SET cross_file_calls_stale = 1, last_index_attempt_at = ?, last_index_error = ? WHERE name = ?').run(now, errMsg, opts.project);
+    } catch { /* best-effort — DB may be locked or closed */ }
+    return {
+      dbPath,
+      durationMs: Date.now() - start,
+      nodes: 0,
+      edges: 0,
+      files: 0,
+      skipped: 0,
+      errors: [],
+      languages: new Set(),
+      parallel: false,
+      workerCount: 0,
+      crossFileCallsStale: true,
+      outcome: 'FAILED',
+      // R159 (API-R159-01 + RES-R159-01): structured failure with EXTRACTION_CRASH.
+      // The inner catch (PERSIST_FAILURE) handles publication failures; this
+      // outer catch handles everything else — preloadGrammars crash, extraction
+      // crash, deleteTx crash, totals query crash, updateProjectStats crash.
+      failure: { code: 'EXTRACTION_CRASH', message: errMsg, phase: 'main-path' },
+      recovery: 'retry_incremental',
+    };
+  } finally {
+    // R159 (RES-R159-01): guaranteed DB close. This is the ONLY db.close()
+    // for the main path — the inner db.close() calls have been removed.
+    // The no-op and deletion-only fast paths have their own db.close() in
+    // their finally blocks (they return BEFORE this try).
+    try { db.close(); } catch { /* ignore close error */ }
   }
-
-  // R158 (OBS-R158-03): Unified classifier for main path. Replaces the
-  // hand-rolled staleCode builder. The classifier returns the canonical
-  // {code, message, recovery} tuple or undefined (e.g., for extraction
-  // errors, where the failure is per-file in `errors[]` not a staleReason).
-  const mainClassified = crossFileStale
-    ? classifyStaleReason({
-        semanticsStale,
-        hasEffectiveHistoricalBrokenAliases,
-        coldStartLock,
-        hasUncertainty,
-        existingStale,
-        hasExtractionErrors: Boolean(fullModeHadErrors || incrementalHadErrors),
-        callSitesInitialized,
-      })
-    : undefined;
-
-  return {
-    ...result,
-    dbPath,
-    durationMs: Date.now() - start,
-    languages: result.languages ?? allLangs,
-    parallel: useParallel,
-    workerCount: useParallel ? numWorkers : 0,
-    crossFileCallsStale: crossFileStale,
-    warnings: discoveryWarnings,
-    outcome: computeOutcome(result.errors, crossFileStale, discoveryWarnings, false),
-    // R158: classified staleReason/recovery for main path. When the
-    // classifier returns undefined (e.g., extraction errors), we fall back
-    // to the indexError message only when present.
-    staleReason: mainClassified
-      ? { code: mainClassified.code, message: mainClassified.message, paths: [] }
-      : (crossFileStale && indexError !== null
-          ? { code: 'PREVIOUSLY_STALE', message: indexError, paths: [] }
-          : undefined),
-    recovery: mainClassified?.recovery ?? (crossFileStale
-      ? (semanticsStale ? 'full_reindex' : 'retry_incremental')
-      : undefined),
-  };
 }
 
 /**

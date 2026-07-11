@@ -106,6 +106,16 @@ export function registerIndexCommand(program: Command): void {
         if (opts.dryRun && result.errors.length > 0) {
           console.log();
           console.log(`⚠ Dry-run failed. ${result.errors.length} error(s). No DB writes.`);
+          // R159 (CLI-R159-01): display structured `failure` field for dry-run
+          // failures too. R158 only surfaced it in the PARTIAL/FAILED branch;
+          // a dry-run with a missing root printed "Dry-run failed" with no
+          // hint at the underlying DB_ERROR / dry-run-root phase.
+          if (result.failure) {
+            console.log(`  System failure:`);
+            console.log(`    Code: ${result.failure.code}`);
+            console.log(`    Phase: ${result.failure.phase}`);
+            console.log(`    Message: ${result.failure.message}`);
+          }
         } else if (opts.dryRun) {
           console.log();
           console.log(`ℹ Dry-run complete. No DB writes.`);
@@ -125,7 +135,15 @@ export function registerIndexCommand(program: Command): void {
           if (result.staleReason) {
             console.log(`⚠ Project "${project}" graph is stale: ${result.staleReason.message}`);
             if (result.staleReason.paths.length > 0) {
-              console.log(`  Affected paths:`);
+              // R159 (OBS-R159-03): surface truncation info so the user knows
+              // the displayed paths are a sample, not the full list. R158 silently
+              // capped at 100 — a user with 5000 broken symlinks saw "100 paths"
+              // and thought that was the total.
+              if (result.staleReason.pathsTruncated && result.staleReason.totalPaths !== undefined) {
+                console.log(`  Affected paths (showing ${result.staleReason.paths.length} of ${result.staleReason.totalPaths}):`);
+              } else {
+                console.log(`  Affected paths:`);
+              }
               for (const p of result.staleReason.paths.slice(0, 10)) {
                 console.log(`    - ${p}`);
               }
@@ -149,14 +167,42 @@ export function registerIndexCommand(program: Command): void {
         } else if (result.outcome === 'PARTIAL' || result.outcome === 'FAILED') {
           console.log();
           console.log(`⚠ Project "${project}" indexed with ${result.errors.length} error(s).`);
+          // R159 (CLI-R159-01): display structured `failure` field when present.
+          // R158 added the `failure` field on IndexResult but the CLI never
+          // surfaced it — programmatic consumers (MCP, Graph UI) could triage
+          // by phase/code, but humans had to string-match `staleReason.message`
+          // or guess from the exit code. Now the CLI prints code/phase/message
+          // so a human can immediately see "PERSIST_FAILURE at main-commit" or
+          // "EXTRACTION_CRASH at main-path" or "DB_ERROR at discovery-partial".
+          if (result.failure) {
+            console.log(`  System failure:`);
+            console.log(`    Code: ${result.failure.code}`);
+            console.log(`    Phase: ${result.failure.phase}`);
+            console.log(`    Message: ${result.failure.message}`);
+          }
           // R157 (OBS-R157-01): show staleReason for FAILED/PARTIAL too.
           if (result.staleReason) {
             console.log(`  Stale reason: ${result.staleReason.message}`);
+            // R159 (OBS-R159-03): surface truncation info so the user knows
+            // the displayed paths are a sample, not the full list.
+            if (result.staleReason.pathsTruncated && result.staleReason.totalPaths !== undefined) {
+              console.log(`  Affected paths (showing ${result.staleReason.paths.length} of ${result.staleReason.totalPaths}):`);
+            } else if (result.staleReason.paths.length > 0) {
+              console.log(`  Affected paths:`);
+            }
+            for (const p of result.staleReason.paths.slice(0, 10)) {
+              console.log(`    - ${p}`);
+            }
+            if (result.staleReason.paths.length > 10) {
+              console.log(`    ... and ${result.staleReason.paths.length - 10} more`);
+            }
           }
           if (result.crossFileCallsStale) {
             console.log(`⚠ Cross-file CALLS may be stale.`);
             if (result.recovery === 'retry_incremental') {
               console.log(`  Recovery: retry the index.`);
+            } else if (result.recovery === 'fix_filesystem') {
+              console.log(`  Recovery: fix or remove the broken symlinks listed above, then rerun.`);
             } else {
               console.log(`  Run "cbm-v2 index --project ${project} --root ${rootPath}" (full reindex) to rebuild them.`);
             }

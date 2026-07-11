@@ -1,6 +1,6 @@
 # V2 Current State — Codebase Memory V2
 
-> **Authoritative snapshot of the current product state.** Updated R158 (2026-07-11).
+> **Authoritative snapshot of the current product state.** Updated R159 (2026-07-11).
 > For the historical roadmap, see [V2_ROADMAP.md](V2_ROADMAP.md) (archive, 0.15.9 era).
 > For the authoritative version and bug count, see `v2/package.json` and `v2/CHANGELOG.md`.
 
@@ -201,6 +201,117 @@ GitHub ↔ GitLab branch bridge for graph-ui contributions:
   it with `commitAliasStateAtomically` for all success paths. Kept as a
   stable API for external callers (MCP tools).
 
+## R159 — True Orchestrator + Discriminated Result
+
+R159 (round 84) closes the 6 confirmed code findings of the R158 audit. R158
+left two structural gaps: (1) the main path had no outer try/catch/finally,
+so exceptions during `preloadGrammars`/`extractFromFilesWasm`/`indexParallel`/
+`deleteTx`/totals/`updateProjectStats` escaped without a structured failure
+and without a guaranteed DB close; (2) the classifier's priority order
+(`SEMANTICS_MISMATCH` first) created circular recovery when both a filesystem
+blocker AND a semantics mismatch were present.
+
+### True orchestrator: outer try/catch/finally (`indexer.ts`)
+
+- **Outer try/catch/finally around the ENTIRE main path** (`RES-R159-01`):
+  wraps `preloadGrammars` through the final return. The outer catch returns
+  `FAILED` with `failure: { code: 'EXTRACTION_CRASH', phase: 'main-path' }`
+  and best-effort persists `stale=1` + `last_index_error`. The outer
+  `finally` is the ONLY `db.close()` for the main path — the inner
+  `db.close()` calls (in the crossFileStale branch and the PERSIST_FAILURE
+  finally) have been removed. The inner try/catch around
+  `commitAliasStateAtomically` remains (provides specific PERSIST_FAILURE
+  diagnosis). The no-op and deletion-only fast paths return BEFORE the outer
+  try and keep their own `db.close()`.
+
+### Discriminated result: classifier priority + extraction-error handling (`indexer.ts`)
+
+- **Classifier priority reordered** (`OUTCOME-R159-01`): filesystem blockers
+  (`COLD_START_LOCK`, `HISTORICAL_ALIAS_BROKEN`) now come BEFORE
+  `SEMANTICS_MISMATCH`. Rationale: if the filesystem is broken, recommending
+  `full_reindex` is circular — the full will be blocked by the broken alias
+  on the next run. R158 put `SEMANTICS_MISMATCH` first, creating a circular
+  recovery loop. R159 fixes the filesystem FIRST, then does the full reindex.
+  New priority: `COLD_START_LOCK → HISTORICAL_ALIAS_BROKEN →
+  SEMANTICS_MISMATCH → DISCOVERY_UNCERTAIN → PREVIOUSLY_STALE`.
+- **Extraction errors no longer mislabeled as PREVIOUSLY_STALE**
+  (`OUTCOME-R159-02`): R158's main-path `staleReason` builder fell back to
+  `{ code: 'PREVIOUSLY_STALE', message: indexError }` when the classifier
+  returned `undefined` (extraction errors). This recommended `full_reindex`
+  — wrong when the cause is per-file extraction errors (the right recovery
+  is `retry_incremental`). R159: when the classifier returns `undefined`,
+  `staleReason` is `undefined`. The per-file errors are in `result.errors[]`;
+  `outcome` is `PARTIAL` or `FAILED` based on `errors.length`. The `recovery`
+  field falls back to `retry_incremental` when `crossFileStale &&
+  !mainClassified`.
+
+### Discriminated FAILED: structured failure on ALL FAILED paths (`indexer.ts`)
+
+- **Early FAILED paths now carry a `failure` field** (`API-R159-01`): R158
+  only added `failure: { code, message, phase }` to the three
+  publication-failure catch blocks. The early FAILED paths (root-validation,
+  discovery, discovery-partial, dry-run-root, dry-run-discovery) set
+  `outcome: 'FAILED'` but no `failure` field — programmatic consumers
+  couldn't triage by phase/code. R159 adds
+  `failure: { code: 'DB_ERROR', message, phase: '<specific-phase>' }` to
+  each. The full set of phases is now: `dry-run-root`, `dry-run-discovery`,
+  `root-validation`, `discovery`, `discovery-partial` (full + incremental
+  branches), `no-op-commit`, `deletion-only-commit`, `main-commit`
+  (PERSIST_FAILURE), and `main-path` (EXTRACTION_CRASH).
+
+### Observability: cap signal + CLI display (`indexer.ts`, `cli/commands/index.ts`)
+
+- **`staleReason.totalPaths` + `pathsTruncated`** (`OBS-R159-03`): R158
+  capped `paths` at `MAX_STALE_PATHS = 100` but exposed no signal that
+  truncation occurred. A user with 5000 broken symlinks saw "100 paths" and
+  thought that was the total. R159 adds `totalPaths: number` (pre-cap count)
+  and `pathsTruncated: boolean`. Consumers can now display
+  "(showing 100 of 5000)".
+- **CLI displays `result.failure`** (`CLI-R159-01`): R158 added the
+  `failure` field but the CLI never surfaced it. R159 prints
+  `System failure: / Code: / Phase: / Message:` in the PARTIAL/FAILED
+  banner and the dry-run failure banner. The STALE banner also surfaces
+  truncation info: "Affected paths (showing 100 of 150):" when
+  `pathsTruncated` is set.
+
+### Tests
+
+21 new tests in `tests/indexer/r159-true-orchestrator.test.ts`:
+
+- 3 tests for classifier priority (COLD_START_LOCK wins over
+  SEMANTICS_MISMATCH, HISTORICAL_ALIAS_BROKEN wins over SEMANTICS_MISMATCH,
+  SEMANTICS_MISMATCH alone still works).
+- 1 test for extraction-error handling (no staleReason, recovery=
+  retry_incremental) — uses `CBM_TEST_FAIL_ON_FILE` to inject an extraction
+  error.
+- 3 tests for the `failure` field on early FAILED paths (root-validation,
+  dry-run-root, discovery-partial).
+- 2 tests for the outer try/catch/finally (extraction crash → FAILED +
+  EXTRACTION_CRASH + main-path phase; DB still readable after crash).
+- 2 tests for `totalPaths` + `pathsTruncated` (150 aliases → truncated; 50
+  aliases → not truncated).
+- 3 CLI process-spawn tests (missing root → "System failure: Code: DB_ERROR
+  Phase: root-validation"; dry-run missing root → dry-run-root phase; 150
+  aliases → "showing 100 of 150").
+- 6 source-inspection regression guards (classifier priority order, outer
+  try/catch/finally, all FAILED paths carry failure, staleReason type
+  carries totalPaths/pathsTruncated, main-path staleReason builder doesn't
+  fall back to PREVIOUSLY_STALE, CLI prints failure + truncation).
+
+### Known limitations (R159)
+
+- **`failure.code = 'UNKNOWN'` not yet emitted** (carryover): only
+  `PERSIST_FAILURE`, `EXTRACTION_CRASH`, and `DB_ERROR` are emitted today.
+  `UNKNOWN` is reserved for future use.
+- **`classifyStaleReason` is still a private helper** (design choice, R158
+  carryover): not exported. Tested indirectly via
+  `IndexResult.staleReason.code`.
+- **Outer catch loses partial `result` info** (design choice): when
+  `extractFromFilesWasm` partially succeeds then `deleteTx` crashes, the
+  outer catch returns `nodes: 0, edges: 0` instead of the partial result.
+  This is intentional — the catastrophic failure is more important than the
+  partial result, and the premark ensures `stale=1` is in the DB.
+
 ## R158 — Publication Orchestrator + Unified staleReason Classifier
 
 R158 (round 83) closes the residual publication-state and classifier gaps
@@ -385,4 +496,4 @@ See [MAINTAINERS_GUIDE.md](../MAINTAINERS_GUIDE.md) for the full workflow.
 
 ## Validation date
 
-This document was validated at R158 (2026-07-11). Always cross-check with `v2/CHANGELOG.md` for the latest state.
+This document was validated at R159 (2026-07-11). Always cross-check with `v2/CHANGELOG.md` for the latest state.
