@@ -29,6 +29,22 @@ import type { WorkerBatch, WorkerBatchResult } from './worker.js';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
 import { existsSync } from 'node:fs';
 
+/**
+ * R161 (OBS-R161-03): Unified MAX_STALE_PATHS module-level constant.
+ *
+ * R160 had TWO separate `const MAX_STALE_PATHS = 100` declarations — one
+ * inside `classifyStaleReason`'s `cap()` helper, one in the full-uncertainty
+ * return's hand-rolled builder. A future edit could bump one and forget the
+ * other, causing inconsistent truncation between the fast paths (which use
+ * the classifier) and the full-uncertainty return. R161 hoists the constant
+ * to module scope so there is a SINGLE source of truth.
+ *
+ * Used by:
+ *   - `classifyStaleReason`'s `cap()` (no-op, deletion-only, main paths)
+ *   - the `!opts.incremental && hasUncertainty` full-uncertainty return
+ */
+const MAX_STALE_PATHS = 100;
+
 export interface IndexOptions {
   project: string;
   rootPath: string;
@@ -181,6 +197,15 @@ export interface IndexResult {
    * R159 (OBS-R159-03): Added `totalPaths` + `pathsTruncated` so consumers can
    * display "(showing 100 of N)" when the cap kicks in. R158 silently capped
    * at 100 with no signal, hiding the magnitude of filesystem breakage.
+   *
+   * R161 (ROOT-R161-01): Added `ROOT_CHANGED` code. When the current root
+   * fingerprint differs from the published snapshot's root fingerprint, the
+   * incremental mode MUST be refused — the file_hashes and nodes belong to
+   * a different physical root. A root change with preserved metadata (same
+   * relative paths, mtime_ns, size) would otherwise fast-skip all files
+   * and certify the old graph as fresh. ROOT_CHANGED is checked FIRST by
+   * the classifier (before cold-start lock) because it is a hard blocker
+   * that only a full reindex can resolve.
    */
   staleReason?: {
     code:
@@ -189,7 +214,8 @@ export interface IndexResult {
       | 'COLD_START_LOCK'
       | 'SEMANTICS_MISMATCH'
       | 'PREVIOUSLY_STALE'
-      | 'PERSIST_FAILURE';
+      | 'PERSIST_FAILURE'
+      | 'ROOT_CHANGED';
     message: string;
     paths: string[];
     /** R159: total broken paths before capping. Undefined when not applicable. */
@@ -293,14 +319,19 @@ function computeOutcome(
  *
  * Priority order (first match wins):
  *   1. PERSIST_FAILURE — publication commit failed (handled by catch blocks)
- *   2. COLD_START_LOCK — history not initialized, broken aliases present
+ *   2. ROOT_CHANGED — current root fingerprint ≠ published snapshot's
+ *      root fingerprint (hard blocker — full reindex required; checked
+ *      before cold-start lock because a root change makes every other
+ *      diagnosis moot — the user must run a full reindex under the new
+ *      root before any other state can be trusted)
+ *   3. COLD_START_LOCK — history not initialized, broken aliases present
  *      (filesystem blocker — full will be blocked)
- *   3. HISTORICAL_ALIAS_BROKEN — previously-valid alias now broken, target absent
+ *   4. HISTORICAL_ALIAS_BROKEN — previously-valid alias now broken, target absent
  *      (filesystem blocker — full will be blocked)
- *   4. SEMANTICS_MISMATCH — extractor_semantics_version != CURRENT
+ *   5. SEMANTICS_MISMATCH — extractor_semantics_version != CURRENT
  *      (recommends full_reindex — only useful if filesystem is healthy)
- *   5. DISCOVERY_UNCERTAIN — TOCTOU races (uncertainPaths/subtrees)
- *   6. PREVIOUSLY_STALE — project was already stale, no-op didn't refresh
+ *   6. DISCOVERY_UNCERTAIN — TOCTOU races (uncertainPaths/subtrees)
+ *   7. PREVIOUSLY_STALE — project was already stale, no-op didn't refresh
  *
  * R159 (OUTCOME-R159-02): When `hasExtractionErrors=true` AND no other
  * cause matched, returns `undefined`. The errors are in `result.errors`
@@ -317,6 +348,43 @@ function computeOutcome(
  * `uncertainSubtreesList` to the classifier, which returns the
  * appropriate list (capped at MAX_STALE_PATHS=100) based on which
  * condition matched.
+ *
+ * R161 (ROOT-R161-01): New `ROOT_CHANGED` code, checked FIRST (before
+ * cold-start lock). When the current root fingerprint differs from the
+ * published snapshot's root fingerprint, the incremental mode MUST be
+ * refused — the file_hashes and nodes belong to a different physical
+ * root. A root change with preserved metadata (same relative paths,
+ * mtime_ns, size) would otherwise fast-skip all files and certify the
+ * old graph as fresh. ROOT_CHANGED is a hard blocker; recovery is
+ * `full_reindex`. paths is empty (no specific paths to surface) and
+ * totalPaths/pathsTruncated are undefined (not applicable to a
+ * fingerprint mismatch).
+ *
+ * R161 (API-R161-02): The classifier now accepts a SEPARATE
+ * `historicalBrokenAliasPaths` list for `HISTORICAL_ALIAS_BROKEN`. R160
+ * used `brokenAliasPaths` (ALL broken aliases) for both
+ * `HISTORICAL_ALIAS_BROKEN` and `COLD_START_LOCK`. But
+ * `HISTORICAL_ALIAS_BROKEN` should only surface the EFFECTIVE historical
+ * aliases — those whose targets are genuinely absent (after the
+ * visibility filter in indexer.ts). Using ALL broken aliases surfaced
+ * paths unrelated to the actual cause (e.g. a fresh broken alias with
+ * no history entry, or one whose target is still visible via another
+ * path). `COLD_START_LOCK` still uses `brokenAliasPaths` (all broken)
+ * because the cold-start lock fires when ANY broken alias is present and
+ * the history is uninitialized — every broken alias is suspect in that
+ * case.
+ *
+ * R161 (OBS-R161-01): The classifier now returns `totalPaths` +
+ * `pathsTruncated` metadata alongside `paths`. R159 added these fields
+ * only to the hand-rolled full-uncertainty return — the fast paths
+ * (no-op, deletion-only, main) silently omitted them, so consumers
+ * couldn't display "(showing 100 of N)" for staleReasons produced by the
+ * classifier. R161 unifies the contract: every classifier return that
+ * caps paths also carries the metadata (and omits them when paths is
+ * empty or not applicable, e.g. SEMANTICS_MISMATCH, ROOT_CHANGED).
+ *
+ * R161 (OBS-R161-03): MAX_STALE_PATHS is now a module-level constant
+ * (was duplicated inside the classifier and the full-uncertainty builder).
  */
 function classifyStaleReason(params: {
   semanticsStale: boolean;
@@ -326,42 +394,85 @@ function classifyStaleReason(params: {
   existingStale: boolean;
   hasExtractionErrors: boolean;
   callSitesInitialized: boolean;
-  // R160 (OBS-R160-01): path lists for the classifier to surface in
-  // staleReason.paths. brokenAliasPaths is used for COLD_START_LOCK and
-  // HISTORICAL_ALIAS_BROKEN; uncertainPathsList + uncertainSubtreesList
-  // are used for DISCOVERY_UNCERTAIN. The classifier caps the returned
-  // list at MAX_STALE_PATHS = 100.
+  // R161 (ROOT-R161-01): root fingerprint changed — hard blocker, checked
+  // first (before cold-start lock). When true, the classifier returns
+  // ROOT_CHANGED with recovery=full_reindex and empty paths.
+  rootChanged?: boolean;
+  // R160 (OBS-R160-01): brokenAliasPaths is used for COLD_START_LOCK —
+  // every broken alias is suspect when history is uninitialized.
   brokenAliasPaths?: string[];
+  // R161 (API-R161-02): historicalBrokenAliasPaths is used for
+  // HISTORICAL_ALIAS_BROKEN — only the EFFECTIVE historical aliases whose
+  // targets are genuinely absent (after the visibility filter in
+  // indexer.ts). R160 used brokenAliasPaths here, surfacing broken
+  // aliases unrelated to the historical-target protection.
+  historicalBrokenAliasPaths?: string[];
   uncertainPathsList?: string[];
   uncertainSubtreesList?: string[];
-}): { code: NonNullable<NonNullable<IndexResult['staleReason']>['code']>; message: string; recovery: NonNullable<IndexResult['recovery']>; paths: string[] } | undefined {
+}): { code: NonNullable<NonNullable<IndexResult['staleReason']>['code']>; message: string; recovery: NonNullable<IndexResult['recovery']>; paths: string[]; totalPaths?: number; pathsTruncated?: boolean } | undefined {
   const { semanticsStale, hasEffectiveHistoricalBrokenAliases, coldStartLock, hasUncertainty, existingStale, hasExtractionErrors, callSitesInitialized } = params;
-  // R160 (OBS-R160-01): MAX_STALE_PATHS cap, consistent with the
-  // full-uncertainty return's cap.
-  const MAX_STALE_PATHS = 100;
-  const cap = (arr: string[]): string[] => arr.slice(0, MAX_STALE_PATHS);
+  // R161 (OBS-R161-01): cap() returns the capped list AND metadata
+  // (totalPaths + pathsTruncated) so the classifier's callers can surface
+  // "(showing 100 of N)" to the user. R160's cap() returned only the list,
+  // so the fast paths couldn't tell whether truncation occurred.
+  // R161 (OBS-R161-03): MAX_STALE_PATHS is now module-level (was duplicated).
+  function cap(paths: string[]): { paths: string[]; totalPaths: number; pathsTruncated: boolean } {
+    const totalPaths = paths.length;
+    const pathsTruncated = totalPaths > MAX_STALE_PATHS;
+    return {
+      paths: pathsTruncated ? paths.slice(0, MAX_STALE_PATHS) : paths,
+      totalPaths,
+      pathsTruncated,
+    };
+  }
 
-  // R159 (OUTCOME-R159-01): COLD_START_LOCK first — filesystem blocker.
+  // R161 (ROOT-R161-01): ROOT_CHANGED first — hard blocker. The published
+  // graph belongs to a different physical root; fast-skip would otherwise
+  // certify the old graph as fresh. Checked before cold-start lock because
+  // a root change makes every other diagnosis moot — the user must run a
+  // full reindex under the new root before any other state can be trusted.
+  if (params.rootChanged) {
+    return {
+      code: 'ROOT_CHANGED',
+      message: `Root fingerprint changed — the published graph belongs to a different root. Full reindex required.`,
+      recovery: 'full_reindex',
+      paths: [],
+    };
+  }
+  // R159 (OUTCOME-R159-01): COLD_START_LOCK — filesystem blocker.
   // If we recommend full_reindex here, the full will be blocked by the
   // cold-start lock on the next run. Fix the filesystem first.
   if (coldStartLock) {
+    const capped = cap(params.brokenAliasPaths ?? []);
     return {
       code: 'COLD_START_LOCK',
       message: `Cold-start lock: alias_history not yet initialized and broken aliases present. Fix or remove the broken symlinks, then rerun.`,
       recovery: 'fix_filesystem',
       // R160 (OBS-R160-01): surface the broken alias paths.
-      paths: cap(params.brokenAliasPaths ?? []),
+      // R161 (OBS-R161-01): surface totalPaths + pathsTruncated metadata.
+      paths: capped.paths,
+      totalPaths: capped.totalPaths,
+      pathsTruncated: capped.pathsTruncated,
     };
   }
-  // R159 (OUTCOME-R159-01): HISTORICAL_ALIAS_BROKEN second — filesystem blocker.
+  // R159 (OUTCOME-R159-01): HISTORICAL_ALIAS_BROKEN — filesystem blocker.
   // Same rationale: full_reindex would be blocked by the broken alias.
+  // R161 (API-R161-02): use historicalBrokenAliasPaths (only effective
+  // historical aliases whose targets are genuinely absent). R160 used
+  // brokenAliasPaths here, surfacing broken aliases unrelated to the
+  // historical-target protection (e.g. a fresh broken alias with no
+  // history entry, or one whose target is still visible via another path).
+  // Fall back to brokenAliasPaths if historicalBrokenAliasPaths is not
+  // provided (defensive — callers should always pass it).
   if (hasEffectiveHistoricalBrokenAliases) {
+    const capped = cap(params.historicalBrokenAliasPaths ?? params.brokenAliasPaths ?? []);
     return {
       code: 'HISTORICAL_ALIAS_BROKEN',
       message: `Historically-valid alias(es) now broken with target absent. Fix or restore the broken alias targets, then rerun.`,
       recovery: 'fix_filesystem',
-      // R160 (OBS-R160-01): surface the broken alias paths.
-      paths: cap(params.brokenAliasPaths ?? []),
+      paths: capped.paths,
+      totalPaths: capped.totalPaths,
+      pathsTruncated: capped.pathsTruncated,
     };
   }
   // R159 (OUTCOME-R159-01): SEMANTICS_MISMATCH third — only useful if filesystem
@@ -376,12 +487,16 @@ function classifyStaleReason(params: {
     };
   }
   if (hasUncertainty) {
+    const capped = cap([...(params.uncertainPathsList ?? []), ...(params.uncertainSubtreesList ?? [])]);
     return {
       code: 'DISCOVERY_UNCERTAIN',
       message: `Source snapshot uncertain: paths temporarily absent. Retry when filesystem is stable.`,
       recovery: 'retry_incremental',
       // R160 (OBS-R160-01): surface the uncertain paths + subtrees.
-      paths: cap([...(params.uncertainPathsList ?? []), ...(params.uncertainSubtreesList ?? [])]),
+      // R161 (OBS-R161-01): surface totalPaths + pathsTruncated metadata.
+      paths: capped.paths,
+      totalPaths: capped.totalPaths,
+      pathsTruncated: capped.pathsTruncated,
     };
   }
   if (hasExtractionErrors) {
@@ -940,7 +1055,8 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R159 (OBS-R159-03): Also expose `totalPaths` + `pathsTruncated` so
     // consumers can display "(showing 100 of N)". R158's silent cap hid the
     // magnitude of filesystem breakage.
-    const MAX_STALE_PATHS = 100;
+    // R161 (OBS-R161-03): MAX_STALE_PATHS is now the module-level constant
+    // (was a local re-declaration here, duplicating the classifier's local).
     const cappedPaths = brokenPaths.slice(0, MAX_STALE_PATHS);
     const pathsTruncated = brokenPaths.length > MAX_STALE_PATHS;
     return {
@@ -973,16 +1089,46 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // premark sets cross_file_calls_stale=1 via UPSERT; if this read ran after
   // it, existingStale would always be true (from the premark), breaking the
   // no-op and deletion-only fast paths which rely on the TRUE pre-premark state.
+  //
+  // R161 (ROOT-R161-01): ALSO read root_fingerprint from the projects table.
+  // The current root fingerprint (computed at line ~775 from canonicalRoot)
+  // is compared with the published snapshot's root fingerprint. If they
+  // differ, incremental mode MUST be refused — the file_hashes and nodes
+  // belong to a different physical root. A root change with preserved
+  // metadata (same relative paths, mtime_ns, size) would otherwise fast-skip
+  // all files and certify the old graph as fresh. R160's projectState only
+  // read stale/initialized/version; the root fingerprint comparison was
+  // missing entirely.
   const projectState = opts.incremental
     ? (db.prepare(
-        'SELECT cross_file_calls_stale AS stale, call_sites_initialized AS initialized, extractor_semantics_version AS version FROM projects WHERE name = ?'
-      ).get(opts.project) as { stale?: number; initialized?: number; version?: number } | undefined)
+        'SELECT cross_file_calls_stale AS stale, call_sites_initialized AS initialized, extractor_semantics_version AS version, root_fingerprint AS rootFingerprint FROM projects WHERE name = ?'
+      ).get(opts.project) as { stale?: number; initialized?: number; version?: number; rootFingerprint?: string | null } | undefined)
     : undefined;
   const existingStale = projectState?.stale === 1;
   const existingInitialized = projectState?.initialized === 1;
   const existingSemanticsVersion = projectState?.version ?? 0;
+  // R161 (ROOT-R161-01): Root snapshot identity lock.
+  // Compare the current root fingerprint with the published snapshot's root
+  // fingerprint. If they differ, incremental mode MUST be refused — the
+  // file_hashes and nodes belong to a different physical root. A root change
+  // with preserved metadata (same relative paths, mtime_ns, size) would
+  // otherwise fast-skip all files and certify the old graph as fresh.
+  // NULL rootFingerprint (pre-R154 DB, or first incremental after upgrade)
+  // is treated as "no published snapshot to compare against" → rootChanged
+  // is false (preserves R154 cold-start behavior for legacy DBs).
+  const publishedRootFingerprint = projectState?.rootFingerprint ?? null;
+  const rootChanged = opts.incremental && publishedRootFingerprint !== null && publishedRootFingerprint !== rootFingerprint;
+  // R161 (ROOT-R161-01): when rootChanged is true, force semanticsStale=true.
+  // This makes the no-op path's `noOpStale = existingStale || semanticsStale
+  // || hasUncertainty` true, the deletion-only path's `crossFileStale` true,
+  // and the main path's `crossFileStale` true — preventing
+  // commitAliasStateAtomically from being called (the success commit would
+  // otherwise overwrite the old graph's root_fingerprint with the new root,
+  // silently rebinding the graph). The classifier surfaces ROOT_CHANGED as
+  // the staleReason (checked first, before cold-start lock), so consumers
+  // see "Root fingerprint changed" + recovery=full_reindex.
   const semanticsStale = opts.incremental
-    ? existingSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION
+    ? (rootChanged || existingSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION)
     : false;
 
   // R157 (DATA-R157-01 + STATE-R157-03): Premark stale BEFORE clearProjectData
@@ -1269,6 +1415,13 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R160 (OBS-R160-01): pass brokenAliasPaths + uncertainPathsList +
     // uncertainSubtreesList so the classifier can surface affected paths
     // in staleReason.paths (was `paths: []` in R159, hiding the aliases).
+    // R161 (ROOT-R161-01): pass rootChanged so the classifier can surface
+    // ROOT_CHANGED (checked first) when the published snapshot's root
+    // fingerprint differs from the current root fingerprint.
+    // R161 (API-R161-02): pass historicalBrokenAliasPaths (only effective
+    // historical aliases whose targets are genuinely absent) for
+    // HISTORICAL_ALIAS_BROKEN. R160 used brokenAliasPaths here, surfacing
+    // unrelated broken-alias paths.
     const noOpClassified = noOpStale
       ? classifyStaleReason({
           semanticsStale,
@@ -1278,7 +1431,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           existingStale,
           hasExtractionErrors: false,
           callSitesInitialized: existingInitialized,
+          rootChanged,
           brokenAliasPaths: discovery.brokenAliases.map(a => a.aliasPath),
+          historicalBrokenAliasPaths: effectiveHistoricalBrokenAliases.map(a => a.aliasPath),
           uncertainPathsList: discovery.uncertainPaths,
           uncertainSubtreesList: discovery.uncertainSubtrees,
         })
@@ -1299,8 +1454,17 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       outcome: computeOutcome([], noOpStale, discoveryWarnings, false),
       // R158: classified staleReason/recovery for no-op stale path.
       // R160 (OBS-R160-01): use the classifier's returned paths (was `paths: []`).
+      // R161 (OBS-R161-01): pass through totalPaths/pathsTruncated so
+      // consumers can display "(showing 100 of N)" for fast-path staleReasons
+      // (was only set on the hand-rolled full-uncertainty return in R159).
       staleReason: noOpClassified
-        ? { code: noOpClassified.code, message: noOpClassified.message, paths: noOpClassified.paths }
+        ? {
+            code: noOpClassified.code,
+            message: noOpClassified.message,
+            paths: noOpClassified.paths,
+            totalPaths: noOpClassified.totalPaths,
+            pathsTruncated: noOpClassified.pathsTruncated,
+          }
         : undefined,
       recovery: noOpClassified?.recovery,
     };
@@ -1477,6 +1641,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R160 (OBS-R160-01): pass brokenAliasPaths + uncertainPathsList +
     // uncertainSubtreesList so the classifier can surface affected paths
     // in staleReason.paths (was `paths: []` in R159).
+    // R161 (ROOT-R161-01): pass rootChanged so the classifier can surface
+    // ROOT_CHANGED (checked first) when the published snapshot's root
+    // fingerprint differs from the current root fingerprint.
+    // R161 (API-R161-02): pass historicalBrokenAliasPaths (only effective
+    // historical aliases whose targets are genuinely absent) for
+    // HISTORICAL_ALIAS_BROKEN.
     const deletionClassified = crossFileStale
       ? classifyStaleReason({
           semanticsStale,
@@ -1486,7 +1656,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           existingStale,
           hasExtractionErrors: false,
           callSitesInitialized,
+          rootChanged,
           brokenAliasPaths: discovery.brokenAliases.map(a => a.aliasPath),
+          historicalBrokenAliasPaths: effectiveHistoricalBrokenAliases.map(a => a.aliasPath),
           uncertainPathsList: discovery.uncertainPaths,
           uncertainSubtreesList: discovery.uncertainSubtrees,
         })
@@ -1507,8 +1679,16 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       outcome: computeOutcome([], crossFileStale, discoveryWarnings, false),
       // R158: classified staleReason/recovery for deletion-only stale path.
       // R160 (OBS-R160-01): use the classifier's returned paths (was `paths: []`).
+      // R161 (OBS-R161-01): pass through totalPaths/pathsTruncated so
+      // consumers can display "(showing 100 of N)" for fast-path staleReasons.
       staleReason: deletionClassified
-        ? { code: deletionClassified.code, message: deletionClassified.message, paths: deletionClassified.paths }
+        ? {
+            code: deletionClassified.code,
+            message: deletionClassified.message,
+            paths: deletionClassified.paths,
+            totalPaths: deletionClassified.totalPaths,
+            pathsTruncated: deletionClassified.pathsTruncated,
+          }
         : undefined,
       recovery: deletionClassified?.recovery,
     };
@@ -1763,6 +1943,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R160 (OBS-R160-01): pass brokenAliasPaths + uncertainPathsList +
     // uncertainSubtreesList so the classifier can surface affected paths
     // in staleReason.paths (was `paths: []` in R159).
+    // R161 (ROOT-R161-01): pass rootChanged so the classifier can surface
+    // ROOT_CHANGED (checked first) when the published snapshot's root
+    // fingerprint differs from the current root fingerprint.
+    // R161 (API-R161-02): pass historicalBrokenAliasPaths (only effective
+    // historical aliases whose targets are genuinely absent) for
+    // HISTORICAL_ALIAS_BROKEN.
     const mainClassified = crossFileStale
       ? classifyStaleReason({
           semanticsStale,
@@ -1772,7 +1958,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           existingStale,
           hasExtractionErrors: Boolean(fullModeHadErrors || incrementalHadErrors),
           callSitesInitialized,
+          rootChanged,
           brokenAliasPaths: discovery.brokenAliases.map(a => a.aliasPath),
+          historicalBrokenAliasPaths: effectiveHistoricalBrokenAliases.map(a => a.aliasPath),
           uncertainPathsList: discovery.uncertainPaths,
           uncertainSubtreesList: discovery.uncertainSubtrees,
         })
@@ -1798,8 +1986,16 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       // PARTIAL/FAILED based on errors.length. Recovery falls back to
       // 'retry_incremental' when crossFileStale && !mainClassified.
       // R160 (OBS-R160-01): use the classifier's returned paths (was `paths: []`).
+      // R161 (OBS-R161-01): pass through totalPaths/pathsTruncated so
+      // consumers can display "(showing 100 of N)" for fast-path staleReasons.
       staleReason: mainClassified
-        ? { code: mainClassified.code, message: mainClassified.message, paths: mainClassified.paths }
+        ? {
+            code: mainClassified.code,
+            message: mainClassified.message,
+            paths: mainClassified.paths,
+            totalPaths: mainClassified.totalPaths,
+            pathsTruncated: mainClassified.pathsTruncated,
+          }
         : undefined,
       recovery: mainClassified?.recovery ?? (crossFileStale
         ? 'retry_incremental'
