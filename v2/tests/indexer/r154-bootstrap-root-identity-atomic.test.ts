@@ -90,7 +90,21 @@ describe('R154: Bootstrap + Root Identity + Atomic State', () => {
     expect(row.fp).toContain(projectDir);
   });
 
-  it('ALIAS-R154-01b: same project name + different root → fresh history (no cross-root matching)', async () => {
+  it('ALIAS-R154-01b (R161 override): same project name + different root → ROOT_CHANGED stale (was: fresh history, no cross-root matching)', async () => {
+    // R154's contract: alias_history is namespaced by root_fingerprint so
+    // projectDir-B's broken alias does NOT match projectDir-A's history.
+    // R154 verified this by running an incremental from projectDir-B and
+    // asserting crossFileCallsStale=false (no protection needed → no stale).
+    //
+    // R161 (ROOT-R161-01): incremental from a different root is now refused
+    // — the published snapshot's root fingerprint ≠ the current root
+    // fingerprint. crossFileCallsStale is true and staleReason is
+    // ROOT_CHANGED. The R154 namespacing contract is still preserved (the
+    // alias_history doesn't match — see the ALIAS-R154-01c test below for
+    // the namespacing assertion on a fresh history lookup), but R161 adds
+    // a NEW invariant on top: the user must run a full reindex under the
+    // new root before the graph can be certified fresh.
+    //
     // Run 1: index projectDir-A with an alias.
     writeFileSync(join(projectDir, 'real.ts'), 'export function real() { return 1; }\n');
     symlinkSync(join(projectDir, 'real.ts'), join(projectDir, 'alias.ts'));
@@ -104,12 +118,51 @@ describe('R154: Bootstrap + Root Identity + Atomic State', () => {
     symlinkSync('/nonexistent', join(projectDirB, 'alias.ts'));
 
     // Run 2: index projectDirB with the SAME project name. The alias_history
-    // from projectDir-A must NOT match (different root_fingerprint).
+    // from projectDir-A must NOT match (different root_fingerprint). But R161
+    // also refuses the incremental because the root changed.
     const r = await indexProjectWasm({ project: projectName, rootPath: projectDirB, incremental: true, useWasm: true, workers: 0 });
-    // R154: the broken alias in projectDirB has no matching history (different root),
-    // so no protection needed. The index should succeed without stale.
+    // R154: no errors (the broken alias in projectDirB doesn't trigger
+    // historical-target protection — different root_fingerprint, no history).
     expect(r.errors.length).toBe(0);
+    // R161 (ROOT-R161-01): crossFileCallsStale=true (was false in R154-R160).
+    expect(r.crossFileCallsStale).toBe(true);
+    // R161 (ROOT-R161-01): staleReason is ROOT_CHANGED.
+    expect(r.staleReason).toBeDefined();
+    expect(r.staleReason!.code).toBe('ROOT_CHANGED');
+    expect(r.recovery).toBe('full_reindex');
+  });
+
+  it('ALIAS-R154-01b-full: FULL reindex from different root → SUCCESS + fresh history (no cross-root matching)', async () => {
+    // Companion to ALIAS-R154-01b: this test verifies the R154 namespacing
+    // contract using a FULL reindex (which R161 allows even when the root
+    // changed). The full reindex clears the old graph and publishes a fresh
+    // one under the new root_fingerprint. The broken alias in projectDirB
+    // has no matching history (different root_fingerprint), so it's a
+    // warning only — no stale, no historical-target protection.
+    writeFileSync(join(projectDir, 'real.ts'), 'export function real() { return 1; }\n');
+    symlinkSync(join(projectDir, 'real.ts'), join(projectDir, 'alias.ts'));
+    await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
+
+    const projectDirB = join(tmpDir, 'projectB-full');
+    mkdirSync(projectDirB, { recursive: true });
+    writeFileSync(join(projectDirB, 'other.ts'), 'export function other() { return 2; }\n');
+    symlinkSync('/nonexistent', join(projectDirB, 'alias.ts'));
+
+    // Run 2: FULL reindex from projectDirB. R161's rootChanged check only
+    // applies to incremental mode; full mode is unaffected.
+    const r = await indexProjectWasm({ project: projectName, rootPath: projectDirB, incremental: false, useWasm: true, workers: 0 });
+    expect(r.errors.length).toBe(0);
+    // R154: the broken alias in projectDirB has no matching history (different
+    // root_fingerprint), so no historical-target protection. The index
+    // succeeds with warnings (the broken alias is a warning, not a blocker).
     expect(r.crossFileCallsStale).toBe(false);
+    // R154: the new root_fingerprint is now persisted.
+    const dbPath = defaultCodeDbPath(projectName);
+    const db = new Database(dbPath, { readonly: true });
+    const fp = computeRootFingerprint(projectDirB);
+    const row = db.prepare('SELECT root_fingerprint AS rfp FROM projects WHERE name = ?').get(projectName) as { rfp: string };
+    db.close();
+    expect(row.rfp).toBe(fp);
   });
 
   // ── ALIAS-R154-02: Contribution filter ───────────────────────────────

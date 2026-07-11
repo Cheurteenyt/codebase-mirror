@@ -1,5 +1,171 @@
 # Changelog — Codebase Memory V2
 
+## 0.66.0 — Round 161 (2026-07-11) Root Snapshot Identity Lock
+
+**86th round (GPT 5.6 Sol audit R160).** 4 P1/P2 fixed.
+Closes the 4 confirmed code findings of the R160 audit.
+
+### Root snapshot identity lock (1 P1 CRITICAL)
+
+247. **P1 ROOT-R161-01 Incremental doesn't compare current root fingerprint
+     with published snapshot's root fingerprint** (`indexer.ts`) — R160's
+     `projectState` query only read `stale`/`initialized`/`version`. The
+     root fingerprint (already computed at line ~775 for alias_history
+     scoping) was never compared with the published snapshot's
+     `root_fingerprint` column. A root change with preserved metadata
+     (same relative paths, mtime_ns, size — e.g. `mv project project-moved`
+     followed by an incremental) would fast-skip all files via the
+     mtime_ns/size hash check, the no-op path would return SUCCESS, and
+     `commitAliasStateAtomically` would overwrite the old graph's
+     `root_fingerprint` with the new root's fingerprint — silently
+     rebinding the graph to a different physical root. The user would see
+     "indexed successfully" while the nodes/edges still belonged to the
+     old root. Fixed:
+     - `projectState` query now reads `root_fingerprint AS rootFingerprint`
+       alongside `stale`/`initialized`/`version`.
+     - New `rootChanged = opts.incremental && publishedRootFingerprint !== null
+       && publishedRootFingerprint !== rootFingerprint` check.
+     - When `rootChanged` is true, `semanticsStale` is forced to true. This
+       makes `noOpStale = existingStale || semanticsStale || hasUncertainty`
+       true in the no-op path, `crossFileStale = semanticsStale ||
+       hasUncertainty ? true : ...` true in the deletion-only path, and
+       `crossFileStale = semanticsStale || ... ? true : ...` true in the
+       main path — preventing `commitAliasStateAtomically` from being
+       called (the success commit would otherwise overwrite the old
+       `root_fingerprint`).
+     - New `ROOT_CHANGED` code added to the `staleReason.code` union. The
+       classifier checks `rootChanged` FIRST (before cold-start lock) —
+       a root change makes every other diagnosis moot. The user must run
+       a full reindex under the new root before any other state can be
+       trusted.
+     - `recovery: 'full_reindex'` (the only safe recovery — the graph
+       belongs to a different physical root).
+     - `paths: []`, `totalPaths: undefined`, `pathsTruncated: undefined`
+       (no specific paths to surface for a fingerprint mismatch).
+     - NULL `root_fingerprint` (pre-R154 DB) is treated as "no published
+       snapshot to compare against" → `rootChanged=false`, preserving the
+       R154 cold-start behavior for legacy DBs.
+     - Full mode is unaffected (rootChanged requires `opts.incremental`).
+       A full reindex from a new root clears the old graph and publishes
+       a fresh one under the new `root_fingerprint` — exactly the
+       recovery the staleReason recommends.
+
+### Historical alias path precision (1 P1/P2)
+
+248. **P1/P2 API-R161-02 HISTORICAL_ALIAS_BROKEN surfaced ALL broken
+     aliases, not just effective historical** (`indexer.ts`) — R160's
+     classifier accepted a single `brokenAliasPaths` param used for both
+     `COLD_START_LOCK` and `HISTORICAL_ALIAS_BROKEN`. But the two cases
+     have different semantics:
+     - `COLD_START_LOCK` fires when ANY broken alias is present and
+       `alias_history` is uninitialized — every broken alias is suspect,
+       so `brokenAliasPaths` (all broken) is correct.
+     - `HISTORICAL_ALIAS_BROKEN` fires only for previously-valid aliases
+       whose targets are genuinely absent (after the R154 visibility
+       filter). Surfacing ALL broken aliases here misled users — they'd
+       see a fresh broken alias with no history entry, or one whose
+       target is still visible via another path, listed as the cause of
+       the stale. Fixed: classifier now accepts a separate
+       `historicalBrokenAliasPaths` param. `HISTORICAL_ALIAS_BROKEN`
+       uses `historicalBrokenAliasPaths` (only
+       `effectiveHistoricalBrokenAliases.map(a => a.aliasPath)`).
+       `COLD_START_LOCK` still uses `brokenAliasPaths` (all broken). All
+       three callers (no-op, deletion-only, main) now pass BOTH lists.
+
+### Fast-path totalPaths/pathsTruncated (1 P2)
+
+249. **P2 OBS-R161-01 Fast paths didn't expose totalPaths/pathsTruncated**
+     (`indexer.ts`) — R159 added `totalPaths` + `pathsTruncated` to the
+     `staleReason` type but only the hand-rolled full-uncertainty return
+     set them. The classifier (used by the no-op, deletion-only, and
+     main paths) silently omitted them, so consumers couldn't display
+     "(showing 100 of N)" for fast-path staleReasons — a repo with 5000
+     broken symlinks would show "100 paths" with no signal that 4900
+     more existed. Fixed:
+     - Classifier's `cap()` helper now returns
+       `{ paths, totalPaths, pathsTruncated }` instead of just `paths`.
+     - Classifier return type now includes `totalPaths?: number` +
+       `pathsTruncated?: boolean`.
+     - All three callers pass through `totalPaths`/`pathsTruncated` to
+       the `staleReason` field.
+     - For codes that don't surface paths (`SEMANTICS_MISMATCH`,
+       `PREVIOUSLY_STALE`, `ROOT_CHANGED`), `totalPaths`/`pathsTruncated`
+       are undefined (omitted from the field).
+
+### Unified MAX_STALE_PATHS (1 P2)
+
+250. **P2 OBS-R161-03 Two separate MAX_STALE_PATHS constants**
+     (`indexer.ts`) — R160 had `const MAX_STALE_PATHS = 100` declared
+     twice: once inside `classifyStaleReason`'s `cap()` helper (used by
+     the no-op, deletion-only, and main paths), once inside the
+     full-uncertainty builder. A future edit could bump one and forget
+     the other, causing inconsistent truncation between the fast paths
+     and the full-uncertainty return. Fixed: hoisted to a single
+     module-level `const MAX_STALE_PATHS = 100;` (with documentation
+     explaining both call sites). The classifier's `cap()` and the
+     full-uncertainty builder both reference the module-level constant.
+
+### Tests
+
+- `v2/tests/indexer/r161-root-snapshot-identity.test.ts` (new): 21 tests.
+  - 7 ROOT-R161-01 tests (no-op refusal, main-path refusal, deletion-only
+    refusal, full-mode success, same-root no-op, NULL root_fingerprint
+    cold-start preservation, rootChanged precedence over cold-start lock).
+  - 2 API-R161-02 tests (HISTORICAL_ALIAS_BROKEN paths only include
+    effective historical; visibility-filtered aliases excluded).
+  - 3 OBS-R161-01 tests (no-op single alias → totalPaths/pathsTruncated
+    present; 150 aliases → truncated; ROOT_CHANGED → empty paths +
+    undefined metadata).
+  - 9 source-inspection regression guards (projectState query reads
+    root_fingerprint; rootChanged computed; semanticsStale forced;
+    ROOT_CHANGED in code union; classifier checks rootChanged first;
+    historicalBrokenAliasPaths param + usage; MAX_STALE_PATHS module-level;
+    cap() returns metadata; classifier return type includes metadata;
+    package.json version).
+- `v2/tests/indexer/r154-bootstrap-root-identity-atomic.test.ts`:
+  updated ALIAS-R154-01b (incremental from different root now → ROOT_CHANGED
+  stale instead of SUCCESS); added ALIAS-R154-01b-full (full reindex from
+  different root → SUCCESS, preserves R154 namespacing contract).
+- `v2/tests/indexer/r158-publication-orchestrator-classifier.test.ts`:
+  updated ROOT-R158-01b (deletion-only path with root change now →
+  ROOT_CHANGED stale instead of deletion-only success).
+- `v2/tests/indexer/r159-true-orchestrator.test.ts`: updated main-path
+  staleReason builder regression guard (multiline format with
+  totalPaths/pathsTruncated passthrough).
+- `v2/tests/indexer/r160-full-orchestrator-failure-taxonomy.test.ts`:
+  updated classifyStaleReason regression guard (new return type,
+  `capped.paths` instead of `cap(...)`, historicalBrokenAliasPaths +
+  rootChanged params, totalPaths/pathsTruncated passthrough); added
+  ROOT_CHANGED + MAX_STALE_PATHS regression guards; updated package.json
+  version guard to 0.66.0.
+
+### Validation
+
+- `cd v2 && npx tsc -p tsconfig.json --noEmit` — PASS (0 errors)
+- `cd v2 && npm run build` — PASS (0 errors, dist/ regenerated)
+- `cd v2 && npx vitest run` — PASS (92 files, 906 tests, 0 regressions)
+- `cd v2 && npx vitest run tests/indexer/` — PASS (59 files, 543 tests; +1 file +24 tests vs R160's 58/519)
+
+### Total bugs fixed across all rounds: 250 + 11 optimizations + 543 indexer tests across 86 rounds
+
+### Known carryovers (open)
+
+- `failure.code = 'RESOLVER_ERROR' | 'UNKNOWN'` not yet emitted (declared
+  in R160 taxonomy, still not emitted).
+- `classifyStaleReason` is still a private helper (design choice; tested
+  indirectly via IndexResult.staleReason.code).
+- Full-uncertainty return is hand-rolled (design choice). The
+  `!opts.incremental && hasUncertainty` return at the top of the main
+  path uses a hand-rolled staleCode builder (not `classifyStaleReason`)
+  because it needs `totalPaths` + `pathsTruncated` fields. R161 added
+  these to the classifier's return type, so a future round could unify
+  them — but the full-uncertainty return also constructs a different
+  message (with broken-alias counts) and a different recovery mapping,
+  so the unification is not straightforward.
+- Outer catch loses partial `result` info when extraction partially
+  succeeds then deleteTx crashes (intentional — catastrophic failure
+  takes priority; premark ensures stale=1 in DB).
+
 ## 0.65.0 — Round 160 (2026-07-11) Full Orchestrator Failure Taxonomy
 
 **85th round (GPT 5.6 Sol audit R159).** 8 P1/P2 fixed.

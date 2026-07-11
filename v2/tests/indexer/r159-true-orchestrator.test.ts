@@ -528,7 +528,12 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
     expect(src).not.toContain("crossFileStale && indexError !== null");
     // R160 (OBS-R160-01): the main-path return uses the cleaner builder, and
     // now uses `paths: mainClassified.paths` (was `paths: []` in R159).
-    expect(src).toContain('staleReason: mainClassified\n        ? { code: mainClassified.code, message: mainClassified.message, paths: mainClassified.paths }\n        : undefined,');
+    // R161 (OBS-R161-01): the builder now also passes through totalPaths +
+    // pathsTruncated (multiline). The single-line form was replaced.
+    expect(src).toContain('staleReason: mainClassified');
+    expect(src).toContain('paths: mainClassified.paths,');
+    expect(src).toContain('totalPaths: mainClassified.totalPaths,');
+    expect(src).toContain('pathsTruncated: mainClassified.pathsTruncated,');
   });
 
   it('regression: CLI prints System failure / Code / Phase / Message', () => {

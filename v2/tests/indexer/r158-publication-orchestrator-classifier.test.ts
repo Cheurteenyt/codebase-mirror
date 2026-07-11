@@ -248,25 +248,52 @@ describe('R158: Publication Orchestrator + Unified Classifier', () => {
     expect(row.rp).not.toBe(projectDir);
   });
 
-  it('ROOT-R158-01b: premark UPSERT also updates root_path on the deletion-only path', async () => {
+  it('ROOT-R158-01b (R161 override): incremental from new root + deletion → ROOT_CHANGED stale (was deletion-only success)', async () => {
+    // R158 originally asserted that the deletion-only premark UPSERT updated
+    // root_path to the new path (the project was moved to a new physical
+    // root and an incremental re-index with a deletion hit the deletion-only
+    // fast path, which then committed fresh). R160 (STATE-R160-02) removed
+    // `root_path = excluded.root_path` from the premark, but the deletion-only
+    // success path still calls `commitAliasStateAtomically`, which DOES
+    // update root_path on success — so the test kept passing through R160.
+    //
+    // R161 (ROOT-R161-01): the project is now physically at a different
+    // root (different root_fingerprint). The published snapshot's root
+    // fingerprint ≠ the current root fingerprint. Incremental mode MUST be
+    // refused — the file_hashes and nodes belong to a different physical
+    // root. A root change with preserved metadata (same relative paths,
+    // mtime_ns, size) would otherwise fast-skip all files and certify the
+    // old graph as fresh. So:
+    //   - crossFileCallsStale = true (was false)
+    //   - staleReason.code = 'ROOT_CHANGED'
+    //   - recovery = 'full_reindex'
+    //   - the user must run a full reindex under the new root
+    //
     // Run 1: index from projectDir with two files.
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     writeFileSync(join(projectDir, 'b.ts'), 'export function b() { return 1; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
-    // Move to a new root.
+    // Move to a new root (different physical root → different root_fingerprint).
     const newProjectDir = join(tmpDir, 'project-moved2');
     renameSync(projectDir, newProjectDir);
     // Delete b.ts so the next run hits the deletion-only fast path.
     unlinkSync(join(newProjectDir, 'b.ts'));
-    // Run 2: incremental from new root + deletion → deletion-only path.
+    // Run 2: incremental from new root + deletion → deletion-only path,
+    // but R161 refuses to publish fresh because the root fingerprint changed.
     const r = await indexProjectWasm({ project: projectName, rootPath: newProjectDir, incremental: true, useWasm: true, workers: 0 });
-    expect(r.crossFileCallsStale).toBe(false);
-    const dbPath = defaultCodeDbPath(projectName);
-    const db = new Database(dbPath, { readonly: true });
-    const row = db.prepare('SELECT root_path AS rp FROM projects WHERE name = ?').get(projectName) as { rp: string };
-    db.close();
-    // R158: root_path is updated by the deletion-only premark UPSERT too.
-    expect(row.rp).toBe(newProjectDir);
+    // R161 (ROOT-R161-01): crossFileCallsStale = true (was false in R158/R160).
+    expect(r.crossFileCallsStale).toBe(true);
+    // R161 (ROOT-R161-01): staleReason is ROOT_CHANGED with full_reindex recovery.
+    expect(r.staleReason).toBeDefined();
+    expect(r.staleReason!.code).toBe('ROOT_CHANGED');
+    expect(r.recovery).toBe('full_reindex');
+    // R161 (ROOT-R161-01): the graph is NOT certified fresh, so
+    // commitAliasStateAtomically is NOT called. updateProjectStats updates
+    // root_path to the new attempted root path (the premark + updateProjectStats
+    // both write root_path via INSERT/UPDATE), but cross_file_calls_stale=1
+    // remains so the next run still sees the project as stale until a full
+    // reindex succeeds. (The graph nodes/edges are preserved from the old
+    // root because the deletion-only cleanup transaction still ran.)
   });
 
   // ── Regression: IndexResult type carries `failure?` field ────────────

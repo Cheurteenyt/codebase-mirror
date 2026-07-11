@@ -651,11 +651,20 @@ describe('R160: Full Orchestrator Failure Taxonomy', () => {
     expect(src).toContain('brokenAliasPaths?: string[];');
     expect(src).toContain('uncertainPathsList?: string[];');
     expect(src).toContain('uncertainSubtreesList?: string[];');
-    // R160 (OBS-R160-01): the classifier returns paths (in the return type).
-    expect(src).toContain('paths: string[] } | undefined');
-    // R160 (OBS-R160-01): the classifier uses the params in the return values.
-    expect(src).toContain('paths: cap(params.brokenAliasPaths ?? [])');
-    expect(src).toContain('paths: cap([...(params.uncertainPathsList ?? []), ...(params.uncertainSubtreesList ?? [])])');
+    // R161 (API-R161-02): the classifier accepts historicalBrokenAliasPaths.
+    expect(src).toContain('historicalBrokenAliasPaths?: string[];');
+    // R161 (ROOT-R161-01): the classifier accepts rootChanged.
+    expect(src).toContain('rootChanged?: boolean;');
+    // R160 (OBS-R160-01) + R161 (OBS-R161-01): the classifier returns paths
+    // AND totalPaths/pathsTruncated metadata (in the return type).
+    // R161 changed the return type to include totalPaths + pathsTruncated.
+    expect(src).toContain('paths: string[]; totalPaths?: number; pathsTruncated?: boolean } | undefined');
+    // R161 (OBS-R161-01): the classifier uses the new cap() that returns
+    // { paths, totalPaths, pathsTruncated }. The classifier unpacks via
+    // `const capped = cap(...)` and uses `paths: capped.paths`.
+    expect(src).toContain('const capped = cap(params.brokenAliasPaths ?? [])');
+    expect(src).toContain('paths: capped.paths,');
+    expect(src).toContain('const capped = cap([...(params.uncertainPathsList ?? []), ...(params.uncertainSubtreesList ?? [])])');
     // R160 (OBS-R160-01): all three callers pass the path lists. Verify each
     // caller's classifyStaleReason call contains the path params.
     // No-op path call site.
@@ -663,17 +672,51 @@ describe('R160: Full Orchestrator Failure Taxonomy', () => {
     expect(src).toContain('brokenAliasPaths: discovery.brokenAliases.map(a => a.aliasPath)');
     expect(src).toContain('uncertainPathsList: discovery.uncertainPaths');
     expect(src).toContain('uncertainSubtreesList: discovery.uncertainSubtrees');
+    // R161 (API-R161-02): all three callers also pass historicalBrokenAliasPaths.
+    expect(src).toContain('historicalBrokenAliasPaths: effectiveHistoricalBrokenAliases.map(a => a.aliasPath)');
+    // R161 (ROOT-R161-01): all three callers pass rootChanged.
+    expect(src).toContain('rootChanged,');
     // R160 (OBS-R160-01): all three callers use the returned paths in
     // staleReason.paths (was `paths: []` in R159). Verify each variable's
     // paths assignment is present in the source.
     expect(src).toContain('paths: noOpClassified.paths');
     expect(src).toContain('paths: deletionClassified.paths');
     expect(src).toContain('paths: mainClassified.paths');
+    // R161 (OBS-R161-01): all three callers also pass through
+    // totalPaths/pathsTruncated to the staleReason field.
+    expect(src).toContain('totalPaths: noOpClassified.totalPaths');
+    expect(src).toContain('pathsTruncated: noOpClassified.pathsTruncated');
+    expect(src).toContain('totalPaths: deletionClassified.totalPaths');
+    expect(src).toContain('pathsTruncated: deletionClassified.pathsTruncated');
+    expect(src).toContain('totalPaths: mainClassified.totalPaths');
+    expect(src).toContain('pathsTruncated: mainClassified.pathsTruncated');
     // R160 (OBS-R160-01): the old `paths: []` hardcoded assignments are
     // gone from the three callers (they're now `<var>.paths`). The full-
     // uncertainty return's `paths: cappedPaths` is still present (that
     // return is hand-rolled and unchanged).
     expect(src).toContain('paths: cappedPaths');
+  });
+
+  it('regression: ROOT_CHANGED code added to staleReason.code union (R161 ROOT-R161-01)', () => {
+    const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
+    // R161 (ROOT-R161-01): the staleReason.code union now includes ROOT_CHANGED.
+    expect(src).toContain("| 'ROOT_CHANGED'");
+    // R161 (ROOT-R161-01): the classifier checks rootChanged FIRST.
+    expect(src).toContain('if (params.rootChanged)');
+    expect(src).toContain("code: 'ROOT_CHANGED'");
+    expect(src).toContain("recovery: 'full_reindex',");
+  });
+
+  it('regression: MAX_STALE_PATHS is a single module-level constant (R161 OBS-R161-03)', () => {
+    const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
+    // R161 (OBS-R161-03): the module-level constant exists.
+    expect(src).toContain('const MAX_STALE_PATHS = 100;');
+    // R161 (OBS-R161-03): the duplicate local declaration inside the
+    // full-uncertainty builder is GONE. The line `    const MAX_STALE_PATHS = 100;`
+    // (4-space indented, inside a function) should no longer appear.
+    // The module-level declaration is at column 0; the local one was indented.
+    const localMatches = src.match(/^ {4,}const MAX_STALE_PATHS = 100;/gm) ?? [];
+    expect(localMatches.length).toBe(0);
   });
 
   it('regression: dry-run partial FAILED attaches failure.DISCOVERY_PARTIAL', () => {
@@ -688,8 +731,8 @@ describe('R160: Full Orchestrator Failure Taxonomy', () => {
     expect(src).toContain("recovery: dryRunOutcome === 'FAILED' ? 'fix_filesystem' : undefined");
   });
 
-  it('regression: package.json version is 0.65.0', () => {
+  it('regression: package.json version is 0.66.0 (R161 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.65.0"');
+    expect(pkg).toContain('"version": "0.66.0"');
   });
 });

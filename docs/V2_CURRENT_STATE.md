@@ -1,6 +1,6 @@
 # V2 Current State — Codebase Memory V2
 
-> **Authoritative snapshot of the current product state.** Updated R160 (2026-07-11).
+> **Authoritative snapshot of the current product state.** Updated R161 (2026-07-11).
 > For the historical roadmap, see [V2_ROADMAP.md](V2_ROADMAP.md) (archive, 0.15.9 era).
 > For the authoritative version and bug count, see `v2/package.json` and `v2/CHANGELOG.md`.
 
@@ -408,11 +408,67 @@ publication failure (making programmatic triage impossible).
 - **Full-uncertainty return is hand-rolled** (design choice): the
   `!opts.incremental && hasUncertainty` return at the top of the main
   path uses a hand-rolled staleCode builder (not `classifyStaleReason`)
-  because it needs `totalPaths` + `pathsTruncated` fields that the
-  classifier doesn't return. The three callers of `classifyStaleReason`
-  (no-op, deletion-only, main) now use the classifier's returned `paths`
-  but don't surface `totalPaths`/`pathsTruncated` (only the full-uncertainty
-  return does). A future round may unify these.
+  because it constructs a different message (with broken-alias counts)
+  and a different recovery mapping. R161 (OBS-R161-01) added
+  `totalPaths`/`pathsTruncated` to the classifier's return type so the
+  three callers (no-op, deletion-only, main) now surface them — but the
+  full-uncertainty return remains hand-rolled for the message/recovery
+  differences. A future round may unify these.
+
+## R161 — Root Snapshot Identity Lock
+
+R161 (round 86) closes the 4 confirmed code findings of the R160 audit:
+
+- **Root snapshot identity lock** (`ROOT-R161-01`, P1 CRITICAL): R160's
+  `projectState` query only read `stale`/`initialized`/`version`. The
+  root fingerprint (already computed for alias_history scoping) was never
+  compared with the published snapshot's `root_fingerprint` column. A
+  root change with preserved metadata (same relative paths, mtime_ns,
+  size — e.g. `mv project project-moved` followed by an incremental)
+  would fast-skip all files via the mtime_ns/size hash check, the no-op
+  path would return SUCCESS, and `commitAliasStateAtomically` would
+  overwrite the old graph's `root_fingerprint` with the new root's
+  fingerprint — silently rebinding the graph to a different physical
+  root. The user would see "indexed successfully" while the nodes/edges
+  still belonged to the old root. R161 adds:
+  - `projectState` query now reads `root_fingerprint AS rootFingerprint`.
+  - New `rootChanged = opts.incremental && publishedRootFingerprint !==
+    null && publishedRootFingerprint !== rootFingerprint` check.
+  - When `rootChanged` is true, `semanticsStale` is forced to true. This
+    makes `noOpStale` true (no-op path), `crossFileStale` true
+    (deletion-only path), and `crossFileStale` true (main path) —
+    preventing `commitAliasStateAtomically` from being called.
+  - New `ROOT_CHANGED` code added to the `staleReason.code` union. The
+    classifier checks `rootChanged` FIRST (before cold-start lock) — a
+    root change makes every other diagnosis moot.
+  - `recovery: 'full_reindex'` (the only safe recovery — the graph
+    belongs to a different physical root).
+  - NULL `root_fingerprint` (pre-R154 DB) → `rootChanged=false`,
+    preserving the R154 cold-start behavior for legacy DBs.
+  - Full mode is unaffected (rootChanged requires `opts.incremental`).
+- **Historical alias path precision** (`API-R161-02`, P1/P2): R160's
+  classifier accepted a single `brokenAliasPaths` param used for both
+  `COLD_START_LOCK` and `HISTORICAL_ALIAS_BROKEN`. But
+  `HISTORICAL_ALIAS_BROKEN` should only surface the EFFECTIVE historical
+  aliases (those whose targets are genuinely absent after the R154
+  visibility filter). R161 adds a separate `historicalBrokenAliasPaths`
+  param; `HISTORICAL_ALIAS_BROKEN` uses it. `COLD_START_LOCK` still uses
+  `brokenAliasPaths` (all broken — every broken alias is suspect when
+  history is uninitialized). All three callers (no-op, deletion-only,
+  main) now pass BOTH lists.
+- **Fast-path totalPaths/pathsTruncated** (`OBS-R161-01`, P2): R159
+  added `totalPaths` + `pathsTruncated` to the `staleReason` type but
+  only the hand-rolled full-uncertainty return set them. The classifier
+  (used by the no-op, deletion-only, and main paths) silently omitted
+  them, so consumers couldn't display "(showing 100 of N)" for
+  fast-path staleReasons. R161 unifies the contract: the classifier's
+  `cap()` helper now returns `{ paths, totalPaths, pathsTruncated }`;
+  the classifier return type includes the metadata; all three callers
+  pass it through to the `staleReason` field.
+- **Unified MAX_STALE_PATHS** (`OBS-R161-03`, P2): R160 had
+  `const MAX_STALE_PATHS = 100` declared twice (inside the classifier's
+  `cap()` and inside the full-uncertainty builder). R161 hoists to a
+  single module-level constant so there is one source of truth.
 
 ## R160 — Full Orchestrator Failure Taxonomy
 
@@ -556,4 +612,4 @@ See [MAINTAINERS_GUIDE.md](../MAINTAINERS_GUIDE.md) for the full workflow.
 
 ## Validation date
 
-This document was validated at R160 (2026-07-11). Always cross-check with `v2/CHANGELOG.md` for the latest state.
+This document was validated at R161 (2026-07-11). Always cross-check with `v2/CHANGELOG.md` for the latest state.
