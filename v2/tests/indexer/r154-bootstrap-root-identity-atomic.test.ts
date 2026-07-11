@@ -216,20 +216,23 @@ describe('R154: Bootstrap + Root Identity + Atomic State', () => {
 
   // ── SCHEMA-R154-01: CHECK constraint on target_kind ──────────────────
 
-  it('SCHEMA-R154-01a: target_kind CHECK rejects invalid values', () => {
+  it('SCHEMA-R154-01a: target_kind CHECK rejects invalid values', async () => {
+    // R155 (TEST-R155-01): fixed non-awaited Promise. The test is now async
+    // and awaits the indexProjectWasm call before asserting.
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
-    // We need to index first to create the DB + alias_history table.
-    indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 }).then(async () => {
-      const dbPath = defaultCodeDbPath(projectName);
-      const db = new Database(dbPath);
-      // Attempt to insert an invalid target_kind — should throw.
+    await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
+    const dbPath = defaultCodeDbPath(projectName);
+    const db = new Database(dbPath);
+    try {
+      // Attempt to insert an invalid target_kind — should throw due to CHECK constraint.
       expect(() => {
         db.prepare(
           "INSERT INTO alias_history (project, alias_path, canonical_target, target_kind, last_seen_success_at, root_fingerprint) VALUES (?, ?, ?, ?, ?, ?)"
         ).run(projectName, 'x', 'y', 'invalid_kind', new Date().toISOString(), 'fp');
       }).toThrow();
+    } finally {
       db.close();
-    });
+    }
   });
 
   // ── Regression ────────────────────────────────────────────────────────
@@ -238,8 +241,8 @@ describe('R154: Bootstrap + Root Identity + Atomic State', () => {
     expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
   });
 
-  it('regression: CURRENT_DISCOVERY_POLICY_VERSION is 1 (R154)', () => {
-    expect(CURRENT_DISCOVERY_POLICY_VERSION).toBe(1);
+  it('regression: CURRENT_DISCOVERY_POLICY_VERSION is 2 (R155)', () => {
+    expect(CURRENT_DISCOVERY_POLICY_VERSION).toBe(2);
   });
 
   it('regression: alias_history survives full reindex (R153+R154)', async () => {

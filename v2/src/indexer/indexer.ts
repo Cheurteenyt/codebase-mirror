@@ -15,7 +15,7 @@
 
 import Database from 'better-sqlite3';
 import { defaultCodeDbPath } from '../bridge/sqlite-ro.js';
-import { initIndexerSchema, clearProjectData, updateProjectStats, CURRENT_EXTRACTOR_SEMANTICS_VERSION, CURRENT_DISCOVERY_POLICY_VERSION, loadAliasHistory, persistAliasHistory, computeRootFingerprint } from './schema.js';
+import { initIndexerSchema, clearProjectData, updateProjectStats, CURRENT_EXTRACTOR_SEMANTICS_VERSION, CURRENT_DISCOVERY_POLICY_VERSION, loadAliasHistory, computeRootFingerprint, commitAliasStateAtomically } from './schema.js';
 import { discoverSourceFilesStructured, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
 import type { DiscoveryResult } from './wasm-extractor.js';
 import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFiles, rebuildCrossFileCallsEdges, clearCrossFileCallEdges, isCallSitesInitialized } from './cross-file-resolver.js';
@@ -23,7 +23,7 @@ import { assertDiscoveryRoot, DiscoveryRootError } from '../utils/safe-path.js';
 import { Worker } from 'node:worker_threads';
 import { cpus } from 'node:os';
 import { join, relative as nodeRelative, sep } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import type { WorkerBatch, WorkerBatchResult } from './worker.js';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
@@ -246,9 +246,10 @@ function computeOutcome(
 export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult> {
   const start = Date.now();
   const dbPath = defaultCodeDbPath(opts.project);
-  // R154 (PERF-R154-01): runId for alias_history GC. Monotonic per-run value
-  // used to stamp observed aliases and GC entries not seen this run.
-  const runId = start;
+  // R154 (PERF-R154-01) + R155 (CONC-R155-01): runId for alias_history GC.
+  // R154 used Date.now() which can collide between concurrent indexers started
+  // in the same millisecond. R155 uses randomUUID() — collision-proof.
+  const runId = randomUUID();
   // R79: use at least 2 workers for parallelism, even on 2-core machines.
   // WASM parsing is CPU-bound but also has I/O (file reads), so 2 workers
   // on a 2-core machine still provides overlap. On 1-core machines (CI),
@@ -644,12 +645,21 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   const hasEffectiveHistoricalBrokenAliases = effectiveHistoricalBrokenAliases.length > 0;
 
   // R154 (MIG-R154-01): Cold-start lock. If bootstrap is not complete AND
-  // there are broken aliases AND the project has existing nodes, apply the
+  // there are broken aliases AND the project has existing data, apply the
   // lock. We can't trust that the broken aliases were never valid.
+  // R155 (PERF-R155-04): Use EXISTS instead of COUNT(*) for the existence
+  // check — COUNT(*) scans all matching rows while EXISTS short-circuits at
+  // the first match. Also check file_hashes/call_sites to catch partial DBs
+  // that have hashes but no nodes (pre-R79 full mode).
   let coldStartLock = false;
   if (!bootstrapComplete && discovery.brokenAliases.length > 0) {
-    const existingNodes = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?').get(opts.project) as { c: number }).c;
-    if (existingNodes > 0) {
+    const hasExistingData = (db.prepare(
+      'SELECT EXISTS(SELECT 1 FROM nodes WHERE project = ? LIMIT 1) AS e'
+    ).get(opts.project) as { e: number }).e === 1
+      || (db.prepare(
+        'SELECT EXISTS(SELECT 1 FROM file_hashes WHERE project = ? LIMIT 1) AS e'
+      ).get(opts.project) as { e: number }).e === 1;
+    if (hasExistingData) {
       coldStartLock = true;
     }
   }
@@ -689,15 +699,17 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       edges: 0,
       files: 0,
       skipped: 0,
-      errors: [{ file: opts.rootPath, error: uncertainMsg }],
+      // R155 (OUTCOME-R155-01): STALE must NOT carry errors. The contract is
+      // errors>0 → FAILED. R154 put the uncertainty message in errors[] AND
+      // set outcome='STALE' — violating the contract. R155 uses errors=[]
+      // and outcome='STALE'. The human-readable reason is in crossFileCallsStale
+      // (true) + the DB's last_index_error (set by markProjectStalePreservingGraph).
+      errors: [],
       languages: new Set(),
       parallel: false,
       workerCount: 0,
       crossFileCallsStale: true,
       warnings: discoveryWarnings,
-      // R154 (OUTCOME-R154-02): outcome is STALE (no errors despite the
-      // errors array — the "error" is really a stale reason). The CLI maps
-      // STALE to exit 2. The errors array carries the human-readable reason.
       outcome: 'STALE',
     };
   }
@@ -912,34 +924,36 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
               ? `Source snapshot uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Retry incremental when filesystem is stable.`
               : 'Project was already stale; no-op incremental did not refresh')
         : null;
-      updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, noOpStale, existingInitialized, existingSemanticsVersion, noOpError,
-        // R154: on success, mark history initialized + upgrade policy version + set root fingerprint.
-        !noOpStale ? true : null,
-        !noOpStale ? CURRENT_DISCOVERY_POLICY_VERSION : null,
-        !noOpStale ? rootFingerprint : null,
-      );
-      return { noOpStale };
-    });
-    const { noOpStale } = noOpTx();
-    // R153 (DATA-R153-01/02) + R154: Persist alias_history even on no-op.
-    // R154: use contributiveAliases (filtered), rootFingerprint, runId.
-    // R154 (TX-R154-02): try/finally to guarantee db.close() even on exception.
-    if (!noOpStale) {
-      const liveAliasPaths = new Set<string>();
-      for (const a of contributiveAliases) liveAliasPaths.add(a.aliasPath);
-      for (const a of discovery.brokenAliases) liveAliasPaths.add(a.aliasPath);
-      try {
-        persistAliasHistory(db, opts.project, rootFingerprint, runId, contributiveAliases, liveAliasPaths);
-      } finally {
-        // R154 (TX-R154-02): ensure db is closed even if persistAliasHistory throws.
-        // If persistAliasHistory failed, the graph is already marked fresh (noOpStale=false)
-        // but the history may be inconsistent. The next run's cold-start check will catch
-        // this (history_initialized was set, but GC may have partial state). Acceptable
-        // trade-off: the graph data is correct, only the history GC may be incomplete.
-        try { db.close(); } catch { /* ignore close error */ }
+      // R155 (TX-R155-01): On STALE no-op, use updateProjectStats alone (no
+      // alias_history changes — the run didn't succeed). On SUCCESS no-op,
+      // we'll use commitAliasStateAtomically AFTER this transaction (it does
+      // its own transaction). So here we only write stats when stale.
+      if (noOpStale) {
+        updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, noOpStale, existingInitialized, existingSemanticsVersion, noOpError);
       }
-    } else {
-      db.close();
+      return { noOpStale, totals };
+    });
+    const { noOpStale, totals } = noOpTx();
+    // R155 (TX-R155-01): Atomic alias state commit. On success, combine
+    // alias_history persist + project stats (fresh + initialized + policy +
+    // root fingerprint) in ONE transaction. If persist fails, the ENTIRE
+    // transaction rolls back — the graph stays stale, history_initialized
+    // stays 0, last_successful_index_at is NOT advanced. The next run's
+    // cold-start check correctly detects the uninitialized state.
+    // R155 (TX-R154-02): try/finally guarantees db.close() even on exception.
+    try {
+      if (!noOpStale) {
+        const liveAliasPaths = new Set<string>();
+        for (const a of contributiveAliases) liveAliasPaths.add(a.aliasPath);
+        for (const a of discovery.brokenAliases) liveAliasPaths.add(a.aliasPath);
+        commitAliasStateAtomically(
+          db, opts.project, effectiveRoot, totals.nodes, totals.edges,
+          existingInitialized, existingSemanticsVersion,
+          rootFingerprint, runId, contributiveAliases, liveAliasPaths,
+        );
+      }
+    } finally {
+      try { db.close(); } catch { /* ignore close error */ }
     }
     return {
       dbPath,
@@ -1055,26 +1069,24 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
             ? `Source snapshot uncertain: ${discovery.uncertainPaths.length} path(s), ${discovery.uncertainSubtrees.length} subtree(s) temporarily absent. Retry incremental when filesystem is stable.`
             : null)
       : null;
-    updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, existingSemanticsVersion, deletionError,
-      // R154: on success, mark history initialized + upgrade policy version + set root fingerprint.
-      !crossFileStale ? true : null,
-      !crossFileStale ? CURRENT_DISCOVERY_POLICY_VERSION : null,
-      !crossFileStale ? rootFingerprint : null,
-    );
-    // R153 (DATA-R153-01/02) + R154: Persist alias_history on deletion-only too.
-    // R154: use contributiveAliases (filtered), rootFingerprint, runId.
-    // R154 (TX-R154-02): try/finally to guarantee db.close() even on exception.
-    if (!crossFileStale) {
+    // R155 (TX-R155-01): On STALE deletion-only, use updateProjectStats alone.
+    // On SUCCESS deletion-only, use commitAliasStateAtomically (atomic).
+    if (crossFileStale) {
+      updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, existingSemanticsVersion, deletionError);
+      db.close();
+    } else {
       const liveAliasPaths = new Set<string>();
       for (const a of contributiveAliases) liveAliasPaths.add(a.aliasPath);
       for (const a of discovery.brokenAliases) liveAliasPaths.add(a.aliasPath);
       try {
-        persistAliasHistory(db, opts.project, rootFingerprint, runId, contributiveAliases, liveAliasPaths);
+        commitAliasStateAtomically(
+          db, opts.project, effectiveRoot, totals.nodes, totals.edges,
+          callSitesInitialized, existingSemanticsVersion,
+          rootFingerprint, runId, contributiveAliases, liveAliasPaths,
+        );
       } finally {
         try { db.close(); } catch { /* ignore close error */ }
       }
-    } else {
-      db.close();
     }
     return {
       dbPath,
@@ -1236,36 +1248,30 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   } else if (opts.incremental && crossFileStale && semanticsStale) {
     indexError = `Semantics version ${existingSemanticsVersion} ≠ current ${CURRENT_EXTRACTOR_SEMANTICS_VERSION} — full reindex required`;
   }
-  updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion, indexError,
-    // R154: on success, mark history initialized + upgrade policy version + set root fingerprint.
-    !crossFileStale ? true : null,
-    !crossFileStale ? CURRENT_DISCOVERY_POLICY_VERSION : null,
-    !crossFileStale ? rootFingerprint : null,
-  );
-
-  // R153 (DATA-R153-01/02) + R154: Persist alias_history on successful index.
-  // R154 (TX-R154-01): Atomicity — the graph is already marked fresh by
-  // updateProjectStats above. If persistAliasHistory fails, the graph is
-  // fresh but the history is stale. To mitigate: the next run's cold-start
-  // check reads alias_history_initialized (which WAS set on success). If the
-  // history is empty despite initialized=1, the protection won't fire but
-  // no false stale either. The risk is: a future broken alias won't be
-  // protected. This is the same risk as R153 (pre-R154) but now bounded to
-  // the persist-failure case, not the cold-start case.
-  // R154 (TX-R154-02): try/finally to guarantee db.close() even on exception.
-  // R154 (ALIAS-R154-02): use contributiveAliases (filtered) instead of all resolvedAliases.
-  // R154 (PERF-R154-01): use runId for GC instead of NOT IN dynamic params.
-  if (!crossFileStale) {
+  // R155 (TX-R155-01): Atomic alias state commit. On SUCCESS, combine
+  // alias_history persist + project stats in ONE transaction. If persist
+  // fails, the ENTIRE transaction rolls back — graph stays stale,
+  // history_initialized stays 0, last_successful_index_at NOT advanced.
+  // This closes the R154 TX-R155-01 gap where the graph was marked fresh
+  // BEFORE alias_history persist, and a persist failure left the graph
+  // fresh + initialized=1 but history empty/stale.
+  // On STALE/FAILED, use updateProjectStats alone (no alias_history changes).
+  if (crossFileStale) {
+    updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion, indexError);
+    db.close();
+  } else {
     const liveAliasPaths = new Set<string>();
     for (const a of contributiveAliases) liveAliasPaths.add(a.aliasPath);
     for (const a of discovery.brokenAliases) liveAliasPaths.add(a.aliasPath);
     try {
-      persistAliasHistory(db, opts.project, rootFingerprint, runId, contributiveAliases, liveAliasPaths);
+      commitAliasStateAtomically(
+        db, opts.project, effectiveRoot, totals.nodes, totals.edges,
+        callSitesInitialized, semanticsVersion,
+        rootFingerprint, runId, contributiveAliases, liveAliasPaths,
+      );
     } finally {
       try { db.close(); } catch { /* ignore close error */ }
     }
-  } else {
-    db.close();
   }
 
   return {

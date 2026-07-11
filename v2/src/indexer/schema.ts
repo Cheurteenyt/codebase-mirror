@@ -107,8 +107,14 @@ export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8;
  * Version history:
  *   - 0 (implicit): pre-R154. Treated as "not initialized". Cold-start lock applies.
  *   - 1: R154 — cold-start lock + root_fingerprint + contribution filter + visibility check.
+ *   - 2: R155 — atomic alias state commit + root fingerprint v2 (dev+ino) +
+ *     special file type safety + scalable GC + legacy row cleanup.
+ *     A DB with policy v1 is treated as "not yet initialized" under v2 — the
+ *     cold-start lock applies until a successful v2 run repopulates the
+ *     history with the new fingerprint format and stamps rows with the new
+ *     run-id scheme.
  */
-export const CURRENT_DISCOVERY_POLICY_VERSION = 1;
+export const CURRENT_DISCOVERY_POLICY_VERSION = 2;
 
 /**
  * Tables created by the native indexer. Matches V1's schema so that
@@ -316,7 +322,7 @@ const SCHEMA_SQL = `
     target_kind TEXT NOT NULL CHECK(target_kind IN ('file', 'directory')),
     last_seen_success_at TEXT NOT NULL,
     root_fingerprint TEXT NOT NULL DEFAULT '',
-    last_observed_run_id INTEGER,
+    last_observed_run_id TEXT,
     UNIQUE(project, root_fingerprint, alias_path)
   );
 
@@ -652,10 +658,43 @@ function migrateProjectsR154Columns(db: Database.Database): void {
  * Idempotent — if the new columns already exist, this is a no-op.
  */
 function migrateAliasHistoryR154Columns(db: Database.Database): void {
-  const cols = db.prepare('PRAGMA table_info(alias_history)').all() as Array<{ name: string }>;
+  const cols = db.prepare('PRAGMA table_info(alias_history)').all() as Array<{ name: string; type?: string }>;
   const names = new Set(cols.map(c => c.name));
   if (names.has('root_fingerprint') && names.has('last_observed_run_id')) {
-    // Already migrated. Just ensure the index exists.
+    // R155: check if last_observed_run_id is TEXT (R155+) or INTEGER (R154).
+    // If INTEGER, rebuild to TEXT for UUID support (CONC-R155-01).
+    const runIdCol = cols.find(c => c.name === 'last_observed_run_id');
+    if (runIdCol && (runIdCol.type ?? '').toUpperCase() === 'INTEGER') {
+      // Rebuild to change column type to TEXT.
+      db.exec('DROP TABLE IF EXISTS alias_history_new');
+      const tx = db.transaction(() => {
+        db.exec(`
+          CREATE TABLE alias_history_new (
+            id INTEGER PRIMARY KEY,
+            project TEXT NOT NULL,
+            alias_path TEXT NOT NULL,
+            canonical_target TEXT NOT NULL,
+            target_kind TEXT NOT NULL CHECK(target_kind IN ('file', 'directory')),
+            last_seen_success_at TEXT NOT NULL,
+            root_fingerprint TEXT NOT NULL DEFAULT '',
+            last_observed_run_id TEXT,
+            UNIQUE(project, root_fingerprint, alias_path)
+          );
+        `);
+        // Copy existing rows. The INTEGER run_id values are cast to TEXT
+        // implicitly by SQLite. Legacy NULL rows stay NULL.
+        db.exec(`
+          INSERT INTO alias_history_new (id, project, alias_path, canonical_target, target_kind, last_seen_success_at, root_fingerprint, last_observed_run_id)
+          SELECT id, project, alias_path, canonical_target, target_kind, last_seen_success_at, root_fingerprint, CAST(last_observed_run_id AS TEXT) FROM alias_history
+        `);
+        db.exec('DROP TABLE alias_history');
+        db.exec('ALTER TABLE alias_history_new RENAME TO alias_history');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_alias_history_project ON alias_history(project)');
+      });
+      tx();
+      return;
+    }
+    // Already migrated to TEXT. Just ensure the index exists.
     db.exec('CREATE INDEX IF NOT EXISTS idx_alias_history_project ON alias_history(project)');
     return;
   }
@@ -672,7 +711,7 @@ function migrateAliasHistoryR154Columns(db: Database.Database): void {
         target_kind TEXT NOT NULL CHECK(target_kind IN ('file', 'directory')),
         last_seen_success_at TEXT NOT NULL,
         root_fingerprint TEXT NOT NULL DEFAULT '',
-        last_observed_run_id INTEGER,
+        last_observed_run_id TEXT,
         UNIQUE(project, root_fingerprint, alias_path)
       );
     `);
@@ -692,16 +731,24 @@ function migrateAliasHistoryR154Columns(db: Database.Database): void {
 }
 
 /**
- * R154 (ALIAS-R154-01): Compute a stable fingerprint for a canonical root.
+ * R154 (ALIAS-R154-01) + R155 (ROOT-R155-01): Compute a stable fingerprint
+ * for a canonical root.
  *
  * The fingerprint combines the realpath (resolved, no symlinks) with the
- * filesystem device ID (st_dev). This ensures:
+ * filesystem device ID (st_dev) AND the inode number (st_ino). This ensures:
  *   - Two different directories on the same FS get different fingerprints
  *     (different realpaths).
  *   - The same directory accessed via different mount points gets the same
- *     fingerprint (same realpath, same st_dev).
- *   - A directory that's recreated after deletion gets a new fingerprint
- *     (st_dev/ino may differ on some filesystems).
+ *     fingerprint (same realpath, same st_dev, same st_ino).
+ *   - A directory that's deleted and recreated at the same path gets a NEW
+ *     fingerprint (st_ino changes on most filesystems when the directory is
+ *     recreated). R154 only used st_dev, which does NOT change on recreate —
+ *     this was ROOT-R155-01. R155 adds st_ino to close the gap.
+ *
+ * R155 (CONC-R155-01): On filesystems where st_dev/st_ino are both zero
+ * (network mounts, FUSE), the fingerprint degrades to just the path. This is
+ * weaker but avoids catastrophic collisions. The policy version bump to 2
+ * forces a re-population of alias_history under the new fingerprint format.
  *
  * Used to namespace alias_history per physical root. When a project is
  * reconfigured to a different root (same name), the fingerprint mismatch
@@ -710,7 +757,13 @@ function migrateAliasHistoryR154Columns(db: Database.Database): void {
 export function computeRootFingerprint(canonicalRoot: string): string {
   try {
     const st = statSync(canonicalRoot, { bigint: true });
-    return `${canonicalRoot}:${st.dev.toString()}`;
+    // R155 (ROOT-R155-01): include st_ino so a recreated directory at the
+    // same path gets a new fingerprint. Detect untrustworthy dev/ino (both
+    // zero — network filesystems) and fall back to path-only.
+    if (st.dev === 0n && st.ino === 0n) {
+      return `${canonicalRoot}:untrusted`;
+    }
+    return `${canonicalRoot}:${st.dev.toString()}:${st.ino.toString()}`;
   } catch {
     // If stat fails (extremely unlikely after assertDiscoveryRoot), fall back
     // to just the path. This is weaker but better than crashing.
@@ -773,16 +826,30 @@ export function loadAliasHistory(db: Database.Database, project: string, rootFin
  *
  * R154 (PERF-R154-01): Replaced the `NOT IN (?, ?, ...)` GC (which built a
  * dynamic SQL string with one parameter per live alias — risk of hitting
- * SQLite's variable limit on heavily-aliased repos) with a run-id GC:
- *   1. Stamp each UPSERTed/resolved alias with last_observed_run_id = runId.
- *   2. DELETE WHERE last_observed_run_id != runId (single statement, no params).
- * This is O(1) SQL regardless of alias count, and avoids the variable limit.
+ * SQLite's variable limit on heavily-aliased repos) with a run-id GC.
+ *
+ * R155 (PERF-R155-01): The R154 stamping step still used
+ * `alias_path IN (?, ?, ...)` with dynamic params. Replaced with a prepared
+ * UPDATE per broken alias, reused via a single prepared statement. No dynamic
+ * SQL, no variable limit. O(B) prepared-statement executions where B = broken
+ * aliases, each O(log N) via the UNIQUE index.
+ *
+ * R155 (MIG-R155-01): Legacy rows from the R153→R154 migration have
+ * `root_fingerprint=''` and `last_observed_run_id=NULL`. The R154 GC
+ * (`last_observed_run_id != runId`) never matched NULL (SQL NULL semantics:
+ * `NULL != x` is NULL, not true). R155 GC uses
+ * `last_observed_run_id IS NULL OR last_observed_run_id != ?` to also clean
+ * legacy NULL rows. Rows with `root_fingerprint=''` (legacy, pre-R154) are
+ * cleaned up on the first R155 run via a separate DELETE.
+ *
+ * R155 (CONC-R155-01): runId is now a string (UUID) instead of Date.now(),
+ * eliminating collision risk between concurrent indexers.
  */
 export function persistAliasHistory(
   db: Database.Database,
   project: string,
   rootFingerprint: string,
-  runId: number,
+  runId: string,
   resolvedAliases: Array<{ aliasPath: string; canonicalTarget: string; targetKind: 'file' | 'directory' }>,
   liveAliasPaths: Set<string>,
 ): void {
@@ -801,21 +868,140 @@ export function persistAliasHistory(
     for (const alias of resolvedAliases) {
       upsert.run(project, rootFingerprint, alias.aliasPath, alias.canonicalTarget, alias.targetKind, now, runId);
     }
-    // 2. Stamp broken aliases (still on disk, just broken) with run_id so
-    //    they're not GC'd. We don't UPSERT (no new canonical_target), but we
-    //    must update last_observed_run_id so the GC keeps them.
-    if (liveAliasPaths.size > 0) {
-      const stampPh = [...liveAliasPaths].map(() => '?').join(',');
-      db.prepare(
-        `UPDATE alias_history SET last_observed_run_id = ? WHERE project = ? AND root_fingerprint = ? AND alias_path IN (${stampPh})`
-      ).run(runId, project, rootFingerprint, ...liveAliasPaths);
+    // 2. R155 (PERF-R155-01): Stamp broken aliases (still on disk, just broken)
+    //    with run_id using a PREPARED UPDATE per alias — no dynamic IN clause.
+    //    Each execution is O(log N) via the UNIQUE index. This closes the
+    //    variable-limit risk identified in PERF-R155-01.
+    const stampStmt = db.prepare(
+      'UPDATE alias_history SET last_observed_run_id = ? WHERE project = ? AND root_fingerprint = ? AND alias_path = ?'
+    );
+    for (const aliasPath of liveAliasPaths) {
+      stampStmt.run(runId, project, rootFingerprint, aliasPath);
     }
-    // 3. GC: delete entries not stamped with the current run_id. These are
-    //    aliases that were on disk in a previous run but are gone now.
-    //    Single statement, no dynamic params — scalable to any alias count.
+    // 3. R155 (MIG-R155-01): GC entries not stamped with the current run_id.
+    //    Use `IS NULL OR !=` to also catch legacy NULL rows from the R153→R154
+    //    migration. Single statement, no dynamic params — O(1) SQL.
     db.prepare(
-      'DELETE FROM alias_history WHERE project = ? AND root_fingerprint = ? AND last_observed_run_id != ?'
+      'DELETE FROM alias_history WHERE project = ? AND root_fingerprint = ? AND (last_observed_run_id IS NULL OR last_observed_run_id != ?)'
     ).run(project, rootFingerprint, runId);
+    // 4. R155 (MIG-R155-01): Clean up legacy rows with root_fingerprint=''
+    //    (from the R153→R154 migration). These are never matched by the
+    //    scoped GC above. Delete them all for this project.
+    db.prepare(
+      "DELETE FROM alias_history WHERE project = ? AND root_fingerprint = ''"
+    ).run(project);
+  });
+  tx();
+}
+
+/**
+ * R155 (TX-R155-01): Atomically commit alias_history + project stats in a
+ * SINGLE transaction.
+ *
+ * R154 called `updateProjectStats` (marks graph fresh, sets
+ * alias_history_initialized=1, discovery_policy_version=CURRENT,
+ * root_fingerprint) THEN `persistAliasHistory` in separate transactions. If
+ * persist failed, the graph was fresh + initialized=1 + policy=CURRENT but
+ * the history was empty/stale. The next run's cold-start check read
+ * initialized=1 and did NOT fire the lock — the comment "cold-start catches
+ * this" was FALSE.
+ *
+ * R155 closes this by combining BOTH writes in one transaction. If the
+ * alias_history persist fails (disk full, SQLite error, corruption), the
+ * ENTIRE transaction rolls back:
+ *   - projects.cross_file_calls_stale stays 1 (or whatever it was)
+ *   - projects.alias_history_initialized stays 0 (or whatever it was)
+ *   - projects.discovery_policy_version stays 0 (or whatever it was)
+ *   - projects.last_successful_index_at is NOT advanced
+ *   - alias_history is NOT modified
+ *
+ * The next run's cold-start check then correctly detects the uninitialized
+ * state and applies the lock.
+ *
+ * This helper is called ONLY on successful index (crossFileStale=false). On
+ * failure paths, the indexer calls `updateProjectStats` alone (with
+ * indexError != null, which does NOT set initialized/policy/fingerprint).
+ */
+export function commitAliasStateAtomically(
+  db: Database.Database,
+  project: string,
+  rootPath: string,
+  nodeCount: number,
+  edgeCount: number,
+  callSitesInitialized: boolean,
+  extractorSemanticsVersion: number,
+  rootFingerprint: string,
+  runId: string,
+  resolvedAliases: Array<{ aliasPath: string; canonicalTarget: string; targetKind: 'file' | 'directory' }>,
+  liveAliasPaths: Set<string>,
+): void {
+  const now = new Date().toISOString();
+  const tx = db.transaction(() => {
+    // 1. UPSERT resolved aliases with the current run_id.
+    const upsert = db.prepare(`
+      INSERT INTO alias_history (project, root_fingerprint, alias_path, canonical_target, target_kind, last_seen_success_at, last_observed_run_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project, root_fingerprint, alias_path) DO UPDATE SET
+        canonical_target = excluded.canonical_target,
+        target_kind = excluded.target_kind,
+        last_seen_success_at = excluded.last_seen_success_at,
+        last_observed_run_id = excluded.last_observed_run_id
+    `);
+    for (const alias of resolvedAliases) {
+      upsert.run(project, rootFingerprint, alias.aliasPath, alias.canonicalTarget, alias.targetKind, now, runId);
+    }
+    // 2. Stamp broken aliases with run_id (prepared UPDATE per alias).
+    const stampStmt = db.prepare(
+      'UPDATE alias_history SET last_observed_run_id = ? WHERE project = ? AND root_fingerprint = ? AND alias_path = ?'
+    );
+    for (const aliasPath of liveAliasPaths) {
+      stampStmt.run(runId, project, rootFingerprint, aliasPath);
+    }
+    // 3. GC entries not stamped with the current run_id (IS NULL OR !=).
+    db.prepare(
+      'DELETE FROM alias_history WHERE project = ? AND root_fingerprint = ? AND (last_observed_run_id IS NULL OR last_observed_run_id != ?)'
+    ).run(project, rootFingerprint, runId);
+    // 4. Clean up legacy rows with root_fingerprint=''.
+    db.prepare(
+      "DELETE FROM alias_history WHERE project = ? AND root_fingerprint = ''"
+    ).run(project);
+    // 5. Update project stats — fresh, initialized, policy current, root fingerprint.
+    //    This is in the SAME transaction as the alias_history writes, so if any
+    //    of the above failed, this is rolled back too.
+    db.prepare(`
+      INSERT INTO projects (
+        name, root_path, indexed_at, node_count, edge_count,
+        cross_file_calls_stale, call_sites_initialized, extractor_semantics_version,
+        last_index_attempt_at, last_successful_index_at, last_index_error,
+        alias_history_initialized, discovery_policy_version, root_fingerprint
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(name) DO UPDATE SET
+        root_path = excluded.root_path,
+        indexed_at = excluded.indexed_at,
+        node_count = excluded.node_count,
+        edge_count = excluded.edge_count,
+        cross_file_calls_stale = excluded.cross_file_calls_stale,
+        call_sites_initialized = excluded.call_sites_initialized,
+        extractor_semantics_version = excluded.extractor_semantics_version,
+        last_index_attempt_at = excluded.last_index_attempt_at,
+        last_successful_index_at = excluded.last_successful_index_at,
+        last_index_error = excluded.last_index_error,
+        alias_history_initialized = excluded.alias_history_initialized,
+        discovery_policy_version = excluded.discovery_policy_version,
+        root_fingerprint = excluded.root_fingerprint
+    `).run(
+      project, rootPath, now, nodeCount, edgeCount,
+      0,                                              // crossFileCallsStale = false (success)
+      callSitesInitialized ? 1 : 0,
+      extractorSemanticsVersion,
+      now,                                            // last_index_attempt_at
+      now,                                            // last_successful_index_at (success)
+      null,                                           // last_index_error (success)
+      1,                                              // alias_history_initialized = 1
+      CURRENT_DISCOVERY_POLICY_VERSION,               // discovery_policy_version = CURRENT
+      rootFingerprint,
+    );
   });
   tx();
 }

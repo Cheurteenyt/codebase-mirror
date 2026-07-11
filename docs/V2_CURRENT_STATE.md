@@ -1,6 +1,6 @@
 # V2 Current State — Codebase Memory V2
 
-> **Authoritative snapshot of the current product state.** Updated R154 (2026-07-11).
+> **Authoritative snapshot of the current product state.** Updated R155 (2026-07-11).
 > For the historical roadmap, see [V2_ROADMAP.md](V2_ROADMAP.md) (archive, 0.15.9 era).
 > For the authoritative version and bug count, see `v2/package.json` and `v2/CHANGELOG.md`.
 
@@ -101,13 +101,52 @@ and atomicity gaps identified in the R153 audit:
 `CURRENT_DISCOVERY_POLICY_VERSION = 1` (separate from extractor semantics v8 —
 tracks policy, not AST output).
 
+## R155 — Atomic Alias State + Fingerprint v2 + Special File Safety
+
+R155 (round 80) closes the atomicity, root-identity, special-file, and
+scalability gaps identified in the R154 audit:
+
+- **Atomic alias state commit** (`TX-R155-01`): new
+  `commitAliasStateAtomically()` helper combines alias_history UPSERT + GC +
+  project stats (fresh + initialized + policy + root_fingerprint) in a SINGLE
+  transaction. If persist fails, the ENTIRE transaction rolls back — the graph
+  stays stale, `alias_history_initialized` stays 0, `last_successful_index_at`
+  is NOT advanced. The next run's cold-start check correctly detects the
+  uninitialized state. All 3 success paths (no-op, deletion-only, main) use
+  this helper.
+- **Root fingerprint v2** (`ROOT-R155-01`): fingerprint is now
+  `canonicalRoot:st_dev:st_ino` (was `canonicalRoot:st_dev`). On recreate,
+  `st_ino` changes on most filesystems, producing a new fingerprint. On
+  untrustworthy filesystems (dev=0, ino=0), falls back to
+  `canonicalRoot:untrusted`. Discovery policy version bumped to 2.
+- **Special file type safety** (`ALIAS-R155-01`): `resolvedAliases.push` moved
+  INTO the `isFile()` and `isDirectory()` branches. Special files (FIFO,
+  socket, device) are never historized.
+- **Scalable GC** (`PERF-R155-01`): replaced `IN (?, ?, ...)` dynamic stamping
+  with a prepared UPDATE per alias. No dynamic SQL, no variable limit.
+- **Legacy row cleanup** (`MIG-R155-01`): GC now uses
+  `last_observed_run_id IS NULL OR != ?` to catch legacy NULL rows. A separate
+  `DELETE WHERE root_fingerprint=''` cleans up pre-R154 rows.
+- **UUID runId** (`CONC-R155-01`): `runId = randomUUID()` instead of
+  `Date.now()`. `last_observed_run_id` column type changed from INTEGER to TEXT.
+- **EXISTS bootstrap** (`PERF-R155-04`): cold-start lock uses
+  `SELECT EXISTS(... LIMIT 1)` instead of `COUNT(*)`. Also checks `file_hashes`.
+- **STALE outcome contract** (`OUTCOME-R155-01`): STALE outcome now uses
+  `errors: []` (was `errors: [{...}]`). The contract `errors>0 → FAILED` is
+  respected.
+- **Dry-run failure banner** (`OUTCOME-R155-02`): dry-run with errors shows
+  "Dry-run failed" instead of "Dry-run complete".
+
+`CURRENT_DISCOVERY_POLICY_VERSION = 2` (bumped from 1 — fingerprint format
+change forces re-population of alias_history).
+
 ## Current versions
 
 | Component | Version | Source of truth |
 |---|---|---|
 | Package | see `v2/package.json` | `v2/package.json` |
 | Extractor semantics | 8 | `v2/src/indexer/schema.ts` `CURRENT_EXTRACTOR_SEMANTICS_VERSION` |
-| Discovery policy | 1 | `v2/src/indexer/schema.ts` `CURRENT_DISCOVERY_POLICY_VERSION` |
+| Discovery policy | 2 | `v2/src/indexer/schema.ts` `CURRENT_DISCOVERY_POLICY_VERSION` |
 | Bugs fixed | see `v2/CHANGELOG.md` | `v2/CHANGELOG.md` |
 | Indexer tests | see `v2/CHANGELOG.md` | `v2/CHANGELOG.md` |
 | Project tests | see `v2/CHANGELOG.md` | `v2/CHANGELOG.md` |
