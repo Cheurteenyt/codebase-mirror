@@ -1,6 +1,6 @@
 # V2 Current State — Codebase Memory V2
 
-> **Authoritative snapshot of the current product state.** Updated R162 (2026-07-11).
+> **Authoritative snapshot of the current product state.** Updated R163 (2026-07-12).
 > For the historical roadmap, see [V2_ROADMAP.md](V2_ROADMAP.md) (archive, 0.15.9 era).
 > For the authoritative version and bug count, see `v2/package.json` and `v2/CHANGELOG.md`.
 
@@ -414,6 +414,90 @@ publication failure (making programmatic triage impossible).
   three callers (no-op, deletion-only, main) now surface them — but the
   full-uncertainty return remains hand-rolled for the message/recovery
   differences. A future round may unify these.
+
+## R163 — Atomic Refusal State + Success Predicate
+
+R163 (round 88) closes the 5 confirmed code findings of the R162 audit:
+
+- **Atomic root refusal state** (`STATE-R163-01`, P1/P2): R162's two
+  root-change early returns (`ROOT_CHANGED` and `ROOT_IDENTITY_UNKNOWN`)
+  called `db.close()` first, then `markProjectStalePreservingGraph(dbPath,
+  ...)` which opened a *new* connection. If the reopen failed (DB locked,
+  corrupt, disk full), the catch block swallowed the error, returned
+  `stalePersisted=false`, and the indexer ignored the return value — the
+  DB stayed `cross_file_calls_stale=0` while the `IndexResult` claimed
+  `crossFileCallsStale=true` and `outcome='STALE'`. Graph Status would
+  then report the project as fresh, and a subsequent incremental would
+  treat the (still-fresh) graph as a valid baseline for cross-root
+  fast-skip. R163 inlines the `UPDATE projects SET cross_file_calls_stale
+  = 1, last_index_attempt_at = ?, last_index_error = ?` on the
+  ALREADY-OPEN connection, BEFORE `db.close()`. The try/catch sets a
+  `stalePersisted` flag; when `false`, the STALE return's
+  `staleReason.message` gets a `[WARNING: stale flag could not be
+  persisted to DB]` suffix so consumers can detect the inconsistency.
+- **Success predicate** (`STATE-R163-02`, P1/P2): R162's
+  `updateProjectStats()` used `succeeded = indexError === null`. But
+  `crossFileCallsStale` can be true with `indexError=null` — in the
+  deletion-only path, when `existingStale=true`, `semanticsStale=false`,
+  `hasUncertainty=false`, `crossFileResolved=false`, and
+  `callSitesInitialized=true`, the code computes `crossFileStale=true`
+  but `deletionError=null`. The success predicate would then advance
+  `last_successful_index_at = now` and clear `last_index_error`, masking
+  the stale state from Graph Status. R163 changes the predicate to
+  `succeeded = indexError === null && !crossFileCallsStale`. When
+  `crossFileCallsStale=true`, the run is NOT a success even without
+  error text — `last_successful_index_at` is preserved (the CASE WHEN
+  clause passes NULL when succeeded=false).
+- **Expand `hasExistingGraphData`** (`ROOT-R163-02`, P2): R162's
+  `hasExistingGraphData` was a 2-table EXISTS check (`nodes` ∪
+  `file_hashes`). A partial DB produced by an interrupted full index
+  (after `clearProjectData` deleted `nodes` but before it deleted
+  `edges`, or vice versa) would have `hasExistingGraphData=false` even
+  though structural graph data is present. The `rootIdentityUnknown`
+  gate would then NOT fire, the premark UPSERT would create a fresh
+  projects row, and the index would proceed as if no prior snapshot
+  existed. R163 expands the EXISTS check to all six structural tables:
+  `nodes`, `file_hashes`, `edges`, `call_sites`, `imports`, `exports`.
+- **Clarify "no mutation"** (`COMP-R163-01`, P2): R162's documentation
+  claimed the root-change early returns perform "no mutation". This was
+  inaccurate — `markProjectStalePreservingGraph` writes trust-state
+  columns AND calls `clearCrossFileCallEdges` on semantics mismatch (a
+  structural mutation). R163 replaces the helper call with an inline
+  UPDATE that writes ONLY the three trust-state columns. The comments on
+  both early returns now explicitly distinguish "trust-state mutations"
+  (which DO happen) from "structural graph mutations" (which do NOT).
+  The semantics-mismatch edge clear is removed entirely — a root change
+  is not a semantics mismatch.
+- **`preservedSnapshot` flag** (`API-R163-01`, P2): R162's two
+  root-change early returns set `nodes: 0, edges: 0` in the
+  IndexResult. The values are accurate (the run did not extract or
+  publish anything), but they're ambiguous: a consumer that interprets
+  `nodes=0` as "the graph is empty" would display "no code has been
+  indexed for this project" even though the DB has thousands of
+  preserved nodes. R163 adds a `preservedSnapshot?: boolean` field to
+  `IndexResult`. When `true`, the IndexResult's `nodes=0`/`edges=0`
+  reflect "no new work published this run", NOT "graph empty" — a
+  previous snapshot still exists in the DB. Consumers that need the
+  actual graph size should query the DB. The flag is set on both
+  root-change early returns; future rounds may set it on additional
+  early-return paths.
+
+### Known limitations (R163, carried over)
+
+- **No cross-process alias_history lock**: concurrent indexers on the same
+  project could race on the alias_history table. This is the same race
+  window as the rest of the SQLite write path (mitigated by `busy_timeout`).
+- **Full publication non-atomic** (carryover P1): a crash after
+  `clearProjectData` but before extraction completes leaves a partial graph.
+  Future round will implement `project.db.next` + atomic rename.
+- **DB dialect divergence** (carryover P1): V1 uses `rel_path`/`sha256`,
+  V2 uses `file_path`/`content_hash`. Future round will add
+  `GraphDbDialect` detection.
+- **Stale-without-error still clears `last_index_error`**: R163-02 prevents
+  `last_successful_index_at` from advancing on a stale run with no error
+  text, but `last_index_error = excluded.last_index_error` in the UPSERT
+  still clears the prior error when `indexError=null` is passed. A future
+  round may add a CASE WHEN to preserve the prior error text in this case.
 
 ## R162 — Root Change Early Refusal + Legacy Lock
 

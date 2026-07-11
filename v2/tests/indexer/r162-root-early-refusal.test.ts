@@ -336,9 +336,16 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     const db = new Database(dbPath);
     // Wipe all graph data (simulates a pre-R154 DB that has a projects row
     // but no nodes/hashes — e.g., a failed full index).
+    // R163 (ROOT-R163-02): expanded hasExistingGraphData to also check
+    // edges, call_sites, imports, exports. We must delete from ALL six
+    // structural tables to make hasExistingGraphData=false. R162 only
+    // checked nodes + file_hashes.
     db.prepare('DELETE FROM nodes WHERE project = ?').run(projectName);
     db.prepare('DELETE FROM edges WHERE project = ?').run(projectName);
     db.prepare('DELETE FROM file_hashes WHERE project = ?').run(projectName);
+    db.prepare('DELETE FROM call_sites WHERE project = ?').run(projectName);
+    db.prepare('DELETE FROM imports WHERE project = ?').run(projectName);
+    db.prepare('DELETE FROM exports WHERE project = ?').run(projectName);
     db.prepare('UPDATE projects SET root_fingerprint = NULL WHERE name = ?').run(projectName);
     db.close();
 
@@ -589,21 +596,23 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     expect(src).toContain('&& hasExistingGraphData;');
   });
 
-  it('regression: both early returns call markProjectStalePreservingGraph + db.close()', () => {
+  it('regression: both early returns inline UPDATE before db.close() (R163 atomic persist)', () => {
+    // R163 (STATE-R163-01): replaced markProjectStalePreservingGraph (which
+    // reopened a connection) with an inline UPDATE on the same connection.
+    // This test was originally a R162 regression guard for the helper call;
+    // R163 updates it to verify the inline UPDATE pattern instead.
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
-    // R162 (RES-R162-01): both early returns call db.close() + markProjectStalePreservingGraph.
     // Find the rootChanged early return (its `if (rootChanged) {` block).
     const rootChangedIfIdx = src.indexOf('if (rootChanged) {');
     expect(rootChangedIfIdx).toBeGreaterThan(-1);
-    // The block ends at the matching `}` — find the next `code: 'ROOT_CHANGED',`
-    // and then the closing `}` of the return object + `}` of the if block.
     const rootChangedCodeIdx = src.indexOf("code: 'ROOT_CHANGED',", rootChangedIfIdx);
     expect(rootChangedCodeIdx).toBeGreaterThan(rootChangedIfIdx);
-    // Extract the block from `if (rootChanged) {` to `code: 'ROOT_CHANGED',`
-    // (the db.close() + markProjectStalePreservingGraph are before the return).
     const rootChangedBlock = src.slice(rootChangedIfIdx, rootChangedCodeIdx);
     expect(rootChangedBlock).toContain('db.close();');
-    expect(rootChangedBlock).toContain('markProjectStalePreservingGraph(dbPath, opts.project, rootMsg);');
+    expect(rootChangedBlock).toContain('UPDATE projects SET');
+    expect(rootChangedBlock).toContain('cross_file_calls_stale = 1');
+    // R163 (STATE-R163-01): no actual call to markProjectStalePreservingGraph.
+    expect(rootChangedBlock).not.toMatch(/markProjectStalePreservingGraph\s*\(/);
 
     // Same for rootIdentityUnknown.
     const rootIdentityUnknownIfIdx = src.indexOf('if (rootIdentityUnknown) {');
@@ -612,15 +621,23 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     expect(rootIdentityUnknownCodeIdx).toBeGreaterThan(rootIdentityUnknownIfIdx);
     const rootIdentityUnknownBlock = src.slice(rootIdentityUnknownIfIdx, rootIdentityUnknownCodeIdx);
     expect(rootIdentityUnknownBlock).toContain('db.close();');
-    expect(rootIdentityUnknownBlock).toContain('markProjectStalePreservingGraph(dbPath, opts.project, rootMsg);');
+    expect(rootIdentityUnknownBlock).toContain('UPDATE projects SET');
+    expect(rootIdentityUnknownBlock).toContain('cross_file_calls_stale = 1');
+    expect(rootIdentityUnknownBlock).not.toMatch(/markProjectStalePreservingGraph\s*\(/);
   });
 
   it('regression: ROOT_CHANGED staleReason includes totalPaths=0 + pathsTruncated=false', () => {
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     // R162 (DATA-R162-01): the early return sets totalPaths=0 + pathsTruncated=false
     // (matching the R161 classifier's contract for ROOT_CHANGED).
-    expect(src).toContain("code: 'ROOT_CHANGED',\n        message: rootMsg,\n        paths: [],\n        totalPaths: 0,\n        pathsTruncated: false,");
-    expect(src).toContain("code: 'ROOT_IDENTITY_UNKNOWN',\n        message: rootMsg,\n        paths: [],\n        totalPaths: 0,\n        pathsTruncated: false,");
+    // R163 (STATE-R163-01): the message now uses
+    // `rootMsg + (stalePersisted ? '' : ' [WARNING: ...]')` instead of the
+    // bare `rootMsg`. The paths/totalPaths/pathsTruncated fields are unchanged.
+    expect(src).toContain("code: 'ROOT_CHANGED',");
+    expect(src).toContain('paths: [],\n        totalPaths: 0,\n        pathsTruncated: false,');
+    expect(src).toContain("code: 'ROOT_IDENTITY_UNKNOWN',");
+    // R163 (STATE-R163-01): message uses the stalePersisted suffix pattern.
+    expect(src).toContain("rootMsg + (stalePersisted ? '' : ' [WARNING: stale flag could not be persisted to DB]')");
   });
 
   it('regression: classifier rootChanged param marked DEPRECATED', () => {
@@ -629,8 +646,8 @@ describe('R162: Root Change Early Refusal + Legacy Lock + root_path Preservation
     expect(src).toContain('R162 (DATA-R162-01 + RES-R162-01 + STATE-R162-02): DEPRECATED.');
   });
 
-  it('regression: package.json version is 0.67.0', () => {
+  it('regression: package.json version is 0.68.0 (R163 bump)', () => {
     const pkg = readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8');
-    expect(pkg).toContain('"version": "0.67.0"');
+    expect(pkg).toContain('"version": "0.68.0"');
   });
 });
