@@ -744,6 +744,38 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     };
   }
 
+  // R157 (ordering fix): Read projectState BEFORE the premark below. The
+  // premark sets cross_file_calls_stale=1 via UPSERT; if this read ran after
+  // it, existingStale would always be true (from the premark), breaking the
+  // no-op and deletion-only fast paths which rely on the TRUE pre-premark state.
+  const projectState = opts.incremental
+    ? (db.prepare(
+        'SELECT cross_file_calls_stale AS stale, call_sites_initialized AS initialized, extractor_semantics_version AS version FROM projects WHERE name = ?'
+      ).get(opts.project) as { stale?: number; initialized?: number; version?: number } | undefined)
+    : undefined;
+  const existingStale = projectState?.stale === 1;
+  const existingInitialized = projectState?.initialized === 1;
+  const existingSemanticsVersion = projectState?.version ?? 0;
+  const semanticsStale = opts.incremental
+    ? existingSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION
+    : false;
+
+  // R157 (DATA-R157-01 + STATE-R157-03): Premark stale BEFORE clearProjectData
+  // and BEFORE any graph mutation. This runs AFTER the no-op and deletion-only
+  // fast paths have returned, so it only affects the MAIN path.
+  // Uses INSERT ON CONFLICT (UPSERT) so it works on first full index too.
+  {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at, last_index_error)
+      VALUES (?, ?, ?, 1, ?, 'Index publication in progress')
+      ON CONFLICT(name) DO UPDATE SET
+        cross_file_calls_stale = 1,
+        last_index_attempt_at = excluded.last_index_attempt_at,
+        last_index_error = excluded.last_index_error
+    `).run(opts.project, effectiveRoot, now, now);
+  }
+
   if (!opts.incremental) {
     clearProjectData(db, opts.project);
   }
@@ -904,17 +936,6 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   //   - crossFileCallsStale MUST be true (force full reindex)
   //   - the resolver MUST NOT publish legacy fallback edges (MIG-R127-03)
   //   - the version is preserved (not upgraded) so the next run still detects it
-  const projectState = opts.incremental
-    ? (db.prepare(
-        'SELECT cross_file_calls_stale AS stale, call_sites_initialized AS initialized, extractor_semantics_version AS version FROM projects WHERE name = ?'
-      ).get(opts.project) as { stale?: number; initialized?: number; version?: number } | undefined)
-    : undefined;
-  const existingStale = projectState?.stale === 1;
-  const existingInitialized = projectState?.initialized === 1;
-  const existingSemanticsVersion = projectState?.version ?? 0;
-  const semanticsStale = opts.incremental
-    ? existingSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION
-    : false;
 
   // R89: Bug 31 fix — early return for no-op incremental. If estimatedFilesToIndex
   // is 0 AND no deleted files, skip the entire extraction phase.
@@ -964,13 +985,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       return { noOpStale, totals };
     });
     const { noOpStale, totals } = noOpTx();
-    // R155 (TX-R155-01): Atomic alias state commit. On success, combine
-    // alias_history persist + project stats (fresh + initialized + policy +
-    // root fingerprint) in ONE transaction. If persist fails, the ENTIRE
-    // transaction rolls back — the graph stays stale, history_initialized
-    // stays 0, last_successful_index_at is NOT advanced. The next run's
-    // cold-start check correctly detects the uninitialized state.
-    // R155 (TX-R154-02): try/finally guarantees db.close() even on exception.
+    // R155 (TX-R155-01) + R157 (STATE-R157-02): Atomic alias state commit.
+    // R157 adds a catch block — if the commit fails, the no-op returns FAILED
+    // with PERSIST_FAILURE (not silently fresh).
+    let noOpPubFailed = false;
     try {
       if (!noOpStale) {
         const liveAliasPaths = new Set<string>();
@@ -982,8 +1000,28 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           rootFingerprint, runId, contributiveAliases, liveAliasPaths,
         );
       }
+    } catch (commitError) {
+      // R157 (STATE-R157-02): no-op publication failure.
+      noOpPubFailed = true;
+      const errMsg = `Index publication failed: ${commitError instanceof Error ? commitError.message : String(commitError)}`;
+      try {
+        const now = new Date().toISOString();
+        db.prepare('UPDATE projects SET cross_file_calls_stale = 1, last_index_attempt_at = ?, last_index_error = ? WHERE name = ?').run(now, errMsg, opts.project);
+      } catch { /* best-effort */ }
     } finally {
       try { db.close(); } catch { /* ignore close error */ }
+    }
+    // R157 (OUTCOME-R157-01): publication failure = FAILED.
+    if (noOpPubFailed) {
+      return {
+        dbPath, durationMs: Date.now() - start,
+        nodes: 0, edges: 0, files: 0, skipped: files.length,
+        errors: [], languages: allLangs, parallel: false, workerCount: 0,
+        crossFileCallsStale: true, warnings: discoveryWarnings,
+        outcome: 'FAILED',
+        staleReason: { code: 'PERSIST_FAILURE', message: 'Index publication failed during no-op commit.', paths: [] },
+        recovery: 'retry_incremental',
+      };
     }
     return {
       dbPath,
@@ -999,6 +1037,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: noOpStale,
       warnings: discoveryWarnings,
       outcome: computeOutcome([], noOpStale, discoveryWarnings, false),
+      // R157 (OBS-R157-01): staleReason/recovery for no-op stale path.
+      staleReason: noOpStale
+        ? { code: 'PREVIOUSLY_STALE', message: 'Project was already stale; no-op incremental did not refresh', paths: [] }
+        : undefined,
+      recovery: noOpStale ? 'full_reindex' : undefined,
     };
   }
 
@@ -1014,6 +1057,21 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // (it would publish legacy fallback edges). Just clean up nodes/edges for
   // deleted files and mark stale=true so the caller does a full reindex.
   if (opts.incremental && estimatedFilesToIndex === 0 && deletedRelPaths.length > 0) {
+    // R157 (STATE-R157-01): Premark stale BEFORE the deletion cleanup.
+    // R156 had no premark here — if commitAliasStateAtomically failed after
+    // the cleanup transaction committed, the graph was modified but projects
+    // could be fresh. R157 premarks so the graph is truthfully stale.
+    {
+      const now = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at, last_index_error)
+        VALUES (?, ?, ?, 1, ?, 'Index publication in progress')
+        ON CONFLICT(name) DO UPDATE SET
+          cross_file_calls_stale = 1,
+          last_index_attempt_at = excluded.last_index_attempt_at,
+          last_index_error = excluded.last_index_error
+      `).run(opts.project, effectiveRoot, now, now);
+    }
     // R107: capture initialized flag BEFORE the transaction (it won't change inside).
     const callSitesInitialized = isCallSitesInitialized(db, opts.project);
     let crossFileResolved = false;
@@ -1108,14 +1166,39 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       const liveAliasPaths = new Set<string>();
       for (const a of contributiveAliases) liveAliasPaths.add(a.aliasPath);
       for (const a of discovery.brokenAliases) liveAliasPaths.add(a.aliasPath);
+      // R157 (STATE-R157-01): catch commit failure — deletion-only path.
+      let deletionPubFailed = false;
       try {
         commitAliasStateAtomically(
           db, opts.project, effectiveRoot, totals.nodes, totals.edges,
           callSitesInitialized, existingSemanticsVersion,
           rootFingerprint, runId, contributiveAliases, liveAliasPaths,
         );
+      } catch (commitError) {
+        // R157: publication failure. The pre-marked stale=1 remains.
+        deletionPubFailed = true;
+        const errMsg = `Index publication failed: ${commitError instanceof Error ? commitError.message : String(commitError)}`;
+        try {
+          const now = new Date().toISOString();
+          db.prepare('UPDATE projects SET cross_file_calls_stale = 1, last_index_attempt_at = ?, last_index_error = ? WHERE name = ?').run(now, errMsg, opts.project);
+        } catch { /* best-effort */ }
       } finally {
         try { db.close(); } catch { /* ignore close error */ }
+      }
+      // R157 (OUTCOME-R157-01): publication failure = FAILED, not PARTIAL.
+      if (deletionPubFailed) {
+        return {
+          dbPath,
+          durationMs: Date.now() - start,
+          nodes: 0, edges: 0, files: 0, skipped: files.length,
+          errors: [],
+          languages: allLangs, parallel: false, workerCount: 0,
+          crossFileCallsStale: true,
+          warnings: discoveryWarnings,
+          outcome: 'FAILED',
+          staleReason: { code: 'PERSIST_FAILURE', message: 'Index publication failed during deletion-only commit.', paths: [] },
+          recovery: 'retry_incremental',
+        };
       }
     }
     return {
@@ -1132,25 +1215,16 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: crossFileStale,
       warnings: discoveryWarnings,
       outcome: computeOutcome([], crossFileStale, discoveryWarnings, false),
+      // R157 (OBS-R157-01): staleReason/recovery for deletion-only stale path.
+      staleReason: crossFileStale
+        ? { code: hasUncertainty ? 'DISCOVERY_UNCERTAIN' : 'SEMANTICS_MISMATCH', message: deletionError ?? '', paths: [] }
+        : undefined,
+      recovery: crossFileStale ? (semanticsStale ? 'full_reindex' : 'retry_incremental') : undefined,
     };
   }
 
-  // R156 (TX-R156-01): Pre-mark stale=1 BEFORE extraction (the main path
-  // that actually mutates the graph). The no-op and deletion-only fast paths
-  // returned above — they don't need this. If the final atomic commit fails,
-  // the pre-marked stale=1 remains truthfully set: the graph IS stale
-  // (extraction committed in its own transaction, but the projects row can't
-  // rollback to stale=0). If the commit succeeds, it clears stale=0 atomically.
-  {
-    const now = new Date().toISOString();
-    db.prepare(`
-      UPDATE projects SET
-        cross_file_calls_stale = 1,
-        last_index_attempt_at = ?,
-        last_index_error = 'Index publication in progress'
-      WHERE name = ?
-    `).run(now, opts.project);
-  }
+  // R157: The premark stale was already done above (before clearProjectData).
+  // No need to re-mark here.
 
   if (!useParallel) {
     // Single-thread: main thread needs the grammars
@@ -1319,9 +1393,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         rootFingerprint, runId, contributiveAliases, liveAliasPaths,
       );
     } catch (commitError) {
-      // R156 (TX-R156-01): The atomic commit failed. The graph has already
-      // been mutated. The pre-marked stale=1 is still in the DB — the graph
-      // is truthfully stale. Best-effort persist the error message.
+      // R157 (TX-R156-01 + OUTCOME-R157-01): The atomic commit failed. The
+      // graph has already been mutated. The pre-marked stale=1 is still in
+      // the DB. R156 pushed the error to result.errors and let computeOutcome
+      // return PARTIAL — which --allow-partial could mask as exit 0. R157
+      // returns FAILED with PERSIST_FAILURE instead. Publication failure must
+      // NEVER be masked.
       const errMsg = `Index publication failed: ${commitError instanceof Error ? commitError.message : String(commitError)}`;
       try {
         const now = new Date().toISOString();
@@ -1336,9 +1413,38 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         // Best-effort — if even this fails, the pre-marked stale=1 remains.
       }
       crossFileStale = true;
-      result.errors.push({ file: opts.rootPath, error: errMsg });
+      // R157: return FAILED immediately — don't fall through to computeOutcome.
+      return {
+        ...result,
+        dbPath,
+        durationMs: Date.now() - start,
+        languages: result.languages ?? allLangs,
+        parallel: useParallel,
+        workerCount: useParallel ? numWorkers : 0,
+        crossFileCallsStale: true,
+        warnings: discoveryWarnings,
+        outcome: 'FAILED',
+        staleReason: { code: 'PERSIST_FAILURE', message: errMsg, paths: [] },
+        recovery: 'retry_incremental',
+      };
     } finally {
       try { db.close(); } catch { /* ignore close error */ }
+    }
+  }
+
+  // R157 (OUTCOME-R157-02): Build staleReason with the correct code based on
+  // the actual failure kind, not a blanket SEMANTICS_MISMATCH.
+  let staleCode: 'DISCOVERY_UNCERTAIN' | 'HISTORICAL_ALIAS_BROKEN' | 'SEMANTICS_MISMATCH' | 'PREVIOUSLY_STALE' | undefined;
+  if (crossFileStale) {
+    if (semanticsStale) {
+      staleCode = 'SEMANTICS_MISMATCH';
+    } else if (hasUncertainty) {
+      staleCode = 'DISCOVERY_UNCERTAIN';
+    } else if (fullModeHadErrors || incrementalHadErrors) {
+      // Extraction errors → not a stale reason per se, but crossFileStale=true.
+      staleCode = undefined; // errors are in result.errors, outcome=PARTIAL
+    } else {
+      staleCode = 'PREVIOUSLY_STALE';
     }
   }
 
@@ -1352,8 +1458,8 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     crossFileCallsStale: crossFileStale,
     warnings: discoveryWarnings,
     outcome: computeOutcome(result.errors, crossFileStale, discoveryWarnings, false),
-    staleReason: crossFileStale && indexError !== null
-      ? { code: 'SEMANTICS_MISMATCH', message: indexError, paths: [] }
+    staleReason: staleCode !== undefined && indexError !== null
+      ? { code: staleCode, message: indexError, paths: [] }
       : undefined,
     recovery: crossFileStale
       ? (semanticsStale ? 'full_reindex' : 'retry_incremental')

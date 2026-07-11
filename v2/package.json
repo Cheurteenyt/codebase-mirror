@@ -1,6 +1,6 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.61.0",
+  "version": "0.62.0",
   "description": "Codebase Memory V2 — hybrid code intelligence (native WASM indexer + human memory graph + Obsidian sync)",
   "type": "module",
   "main": "dist/cli/index.js",

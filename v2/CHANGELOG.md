@@ -1,5 +1,97 @@
 # Changelog — Codebase Memory V2
 
+## 0.62.0 — Round 157 (2026-07-11) Publication State Protocol + Bridge Hardening
+
+**82nd round (GPT 5.6 Sol audit R156).** 4 P1 + 5 P1/P2 + 3 P2 fixed.
+Closes the 12 confirmed code findings of the R156 audit.
+
+### Publication state protocol (4 P1)
+
+212. **P1 clearProjectData before premark — crash window** (`indexer.ts`)
+     — R156 ran `clearProjectData()` BEFORE the premark stale. A crash
+     between clear and premark left the graph empty but `projects.stale`
+     potentially 0. Fixed: premark UPSERT (`INSERT ON CONFLICT`) moved
+     BEFORE `clearProjectData`. (DATA-R157-01)
+
+213. **P1 deletion-only: no premark, no catch** (`indexer.ts`) — R156's
+     deletion-only fast path committed deletions then called
+     `commitAliasStateAtomically` without premark or catch. If commit
+     failed, graph was modified but project could be fresh. Fixed: added
+     premark before cleanup transaction + catch with FAILED/PERSIST_FAILURE.
+     (STATE-R157-01)
+
+214. **P1 publication failure masked as PARTIAL** (`indexer.ts`) — R156's
+     catch block pushed the error to `result.errors` and let `computeOutcome`
+     return PARTIAL — `--allow-partial` could mask it as exit 0. Fixed:
+     publication failure now returns `outcome='FAILED'` +
+     `staleReason.code='PERSIST_FAILURE'` immediately. `--allow-partial`
+     never masks FAILED. (OUTCOME-R157-01)
+
+215. **P1 first index: premark UPDATE modifies 0 rows** (`indexer.ts`) —
+     R156's premark used `UPDATE projects WHERE name=?`. On first full
+     index, no projects row existed → 0 rows modified → premark silently
+     skipped. Fixed: use `INSERT ON CONFLICT DO UPDATE` (UPSERT). Works
+     on first index. (STATE-R157-03)
+
+### Outcome builder + propagation (5 P1/P2)
+
+216. **P1/P2 SEMANTICS_MISMATCH used for all stale reasons** (`indexer.ts`)
+     — R156's final return used `SEMANTICS_MISMATCH` whenever
+     `crossFileStale && indexError != null`, even for extraction errors
+     or uncertainty. Fixed: staleCode builder now checks `semanticsStale`
+     → `SEMANTICS_MISMATCH`, `hasUncertainty` → `DISCOVERY_UNCERTAIN`,
+     else `PREVIOUSLY_STALE`. (OUTCOME-R157-02)
+
+217. **P1/P2 staleReason absent from fast paths** (`indexer.ts`) — R156
+     only set staleReason on the full-uncertainty path. No-op, deletion-only,
+     and main-path stale had no staleReason/recovery. Fixed: all stale
+     return paths now include staleReason + recovery. (OBS-R157-01)
+
+218. **P1/P2 no-op alias commit failure leaves project fresh**
+     (`indexer.ts`) — R156's no-op path had no catch. If
+     `commitAliasStateAtomically` failed, project could stay fresh.
+     Fixed: added catch + FAILED/PERSIST_FAILURE. (STATE-R157-02)
+
+219. **P1/P2 PERSIST_FAILURE defined but never emitted** (`indexer.ts`)
+     — The type allowed `PERSIST_FAILURE` but R156 never emitted it.
+     Fixed: all three catch blocks (no-op, deletion-only, main) now emit
+     `PERSIST_FAILURE` on commit failure. (OBS-R157-02)
+
+220. **P1/P2 outer exceptions leave DB open** (`indexer.ts`) — R156 had
+     no outer try/catch/finally around extraction + publication. Fixed:
+     each path has its own try/catch/finally. The premark ensures
+     stale=1 persists even if extraction throws. (RES-R157-01)
+
+### Graph UI bridge hardening (3 P2)
+
+221. **P2 sync-graph-ui: no fork guard** (`.github/workflows/sync-graph-ui-to-gitlab.yml`)
+     — R156's workflow didn't check `head_repository.full_name`. A fork PR
+     with `graph-ui/*` could trigger GitLab sync. Fixed: added
+     `head_repository.full_name == github.repository` check in the `if`
+     condition. (SEC-R157-01)
+
+222. **P2 sync-graph-ui: no path guard for CI files** (`.github/workflows/sync-graph-ui-to-gitlab.yml`)
+     — A `graph-ui/*` branch could modify `.github/workflows/` or
+     `.gitlab-ci.yml` and get synced. Fixed: added `git diff --name-only`
+     check that refuses if the branch modifies privileged CI files.
+     (SEC-R157-02)
+
+223. **P2 sync-graph-ui: --force, no lease, remove_source_branch=false**
+     (`.github/workflows/sync-graph-ui-to-gitlab.yml`) — R156 used
+     `--force` (can silently overwrite GitLab work), didn't URL-encode
+     the branch for API queries, and set `remove_source_branch=false`.
+     Fixed: `--force-with-lease` with `ls-remote` SHA, URL-encoded branch,
+     `remove_source_branch=true`. (SYNC-R157-01/02/03)
+
+### Documentation corrections
+
+- **CI-R157-02**: docs corrected — `.gitlab-ci.yml` uses `mr-preflight`
+  echo (not a real gate). The gate will be activated in a follow-up MR.
+- **V2_CURRENT_STATE.md**: updated to R157, clarified premark ordering.
+- **CHANGELOG**: R156 erratum noted (gate was restored to echo).
+
+### Total: 223 bugs + 11 optimizations + 453 indexer tests across 82 rounds
+
 ## 0.61.0 — Round 156 (2026-07-11) CI Hotfix + Truthful State + Directory Alias + Graph UI Bridge
 
 **81st round (GPT 5.6 Sol audit R155).** 2 P1 + 3 P1/P2 + 3 P2 fixed.

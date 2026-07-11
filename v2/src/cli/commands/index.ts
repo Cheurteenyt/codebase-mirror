@@ -149,9 +149,17 @@ export function registerIndexCommand(program: Command): void {
         } else if (result.outcome === 'PARTIAL' || result.outcome === 'FAILED') {
           console.log();
           console.log(`⚠ Project "${project}" indexed with ${result.errors.length} error(s).`);
+          // R157 (OBS-R157-01): show staleReason for FAILED/PARTIAL too.
+          if (result.staleReason) {
+            console.log(`  Stale reason: ${result.staleReason.message}`);
+          }
           if (result.crossFileCallsStale) {
             console.log(`⚠ Cross-file CALLS may be stale.`);
-            console.log(`  Run "cbm-v2 index --project ${project} --root ${rootPath}" (full reindex) to rebuild them.`);
+            if (result.recovery === 'retry_incremental') {
+              console.log(`  Recovery: retry the index.`);
+            } else {
+              console.log(`  Run "cbm-v2 index --project ${project} --root ${rootPath}" (full reindex) to rebuild them.`);
+            }
           }
         } else {
           // R150 (OUTCOME-R150-01): No-op incremental or empty project.

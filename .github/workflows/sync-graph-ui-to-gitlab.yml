@@ -1,32 +1,31 @@
-# R156 (CI-FLOW-R156-01): Sync graph-ui/* changes from GitHub to GitLab.
+# R157: Sync graph-ui/* changes from GitHub to GitLab — HARDENED.
 #
-# This workflow is triggered AFTER a successful `ci.yml` run on a graph-ui
-# branch (branches matching `graph-ui/**`). It:
-#   1. Validates the source branch name (must start with `graph-ui/`).
-#   2. Pushes the branch to GitLab (under the same name).
-#   3. Creates or updates a GitLab MR from this branch → main.
+# R156 had insufficient security: no fork guard, no path guard, --force
+# instead of --force-with-lease, remove_source_branch=false.
+# R157 adds all missing security checks.
 #
-# Security model:
-#   - This is a `workflow_run` trigger (NOT `pull_request`), so it runs in
-#     the context of the DEFAULT branch (main) with the repo's secrets. This
-#     is required because `pull_request` workflows don't have access to
-#     secrets that aren't explicitly exposed.
-#   - The workflow explicitly checks that the source branch is `graph-ui/**`
-#     before doing anything.
-#   - The `GITLAB_MIRROR_TOKEN` secret is a GitLab PAT with `api` scope,
-#     used to push branches and create MRs.
-#   - Concurrency: only the latest run per branch is kept (cancel-in-progress).
+# Security model (R157):
+#   - workflow_run trigger (runs in context of main, with secrets)
+#   - Checks head_repository.full_name == github.repository (no forks)
+#   - Checks workflow_run.event == 'pull_request'
+#   - Checks branch starts with 'graph-ui/'
+#   - Checks workflow_run.conclusion == 'success'
+#   - Refuses if branch modifies .github/workflows/ or .gitlab-ci.yml
+#   - Uses --force-with-lease (not --force)
+#   - URL-encodes branch name for API queries
+#   - Creates MR with remove_source_branch=true
+#   - Removes private key in if: always() cleanup
+
 name: Sync graph-ui to GitLab
 
 on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches:
-      - 'graph-ui/**'
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: sync-graph-ui-${{ github.event.workflow_run.head_branch }}
@@ -34,120 +33,168 @@ concurrency:
 
 jobs:
   sync:
-    # Only run if the upstream CI workflow succeeded.
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # R157 (SEC-R157-01): Only run if CI succeeded AND source is same repo (not fork)
+    # AND source event is pull_request AND branch is graph-ui/*.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'graph-ui/')
+
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    environment: gitlab-graph-ui-sync
+
     steps:
-      - name: Validate source branch
-        id: branch
+      - name: Capture validated ref
+        id: ref
         shell: bash
         env:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          # R156 security: only graph-ui/** branches are allowed.
-          if [[ ! "$BRANCH" =~ ^graph-ui/ ]]; then
-            echo "Source branch '$BRANCH' is not a graph-ui/* branch. Skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          case "$BRANCH" in
+            graph-ui/*) ;;
+            *)
+              echo "Refusing unexpected branch: $BRANCH" >&2
+              exit 1
+              ;;
+          esac
+          git check-ref-format --branch "$BRANCH" >/dev/null
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid SHA: $SHA" >&2
+            exit 1
           fi
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "Branch: $BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout source SHA
-        if: steps.branch.outputs.skip != 'true'
+      - name: Checkout exact validated SHA
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ steps.ref.outputs.sha }}
           fetch-depth: 0
 
-      - name: Configure git
-        if: steps.branch.outputs.skip != 'true'
+      - name: Protect CI infrastructure
+        # R157 (SEC-R157-02): Refuse if the branch modifies privileged files.
         shell: bash
-        env:
-          GITLAB_TOKEN: ${{ secrets.GITLAB_MIRROR_TOKEN }}
-        run: |
-          # R156: use http.extraHeader for auth (token never appears in URL).
-          git config --global http.extraHeader "Authorization: basic $(printf '%s' "oauth2:${GITLAB_TOKEN}" | base64 -w0)"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-
-      - name: Push branch to GitLab
-        if: steps.branch.outputs.skip != 'true'
-        shell: bash
-        env:
-          BRANCH: ${{ github.event.workflow_run.head_branch }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_MIRROR_TOKEN }}
         run: |
           set -euo pipefail
-          GL_URL="https://gitlab.com/cheurteen1/codebase-memory-V2.git"
-          echo "Pushing $SHA to GitLab branch '$BRANCH'..."
-          git push "$GL_URL" "$SHA:refs/heads/$BRANCH" --force
+          git fetch origin main --depth=1
+          FORBIDDEN="$(
+            git diff --name-only origin/main...HEAD |
+            grep -E '^(\.github/workflows/|\.gitlab-ci\.yml$)' || true
+          )"
+          if [ -n "$FORBIDDEN" ]; then
+            echo "Graph UI branch modifies privileged CI files:" >&2
+            echo "$FORBIDDEN" >&2
+            echo "Use a separately reviewed infrastructure MR." >&2
+            exit 1
+          fi
+
+      - name: Configure GitLab SSH
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.GITLAB_GRAPH_UI_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ vars.GITLAB_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.ssh/config" <<'EOF'
+          Host gitlab.com
+            IdentityFile ~/.ssh/id_ed25519
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+          chmod 600 "$HOME/.ssh/config"
+
+      - name: Push branch with lease
+        # R157 (SYNC-R157-01): Use --force-with-lease, not --force.
+        id: push
+        shell: bash
+        env:
+          BRANCH: ${{ steps.ref.outputs.branch }}
+          GITLAB_URL: ${{ vars.GITLAB_REPOSITORY_SSH_URL }}
+        run: |
+          set -euo pipefail
+          git remote add gitlab "$GITLAB_URL"
+          REMOTE_SHA="$(
+            git ls-remote gitlab "refs/heads/$BRANCH" |
+            awk '{print $1}'
+          )"
+          if [ -z "$REMOTE_SHA" ]; then
+            git push gitlab "HEAD:refs/heads/$BRANCH"
+          else
+            git push gitlab \
+              --force-with-lease="refs/heads/$BRANCH:$REMOTE_SHA" \
+              "HEAD:refs/heads/$BRANCH"
+          fi
+          PUSHED_SHA="$(git rev-parse HEAD)"
+          echo "pushed_sha=$PUSHED_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Create or update GitLab MR
-        if: steps.branch.outputs.skip != 'true'
+        # R157 (SYNC-R157-02/03): URL-encode branch, filter target, remove_source_branch=true.
         shell: bash
         env:
-          BRANCH: ${{ github.event.workflow_run.head_branch }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_MIRROR_TOKEN }}
-          GH_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          TOKEN: ${{ secrets.GITLAB_GRAPH_UI_API_TOKEN }}
+          PROJECT_ID: ${{ vars.GITLAB_PROJECT_ID }}
+          BRANCH: ${{ steps.ref.outputs.branch }}
+          PUSHED_SHA: ${{ steps.push.outputs.pushed_sha }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          GL_API="https://gitlab.com/api/v4/projects/cheurteen1%2Fcodebase-memory-V2"
+          API="https://gitlab.com/api/v4"
+          ENCODED_BRANCH="$(
+            python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$BRANCH"
+          )"
+          OPEN_MRS="$(
+            curl --fail-with-body --silent \
+              --header "PRIVATE-TOKEN: $TOKEN" \
+              "$API/projects/$PROJECT_ID/merge_requests?state=opened&source_branch=$ENCODED_BRANCH&target_branch=main"
+          )"
+          MR_COUNT="$(
+            printf '%s' "$OPEN_MRS" |
+            python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'
+          )"
+          TITLE="$(git log -1 --pretty=%s)"
+          DESCRIPTION="GitHub source: https://github.com/$GH_REPOSITORY/tree/$BRANCH
 
-          # Check if an MR already exists for this branch.
-          EXISTING_MR=$(
-            curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-              "$GL_API/merge_requests?source_branch=$BRANCH&state=opened" \
-              | python3 -c '
-          import json, sys
-          data = json.load(sys.stdin)
-          if isinstance(data, list) and len(data) > 0:
-              print(data[0]["iid"])
-          ' 2>/dev/null || true
-          )
+          Validated SHA: \`$PUSHED_SHA\`
 
-          BODY="GitHub PR sync for \`$BRANCH\` (SHA \`$SHA\`).
+          GitHub CI: https://github.com/$GH_REPOSITORY/actions/runs/$GH_RUN_ID
 
-          This MR was created automatically by the [sync-graph-ui-to-gitlab](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/sync-graph-ui-to-gitlab.yml) workflow after the upstream GitHub CI succeeded.
+          This MR is synchronized automatically from a validated Graph UI branch."
 
-          Source CI run: $GH_RUN_URL
-
-          ---
-
-          \`\`\`diff
-          + This branch was validated by GitHub CI before being synced.
-          \`\`\`"
-
-          if [ -n "$EXISTING_MR" ]; then
-            echo "MR ! $EXISTING_MR already exists for $BRANCH. Updating description..."
-            curl -s --fail-with-body --request PUT \
-              --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-              --header "Content-Type: application/json" \
-              --data "$(python3 -c "import json,sys; print(json.dumps({'description': sys.argv[1]}))" "$BODY")" \
-              "$GL_API/merge_requests/$EXISTING_MR" > /dev/null
-            echo "Updated MR ! $EXISTING_MR"
+          if [ "$MR_COUNT" -eq 0 ]; then
+            curl --fail-with-body --silent \
+              --request POST \
+              --header "PRIVATE-TOKEN: $TOKEN" \
+              --data-urlencode "source_branch=$BRANCH" \
+              --data-urlencode "target_branch=main" \
+              --data-urlencode "title=$TITLE" \
+              --data-urlencode "description=$DESCRIPTION" \
+              --data-urlencode "remove_source_branch=true" \
+              "$API/projects/$PROJECT_ID/merge_requests"
           else
-            echo "Creating new MR for $BRANCH..."
-            RESULT=$(
-              curl -s --fail-with-body --request POST \
-                --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-                --header "Content-Type: application/json" \
-                --data "$(python3 -c '
-          import json, sys
-          print(json.dumps({
-              "source_branch": sys.argv[1],
-              "target_branch": "main",
-              "title": "graph-ui: " + sys.argv[1].split("/", 1)[1] if "/" in sys.argv[1] else sys.argv[1],
-              "description": sys.argv[2],
-              "remove_source_branch": False,
-          }))
-          ' "$BRANCH" "$BODY")" \
-                "$GL_API/merge_requests"
-            )
-            MR_IID=$(printf '%s' "$RESULT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("iid","?"))' 2>/dev/null || echo "?")
-            echo "Created MR ! $MR_IID"
+            MR_IID="$(
+              printf '%s' "$OPEN_MRS" |
+              python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["iid"])'
+            )"
+            curl --fail-with-body --silent \
+              --request PUT \
+              --header "PRIVATE-TOKEN: $TOKEN" \
+              --data-urlencode "title=$TITLE" \
+              --data-urlencode "description=$DESCRIPTION" \
+              "$API/projects/$PROJECT_ID/merge_requests/$MR_IID"
           fi
+
+      - name: Remove private key
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$HOME/.ssh/id_ed25519"
