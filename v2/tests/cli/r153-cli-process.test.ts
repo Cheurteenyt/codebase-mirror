@@ -98,7 +98,11 @@ describe('R153: CLI process tests (TEST-R153-04)', () => {
     expect(result.exitCode).toBe(1);
     // The error is printed to stdout via console.log (not stderr).
     expect(result.stdout).toContain('Discovery root error');
-    expect(result.stdout).toContain('1 error(s)');
+    // R160 (CLI-R160-01): when result.failure is present, the first line is
+    // "indexing failed due to a system error" instead of "indexed with N
+    // error(s)". The errors list still shows "Errors: 1" in the Result block.
+    expect(result.stdout).toContain('Errors:          1');
+    expect(result.stdout).toContain('indexing failed due to a system error');
   });
 
   it('TEST-R153-04e: warnings printed BEFORE success banner (ordering)', async () => {

@@ -208,7 +208,15 @@ export interface IndexResult {
    * per-file extraction errors only.
    */
   failure?: {
-    code: 'PERSIST_FAILURE' | 'EXTRACTION_CRASH' | 'DB_ERROR' | 'UNKNOWN';
+    // R160 (API-R160-03): expanded failure code taxonomy. R159 used DB_ERROR
+    // for non-DB errors (missing root, discovery failure). R160 splits these
+    // into ROOT_ERROR (root validation), DISCOVERY_ERROR (discovery throw),
+    // DISCOVERY_PARTIAL (incomplete discovery), RESOLVER_ERROR (cross-file
+    // resolver crash — declared but not yet emitted), DB_ERROR (raw DB
+    // operation failure during cleanup/totals/publish), EXTRACTION_CRASH
+    // (preload/extraction crash), PERSIST_FAILURE (publication commit
+    // failure), UNKNOWN (declared but not yet emitted).
+    code: 'ROOT_ERROR' | 'DISCOVERY_ERROR' | 'DISCOVERY_PARTIAL' | 'DB_ERROR' | 'RESOLVER_ERROR' | 'EXTRACTION_CRASH' | 'PERSIST_FAILURE' | 'UNKNOWN';
     message: string;
     phase: string;
   };
@@ -300,6 +308,15 @@ function computeOutcome(
  * this, but the main path's staleReason builder fell back to
  * `PREVIOUSLY_STALE` with the indexError message, mislabeling extraction
  * errors. R159 fixes the main path builder to respect `undefined`.
+ *
+ * R160 (OBS-R160-01): The classifier now accepts and returns `paths`.
+ * R159's fast paths (no-op, deletion-only, main) returned `paths: []`
+ * even when the staleReason was HISTORICAL_ALIAS_BROKEN or
+ * COLD_START_LOCK — hiding the affected aliases from the user. R160
+ * passes `brokenAliasPaths`, `uncertainPathsList`, and
+ * `uncertainSubtreesList` to the classifier, which returns the
+ * appropriate list (capped at MAX_STALE_PATHS=100) based on which
+ * condition matched.
  */
 function classifyStaleReason(params: {
   semanticsStale: boolean;
@@ -309,8 +326,20 @@ function classifyStaleReason(params: {
   existingStale: boolean;
   hasExtractionErrors: boolean;
   callSitesInitialized: boolean;
-}): { code: NonNullable<NonNullable<IndexResult['staleReason']>['code']>; message: string; recovery: NonNullable<IndexResult['recovery']>; } | undefined {
+  // R160 (OBS-R160-01): path lists for the classifier to surface in
+  // staleReason.paths. brokenAliasPaths is used for COLD_START_LOCK and
+  // HISTORICAL_ALIAS_BROKEN; uncertainPathsList + uncertainSubtreesList
+  // are used for DISCOVERY_UNCERTAIN. The classifier caps the returned
+  // list at MAX_STALE_PATHS = 100.
+  brokenAliasPaths?: string[];
+  uncertainPathsList?: string[];
+  uncertainSubtreesList?: string[];
+}): { code: NonNullable<NonNullable<IndexResult['staleReason']>['code']>; message: string; recovery: NonNullable<IndexResult['recovery']>; paths: string[] } | undefined {
   const { semanticsStale, hasEffectiveHistoricalBrokenAliases, coldStartLock, hasUncertainty, existingStale, hasExtractionErrors, callSitesInitialized } = params;
+  // R160 (OBS-R160-01): MAX_STALE_PATHS cap, consistent with the
+  // full-uncertainty return's cap.
+  const MAX_STALE_PATHS = 100;
+  const cap = (arr: string[]): string[] => arr.slice(0, MAX_STALE_PATHS);
 
   // R159 (OUTCOME-R159-01): COLD_START_LOCK first — filesystem blocker.
   // If we recommend full_reindex here, the full will be blocked by the
@@ -320,6 +349,8 @@ function classifyStaleReason(params: {
       code: 'COLD_START_LOCK',
       message: `Cold-start lock: alias_history not yet initialized and broken aliases present. Fix or remove the broken symlinks, then rerun.`,
       recovery: 'fix_filesystem',
+      // R160 (OBS-R160-01): surface the broken alias paths.
+      paths: cap(params.brokenAliasPaths ?? []),
     };
   }
   // R159 (OUTCOME-R159-01): HISTORICAL_ALIAS_BROKEN second — filesystem blocker.
@@ -329,6 +360,8 @@ function classifyStaleReason(params: {
       code: 'HISTORICAL_ALIAS_BROKEN',
       message: `Historically-valid alias(es) now broken with target absent. Fix or restore the broken alias targets, then rerun.`,
       recovery: 'fix_filesystem',
+      // R160 (OBS-R160-01): surface the broken alias paths.
+      paths: cap(params.brokenAliasPaths ?? []),
     };
   }
   // R159 (OUTCOME-R159-01): SEMANTICS_MISMATCH third — only useful if filesystem
@@ -339,6 +372,7 @@ function classifyStaleReason(params: {
       code: 'SEMANTICS_MISMATCH',
       message: `Semantics version mismatch — full reindex required`,
       recovery: 'full_reindex',
+      paths: [],
     };
   }
   if (hasUncertainty) {
@@ -346,6 +380,8 @@ function classifyStaleReason(params: {
       code: 'DISCOVERY_UNCERTAIN',
       message: `Source snapshot uncertain: paths temporarily absent. Retry when filesystem is stable.`,
       recovery: 'retry_incremental',
+      // R160 (OBS-R160-01): surface the uncertain paths + subtrees.
+      paths: cap([...(params.uncertainPathsList ?? []), ...(params.uncertainSubtreesList ?? [])]),
     };
   }
   if (hasExtractionErrors) {
@@ -356,6 +392,7 @@ function classifyStaleReason(params: {
       code: 'PREVIOUSLY_STALE',
       message: `Call sites not initialized — full reindex required`,
       recovery: 'full_reindex',
+      paths: [],
     };
   }
   if (existingStale) {
@@ -363,6 +400,7 @@ function classifyStaleReason(params: {
       code: 'PREVIOUSLY_STALE',
       message: `Project was already stale; incremental did not refresh`,
       recovery: 'full_reindex',
+      paths: [],
     };
   }
   return undefined;
@@ -417,8 +455,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         crossFileCallsStale: true,
         outcome: 'FAILED',
         // R159 (API-R159-01): structured failure for programmatic triage.
-        failure: { code: 'DB_ERROR', message, phase: 'dry-run-root' },
-        recovery: 'retry_incremental',
+        // R160 (API-R160-03 + OUTCOME-R160-01): ROOT_ERROR (was DB_ERROR) —
+        // a missing/unreadable root is a filesystem issue, not a DB issue.
+        // Recovery is fix_filesystem (was retry_incremental) — the user must
+        // fix or remove the missing root before retrying.
+        failure: { code: 'ROOT_ERROR', message, phase: 'dry-run-root' },
+        recovery: 'fix_filesystem',
       };
     }
     let discovery: DiscoveryResult;
@@ -436,8 +478,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         crossFileCallsStale: true,
         outcome: 'FAILED',
         // R159 (API-R159-01): structured failure for programmatic triage.
-        failure: { code: 'DB_ERROR', message: `Discovery failed: ${discoveryMsg}`, phase: 'dry-run-discovery' },
-        recovery: 'retry_incremental',
+        // R160 (API-R160-03 + OUTCOME-R160-01): DISCOVERY_ERROR (was DB_ERROR)
+        // — a discovery throw is a filesystem issue, not a DB issue. Recovery
+        // is fix_filesystem (was retry_incremental).
+        failure: { code: 'DISCOVERY_ERROR', message: `Discovery failed: ${discoveryMsg}`, phase: 'dry-run-discovery' },
+        recovery: 'fix_filesystem',
       };
     }
     const langs = new Set<string>();
@@ -449,6 +494,17 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // return paths can include them. R152 dropped warnings from dry-run.
     const dryRunWarnings = buildDiscoveryWarnings(discovery);
     const dryRunStale = !discovery.complete;
+    // R160 (API-R160-02): extract the outcome into a variable so we can
+    // attach a `failure` field when the dry-run discovery was partial
+    // (errors>0 + aborted=true → FAILED). R159 returned FAILED with no
+    // `failure` field, so programmatic consumers couldn't distinguish a
+    // dry-run partial discovery from a clean dry-run via the failure.code.
+    const dryRunOutcome = computeOutcome(
+      discovery.errors.map(e => ({ file: e.path, error: `${e.code}: ${e.message}` })),
+      dryRunStale,
+      dryRunWarnings,
+      true,
+    );
     return {
       dbPath, durationMs: Date.now() - start, nodes: 0, edges: 0,
       files: discovery.files.length, skipped: 0,
@@ -458,12 +514,15 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       workerCount: 0,
       crossFileCallsStale: dryRunStale,
       warnings: dryRunWarnings,
-      outcome: computeOutcome(
-        discovery.errors.map(e => ({ file: e.path, error: `${e.code}: ${e.message}` })),
-        dryRunStale,
-        dryRunWarnings,
-        true,
-      ),
+      outcome: dryRunOutcome,
+      // R160 (API-R160-02): FAILED outcome now carries a structured failure
+      // with code=DISCOVERY_PARTIAL and phase=dry-run-discovery-partial.
+      // Recovery is fix_filesystem (the discovery errors are filesystem
+      // issues — broken symlinks, EACCES on subtrees, etc.).
+      failure: dryRunOutcome === 'FAILED'
+        ? { code: 'DISCOVERY_PARTIAL', message: `Dry-run discovery incomplete: ${discovery.totalErrors} error(s)`, phase: 'dry-run-discovery-partial' }
+        : undefined,
+      recovery: dryRunOutcome === 'FAILED' ? 'fix_filesystem' : undefined,
     };
   }
 
@@ -502,8 +561,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       outcome: 'FAILED',
       // R159 (API-R159-01): structured failure for programmatic triage.
-      failure: { code: 'DB_ERROR', message, phase: 'root-validation' },
-      recovery: 'retry_incremental',
+      // R160 (API-R160-03 + OUTCOME-R160-01): ROOT_ERROR (was DB_ERROR) —
+      // a missing/unreadable root is a filesystem issue. Recovery is
+      // fix_filesystem (was retry_incremental).
+      failure: { code: 'ROOT_ERROR', message, phase: 'root-validation' },
+      recovery: 'fix_filesystem',
     };
   }
 
@@ -552,8 +614,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       outcome: 'FAILED',
       // R159 (API-R159-01): structured failure for programmatic triage.
-      failure: { code: 'DB_ERROR', message: fullMsg, phase: 'discovery' },
-      recovery: 'retry_incremental',
+      // R160 (API-R160-03 + OUTCOME-R160-01): DISCOVERY_ERROR (was DB_ERROR)
+      // — a discovery throw is a filesystem issue. Recovery is fix_filesystem
+      // (was retry_incremental).
+      failure: { code: 'DISCOVERY_ERROR', message: fullMsg, phase: 'discovery' },
+      recovery: 'fix_filesystem',
     };
   }
 
@@ -668,7 +733,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
         warnings: discoveryWarnings,
         outcome: 'FAILED',
         // R159 (API-R159-01): structured failure for programmatic triage.
-        failure: { code: 'DB_ERROR', message: fullMsg, phase: 'discovery-partial' },
+        // R160 (API-R160-03): DISCOVERY_PARTIAL (was DB_ERROR) — the
+        // discovery was incomplete (subtree EACCES, fatal symlink errors).
+        // R160 (OUTCOME-R160-01): recovery is retry_incremental (unchanged)
+        // — the filesystem may be transiently unreadable (EACCES, lock),
+        // so retrying may succeed once the underlying issue clears.
+        failure: { code: 'DISCOVERY_PARTIAL', message: fullMsg, phase: 'discovery-partial' },
         recovery: 'retry_incremental',
       };
     }
@@ -692,7 +762,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       warnings: discoveryWarnings,
       outcome: 'FAILED',
       // R159 (API-R159-01): structured failure for programmatic triage.
-      failure: { code: 'DB_ERROR', message: fullMsg, phase: 'discovery-partial' },
+      // R160 (API-R160-03): DISCOVERY_PARTIAL (was DB_ERROR).
+      // R160 (OUTCOME-R160-01): recovery is retry_incremental (unchanged).
+      failure: { code: 'DISCOVERY_PARTIAL', message: fullMsg, phase: 'discovery-partial' },
       recovery: 'retry_incremental',
     };
   }
@@ -917,16 +989,26 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // and BEFORE any graph mutation. This runs AFTER the no-op and deletion-only
   // fast paths have returned, so it only affects the MAIN path.
   // Uses INSERT ON CONFLICT (UPSERT) so it works on first full index too.
-  // R158 (ROOT-R158-01): the ON CONFLICT DO UPDATE clause now also sets
+  // R158 (ROOT-R158-01): the ON CONFLICT DO UPDATE clause also set
   // root_path = excluded.root_path so a project reconfigured to a new root
-  // has its root_path updated atomically with the premark.
+  // had its root_path updated atomically with the premark.
+  // R160 (STATE-R160-02): REMOVED `root_path = excluded.root_path` from the
+  // ON CONFLICT DO UPDATE clause. The premark should NOT update root_path —
+  // only the final commit (commitAliasStateAtomically or updateProjectStats)
+  // should update root_path on success. The premark represents an ATTEMPTED
+  // root, not a confirmed snapshot root. If the premark updated root_path
+  // and the index then failed, the DB would record the attempted (possibly
+  // broken) root as the project's root_path, misleading Graph Status and
+  // the next run's root_fingerprint computation. Now the premark only
+  // updates stale/last_index_attempt_at/last_index_error; root_path is
+  // written by the INSERT (first full index) and updated only by the final
+  // commit on success.
   {
     const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at, last_index_error)
       VALUES (?, ?, ?, 1, ?, 'Index publication in progress')
       ON CONFLICT(name) DO UPDATE SET
-        root_path = excluded.root_path,
         cross_file_calls_stale = 1,
         last_index_attempt_at = excluded.last_index_attempt_at,
         last_index_error = excluded.last_index_error
@@ -1184,6 +1266,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       };
     }
     // R158 (OBS-R158-01): unified classifier for no-op stale path.
+    // R160 (OBS-R160-01): pass brokenAliasPaths + uncertainPathsList +
+    // uncertainSubtreesList so the classifier can surface affected paths
+    // in staleReason.paths (was `paths: []` in R159, hiding the aliases).
     const noOpClassified = noOpStale
       ? classifyStaleReason({
           semanticsStale,
@@ -1193,6 +1278,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           existingStale,
           hasExtractionErrors: false,
           callSitesInitialized: existingInitialized,
+          brokenAliasPaths: discovery.brokenAliases.map(a => a.aliasPath),
+          uncertainPathsList: discovery.uncertainPaths,
+          uncertainSubtreesList: discovery.uncertainSubtrees,
         })
       : undefined;
     return {
@@ -1210,8 +1298,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       warnings: discoveryWarnings,
       outcome: computeOutcome([], noOpStale, discoveryWarnings, false),
       // R158: classified staleReason/recovery for no-op stale path.
+      // R160 (OBS-R160-01): use the classifier's returned paths (was `paths: []`).
       staleReason: noOpClassified
-        ? { code: noOpClassified.code, message: noOpClassified.message, paths: [] }
+        ? { code: noOpClassified.code, message: noOpClassified.message, paths: noOpClassified.paths }
         : undefined,
       recovery: noOpClassified?.recovery,
     };
@@ -1233,16 +1322,19 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // R156 had no premark here — if commitAliasStateAtomically failed after
     // the cleanup transaction committed, the graph was modified but projects
     // could be fresh. R157 premarks so the graph is truthfully stale.
-    // R158 (ROOT-R158-01): the ON CONFLICT DO UPDATE clause now also sets
+    // R158 (ROOT-R158-01): the ON CONFLICT DO UPDATE clause also set
     // root_path = excluded.root_path so a project reconfigured to a new root
-    // has its root_path updated atomically with the premark.
+    // had its root_path updated atomically with the premark.
+    // R160 (STATE-R160-02): REMOVED `root_path = excluded.root_path` (same
+    // rationale as the main-path premark above — the premark is an attempted
+    // root, not a confirmed snapshot root; only the final commit should
+    // update root_path on success).
     {
       const now = new Date().toISOString();
       db.prepare(`
         INSERT INTO projects (name, root_path, indexed_at, cross_file_calls_stale, last_index_attempt_at, last_index_error)
         VALUES (?, ?, ?, 1, ?, 'Index publication in progress')
         ON CONFLICT(name) DO UPDATE SET
-          root_path = excluded.root_path,
           cross_file_calls_stale = 1,
           last_index_attempt_at = excluded.last_index_attempt_at,
           last_index_error = excluded.last_index_error
@@ -1382,6 +1474,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       }
     }
     // R158 (OBS-R158-02): unified classifier for deletion-only stale path.
+    // R160 (OBS-R160-01): pass brokenAliasPaths + uncertainPathsList +
+    // uncertainSubtreesList so the classifier can surface affected paths
+    // in staleReason.paths (was `paths: []` in R159).
     const deletionClassified = crossFileStale
       ? classifyStaleReason({
           semanticsStale,
@@ -1391,6 +1486,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           existingStale,
           hasExtractionErrors: false,
           callSitesInitialized,
+          brokenAliasPaths: discovery.brokenAliases.map(a => a.aliasPath),
+          uncertainPathsList: discovery.uncertainPaths,
+          uncertainSubtreesList: discovery.uncertainSubtrees,
         })
       : undefined;
     return {
@@ -1408,8 +1506,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       warnings: discoveryWarnings,
       outcome: computeOutcome([], crossFileStale, discoveryWarnings, false),
       // R158: classified staleReason/recovery for deletion-only stale path.
+      // R160 (OBS-R160-01): use the classifier's returned paths (was `paths: []`).
       staleReason: deletionClassified
-        ? { code: deletionClassified.code, message: deletionClassified.message, paths: [] }
+        ? { code: deletionClassified.code, message: deletionClassified.message, paths: deletionClassified.paths }
         : undefined,
       recovery: deletionClassified?.recovery,
     };
@@ -1432,13 +1531,21 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // PERSIST_FAILURE finally have been removed — the outer finally handles them.
   // The no-op and deletion-only fast paths return BEFORE this try and have
   // their own db.close() in their finally blocks (untouched).
+  //
+  // R160 (API-R160-04): `currentPhase` tracks which phase the orchestrator is
+  // in. The outer catch maps it to a failure code (EXTRACTION_CRASH for
+  // preload/extraction, DB_ERROR for cleanup/totals/publish). R159 always
+  // returned EXTRACTION_CRASH — too broad. A crash during cleanup/totals/
+  // publish is a DB operation, not extraction. The phase is also embedded in
+  // the failure.phase string (`main-path-<phase>`) for fine-grained triage.
+  let currentPhase: 'preload' | 'extraction' | 'cleanup' | 'totals' | 'publish' = 'preload';
   try {
     if (!useParallel) {
       // Single-thread: main thread needs the grammars
       await preloadGrammars(allLangs);
     }
     // Parallel: workers will load grammars themselves; skip main-thread preload
-
+    currentPhase = 'extraction';
     let result;
     if (useParallel) {
       result = await indexParallel(db, opts.project, effectiveRoot, langGroups, numWorkers, opts.incremental ?? false);
@@ -1455,6 +1562,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // Note: this block only runs when there were BOTH changed files to extract
     // AND deleted files to clean up. Deletion-only is handled by the fast path above.
     if (opts.incremental && deletedRelPaths.length > 0) {
+      currentPhase = 'cleanup';
       const deleteTx = db.transaction(() => {
         const ph = deletedRelPaths.map(() => '?').join(',');
         // Get node IDs for deleted files
@@ -1503,6 +1611,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       deleteTx();
     }
 
+    // R160 (API-R160-04): enter totals phase. The totals query is a DB read;
+    // a crash here is DB_ERROR, not EXTRACTION_CRASH.
+    currentPhase = 'totals';
     // R81: Bug 18 fix — after incremental, projects.node_count/edge_count must
     // reflect the TOTAL in the DB, not just the nodes/edges inserted in this run.
     const totals = db.prepare(`
@@ -1586,6 +1697,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // BEFORE alias_history persist, and a persist failure left the graph
     // fresh + initialized=1 but history empty/stale.
     // On STALE/FAILED, use updateProjectStats alone (no alias_history changes).
+    // R160 (API-R160-04): enter publish phase. Both updateProjectStats and
+    // commitAliasStateAtomically do DB writes; a crash here is DB_ERROR.
+    currentPhase = 'publish';
     if (crossFileStale) {
       updateProjectStats(db, opts.project, effectiveRoot, totals.nodes, totals.edges, crossFileStale, callSitesInitialized, semanticsVersion, indexError);
       // R159 (RES-R159-01): removed db.close() — outer finally handles it.
@@ -1644,8 +1758,11 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
 
     // R158 (OBS-R158-03): Unified classifier for main path. Replaces the
     // hand-rolled staleCode builder. The classifier returns the canonical
-    // {code, message, recovery} tuple or undefined (e.g., for extraction
+    // {code, message, recovery, paths} tuple or undefined (e.g., for extraction
     // errors, where the failure is per-file in `errors[]` not a staleReason).
+    // R160 (OBS-R160-01): pass brokenAliasPaths + uncertainPathsList +
+    // uncertainSubtreesList so the classifier can surface affected paths
+    // in staleReason.paths (was `paths: []` in R159).
     const mainClassified = crossFileStale
       ? classifyStaleReason({
           semanticsStale,
@@ -1655,6 +1772,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
           existingStale,
           hasExtractionErrors: Boolean(fullModeHadErrors || incrementalHadErrors),
           callSitesInitialized,
+          brokenAliasPaths: discovery.brokenAliases.map(a => a.aliasPath),
+          uncertainPathsList: discovery.uncertainPaths,
+          uncertainSubtreesList: discovery.uncertainSubtrees,
         })
       : undefined;
 
@@ -1677,8 +1797,9 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       // is undefined. The per-file errors are in result.errors[]; outcome is
       // PARTIAL/FAILED based on errors.length. Recovery falls back to
       // 'retry_incremental' when crossFileStale && !mainClassified.
+      // R160 (OBS-R160-01): use the classifier's returned paths (was `paths: []`).
       staleReason: mainClassified
-        ? { code: mainClassified.code, message: mainClassified.message, paths: [] }
+        ? { code: mainClassified.code, message: mainClassified.message, paths: mainClassified.paths }
         : undefined,
       recovery: mainClassified?.recovery ?? (crossFileStale
         ? 'retry_incremental'
@@ -1689,7 +1810,20 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     // The premark at line ~857 already set cross_file_calls_stale=1 with
     // last_index_error='Index publication in progress'. Now overwrite with
     // the real error message so Graph Status shows the actual failure.
-    const errMsg = `Index failed: ${error instanceof Error ? error.message : String(error)}`;
+    // R160 (API-R160-04): map the currentPhase to a specific failure code.
+    // R159 always returned EXTRACTION_CRASH — too broad. A crash during
+    // cleanup/totals/publish is a DB operation, not extraction. R160 splits:
+    //   - preload/extraction → EXTRACTION_CRASH
+    //   - cleanup/totals/publish → DB_ERROR
+    // R160 (OUTCOME-R160-01): recovery is full_reindex in full mode (the
+    // graph may be partially mutated; a full reindex is the safe recovery),
+    // retry_incremental in incremental mode (the existing graph is preserved;
+    // retrying the incremental may succeed).
+    let failCode: 'EXTRACTION_CRASH' | 'DB_ERROR' | 'RESOLVER_ERROR' = 'EXTRACTION_CRASH';
+    if (currentPhase === 'cleanup' || currentPhase === 'totals' || currentPhase === 'publish') {
+      failCode = 'DB_ERROR';
+    }
+    const errMsg = `Index failed during ${currentPhase}: ${error instanceof Error ? error.message : String(error)}`;
     try {
       const now = new Date().toISOString();
       db.prepare('UPDATE projects SET cross_file_calls_stale = 1, last_index_attempt_at = ?, last_index_error = ? WHERE name = ?').run(now, errMsg, opts.project);
@@ -1708,11 +1842,12 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
       crossFileCallsStale: true,
       outcome: 'FAILED',
       // R159 (API-R159-01 + RES-R159-01): structured failure with EXTRACTION_CRASH.
-      // The inner catch (PERSIST_FAILURE) handles publication failures; this
-      // outer catch handles everything else — preloadGrammars crash, extraction
-      // crash, deleteTx crash, totals query crash, updateProjectStats crash.
-      failure: { code: 'EXTRACTION_CRASH', message: errMsg, phase: 'main-path' },
-      recovery: 'retry_incremental',
+      // R160 (API-R160-04): now phase-tracked — EXTRACTION_CRASH for
+      // preload/extraction, DB_ERROR for cleanup/totals/publish.
+      // R160 (OUTCOME-R160-01): recovery is full_reindex in full mode,
+      // retry_incremental in incremental mode.
+      failure: { code: failCode, message: errMsg, phase: `main-path-${currentPhase}` },
+      recovery: opts.incremental ? 'retry_incremental' : 'full_reindex',
     };
   } finally {
     // R159 (RES-R159-01): guaranteed DB close. This is the ONLY db.close()

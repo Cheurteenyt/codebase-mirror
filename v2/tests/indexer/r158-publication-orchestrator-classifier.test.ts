@@ -276,9 +276,21 @@ describe('R158: Publication Orchestrator + Unified Classifier', () => {
     // failure field. This source-inspection test guards against accidental
     // removal of the field (a regression would silently break programmatic
     // consumers that rely on failure.code for triage).
+    // R160 (API-R160-03): the type union was expanded from
+    //   'PERSIST_FAILURE' | 'EXTRACTION_CRASH' | 'DB_ERROR' | 'UNKNOWN'
+    // to
+    //   'ROOT_ERROR' | 'DISCOVERY_ERROR' | 'DISCOVERY_PARTIAL' | 'DB_ERROR' |
+    //   'RESOLVER_ERROR' | 'EXTRACTION_CRASH' | 'PERSIST_FAILURE' | 'UNKNOWN'
     const indexerSrc = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     expect(indexerSrc).toContain('failure?: {');
-    expect(indexerSrc).toContain("code: 'PERSIST_FAILURE' | 'EXTRACTION_CRASH' | 'DB_ERROR' | 'UNKNOWN'");
+    expect(indexerSrc).toContain("'ROOT_ERROR'");
+    expect(indexerSrc).toContain("'DISCOVERY_ERROR'");
+    expect(indexerSrc).toContain("'DISCOVERY_PARTIAL'");
+    expect(indexerSrc).toContain("'RESOLVER_ERROR'");
+    expect(indexerSrc).toContain("'EXTRACTION_CRASH'");
+    expect(indexerSrc).toContain("'PERSIST_FAILURE'");
+    expect(indexerSrc).toContain("'DB_ERROR'");
+    expect(indexerSrc).toContain("'UNKNOWN'");
     expect(indexerSrc).toContain('message: string');
     expect(indexerSrc).toContain('phase: string');
   });
@@ -311,12 +323,42 @@ describe('R158: Publication Orchestrator + Unified Classifier', () => {
     expect(indexerSrc).toContain('const cappedPaths = brokenPaths.slice(0, MAX_STALE_PATHS)');
   });
 
-  it('regression: premark UPSERT includes root_path = excluded.root_path (both paths)', () => {
+  it('regression: premark UPSERT does NOT update root_path (R160 STATE-R160-02)', () => {
+    // R158 (ROOT-R158-01): the premark UPSERT set root_path = excluded.root_path
+    // so a project reconfigured to a new root had its root_path updated
+    // atomically with the premark.
+    // R160 (STATE-R160-02): REMOVED `root_path = excluded.root_path` from BOTH
+    // premark UPSERT blocks (main path + deletion-only path). The premark
+    // should NOT update root_path — only the final commit (via
+    // commitAliasStateAtomically or updateProjectStats) should update
+    // root_path on success. The premark represents an ATTEMPTED root, not a
+    // confirmed snapshot root. If the premark updated root_path and the index
+    // then failed, the DB would record the attempted (possibly broken) root
+    // as the project's root_path, misleading Graph Status and the next run's
+    // root_fingerprint computation.
     const indexerSrc = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
-    // Two premark UPSERTs — main path + deletion-only path — both must update
-    // root_path. Count occurrences of the SET clause.
-    const matches = indexerSrc.match(/root_path = excluded\.root_path/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(2);
+    // The premark is identifiable by the 'Index publication in progress'
+    // literal in the INSERT VALUES. The final commit UPSERTs (in schema.ts)
+    // DO legitimately use `root_path = excluded.root_path` because they are
+    // the success path. We extract the two premark blocks (in indexer.ts)
+    // and verify they don't contain the root_path update in the actual SQL.
+    const premarkMarker = "'Index publication in progress'";
+    let cursor = 0;
+    let premarkCount = 0;
+    while (true) {
+      const idx = indexerSrc.indexOf(premarkMarker, cursor);
+      if (idx === -1) break;
+      premarkCount++;
+      // Extract a window around the marker (the SQL block is ~500 chars).
+      const block = indexerSrc.slice(idx - 400, idx + 200);
+      // R160 (STATE-R160-02): the premark block must NOT contain
+      // root_path = excluded.root_path in the ON CONFLICT DO UPDATE clause
+      // (with the trailing comma to avoid matching comments).
+      expect(block).not.toContain('root_path = excluded.root_path,');
+      cursor = idx + 1;
+    }
+    // There must be at least 2 premark blocks (main path + deletion-only).
+    expect(premarkCount).toBeGreaterThanOrEqual(2);
   });
 
   it('regression: sync-graph-ui workflow no longer uses --depth=1 fetch', () => {

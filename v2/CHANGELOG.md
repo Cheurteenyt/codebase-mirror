@@ -1,5 +1,173 @@
 # Changelog — Codebase Memory V2
 
+## 0.65.0 — Round 160 (2026-07-11) Full Orchestrator Failure Taxonomy
+
+**85th round (GPT 5.6 Sol audit R159).** 8 P1/P2 fixed.
+Closes the 8 confirmed code findings of the R159 audit.
+
+### Expanded failure code taxonomy (1 P1/P2)
+
+239. **P1/P2 `DB_ERROR` used for non-DB errors** (`indexer.ts`) — R159
+     lumped missing-root, discovery-throw, and discovery-partial failures
+     all under `DB_ERROR`. A missing root is a filesystem issue, not a DB
+     issue; a discovery throw is a filesystem issue; a partial discovery is
+     a filesystem completeness issue. Programmatic consumers couldn't
+     triage by phase without string-matching the message. Fixed: expanded
+     the `failure.code` type union from
+     `'PERSIST_FAILURE' | 'EXTRACTION_CRASH' | 'DB_ERROR' | 'UNKNOWN'` to
+     `'ROOT_ERROR' | 'DISCOVERY_ERROR' | 'DISCOVERY_PARTIAL' | 'DB_ERROR' |
+     'RESOLVER_ERROR' | 'EXTRACTION_CRASH' | 'PERSIST_FAILURE' | 'UNKNOWN'`.
+     Each early FAILED path now uses the correct code:
+     - `phase: 'root-validation'` → `code: 'ROOT_ERROR'` (was DB_ERROR)
+     - `phase: 'dry-run-root'` → `code: 'ROOT_ERROR'` (was DB_ERROR)
+     - `phase: 'discovery'` → `code: 'DISCOVERY_ERROR'` (was DB_ERROR)
+     - `phase: 'dry-run-discovery'` → `code: 'DISCOVERY_ERROR'` (was DB_ERROR)
+     - `phase: 'discovery-partial'` → `code: 'DISCOVERY_PARTIAL'` (was DB_ERROR)
+     `DB_ERROR` is now reserved for actual DB operation failures (the outer
+     catch's cleanup/totals/publish phases). `RESOLVER_ERROR` and `UNKNOWN`
+     are declared but not yet emitted (carryover). (API-R160-03)
+
+### Recovery per phase (1 P1/P2)
+
+240. **P1/P2 recovery always `retry_incremental`** (`indexer.ts`) — R159
+     returned `recovery: 'retry_incremental'` for ALL FAILED paths,
+     including root failure (where retrying won't help — the root is
+     missing) and the outer catch in full mode (where the graph may be
+     partially mutated and a full reindex is the safe recovery). Fixed:
+     - Root failure (`ROOT_ERROR`) → `recovery: 'fix_filesystem'`
+     - Discovery failure (`DISCOVERY_ERROR`) → `recovery: 'fix_filesystem'`
+     - Discovery partial (`DISCOVERY_PARTIAL`) → `recovery: 'retry_incremental'`
+       (unchanged — the filesystem may be transiently unreadable)
+     - Dry-run root → `recovery: 'fix_filesystem'`
+     - Dry-run discovery → `recovery: 'fix_filesystem'`
+     - Dry-run discovery partial → `recovery: 'fix_filesystem'`
+     - Outer catch main-path: if `!opts.incremental` (full mode) →
+       `recovery: 'full_reindex'`, else `recovery: 'retry_incremental'`.
+       In full mode, the graph may be partially mutated by
+       `clearProjectData` followed by a crash; a full reindex is the only
+       safe recovery. In incremental mode, the existing graph is preserved
+       (extraction is in-place), so retrying the incremental may succeed.
+     (OUTCOME-R160-01)
+
+### Dry-run partial FAILED now carries `failure` (1 P1/P2)
+
+241. **P1/P2 dry-run partial FAILED has no `failure` field** (`indexer.ts`)
+     — R159's dry-run success return called `computeOutcome(...)` with
+     `aborted=true`, so a dry-run with discovery errors returned
+     `outcome: 'FAILED'` but no `failure` field. Programmatic consumers
+     couldn't distinguish a dry-run partial discovery from a clean dry-run
+     via `failure.code`. Fixed: extract the outcome into a `dryRunOutcome`
+     variable; when `FAILED`, attach
+     `failure: { code: 'DISCOVERY_PARTIAL', message: 'Dry-run discovery
+     incomplete: N error(s)', phase: 'dry-run-discovery-partial' }` and
+     `recovery: 'fix_filesystem'`. (API-R160-02)
+
+### Phase tracking in outer catch (1 P1/P2)
+
+242. **P1/P2 `EXTRACTION_CRASH` too broad** (`indexer.ts`) — R159's outer
+     catch always returned `failure: { code: 'EXTRACTION_CRASH', phase:
+     'main-path' }` regardless of which phase the orchestrator was in. A
+     crash during cleanup (deleteTx), totals query, or publish
+     (commitAliasStateAtomically) is a DB operation, not extraction.
+     Programmatic consumers couldn't distinguish a preload/extraction crash
+     from a publish crash. Fixed: added `let currentPhase: 'preload' |
+     'extraction' | 'cleanup' | 'totals' | 'publish' = 'preload'` before
+     the outer try. Updated before each major operation (preloadGrammars →
+     extraction, deleteTx → cleanup, totals query → totals,
+     commitAliasStateAtomically → publish). The outer catch maps
+     `currentPhase` to the failure code: preload/extraction →
+     `EXTRACTION_CRASH`, cleanup/totals/publish → `DB_ERROR`. The phase is
+     also embedded in the `failure.phase` string as `main-path-<phase>`
+     for fine-grained triage. (API-R160-04)
+
+### Premark no longer updates root_path (1 P1/P2)
+
+243. **P1/P2 `root_path` updated in premark** (`indexer.ts`) — R158's
+     premark UPSERT (both the main-path premark and the deletion-only
+     premark) set `root_path = excluded.root_path` in the ON CONFLICT DO
+     UPDATE clause. The premark represents an ATTEMPTED root, not a
+     confirmed snapshot root. If the premark updated root_path and the
+     index then failed, the DB would record the attempted (possibly
+     broken) root as the project's root_path, misleading Graph Status and
+     the next run's root_fingerprint computation. Fixed: REMOVED
+     `root_path = excluded.root_path` from BOTH premark UPSERT blocks.
+     The premark only updates `cross_file_calls_stale`,
+     `last_index_attempt_at`, `last_index_error`. `root_path` is written
+     by the INSERT (first full index) and updated only by the final commit
+     (`commitAliasStateAtomically` or `updateProjectStats`) on success.
+     (STATE-R160-02)
+
+### CLI banner: "system error" not "0 errors" (1 P1/P2)
+
+244. **P1/P2 "indexed with 0 error(s)" before system failure message**
+     (`cli/commands/index.ts`) — R159's PARTIAL/FAILED banner always
+     printed `⚠ Project "${project}" indexed with ${result.errors.length}
+     error(s).` as the first line, even when `result.failure` was present.
+     For a system failure (root error, discovery failure, extraction
+     crash, persist failure), `errors.length` is 0 (errors[] is reserved
+     for per-file extraction errors), so the user saw "indexed with 0
+     error(s)" followed by the system failure message — confusing because
+     "0 errors" suggests success. Fixed: when `result.failure` is present,
+     the first line is `⚠ Project "${project}" indexing failed due to a
+     system error.` instead. The structured failure block (Code/Phase/
+     Message) follows immediately. (CLI-R160-01)
+
+### Classifier surfaces paths for historical alias / cold-start (1 P1/P2)
+
+245. **P1/P2 fast paths return `paths: []` even for historical alias /
+     cold-start** (`indexer.ts`) — R159's `classifyStaleReason` did not
+     accept or return paths. The no-op, deletion-only, and main paths all
+     hardcoded `paths: []` in the staleReason builder, even when the
+     staleReason was `HISTORICAL_ALIAS_BROKEN` or `COLD_START_LOCK`. The
+     user saw "graph is stale: historically-valid alias(es) now broken"
+     with no list of the affected aliases — they had to manually find the
+     broken symlinks. Fixed: `classifyStaleReason` now accepts
+     `brokenAliasPaths`, `uncertainPathsList`, and `uncertainSubtreesList`
+     params. When returning `HISTORICAL_ALIAS_BROKEN` or `COLD_START_LOCK`,
+     it includes `params.brokenAliasPaths` (capped at 100). When returning
+     `DISCOVERY_UNCERTAIN`, it includes `params.uncertainPathsList +
+     params.uncertainSubtreesList` (capped at 100). All three callers
+     (no-op, deletion-only, main) now pass `discovery.brokenAliases.map(a
+     => a.aliasPath)`, `discovery.uncertainPaths`, and
+     `discovery.uncertainSubtrees`, and use the classifier's returned
+     paths in `staleReason.paths` (was `paths: []`). The full-uncertainty
+     return (full mode) already had correct path collection and is
+     unchanged. (OBS-R160-01)
+
+### Tests
+
+- New: `tests/indexer/r160-full-orchestrator-failure-taxonomy.test.ts`:
+  - Failure code taxonomy tests (ROOT_ERROR for root-validation/dry-run-root,
+    DISCOVERY_ERROR for discovery/dry-run-discovery, DISCOVERY_PARTIAL for
+    discovery-partial, PERSIST_FAILURE for commit failures, EXTRACTION_CRASH
+    for preload/extraction phase, DB_ERROR for cleanup/totals/publish phase).
+  - Recovery per phase tests (root → fix_filesystem, discovery → fix_filesystem,
+    discovery-partial → retry_incremental, full-mode outer crash → full_reindex,
+    incremental outer crash → retry_incremental).
+  - Dry-run partial FAILED has failure (DISCOVERY_PARTIAL +
+    phase=dry-run-discovery-partial + recovery=fix_filesystem).
+  - CLI displays "indexing failed due to a system error" (not "0 errors")
+    when result.failure is present.
+  - Classifier includes paths for historical alias / cold-start /
+    discovery-uncertain (no-op, deletion-only, and main paths).
+  - Source-inspection regression guards (expanded type union, currentPhase
+    variable, premark UPSERT without root_path, classifier returns paths).
+- Updated: `tests/indexer/r158-publication-orchestrator-classifier.test.ts`:
+  - Type union regression guard now checks for the expanded taxonomy.
+  - Premark regression guard now asserts `root_path = excluded.root_path`
+    is GONE (was: at least 2 occurrences).
+- Updated: `tests/indexer/r159-true-orchestrator.test.ts`:
+  - Early-FAILED tests now expect ROOT_ERROR / DISCOVERY_PARTIAL (was
+    DB_ERROR) and check recovery (fix_filesystem / retry_incremental).
+  - Outer-catch test now expects phase=`main-path-extraction` (was
+    `main-path`).
+  - CLI tests now expect `Code: ROOT_ERROR` (was DB_ERROR) and
+    "indexing failed due to a system error" (was "indexed with 0 error(s)").
+  - Source-inspection guards updated for the expanded taxonomy,
+    phase-tracked outer catch, and classifier-returned paths.
+
+### Total: 246 bugs + 11 optimizations + 490+ indexer tests across 85 rounds
+
 ## 0.64.0 — Round 159 (2026-07-11) True Orchestrator + Discriminated Result
 
 **84th round (GPT 5.6 Sol audit R158).** 6 P1/P2 fixed.

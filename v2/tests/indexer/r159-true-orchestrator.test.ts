@@ -233,28 +233,36 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
   // R159 adds it to root-validation, discovery, discovery-partial, dry-run-root,
   // dry-run-discovery, and main-path (outer catch).
 
-  it('API-R159-01a: root-validation FAILED carries failure.DB_ERROR', async () => {
+  it('API-R159-01a: root-validation FAILED carries failure.ROOT_ERROR (R160)', async () => {
     // Missing root → assertDiscoveryRoot throws → root-validation FAILED.
+    // R160 (API-R160-03): code is ROOT_ERROR (was DB_ERROR) — a missing/
+    // unreadable root is a filesystem issue, not a DB issue.
     const r = await indexProjectWasm({ project: projectName, rootPath: join(tmpDir, 'does-not-exist'), incremental: false, useWasm: true });
     expect(r.outcome).toBe('FAILED');
     expect(r.failure).toBeDefined();
-    expect(r.failure!.code).toBe('DB_ERROR');
+    expect(r.failure!.code).toBe('ROOT_ERROR');
     expect(r.failure!.phase).toBe('root-validation');
     expect(r.failure!.message.length).toBeGreaterThan(0);
+    // R160 (OUTCOME-R160-01): recovery is fix_filesystem (was retry_incremental).
+    expect(r.recovery).toBe('fix_filesystem');
   });
 
-  it('API-R159-01b: dry-run-root FAILED carries failure.DB_ERROR + phase=dry-run-root', async () => {
+  it('API-R159-01b: dry-run-root FAILED carries failure.ROOT_ERROR + phase=dry-run-root (R160)', async () => {
     // Dry-run with missing root → dry-run-root FAILED.
+    // R160 (API-R160-03): code is ROOT_ERROR (was DB_ERROR).
     const r = await indexProjectWasm({ project: projectName, rootPath: join(tmpDir, 'does-not-exist'), incremental: false, dryRun: true, useWasm: true });
     expect(r.outcome).toBe('FAILED');
     expect(r.failure).toBeDefined();
-    expect(r.failure!.code).toBe('DB_ERROR');
+    expect(r.failure!.code).toBe('ROOT_ERROR');
     expect(r.failure!.phase).toBe('dry-run-root');
+    // R160 (OUTCOME-R160-01): recovery is fix_filesystem.
+    expect(r.recovery).toBe('fix_filesystem');
   });
 
-  it('API-R159-01c: discovery-partial FAILED carries failure.DB_ERROR + phase=discovery-partial', async () => {
+  it('API-R159-01c: discovery-partial FAILED carries failure.DISCOVERY_PARTIAL + phase=discovery-partial (R160)', async () => {
     // Create a directory with no read permission on a subdir → discovery is
     // partial (subtree EACCES). Use a non-readable subdir.
+    // R160 (API-R160-03): code is DISCOVERY_PARTIAL (was DB_ERROR).
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     const subDir = join(projectDir, 'subdir');
     mkdirSync(subDir);
@@ -273,7 +281,7 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
       // asserts the contract when discovery is genuinely partial.
       if (r.outcome === 'FAILED') {
         expect(r.failure).toBeDefined();
-        expect(r.failure!.code).toBe('DB_ERROR');
+        expect(r.failure!.code).toBe('DISCOVERY_PARTIAL');
         expect(r.failure!.phase).toBe('discovery-partial');
       }
     } catch {
@@ -287,13 +295,17 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
   // Inject an extraction crash and verify the outer catch returns FAILED with
   // failure.EXTRACTION_CRASH. R158 would have let the exception escape.
 
-  it('RES-R159-01a: extractFromFilesWasm throws → FAILED + failure.EXTRACTION_CRASH + phase=main-path', async () => {
+  it('RES-R159-01a: extractFromFilesWasm throws → FAILED + failure.EXTRACTION_CRASH + phase=main-path-extraction (R160)', async () => {
     // Run 1: full index (success).
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     // Run 2: modify the file so the main path runs (not no-op), then inject
     // an extraction crash. The outer try/catch should catch it and return
     // FAILED with failure.EXTRACTION_CRASH.
+    // R160 (API-R160-04): phase is now `main-path-extraction` (was `main-path`)
+    // because the phase tracker records which phase the orchestrator was in.
+    // R160 (OUTCOME-R160-01): recovery is retry_incremental in incremental
+    // mode (unchanged).
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 2; }\n');
     extractionCrash.shouldCrash = true;
     extractionCrash.phase = 'main-path';
@@ -301,7 +313,7 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
     expect(r.outcome).toBe('FAILED');
     expect(r.failure).toBeDefined();
     expect(r.failure!.code).toBe('EXTRACTION_CRASH');
-    expect(r.failure!.phase).toBe('main-path');
+    expect(r.failure!.phase).toBe('main-path-extraction');
     expect(r.failure!.message).toContain('injected extractFromFilesWasm crash');
     expect(r.crossFileCallsStale).toBe(true);
     expect(r.recovery).toBe('retry_incremental');
@@ -385,28 +397,34 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
   // R158 added the `failure` field but the CLI never surfaced it. R159 prints
   // code/phase/message in the PARTIAL/FAILED banner.
 
-  it('CLI-R159-01a: missing root → CLI prints "System failure" with code/phase/message', async () => {
-    // Missing root → root-validation FAILED with failure.DB_ERROR.
+  it('CLI-R159-01a: missing root → CLI prints "System failure" with code/phase/message (R160)', async () => {
+    // Missing root → root-validation FAILED with failure.ROOT_ERROR (R160).
     const result = await runCli(
       ['index', '--project', projectName, '--root', join(tmpDir, 'does-not-exist')],
       { XDG_CACHE_HOME: cacheDir },
     );
     expect(result.exitCode).toBe(1);
     // R159 (CLI-R159-01): CLI prints the structured failure field.
+    // R160 (API-R160-03): code is ROOT_ERROR (was DB_ERROR).
     expect(result.stdout).toContain('System failure:');
-    expect(result.stdout).toContain('Code: DB_ERROR');
+    expect(result.stdout).toContain('Code: ROOT_ERROR');
     expect(result.stdout).toContain('Phase: root-validation');
     expect(result.stdout).toContain('Message:');
+    // R160 (CLI-R160-01): first line says "indexing failed due to a system error"
+    // (was "indexed with 0 error(s)").
+    expect(result.stdout).toContain('indexing failed due to a system error');
+    expect(result.stdout).not.toContain('indexed with 0 error');
   });
 
-  it('CLI-R159-01b: dry-run missing root → CLI prints failure with phase=dry-run-root', async () => {
+  it('CLI-R159-01b: dry-run missing root → CLI prints failure with phase=dry-run-root (R160)', async () => {
     const result = await runCli(
       ['index', '--project', projectName, '--root', join(tmpDir, 'does-not-exist'), '--dry-run'],
       { XDG_CACHE_HOME: cacheDir },
     );
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toContain('System failure:');
-    expect(result.stdout).toContain('Code: DB_ERROR');
+    // R160 (API-R160-03): code is ROOT_ERROR (was DB_ERROR).
+    expect(result.stdout).toContain('Code: ROOT_ERROR');
     expect(result.stdout).toContain('Phase: dry-run-root');
   });
 
@@ -459,31 +477,37 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
     expect(historicalIdx).toBeLessThan(semanticsIdx);
   });
 
-  it('regression: outer try/catch/finally wraps the main path', () => {
+  it('regression: outer try/catch/finally wraps the main path (R160 phase tracking)', () => {
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     // R159 (RES-R159-01): outer catch returns EXTRACTION_CRASH at main-path.
-    expect(src).toContain("failure: { code: 'EXTRACTION_CRASH', message: errMsg, phase: 'main-path' }");
+    // R160 (API-R160-04): phase is now `main-path-${currentPhase}` — the
+    // literal `'main-path'` (without a suffix) is no longer present. Instead,
+    // the source contains the template literal `main-path-${currentPhase}`.
+    expect(src).toContain('phase: `main-path-${currentPhase}`');
     // The outer finally closes the db.
     expect(src).toContain('R159 (RES-R159-01): guaranteed DB close');
+    // R160 (API-R160-04): currentPhase variable is declared before the try.
+    expect(src).toContain("let currentPhase: 'preload' | 'extraction' | 'cleanup' | 'totals' | 'publish' = 'preload'");
   });
 
-  it('regression: all FAILED paths include a failure field', () => {
+  it('regression: all FAILED paths include a failure field (R160 taxonomy)', () => {
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     // R159 (API-R159-01): each FAILED return path must set `failure:`.
     // The publication-failure catch blocks (R158):
     expect(src).toContain("failure: { code: 'PERSIST_FAILURE', message: noOpErrMsg, phase: 'no-op-commit' }");
     expect(src).toContain("failure: { code: 'PERSIST_FAILURE', message: deletionErrMsg, phase: 'deletion-only-commit' }");
     expect(src).toContain("failure: { code: 'PERSIST_FAILURE', message: errMsg, phase: 'main-commit' }");
-    // R159 additions — early FAILED paths:
-    expect(src).toContain("failure: { code: 'DB_ERROR', message, phase: 'dry-run-root' }");
-    expect(src).toContain("failure: { code: 'DB_ERROR', message: `Discovery failed: ${discoveryMsg}`, phase: 'dry-run-discovery' }");
-    expect(src).toContain("failure: { code: 'DB_ERROR', message, phase: 'root-validation' }");
-    expect(src).toContain("failure: { code: 'DB_ERROR', message: fullMsg, phase: 'discovery' }");
+    // R160 (API-R160-03): early FAILED paths now use ROOT_ERROR / DISCOVERY_ERROR /
+    // DISCOVERY_PARTIAL instead of DB_ERROR.
+    expect(src).toContain("failure: { code: 'ROOT_ERROR', message, phase: 'dry-run-root' }");
+    expect(src).toContain("failure: { code: 'DISCOVERY_ERROR', message: `Discovery failed: ${discoveryMsg}`, phase: 'dry-run-discovery' }");
+    expect(src).toContain("failure: { code: 'ROOT_ERROR', message, phase: 'root-validation' }");
+    expect(src).toContain("failure: { code: 'DISCOVERY_ERROR', message: fullMsg, phase: 'discovery' }");
     // Two discovery-partial FAILED paths (full mode + incremental mode).
     const partialMatches = src.match(/phase: 'discovery-partial'/g) ?? [];
     expect(partialMatches.length).toBeGreaterThanOrEqual(2);
-    // The outer-catch FAILED path.
-    expect(src).toContain("failure: { code: 'EXTRACTION_CRASH', message: errMsg, phase: 'main-path' }");
+    // The outer-catch FAILED path uses the phase-tracked failCode.
+    expect(src).toContain('failure: { code: failCode, message: errMsg, phase: `main-path-${currentPhase}` }');
   });
 
   it('regression: staleReason type carries totalPaths + pathsTruncated', () => {
@@ -502,8 +526,9 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
     // ? { code: 'PREVIOUSLY_STALE', ... }` must be GONE from the main path.
     // The new builder is `mainClassified ? {...} : undefined`.
     expect(src).not.toContain("crossFileStale && indexError !== null");
-    // The main-path return uses the cleaner builder.
-    expect(src).toContain('staleReason: mainClassified\n        ? { code: mainClassified.code, message: mainClassified.message, paths: [] }\n        : undefined,');
+    // R160 (OBS-R160-01): the main-path return uses the cleaner builder, and
+    // now uses `paths: mainClassified.paths` (was `paths: []` in R159).
+    expect(src).toContain('staleReason: mainClassified\n        ? { code: mainClassified.code, message: mainClassified.message, paths: mainClassified.paths }\n        : undefined,');
   });
 
   it('regression: CLI prints System failure / Code / Phase / Message', () => {
@@ -519,11 +544,12 @@ describe('R159: True Orchestrator + Discriminated Result', () => {
     expect(src).toContain('showing ${result.staleReason.paths.length} of ${result.staleReason.totalPaths}');
   });
 
-  it('regression: IndexResult type still carries all required R158 fields', () => {
+  it('regression: IndexResult type still carries all required R158 fields (R160 expanded)', () => {
     const src = readFileSync(join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf8');
     // R158 fields must still be present (R159 doesn't remove them).
+    // R160 (API-R160-03): the type union was expanded.
     expect(src).toContain('failure?: {');
-    expect(src).toContain("code: 'PERSIST_FAILURE' | 'EXTRACTION_CRASH' | 'DB_ERROR' | 'UNKNOWN'");
+    expect(src).toContain("'ROOT_ERROR' | 'DISCOVERY_ERROR' | 'DISCOVERY_PARTIAL' | 'DB_ERROR' | 'RESOLVER_ERROR' | 'EXTRACTION_CRASH' | 'PERSIST_FAILURE' | 'UNKNOWN'");
     expect(src).toContain('phase: string;');
   });
 });

@@ -166,7 +166,19 @@ export function registerIndexCommand(program: Command): void {
           }
         } else if (result.outcome === 'PARTIAL' || result.outcome === 'FAILED') {
           console.log();
-          console.log(`⚠ Project "${project}" indexed with ${result.errors.length} error(s).`);
+          // R160 (CLI-R160-01): when a system failure is present, the first
+          // line should say "indexing failed due to a system error" instead
+          // of "indexed with N error(s)". R159 printed "indexed with 0
+          // error(s)" before the system failure message — confusing because
+          // the user sees "0 errors" then "system failure". Now the first
+          // line reflects the true nature of the failure: per-file extraction
+          // errors (PARTIAL with errors>0) vs system error (FAILED with
+          // failure field).
+          if (result.failure) {
+            console.log(`⚠ Project "${project}" indexing failed due to a system error.`);
+          } else {
+            console.log(`⚠ Project "${project}" indexed with ${result.errors.length} error(s).`);
+          }
           // R159 (CLI-R159-01): display structured `failure` field when present.
           // R158 added the `failure` field on IndexResult but the CLI never
           // surfaced it — programmatic consumers (MCP, Graph UI) could triage

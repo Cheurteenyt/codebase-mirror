@@ -1,6 +1,6 @@
 # V2 Current State — Codebase Memory V2
 
-> **Authoritative snapshot of the current product state.** Updated R159 (2026-07-11).
+> **Authoritative snapshot of the current product state.** Updated R160 (2026-07-11).
 > For the historical roadmap, see [V2_ROADMAP.md](V2_ROADMAP.md) (archive, 0.15.9 era).
 > For the authoritative version and bug count, see `v2/package.json` and `v2/CHANGELOG.md`.
 
@@ -393,18 +393,78 @@ publication failure (making programmatic triage impossible).
   `root_path = excluded.root_path` in both UPSERTs, and the
   sync-graph-ui workflow changes.
 
-### Known limitations (R158)
+### Known limitations (R160)
 
-- **`failure.code = 'EXTRACTION_CRASH' | 'DB_ERROR' | 'UNKNOWN'` not yet
-  emitted** (carryover): only `PERSIST_FAILURE` is emitted today. The
-  other codes are reserved for future use (extraction crashes that
-  bypass the worker pool, raw DB errors not from publication, etc.).
+- **`failure.code = 'RESOLVER_ERROR' | 'UNKNOWN'` not yet emitted**
+  (carryover): the expanded R160 taxonomy declares `ROOT_ERROR`,
+  `DISCOVERY_ERROR`, `DISCOVERY_PARTIAL`, `DB_ERROR`, `EXTRACTION_CRASH`,
+  and `PERSIST_FAILURE` — all emitted on the appropriate FAILED paths.
+  `RESOLVER_ERROR` is reserved for cross-file resolver crashes (currently
+  mapped to `DB_ERROR` during the cleanup phase) and `UNKNOWN` is reserved
+  for unforeseen failures. Both will be emitted in a future round.
 - **`classifyStaleReason` is a private helper** (design choice): not
   exported. Tested indirectly via `IndexResult.staleReason.code`. If
   MCP/UI consumers need to call it directly, export it in a follow-up.
-- **`staleReason.paths` cap is silent** (UX): the cap doesn't add a
-  `truncated: true` flag. A future round may add it so consumers can
-  display "(showing 100 of N)".
+- **Full-uncertainty return is hand-rolled** (design choice): the
+  `!opts.incremental && hasUncertainty` return at the top of the main
+  path uses a hand-rolled staleCode builder (not `classifyStaleReason`)
+  because it needs `totalPaths` + `pathsTruncated` fields that the
+  classifier doesn't return. The three callers of `classifyStaleReason`
+  (no-op, deletion-only, main) now use the classifier's returned `paths`
+  but don't surface `totalPaths`/`pathsTruncated` (only the full-uncertainty
+  return does). A future round may unify these.
+
+## R160 — Full Orchestrator Failure Taxonomy
+
+R160 (round 85) closes the 8 confirmed code findings of the R159 audit:
+
+- **Expanded failure code taxonomy** (`API-R160-03`): the `failure.code`
+  type union was expanded from
+  `'PERSIST_FAILURE' | 'EXTRACTION_CRASH' | 'DB_ERROR' | 'UNKNOWN'` to
+  `'ROOT_ERROR' | 'DISCOVERY_ERROR' | 'DISCOVERY_PARTIAL' | 'DB_ERROR' |
+  'RESOLVER_ERROR' | 'EXTRACTION_CRASH' | 'PERSIST_FAILURE' | 'UNKNOWN'`.
+  Each early FAILED path now uses the correct code (ROOT_ERROR for root
+  validation, DISCOVERY_ERROR for discovery throw, DISCOVERY_PARTIAL for
+  incomplete discovery). DB_ERROR is now reserved for actual DB operation
+  failures (the outer catch's cleanup/totals/publish phases).
+- **Recovery per phase** (`OUTCOME-R160-01`): root failure and discovery
+  failure now recommend `fix_filesystem` (was `retry_incremental` — retrying
+  won't help when the root is missing). The outer catch in full mode now
+  recommends `full_reindex` (was `retry_incremental` — the graph may be
+  partially mutated by clearProjectData followed by a crash, so a full
+  reindex is the safe recovery). Incremental outer catch remains
+  `retry_incremental` (the existing graph is preserved).
+- **Dry-run partial FAILED carries `failure`** (`API-R160-02`): R159's
+  dry-run return called `computeOutcome(...)` with `aborted=true`, so a
+  dry-run with discovery errors returned `outcome: 'FAILED'` but no
+  `failure` field. R160 attaches `failure: { code: 'DISCOVERY_PARTIAL',
+  phase: 'dry-run-discovery-partial' }` and `recovery: 'fix_filesystem'`.
+- **Phase tracking in outer catch** (`API-R160-04`): R159's outer catch
+  always returned `EXTRACTION_CRASH` regardless of which phase crashed.
+  R160 adds a `currentPhase` variable (`preload | extraction | cleanup |
+  totals | publish`) and maps it to the failure code: preload/extraction →
+  `EXTRACTION_CRASH`, cleanup/totals/publish → `DB_ERROR`. The phase is
+  embedded in `failure.phase` as `main-path-<phase>` for fine-grained
+  triage.
+- **Premark no longer updates root_path** (`STATE-R160-02`): R158's
+  premark UPSERT set `root_path = excluded.root_path`, but the premark
+  represents an ATTEMPTED root, not a confirmed snapshot root. If the
+  premark updated root_path and the index then failed, the DB would
+  record the attempted (possibly broken) root as the project's root_path.
+  R160 removes `root_path = excluded.root_path` from both premark UPSERT
+  blocks; root_path is now updated only by the final commit on success.
+- **CLI banner: "system error" not "0 errors"** (`CLI-R160-01`): R159's
+  PARTIAL/FAILED banner always printed "indexed with N error(s)" first,
+  even when `result.failure` was present (N=0 for system failures). R160
+  prints "indexing failed due to a system error" when `result.failure`
+  is present, followed by the structured failure block.
+- **Classifier surfaces paths** (`OBS-R160-01`): R159's
+  `classifyStaleReason` did not accept or return paths. The no-op,
+  deletion-only, and main paths hardcoded `paths: []` even when the
+  staleReason was `HISTORICAL_ALIAS_BROKEN` or `COLD_START_LOCK`. R160
+  adds `brokenAliasPaths`, `uncertainPathsList`, `uncertainSubtreesList`
+  params to the classifier; the three callers now pass these and use the
+  classifier's returned `paths` (capped at 100).
 
 ## Current versions
 
@@ -496,4 +556,4 @@ See [MAINTAINERS_GUIDE.md](../MAINTAINERS_GUIDE.md) for the full workflow.
 
 ## Validation date
 
-This document was validated at R159 (2026-07-11). Always cross-check with `v2/CHANGELOG.md` for the latest state.
+This document was validated at R160 (2026-07-11). Always cross-check with `v2/CHANGELOG.md` for the latest state.
