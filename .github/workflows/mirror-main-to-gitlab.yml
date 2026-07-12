@@ -248,7 +248,8 @@ jobs:
           # All checks passed — emit key=value pairs for GITHUB_OUTPUT
           for key, value in d.items():
               print(f"{key}={value}")
-          '; then
+          '
+          )"; then
             echo "::error::Wrapper JSON validation failed"
             echo "verified=error" >> "$GITHUB_OUTPUT"
             echo "error_category=GITHUB_SIGNATURE_WRAPPER_ERROR" >> "$GITHUB_OUTPUT"

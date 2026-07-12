@@ -943,6 +943,16 @@ Phase B adds three test files:
   empty, job_status failure, push coherence violations, newer-valid with
   exact parity). Summary content verified for each verdict.
 
+- `v2/tests/ci/r169-phase-b-gate-shell-runtime.test.ts` — 11 gate shell
+  runtime tests. **Extracts the COMPLETE `run: |` block** from the
+  "Verify GitHub commit signature" step (not just the Python fragment)
+  and validates it with `bash -n` + executes it with a fake verifier.
+  This prevents shell quoting/command-substitution errors that testing
+  only the embedded Python parser cannot detect. Also runs `bash -n` on
+  ALL inline Bash blocks in the workflow YAML. Test matrix: success JSON,
+  JSON absent/malformed, api_sha mismatch, verified=false, category≠none,
+  diagnostic+exit 1, attempts non-canonical.
+
 ### Script
 
 `scripts/ci/verify-github-commit-signature.sh` — the canonical verifier.
