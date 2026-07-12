@@ -215,14 +215,15 @@ architecture is sufficient for the project's risk profile.
 
 ## 6. GitHub signature verification API unavailable
 
-SIG-R169 is being deployed in 2 phases. As of Phase A, the signature
-gate is NOT yet active — the mirror workflow operates without it.
-Phase B will activate the gate.
-
-Once Phase B is deployed, if the GitHub API is temporarily unavailable,
+SIG-R169 Phase B is **active**. The signature gate is now enforced
+before GitLab mirroring. If the GitHub API is temporarily unavailable,
 the mirror will fail closed.
 
-### Response (Phase B, after activation)
+```
+TRUSTED_VERIFIER_SHA = f5d42688d921f04b4323a017586af4566c17e381
+```
+
+### Response
 
 - GitLab remains at the last successfully mirrored SHA
 - No manual unsigned bypass

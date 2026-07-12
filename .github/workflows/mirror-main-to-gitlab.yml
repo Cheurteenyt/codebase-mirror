@@ -1,10 +1,37 @@
 name: Mirror validated GitHub main to GitLab
 
 # R166: initial passive mirror workflow.
-# R167: monolithic step split into 9 named steps + fingerprint checks.
-# R168: state machine extracted to scripts/ci/mirror-main-to-gitlab.sh for
-#       testability with bare repos. The YAML is now a thin wrapper:
-#       checkout → materialize → call script → truthful summary → cleanup.
+# R167: monolithic step split into named steps + fingerprint checks.
+# R168: state machine extracted to scripts/ci/mirror-main-to-gitlab.sh.
+# R168.1: GitHub reads fail-closed, trap outputs, test-only hooks.
+# SIG-R169 Phase B: Cross-host signature trust gate ACTIVATED.
+#
+# The verifier is loaded from the immutable Phase A squash SHA:
+#   TRUSTED_VERIFIER_SHA = f5d42688d921f04b4323a017586af4566c17e381
+#
+# This breaks the circular trust root: TARGET_SHA cannot supply its own
+# verifier because the verifier comes from a different, pinned commit.
+#
+# Step ordering (SIG-R169-Phase-B-FINAL):
+#   1. Validate event identity
+#   2. Checkout pinned verifier
+#   3. Verify signature (fail-closed JSON wrapper)
+#   4. Checkout TARGET_SHA (only if gate passed)
+#   5. Materialize SSH key (only if gate passed)
+#   6. Run mirror state machine
+#   7. Cleanup (always, id: cleanup)
+#   8. Final verdict + summary (always, LAST step, exits 1 on FAILED)
+#
+# The cleanup runs BEFORE the final verdict so the verdict can require
+# steps.cleanup.outcome == success. The final verdict is the LAST step
+# and exits 1 on FAILED — the job goes red if the effective state is
+# FAILED, not just if an earlier step failed.
+#
+# Three verdicts (SIG-R169-Phase-B-CONC):
+#   SUCCESS:   mirrored|already-mirrored + observed_sha==TARGET_SHA + sig valid + cleanup ok
+#   SUPERSEDED: newer-valid-mirror-present + post_verify==success + observed_sha non-empty
+#               + github_main_sha non-empty + sig valid + cleanup ok
+#   FAILED:    everything else (exit 1)
 #
 # Required environment (GitHub Environment "gitlab-passive-mirror"):
 #   Secret:    GITLAB_MIRROR_SSH_PRIVATE_KEY  (OpenSSH ed25519, no passphrase)
@@ -24,6 +51,14 @@ permissions:
 concurrency:
   group: gitlab-passive-main-mirror
   cancel-in-progress: false
+
+# SIG-R169 Phase B: The pinned immutable Phase A squash SHA.
+# This is the ONLY source of trust for the verifier. Never use main, HEAD,
+# TARGET_SHA, github.sha, or any moving ref/branch/tag.
+# To rotate: publish a new Phase A PR, squash-merge, verify CI + mirror,
+# then update this SHA in a separate PR.
+env:
+  TRUSTED_VERIFIER_SHA: f5d42688d921f04b4323a017586af4566c17e381
 
 jobs:
   mirror:
@@ -45,7 +80,7 @@ jobs:
       EXPECTED_HOST_FP: ${{ vars.GITLAB_ED25519_HOST_FINGERPRINT }}
 
     steps:
-      # ── Step 1: Validate event identity ──────────────────────────────
+      # ── Step 1: Validate workflow_run event identity ────────────────
       - name: Validate event identity
         shell: bash
         run: |
@@ -79,7 +114,166 @@ jobs:
             exit 1
           fi
 
-      # ── Step 2: Checkout exact CI-validated SHA ──────────────────────
+          # Verify TRUSTED_VERIFIER_SHA is a 40-char hex SHA
+          if ! [[ "$TRUSTED_VERIFIER_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::TRUSTED_VERIFIER_SHA is not a valid 40-char hex SHA: $TRUSTED_VERIFIER_SHA"
+            exit 1
+          fi
+
+      # ── Step 2: Checkout trusted signature verifier (PINNED SHA) ────
+      # SIG-R169 Phase B: Load the verifier from the immutable Phase A
+      # squash SHA. NOT from main, HEAD, TARGET_SHA, or github.sha.
+      - name: Checkout trusted signature verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: f5d42688d921f04b4323a017586af4566c17e381
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/ci
+          path: trusted-verifier
+          persist-credentials: false
+
+      # ── Step 3: Verify GitHub commit signature (SIG-R169 gate) ──────
+      # Calls the pinned verifier script. The script verifies TARGET_SHA
+      # via the GitHub REST API and writes JSON outputs to OUTPUT_FILE.
+      # This step runs BEFORE TARGET_SHA checkout and BEFORE any GitLab
+      # SSH key materialization.
+      - name: Verify GitHub commit signature
+        id: github_signature
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          OUTPUT_FILE: ${{ runner.temp }}/github-signature-outputs.json
+        run: |
+          set -uo pipefail
+
+          # Run the pinned canonical verifier (SIG-R169-DIV-01)
+          bash trusted-verifier/scripts/ci/verify-github-commit-signature.sh || SCRIPT_EXIT=$?
+          SCRIPT_EXIT=${SCRIPT_EXIT:-0}
+
+          # SIG-R3-OUTPUT-01 / SIG-R169-Phase-B: Fail-closed JSON validation.
+          # The wrapper MUST reject:
+          #   - JSON absent or empty
+          #   - JSON malformed
+          #   - Missing or extra keys
+          #   - Multiline values
+          #   - exit 0 inconsistent with outputs (verified=true, reason=valid,
+          #     api_sha=TARGET_SHA, error_category=none)
+          #   - attempts out of valid range
+          # If any check fails, the step exits 1 — no GitLab key materialized.
+
+          if [ ! -s "$OUTPUT_FILE" ]; then
+            echo "::error::Signature verifier produced no output JSON (exit=$SCRIPT_EXIT)"
+            echo "verified=error" >> "$GITHUB_OUTPUT"
+            echo "error_category=GITHUB_SIGNATURE_WRAPPER_ERROR" >> "$GITHUB_OUTPUT"
+            echo "attempts=0" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          if ! STEP_OUTPUTS="$(
+            SCRIPT_EXIT="$SCRIPT_EXIT" \
+            TARGET_SHA="$TARGET_SHA" \
+            OUTPUT_FILE="$OUTPUT_FILE" \
+            python3 -c '
+          import json
+          import os
+          import sys
+
+          path = os.environ["OUTPUT_FILE"]
+          target = os.environ["TARGET_SHA"]
+          script_exit = os.environ["SCRIPT_EXIT"]
+
+          try:
+              with open(path, encoding="utf-8") as f:
+                  d = json.load(f)
+          except Exception:
+              print("WRAPPER_ERROR|malformed_json")
+              sys.exit(0)
+
+          # Exact key set — no missing, no extra
+          required = {
+              "verified",
+              "reason",
+              "verified_at",
+              "api_sha",
+              "error_category",
+              "attempts",
+          }
+          if set(d.keys()) != required:
+              print("WRAPPER_ERROR|invalid_keys")
+              sys.exit(0)
+
+          # Reject multiline values
+          for key, value in d.items():
+              if "\n" in str(value) or "\r" in str(value):
+                  print("WRAPPER_ERROR|multiline_value")
+                  sys.exit(0)
+
+          # SIG-R169-Phase-B-WRAPPER-03: Strict attempts validation.
+          #   - attempts must be a string (not bool, float, or other type)
+          #   - must match regex ^[0-3]$ (single digit 0-3)
+          #   - success (script_exit == 0): attempts must be 1-3
+          #   - diagnostic/config (script_exit != 0): attempts must be 0-3
+          import re as _re
+          if not isinstance(d["attempts"], str):
+              print("WRAPPER_ERROR|attempts_not_string")
+              sys.exit(0)
+          if not _re.match(r"^[0-3]$", d["attempts"]):
+              print("WRAPPER_ERROR|attempts_not_canonical")
+              sys.exit(0)
+          attempts_int = int(d["attempts"])
+          if script_exit == "0" and attempts_int < 1:
+              print("WRAPPER_ERROR|attempts_success_too_low")
+              sys.exit(0)
+
+          # If script exit 0, outputs must be consistent with success
+          if script_exit == "0":
+              if not (
+                  d["verified"] == "true"
+                  and d["reason"] == "valid"
+                  and d["verified_at"]
+                  and d["api_sha"] == target
+                  and d["error_category"] == "none"
+              ):
+                  print("WRAPPER_ERROR|exit0_inconsistent")
+                  sys.exit(0)
+
+          # If script exit != 0, verified must not be "true"
+          if script_exit != "0" and d["verified"] == "true":
+              print("WRAPPER_ERROR|exit_nonzero_but_verified_true")
+              sys.exit(0)
+
+          # All checks passed — emit key=value pairs for GITHUB_OUTPUT
+          for key, value in d.items():
+              print(f"{key}={value}")
+          '; then
+            echo "::error::Wrapper JSON validation failed"
+            echo "verified=error" >> "$GITHUB_OUTPUT"
+            echo "error_category=GITHUB_SIGNATURE_WRAPPER_ERROR" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Check for wrapper errors
+          if echo "$STEP_OUTPUTS" | grep -q "^WRAPPER_ERROR|"; then
+            ERROR_DETAIL=$(echo "$STEP_OUTPUTS" | grep "^WRAPPER_ERROR|" | cut -d'|' -f2)
+            echo "::error::Signature wrapper validation failed: $ERROR_DETAIL"
+            echo "verified=error" >> "$GITHUB_OUTPUT"
+            echo "error_category=GITHUB_SIGNATURE_WRAPPER_ERROR" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Publish validated outputs to GITHUB_OUTPUT
+          printf '%s\n' "$STEP_OUTPUTS" >> "$GITHUB_OUTPUT"
+
+          # If the script itself failed, exit now (diagnostics already published)
+          if [ "$SCRIPT_EXIT" != "0" ]; then
+            exit "$SCRIPT_EXIT"
+          fi
+
+      # ── Step 4: Checkout exact CI-validated SHA ──────────────────────
+      # Only reached if signature verification PASSED.
       - name: Checkout exact CI-validated SHA
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -87,7 +281,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # ── Step 3: Materialize SSH key + known_hosts ────────────────────
+      # ── Step 5: Materialize SSH key + known_hosts ────────────────────
       - name: Materialize SSH key and known_hosts
         id: materialize
         shell: bash
@@ -115,10 +309,7 @@ jobs:
           echo "ssh_key_file=$HOME/.ssh/gitlab_mirror_ed25519" >> "$GITHUB_OUTPUT"
           echo "known_hosts_file=$HOME/.ssh/known_hosts" >> "$GITHUB_OUTPUT"
 
-      # ── Step 4: Run mirror state machine ─────────────────────────────
-      # The script handles: fingerprint verification, Git operations,
-      # error classification, post-push verification, and truthful outcome.
-      # It writes structured outputs to $RUNNER_TEMP/mirror-outputs.txt
+      # ── Step 6: Run mirror state machine ─────────────────────────────
       - name: Run mirror state machine
         id: mirror
         shell: bash
@@ -132,26 +323,58 @@ jobs:
           bash scripts/ci/mirror-main-to-gitlab.sh || SCRIPT_EXIT=$?
           SCRIPT_EXIT=${SCRIPT_EXIT:-0}
 
-          # Read outputs into step outputs
           if [ -f "$OUTPUT_FILE" ]; then
             while IFS='=' read -r key value; do
               echo "$key=$value" >> "$GITHUB_OUTPUT"
             done < "$OUTPUT_FILE"
           fi
 
-          # If the script failed, fail this step
           if [ "$SCRIPT_EXIT" != "0" ]; then
             exit "$SCRIPT_EXIT"
           fi
 
-      # ── Step 5: Write truthful summary (OBS-R168-01, OBS-R168-02) ────
-      # The summary is based on the script's actual outputs, not on
-      # assumptions. It reports verified=true only if the fingerprint
-      # steps actually succeeded.
-      - name: Write truthful mirror summary
+      # ── Step 7: Cleanup (always, BEFORE final verdict) ───────────────
+      # SIG-R169-Phase-B-CLEANUP: Cleanup runs BEFORE the final verdict
+      # so the verdict can require steps.cleanup.outcome == success.
+      # The final verdict is the LAST step and exits 1 on FAILED.
+      - name: Cleanup SSH material and temp files
+        id: cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            "$HOME/.ssh/gitlab_mirror_ed25519" \
+            "$HOME/.ssh/config" \
+            "$HOME/.ssh/known_hosts" \
+            "${RUNNER_TEMP:-/tmp}/mirror-outputs.txt" \
+            "${RUNNER_TEMP:-/tmp}/github-signature-outputs.json"
+
+      # ── Step 8: Final verdict + summary (always, LAST step) ──────────
+      # SIG-R169-Phase-B-FINAL: This step computes the effective verdict
+      # and EXITS 1 on FAILED. The job goes red if the effective state
+      # is FAILED, not just if an earlier step failed.
+      #
+      # Three verdicts (SIG-R169-Phase-B-CONC):
+      #   SUCCESS:    mirrored|already-mirrored + observed_sha==TARGET_SHA
+      #               + sig valid + cleanup success
+      #   SUPERSEDED: newer-valid-mirror-present + post_verify==success
+      #               + observed_sha non-empty + github_main_sha non-empty
+      #               + sig valid + cleanup success
+      #   FAILED:     everything else (exit 1)
+      - name: Final verdict and summary
+        id: final_verdict
         if: always()
         shell: bash
         env:
+          # Signature gate outputs
+          SIG_VERIFIED: ${{ steps.github_signature.outputs.verified }}
+          SIG_REASON: ${{ steps.github_signature.outputs.reason }}
+          SIG_VERIFIED_AT: ${{ steps.github_signature.outputs.verified_at }}
+          SIG_API_SHA: ${{ steps.github_signature.outputs.api_sha }}
+          SIG_ERROR_CATEGORY: ${{ steps.github_signature.outputs.error_category }}
+          SIG_ATTEMPTS: ${{ steps.github_signature.outputs.attempts }}
+          # Mirror outputs
           FINAL_RESULT: ${{ steps.mirror.outputs.final_result }}
           OBSERVED_SHA: ${{ steps.mirror.outputs.observed_sha }}
           GITHUB_MAIN_SHA: ${{ steps.mirror.outputs.github_main_sha }}
@@ -164,16 +387,149 @@ jobs:
           PUSH_ATTEMPTED: ${{ steps.mirror.outputs.push_attempted }}
           PUSH_COMPLETED: ${{ steps.mirror.outputs.push_completed }}
           POST_VERIFY_RESULT: ${{ steps.mirror.outputs.post_verify_result }}
+          # Cleanup outcome
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
           JOB_STATUS: ${{ job.status }}
         run: |
+          set -uo pipefail
+
+          # ── Compute sub-verdicts ──────────────────────────────────
+
+          SIG_SHA_MATCH="not-run"
+          if [ -n "${SIG_API_SHA:-}" ] && [ "${SIG_API_SHA}" = "${TARGET_SHA}" ]; then
+            SIG_SHA_MATCH="true"
+          elif [ -n "${SIG_API_SHA:-}" ]; then
+            SIG_SHA_MATCH="false"
+          fi
+
+          EXACT_PARITY="not-run"
+          if [ -n "${OBSERVED_SHA:-}" ] && [ "${OBSERVED_SHA}" = "${TARGET_SHA}" ]; then
+            EXACT_PARITY="true"
+          elif [ -n "${OBSERVED_SHA:-}" ]; then
+            EXACT_PARITY="false"
+          fi
+
+          # ── Determine operational verdict (SIG-R169-Phase-B-CONC) ──
+          #
+          # SUCCESS: exact target parity (mirrored or already-mirrored)
+          # SUPERSEDED: newer-valid-mirror-present (GitLab is ahead —
+          #             a descendant of TARGET_SHA is already mirrored)
+          # FAILED: everything else
+          #
+          # SIG-R169-Phase-B-FINAL-INVARIANTS-02: Common MIRROR_INVARIANTS_OK
+          # required for BOTH SUCCESS and SUPERSEDED:
+          #   - POST_VERIFY_RESULT == success
+          #   - CLIENT_FP_VERIFIED == true
+          #   - HOST_FP_VERIFIED == true
+          #   - ERROR_CATEGORY == none (or empty)
+          #   - ERROR_PHASE == none (or empty)
+          #   - GITHUB_MAIN_SHA non-empty
+          #   - JOB_STATUS == success
+          #   - CLEANUP_OUTCOME == success
+          #
+          # Push coherence per verdict:
+          #   SUCCESS mirrored:       push_attempted=true,  push_completed=true
+          #   SUCCESS already-mirrored: push_attempted=false, push_completed=false
+          #   SUPERSEDED:             push_attempted=false, push_completed=false
+
+          SIG_OK="false"
+          if [ "${SIG_VERIFIED:-}" = "true" ] && [ "${SIG_SHA_MATCH}" = "true" ]; then
+            SIG_OK="true"
+          fi
+
+          # SIG-R169-Phase-B-FINAL-INVARIANTS-02: Common mirror invariants
+          MIRROR_INVARIANTS_OK="false"
+          if [ "${POST_VERIFY_RESULT:-}" = "success" ] \
+             && [ "${CLIENT_FP_VERIFIED:-}" = "true" ] \
+             && [ "${HOST_FP_VERIFIED:-}" = "true" ] \
+             && [ -z "${ERROR_CATEGORY:-}" -o "${ERROR_CATEGORY:-}" = "none" ] \
+             && [ -z "${ERROR_PHASE:-}" -o "${ERROR_PHASE:-}" = "none" ] \
+             && [ -n "${GITHUB_MAIN_SHA:-}" ] \
+             && [ "${JOB_STATUS:-}" = "success" ] \
+             && [ "${CLEANUP_OUTCOME:-}" = "success" ]; then
+            MIRROR_INVARIANTS_OK="true"
+          fi
+
+          VERDICT="FAILED"
+
+          # SUCCESS mirrored: exact parity + push_attempted=true + push_completed=true
+          #   + invariants + sig
+          if [ "${FINAL_RESULT:-}" = "mirrored" ] \
+             && [ "$EXACT_PARITY" = "true" ] \
+             && [ "${PUSH_ATTEMPTED:-}" = "true" ] \
+             && [ "${PUSH_COMPLETED:-}" = "true" ] \
+             && [ "$MIRROR_INVARIANTS_OK" = "true" ] \
+             && [ "$SIG_OK" = "true" ]; then
+            VERDICT="SUCCESS"
+          fi
+
+          # SUCCESS already-mirrored: exact parity + push_attempted=false + push_completed=false
+          #   + invariants + sig
+          if [ "${FINAL_RESULT:-}" = "already-mirrored" ] \
+             && [ "$EXACT_PARITY" = "true" ] \
+             && [ "${PUSH_ATTEMPTED:-}" = "false" ] \
+             && [ "${PUSH_COMPLETED:-}" = "false" ] \
+             && [ "$MIRROR_INVARIANTS_OK" = "true" ] \
+             && [ "$SIG_OK" = "true" ]; then
+            VERDICT="SUCCESS"
+          fi
+
+          # SUPERSEDED: newer-valid-mirror-present + exact parity false
+          #   + observed_sha != TARGET_SHA + GITHUB_MAIN_SHA != TARGET_SHA
+          #   + push coherence (either false/false OR true/true) + invariants + sig
+          #
+          # SIG-R169-Phase-B-CONC-R3-01: Two valid SUPERSEDED origins:
+          #   1. PREEXISTING: GitLab was already ahead before this run
+          #      (push_attempted=false, push_completed=false)
+          #   2. AFTER_PUSH_RACE: this run pushed TARGET_SHA, then a newer
+          #      mirror pushed a descendant before post-verification
+          #      (push_attempted=true, push_completed=true)
+          # Both are valid operational successes — no rollback needed.
+          # Rejected: push_attempted=true + push_completed=false (push failed)
+          #           push_attempted=false + push_completed=true (impossible)
+          SUPERSEDED_PUSH_COHERENT="false"
+          if [ "${PUSH_ATTEMPTED:-}" = "false" ] && [ "${PUSH_COMPLETED:-}" = "false" ]; then
+            SUPERSEDED_PUSH_COHERENT="true"
+          elif [ "${PUSH_ATTEMPTED:-}" = "true" ] && [ "${PUSH_COMPLETED:-}" = "true" ]; then
+            SUPERSEDED_PUSH_COHERENT="true"
+          fi
+
+          if [ "${FINAL_RESULT:-}" = "newer-valid-mirror-present" ] \
+             && [ "$EXACT_PARITY" = "false" ] \
+             && [ -n "${OBSERVED_SHA:-}" ] \
+             && [ "${OBSERVED_SHA:-}" != "$TARGET_SHA" ] \
+             && [ -n "${GITHUB_MAIN_SHA:-}" ] \
+             && [ "${GITHUB_MAIN_SHA:-}" != "$TARGET_SHA" ] \
+             && [ "$SUPERSEDED_PUSH_COHERENT" = "true" ] \
+             && [ "$MIRROR_INVARIANTS_OK" = "true" ] \
+             && [ "$SIG_OK" = "true" ]; then
+            VERDICT="SUPERSEDED"
+          fi
+
+          # ── Write summary ──────────────────────────────────────────
           {
-            echo "## GitLab passive mirror"
+            echo "## GitLab passive mirror — SIG-R169 Phase B"
+            echo
+            echo "### GitHub commit signature gate"
             echo
             echo "- Target SHA: \`$TARGET_SHA\`"
-            echo "- Final result: \`${FINAL_RESULT:-failed}\`"
+            echo "- API SHA: \`${SIG_API_SHA:-N/A}\`"
+            echo "- Verified: \`${SIG_VERIFIED:-not-run}\`"
+            echo "- Reason: \`${SIG_REASON:-N/A}\`"
+            echo "- Verified at: \`${SIG_VERIFIED_AT:-N/A}\`"
+            echo "- Attempts: \`${SIG_ATTEMPTS:-0}\`"
+            echo "- Error category: \`${SIG_ERROR_CATEGORY:-none}\`"
+            echo "- Target/API SHA match: \`$SIG_SHA_MATCH\`"
+            echo
+            echo "### Mirror result"
+            echo
+            echo "- Final result: \`${FINAL_RESULT:-not-run}\`"
             echo "- Job status: \`$JOB_STATUS\`"
             echo "- Observed GitLab SHA: \`${OBSERVED_SHA:-unknown}\`"
             echo "- Re-read GitHub SHA: \`${GITHUB_MAIN_SHA:-unknown}\`"
+            echo "- Exact target parity: \`$EXACT_PARITY\`"
+            echo "- Error category: \`${ERROR_CATEGORY:-none}\`"
+            echo "- Error phase: \`${ERROR_PHASE:-none}\`"
             echo
             echo "### Fingerprint verification"
             echo
@@ -190,25 +546,48 @@ jobs:
             echo "- Push completed: \`${PUSH_COMPLETED:-false}\`"
             echo "- Post-verification: \`${POST_VERIFY_RESULT:-not-run}\`"
             echo
-            echo "### Error diagnostics"
+            echo "### Cleanup"
             echo
-            echo "- Error category: \`${ERROR_CATEGORY:-none}\`"
-            echo "- Error phase: \`${ERROR_PHASE:-none}\`"
+            echo "- Cleanup outcome: \`${CLEANUP_OUTCOME:-not-run}\`"
+            echo
+            echo "### Final verdict"
+            echo
+            echo "- **Operational result: $VERDICT**"
+            echo
+            if [ "$VERDICT" = "SUCCESS" ]; then
+              echo "- **Signature gate: PASSED**"
+              echo "- **Mirror: SUCCESS (${FINAL_RESULT:-})**"
+              echo "- **Exact target parity: true**"
+            elif [ "$VERDICT" = "SUPERSEDED" ]; then
+              echo "- **Signature gate: PASSED**"
+              echo "- **Mirror: SUPERSEDED (${FINAL_RESULT:-})**"
+              echo "- **Exact target parity: false (GitLab is ahead)**"
+              echo "- **Post-verify: ${POST_VERIFY_RESULT:-}**"
+            else
+              echo "- **Signature gate: ${SIG_ERROR_CATEGORY:-FAILED}**"
+              echo "- **Mirror: ${FINAL_RESULT:-not-run}**"
+              echo "- **Exact target parity: $EXACT_PARITY**"
+            fi
             echo
             echo "### Architecture"
             echo
-            echo "- Mirror workflow uses named diagnostic phases (see scripts/ci/mirror-main-to-gitlab.sh)"
+            echo "- Verifier: \`trusted-verifier/scripts/ci/verify-github-commit-signature.sh\`"
+            echo "- Verifier SHA (immutable pin): \`$TRUSTED_VERIFIER_SHA\`"
             echo "- GitLab pipeline requested: \`no\`"
             echo "- Force push used: \`no\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Step 6: Remove SSH material ─────────────────────────────────
-      - name: Remove SSH material
-        if: always()
-        shell: bash
-        run: |
-          rm -f \
-            "$HOME/.ssh/gitlab_mirror_ed25519" \
-            "$HOME/.ssh/config" \
-            "$HOME/.ssh/known_hosts" \
-            "${RUNNER_TEMP:-/tmp}/mirror-outputs.txt"
+          # Publish verdict as step output
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "exact_parity=$EXACT_PARITY" >> "$GITHUB_OUTPUT"
+
+          # ── Execute verdict (SIG-R169-Phase-B-FINAL) ───────────────
+          # FAILED → exit 1 (job goes red)
+          # SUCCESS or SUPERSEDED → exit 0 (job stays green)
+          if [ "$VERDICT" = "FAILED" ]; then
+            echo "::error::Final verdict: FAILED"
+            exit 1
+          fi
+
+          echo "✓ Final verdict: $VERDICT"
+          exit 0

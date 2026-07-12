@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execSync, execFileSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -55,6 +55,44 @@ function parseOutputs(outputFile: string): MirrorOutputs {
     outputs[key] = value;
   }
   return outputs as MirrorOutputs;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIG-R169-Phase-B-TEST-ENV-R4-01: Clean mirror test environment.
+// GitHub Actions sets GITHUB_ACTIONS=true automatically. The mirror script
+// only activates test-only hooks when GITHUB_ACTIONS != "true", so we MUST
+// strip GITHUB_ACTIONS from the child env for hook-based tests to work in CI.
+// We also strip all MIRROR_TEST_* vars to prevent contamination between tests.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MIRROR_TEST_ENV_KEYS = [
+  "TARGET_SHA",
+  "GITLAB_URL",
+  "GITHUB_REMOTE",
+  "SKIP_SSH_CONFIG",
+  "SKIP_FP_CHECKS",
+  "OUTPUT_FILE",
+  "CBM_MIRROR_TEST_MODE",
+  "GITHUB_ACTIONS",
+  "MIRROR_TEST_AFTER_INITIAL_READ",
+  "MIRROR_TEST_AFTER_PUSH",
+  "MIRROR_TEST_BEFORE_FINAL_READ",
+] as const;
+
+function cleanMirrorTestEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of MIRROR_TEST_ENV_KEYS) {
+    delete env[key];
+  }
+  return env;
+}
+
+interface MirrorRunResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  outputs: MirrorOutputs;
+  timedOut: boolean;
 }
 
 class BareRepoTestEnv {
@@ -171,17 +209,44 @@ class BareRepoTestEnv {
   }
 
   /**
-   * Run the mirror script and return the outputs.
-   * Checks out the target SHA first (simulating actions/checkout@v7 ref: TARGET_SHA).
+   * Run the mirror script WITHOUT test mode (production-like).
+   * SIG-R169-Phase-B-TEST-ENV-R4-01: Does NOT activate CBM_MIRROR_TEST_MODE
+   * and does NOT pass any hooks. Uses cleanMirrorTestEnv() to strip
+   * GITHUB_ACTIONS and all MIRROR_TEST_* vars from the child env.
    */
-  runMirror(targetSha: string): { exitCode: number; outputs: MirrorOutputs } {
+  runMirror(targetSha: string): MirrorRunResult {
+    return this.executeMirror(targetSha, { testMode: false, hooks: {} });
+  }
+
+  /**
+   * Run the mirror script WITH test mode and hooks enabled.
+   * SIG-R169-Phase-B-CONC-R3-01: Used for the AFTER_PUSH_RACE integration test.
+   * SIG-R169-Phase-B-TEST-ENV-R4-01: Strips GITHUB_ACTIONS so hooks work in CI.
+   */
+  runMirrorWithHooks(
+    targetSha: string,
+    hooks: Record<string, string>,
+  ): MirrorRunResult {
+    return this.executeMirror(targetSha, { testMode: true, hooks });
+  }
+
+  /**
+   * Core execution helper. Builds a clean child env, optionally enables
+   * test mode + hooks, and captures stdout/stderr for diagnostics.
+   */
+  private executeMirror(
+    targetSha: string,
+    options: { testMode: boolean; hooks: Record<string, string> },
+  ): MirrorRunResult {
     // Checkout the target SHA (simulating actions/checkout in the real workflow)
     execSync(`git -C "${this.workRepo}" checkout "${targetSha}" 2>/dev/null`, {
       stdio: "pipe",
     });
 
-    const env: Record<string, string> = {
-      ...process.env,
+    // SIG-R169-Phase-B-TEST-ENV-R4-01: Start from a clean env.
+    // Never inherit GITHUB_ACTIONS or MIRROR_TEST_* from the parent process.
+    const env: NodeJS.ProcessEnv = {
+      ...cleanMirrorTestEnv(),
       TARGET_SHA: targetSha,
       GITLAB_URL: `file://${this.gitlabBare}`,
       GITHUB_REMOTE: `file://${this.githubBare}`,
@@ -190,19 +255,29 @@ class BareRepoTestEnv {
       OUTPUT_FILE: this.outputFile,
     };
 
-    let exitCode = 0;
-    try {
-      execFileSync("bash", [SCRIPT_PATH], {
-        cwd: this.workRepo,
-        env,
-        stdio: "pipe",
-      });
-    } catch (e: any) {
-      exitCode = e.status ?? 1;
+    if (options.testMode) {
+      env.CBM_MIRROR_TEST_MODE = "1";
+      Object.assign(env, options.hooks);
     }
 
+    // SIG-R169-Phase-B-TEST-ENV-R4-01: Use spawnSync to capture stdout/stderr
+    // for diagnostics. The old execFileSync + catch opaque hid the real
+    // error_category on assertion failures.
+    const result = spawnSync("bash", [SCRIPT_PATH], {
+      cwd: this.workRepo,
+      env,
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+
     const outputs = parseOutputs(this.outputFile);
-    return { exitCode, outputs };
+    return {
+      exitCode: result.status ?? -1,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+      outputs,
+      timedOut: result.error?.message.includes("ETIMEDOUT") ?? false,
+    };
   }
 
   cleanup() {
@@ -576,6 +651,82 @@ describe("R168.1 — Real race condition tests (TEST-R168.1-01)", () => {
     expect(outputs.post_verify_result).toBe("success");
   });
 
+  it("SIG-R169-Phase-B-CONC-R3-01: race after push via MIRROR_TEST_AFTER_PUSH hook → newer-valid with push_attempted=true", () => {
+    // This is the REAL integration test using the test-only hook.
+    // Scenario:
+    //   1. GitLab starts behind (at sha1)
+    //   2. The script pushes TARGET_SHA (sha2) → push_attempted=true, push_completed=true
+    //   3. The MIRROR_TEST_AFTER_PUSH hook fires — it advances GitLab to sha3
+    //      (simulating a newer mirror run that pushed a descendant)
+    //   4. GitHub main is also at sha3 (advanced by the newer run)
+    //   5. Post-verification confirms sha3 is a valid descendant
+    //   6. final_result=newer-valid-mirror-present
+    //
+    // SIG-R169-Phase-B-TEST-ENV-R4-01: The hook uses a marker file to prove
+    // it actually ran. No || true — if the hook push fails, the test fails.
+
+    const sha1 = env.commit("R165");
+    env.pushToGithub();
+    const sha2 = env.commit("R166");
+    env.pushToGithub();
+    const sha3 = env.commit("R167");
+    env.pushToGithub();
+
+    // GitLab starts at sha1 (behind) → push will happen
+    env.setGitLabMain(sha1);
+
+    // SIG-R169-Phase-B-TEST-ENV-R4-01: Marker file proves the hook ran.
+    // The hook pushes sha3 to GitLab, then writes the marker only on success.
+    // No || true — hook failure must cause test failure.
+    const marker = join(env.tmpDir, "after-push-hook-ran");
+    const hookCmd = `git -C "${env.workRepo}" push gitlab ${sha3}:refs/heads/main --force && touch "${marker}"`;
+
+    const result = env.runMirrorWithHooks(sha2, {
+      MIRROR_TEST_AFTER_PUSH: hookCmd,
+    });
+
+    // SIG-R169-Phase-B-TEST-ENV-R4-01: On assertion failure, include
+    // stdout/stderr so the real error_category is visible.
+    if (result.exitCode !== 0 || result.outputs.final_result !== "newer-valid-mirror-present") {
+      expect.fail(
+        `Expected exit 0 + newer-valid-mirror-present, got exit ${result.exitCode} + ${result.outputs.final_result}\n` +
+        `stderr: ${result.stderr}\nstdout: ${result.stdout}`
+      );
+    }
+
+    // The hook must have actually run
+    expect(existsSync(marker)).toBe(true);
+
+    const { outputs } = result;
+    expect(outputs.final_result).toBe("newer-valid-mirror-present");
+    expect(outputs.push_attempted).toBe("true");
+    expect(outputs.push_completed).toBe("true");
+    expect(outputs.observed_sha).toBe(sha3);
+    expect(outputs.post_verify_result).toBe("success");
+    // GitHub main should be re-read as sha3 (the newer commit)
+    expect(outputs.github_main_sha).toBe(sha3);
+  });
+
+  it("SIG-R169-Phase-B-TEST-ENV-R4-01: runMirror (no test mode) → mirrored, no hooks", () => {
+    // This test verifies that runMirror does NOT activate test mode.
+    // Even if GITHUB_ACTIONS=true in the parent process, the child env
+    // is cleaned and no hooks fire.
+    const sha1 = env.commit("R165");
+    env.pushToGithub();
+    const sha2 = env.commit("R166");
+    env.pushToGithub();
+
+    env.setGitLabMain(sha1);
+
+    // Even if we pass hooks, runMirror should NOT use them (testMode=false)
+    const result = env.runMirror(sha2);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.outputs.final_result).toBe("mirrored");
+    expect(result.outputs.push_attempted).toBe("true");
+    expect(result.outputs.push_completed).toBe("true");
+  });
+
   it("GitHub main re-read at end detects changes (MIRROR-R168.1-01)", () => {
     const sha1 = env.commit("R165");
     env.pushToGithub();
@@ -702,5 +853,75 @@ describe("R168.1 — GitHub read fail-closed (MIRROR-R168.1-01)", () => {
     // Test hooks must be gated: only active for file:// URLs and not in GITHUB_ACTIONS
     expect(script).toContain('GITHUB_ACTIONS');
     expect(script).toContain('file://*');
+  });
+});
+
+// =============================================================================
+// SIG-R169-Phase-B-TEST-ENV-R4-01: Security guard — GITHUB_ACTIONS disables hooks
+// This test proves the production guard works: even with CBM_MIRROR_TEST_MODE=1
+// and a hook command set, the hook is NOT executed when GITHUB_ACTIONS=true.
+// =============================================================================
+
+describe("SIG-R169-Phase-B-TEST-ENV-R4-01 — GITHUB_ACTIONS disables test hooks", () => {
+  let env: BareRepoTestEnv;
+
+  beforeEach(() => {
+    env = new BareRepoTestEnv();
+  });
+
+  afterEach(() => {
+    env.cleanup();
+  });
+
+  it("GITHUB_ACTIONS=true + CBM_MIRROR_TEST_MODE=1 + hook → hook NOT executed, mirrored", () => {
+    // This test calls the script DIRECTLY with GITHUB_ACTIONS=true to prove
+    // the production guard works. The hook must NOT fire.
+    const sha1 = env.commit("R165");
+    env.pushToGithub();
+    const sha2 = env.commit("R166");
+    env.pushToGithub();
+    const sha3 = env.commit("R167");
+    env.pushToGithub();
+
+    env.setGitLabMain(sha1);
+
+    // Marker file — should NOT exist after the run because the hook is disabled
+    const marker = join(env.tmpDir, "hook-should-not-run");
+    const hookCmd = `touch "${marker}"`;
+
+    // Call the script directly with GITHUB_ACTIONS=true
+    execSync(`git -C "${env.workRepo}" checkout "${sha2}" 2>/dev/null`, { stdio: "pipe" });
+    const childEnv: NodeJS.ProcessEnv = {
+      ...cleanMirrorTestEnv(),
+      TARGET_SHA: sha2,
+      GITLAB_URL: `file://${env.gitlabBare}`,
+      GITHUB_REMOTE: `file://${env.githubBare}`,
+      SKIP_SSH_CONFIG: "yes",
+      SKIP_FP_CHECKS: "yes",
+      OUTPUT_FILE: env.outputFile,
+      CBM_MIRROR_TEST_MODE: "1",
+      GITHUB_ACTIONS: "true", // Production guard — hooks must be disabled
+      MIRROR_TEST_AFTER_PUSH: hookCmd,
+    };
+
+    const result = spawnSync("bash", [SCRIPT_PATH], {
+      cwd: env.workRepo,
+      env: childEnv,
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+
+    const outputs = parseOutputs(env.outputFile);
+
+    // The hook must NOT have run — marker must NOT exist
+    expect(existsSync(marker)).toBe(false);
+
+    // The script should succeed with mirrored (hook didn't advance GitLab)
+    expect(result.status).toBe(0);
+    expect(outputs.final_result).toBe("mirrored");
+    expect(outputs.push_attempted).toBe("true");
+    expect(outputs.push_completed).toBe("true");
+    // GitLab should be at sha2 (the target), not sha3
+    expect(outputs.observed_sha).toBe(sha2);
   });
 });

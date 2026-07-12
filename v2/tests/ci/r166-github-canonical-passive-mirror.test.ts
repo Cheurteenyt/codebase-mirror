@@ -329,12 +329,16 @@ describe("R167 — mirror workflow split into diagnostic steps", () => {
     expect(mirror).toContain("Post-push verification");
   });
 
-  it("workflow has a 'Write truthful mirror summary' step (if: always)", () => {
-    expect(mirror).toContain("Write truthful mirror summary");
+  it("workflow has a summary/verdict step (if: always)", () => {
+    // SIG-R169 Phase B: the summary step is now 'Final verdict and summary'
+    // which includes the verdict logic and exits 1 on FAILED.
+    expect(mirror).toContain("Final verdict and summary");
   });
 
-  it("workflow has a 'Remove SSH material' step (if: always)", () => {
-    expect(mirror).toContain("Remove SSH material");
+  it("workflow has a cleanup step (if: always)", () => {
+    // SIG-R169 Phase B: cleanup is now 'Cleanup SSH material and temp files'
+    // and runs BEFORE the final verdict.
+    expect(mirror).toContain("Cleanup SSH material");
   });
 });
 

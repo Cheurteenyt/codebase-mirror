@@ -538,18 +538,34 @@ If any of these seems necessary, stop and declare an incident.
 
 ## 19. GitHub signature verification gate (SIG-R169)
 
-### Current state: Phase A (not yet activated)
+### Current state: Phase B ACTIVATED
 
-The signature gate is being deployed in a **2-phase bootstrap** to
-establish a non-circular trust root (SIG-R3-TRUST-01):
+The signature gate is now **active** (Phase B merged). The 2-phase
+bootstrap is complete:
 
-- **Phase A (current):** The canonical verifier script, runtime tests,
-  and documentation are published. The mirror workflow does NOT yet
-  call the verifier. The workflow remains in its pre-SIG-R169 state.
-- **Phase B (next PR):** The mirror workflow is modified to checkout
-  the verifier at `ref: <Phase A squash SHA>` (an immutable 40-char
-  Git SHA) and call it before target checkout. This ensures the
-  verifier cannot come from `TARGET_SHA` or a future `main`.
+- **Phase A (completed):** The canonical verifier script, runtime tests,
+  and documentation were published and squash-merged as:
+  ```
+  f5d42688d921f04b4323a017586af4566c17e381
+  ```
+- **Phase B (active):** The mirror workflow loads the verifier from
+  this immutable pinned SHA and executes it before target checkout.
+
+```
+TRUSTED_VERIFIER_SHA = f5d42688d921f04b4323a017586af4566c17e381
+```
+
+### Rotation procedure
+
+To update the verifier:
+1. Publish a new Phase A PR (script + tests + docs only, gate NOT activated)
+2. Squash-merge and verify CI green + mirror green
+3. Record the new squash SHA
+4. Update `TRUSTED_VERIFIER_SHA` in `.github/workflows/mirror-main-to-gitlab.yml`
+   in a separate PR
+
+Never use `main`, `HEAD`, `TARGET_SHA`, `github.sha`, or any moving ref as
+the verifier source.
 
 Rationale: If the workflow checked out the verifier from the default
 branch without a `ref`, `actions/checkout` would use the event SHA
@@ -557,7 +573,7 @@ branch without a `ref`, `actions/checkout` would use the event SHA
 This means `TARGET_SHA` could supply its own verifier — a circular
 trust root. Pinning to the Phase A SHA breaks the circle.
 
-### Purpose (Phase B)
+### Purpose
 
 Once activated, the gate will verify that GitHub has cryptographically
 verified the commit at `TARGET_SHA` **before** the mirror workflow
@@ -729,20 +745,94 @@ the JSON output fail-closed:
 This prevents a fail-open scenario where a missing/malformed JSON
 allows the push to proceed.
 
-### Phase B: Strict summary (SIG-R3-SUMMARY-01)
+### Phase B: Three verdicts (SIG-R169-Phase-B-CONC, SIG-R169-Phase-B-FINAL)
 
-The workflow summary will require ALL of the following for
-`Overall: SUCCESS`:
+The workflow has a **final verdict step** that runs LAST (after cleanup)
+and **exits 1 on FAILED** — the job goes red if the effective state is
+FAILED, not just if an earlier step failed.
+
+**Step ordering (SIG-R169-Phase-B-CLEANUP):**
+1. Steps 1-6: validate, checkout verifier, gate, checkout target, SSH, mirror
+2. Step 7: **Cleanup** (`id: cleanup`, `if: always()`) — runs before verdict
+3. Step 8: **Final verdict + summary** (`if: always()`, LAST step) — exits 1 on FAILED
+
+The verdict requires `steps.cleanup.outcome == success` for SUCCESS/SUPERSEDED.
+
+**Three verdicts:**
 
 ```text
-SIG_VERIFIED == true
-SIG_SHA_MATCH == true
-MIRROR_SUCCESS == true (mirrored|already-mirrored|newer-valid-mirror-present)
-GITLAB_PARITY == true
-JOB_STATUS == success
+Common MIRROR_INVARIANTS_OK (required for SUCCESS and SUPERSEDED):
+  - POST_VERIFY_RESULT == success
+  - CLIENT_FP_VERIFIED == true
+  - HOST_FP_VERIFIED == true
+  - ERROR_CATEGORY == none (or empty)
+  - ERROR_PHASE == none (or empty)
+  - GITHUB_MAIN_SHA non-empty
+  - JOB_STATUS == success
+  - CLEANUP_OUTCOME == success
+
+SUCCESS mirrored:
+  - final_result = mirrored
+  - exact parity = true (observed_sha == TARGET_SHA)
+  - push_attempted = true
+  - push_completed = true
+  - MIRROR_INVARIANTS_OK = true
+  - signature verified == true + API SHA == TARGET_SHA
+
+SUCCESS already-mirrored:
+  - final_result = already-mirrored
+  - exact parity = true (observed_sha == TARGET_SHA)
+  - push_attempted = false
+  - push_completed = false
+  - MIRROR_INVARIANTS_OK = true
+  - signature verified == true + API SHA == TARGET_SHA
+
+SUPERSEDED:
+  - final_result = newer-valid-mirror-present
+  - exact parity = false (observed_sha != TARGET_SHA)
+  - observed_sha non-empty (GitLab is ahead — a descendant of TARGET_SHA)
+  - GITHUB_MAIN_SHA != TARGET_SHA (GitHub main advanced past target)
+  - push coherence: EITHER (false/false) OR (true/true) — see below
+  - MIRROR_INVARIANTS_OK = true
+  - signature verified == true + API SHA == TARGET_SHA
+
+FAILED:
+  - everything else → exit 1
 ```
 
-If any condition is false, the result is `FAILED`.
+**SUCCESS and SUPERSEDED leave the job green.** FAILED exits 1.
+
+**Push coherence (SIG-R169-Phase-B-FINAL-INVARIANTS-02, CONC-R3-01):**
+- `mirrored` requires `push_attempted=true` AND `push_completed=true`
+- `already-mirrored` requires `push_attempted=false` AND `push_completed=false`
+- `SUPERSEDED` accepts TWO valid origins (SUPERSEDED_PUSH_COHERENT):
+  1. **PREEXISTING**: `push_attempted=false` AND `push_completed=false`
+     (GitLab was already ahead before this run)
+  2. **AFTER_PUSH_RACE**: `push_attempted=true` AND `push_completed=true`
+     (this run pushed TARGET_SHA, then a newer mirror pushed a descendant
+     before post-verification)
+- Rejected: `push_attempted=true` + `push_completed=false` (push failed)
+- Rejected: `push_attempted=false` + `push_completed=true` (impossible)
+- Any mismatch → FAILED
+
+**Two origins of SUPERSEDED (SIG-R169-Phase-B-CONC-R3-01):**
+1. GitLab was already ahead before this run started — no push needed.
+2. A race condition: this run pushed TARGET_SHA successfully, but a newer
+   mirror run pushed a descendant before post-verification completed.
+   Both runs succeed operationally; no rollback is needed. The last run
+   eventually restores convergence.
+
+**Exact target parity vs operational coverage:**
+- `Exact target parity: true` means `observed_sha == TARGET_SHA` (GitLab
+  is at exactly the commit we wanted to mirror).
+- `SUPERSEDED` means GitLab is AHEAD of TARGET_SHA — exact parity is
+  `false`, but the mirror is operationally valid because a descendant
+  is already present and post-verification succeeded.
+- The summary displays these separately:
+  - `Exact target parity: true|false`
+  - `Operational result: SUCCESS|SUPERSEDED|FAILED`
+
+Never present SUPERSEDED as exact parity.
 
 ### Expected GitLab UI badge
 
@@ -819,8 +909,42 @@ Structural tests in `r169-signature-gate.test.ts` verify the CI YAML:
 action ref is a 40-char SHA, `additional_paths` is absent, `scandir`
 targets `scripts/ci`, version is explicit, step is in the Backend job.
 
+### Phase B tests (SIG-R169-Phase-B-TEST-01, TEST-FINAL-R169-01)
+
+Phase B adds three test files:
+
+- `v2/tests/ci/r169-phase-b-structural.test.ts` — 50 structural tests
+  verifying: verifier pin (exact SHA, ref, path, persist-credentials),
+  step ordering (gate before target/SSH, cleanup before verdict, verdict
+  is last), fail-closed gate (no continue-on-error, no `|| true`, JSON
+  validation, strict attempts regex `^[0-3]$`), three verdicts
+  (SUCCESS/SUPERSEDED/FAILED, newer-valid gives SUPERSEDED not SUCCESS),
+  MIRROR_INVARIANTS_OK common requirement, push coherence per verdict,
+  executable verdict (exit 1 on FAILED, no FAILED path leaves job green),
+  cleanup step (id, if:always, outcome referenced), permissions
+  (contents:read only, no new secrets).
+
+- `v2/tests/ci/r169-phase-b-wrapper.test.ts` — 29 wrapper validation tests.
+  **Extracts the REAL Python wrapper code from the workflow YAML** and
+  executes it with fixtures — no duplication. Tests fail if the block
+  cannot be extracted, if multiple candidates exist, or if the workflow
+  and fixtures are incompatible. Covers: valid JSON, absent/empty/malformed
+  JSON, missing/extra keys, multiline values, strict attempts validation
+  (string type, regex `^[0-3]$`, success 1-3, diagnostic 0-3, bool/float/
+  negative/>3 rejected), exit 0 inconsistency, exit non-zero inconsistency.
+
+- `v2/tests/ci/r169-phase-b-verdict-runtime.test.ts` — 22 verdict runtime
+  tests. **Extracts the REAL Bash verdict block from the workflow YAML**
+  and executes it with a complete env matrix. Verifies exit code, verdict
+  output, and summary content. Matrix: SUCCESS (mirrored, already-mirrored),
+  SUPERSEDED (newer-valid, parity false, observed != target), FAILED
+  (signature false, API SHA mismatch, cleanup failure, post_verify failure,
+  client/host fingerprint false, error_category/phase != none, github_main_sha
+  empty, job_status failure, push coherence violations, newer-valid with
+  exact parity). Summary content verified for each verdict.
+
 ### Script
 
 `scripts/ci/verify-github-commit-signature.sh` — the canonical verifier.
-Phase A: exists with full test coverage, not yet called by the workflow.
-Phase B: will be called by the workflow with `ref: <Phase A squash SHA>`.
+Phase A: completed (squash-merged as f5d42688d921f04b4323a017586af4566c17e381).
+Phase B: active — the mirror workflow calls this script from the pinned SHA.

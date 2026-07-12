@@ -280,16 +280,30 @@ After any modification to GitHub repository settings:
 
 ## 16. Cross-host Signature Trust Boundary (SIG-R169)
 
-### Current state: Phase A (not yet activated)
+### Current state: Phase B ACTIVATED
 
-The signature gate is being deployed in a **2-phase bootstrap** to
-establish a non-circular trust root (SIG-R3-TRUST-01):
+The signature gate is now **active** (Phase B merged). The 2-phase
+bootstrap is complete:
 
-- **Phase A (current):** The canonical verifier script, runtime tests,
-  and documentation are published. The mirror workflow does NOT yet
-  call the verifier.
-- **Phase B (next PR):** The mirror workflow checks out the verifier
-  at `ref: <Phase A squash SHA>` and calls it before target checkout.
+- **Phase A (completed):** Verifier script + tests + docs published and
+  squash-merged as `f5d42688d921f04b4323a017586af4566c17e381`.
+- **Phase B (active):** The mirror workflow loads the verifier from
+  this immutable pinned SHA and executes it before target checkout.
+
+```
+TRUSTED_VERIFIER_SHA = f5d42688d921f04b4323a017586af4566c17e381
+```
+
+### Rotation procedure
+
+To update the verifier:
+1. Publish a new Phase A PR (script + tests + docs only, gate NOT activated)
+2. Squash-merge and verify CI green + mirror green
+3. Record the new squash SHA
+4. Update `TRUSTED_VERIFIER_SHA` in `.github/workflows/mirror-main-to-gitlab.yml`
+   in a separate PR
+
+Never use `main`, `HEAD`, `TARGET_SHA`, `github.sha`, or any moving ref.
 
 ### Architecture
 
@@ -324,14 +338,14 @@ rules, not by the signature gate.
 
 ### Canonical source (SIG-R169-DIV-01)
 
-The verification logic lives in a **single canonical script**. Phase B
-will call this script directly from the workflow — no inline duplication.
-Runtime tests execute the same script against a local HTTP fixture
-server, proving the actual production code path.
+The verification logic lives in a **single canonical script**. The mirror
+workflow calls this script directly — no inline duplication. Runtime tests
+execute the same script against a local HTTP fixture server, proving the
+actual production code path.
 
-### Trust contract (Phase B)
+### Trust contract
 
-The mirror workflow will verify, **before** materializing any GitLab SSH
+The mirror workflow verifies, **before** materializing any GitLab SSH
 credential:
 
 ```text
@@ -354,6 +368,46 @@ against the official GitHub enum (SIG-R4-PARSER-01).
 After successful mirror: `GitLab main SHA == TARGET_SHA` proves the
 exact Git object verified by GitHub is now present on GitLab.
 
+### Three verdicts (SIG-R169-Phase-B-CONC, SIG-R169-Phase-B-FINAL, FINAL-INVARIANTS-02)
+
+The mirror workflow has a **final verdict step** (last step, `if: always()`)
+that **exits 1 on FAILED**. The job goes red if the effective state is
+FAILED, not just if an earlier step failed.
+
+Cleanup runs BEFORE the verdict (`id: cleanup`, `if: always()`). The
+verdict requires `steps.cleanup.outcome == success`.
+
+**Common MIRROR_INVARIANTS_OK** (required for SUCCESS and SUPERSEDED):
+`POST_VERIFY_RESULT == success`, `CLIENT_FP_VERIFIED == true`,
+`HOST_FP_VERIFIED == true`, `ERROR_CATEGORY == none`, `ERROR_PHASE == none`,
+`GITHUB_MAIN_SHA` non-empty, `JOB_STATUS == success`, `CLEANUP_OUTCOME == success`.
+
+**Push coherence** per verdict:
+- SUCCESS mirrored: `push_attempted=true`, `push_completed=true`
+- SUCCESS already-mirrored: `push_attempted=false`, `push_completed=false`
+- SUPERSEDED: accepts EITHER `push_attempted=false` + `push_completed=false`
+  (PREEXISTING — GitLab was already ahead) OR `push_attempted=true` +
+  `push_completed=true` (AFTER_PUSH_RACE — a newer mirror pushed a
+  descendant after this run's push). Both are valid operational successes;
+  no rollback needed. SUPERSEDED also requires `GITHUB_MAIN_SHA != TARGET_SHA`.
+
+```text
+SUCCESS mirrored:         mirrored + exact parity + push true + invariants + sig
+SUCCESS already-mirrored: already-mirrored + exact parity + push false + invariants + sig
+SUPERSEDED:               newer-valid + parity false + observed != target + push false + invariants + sig
+FAILED:                   everything else → exit 1
+```
+
+**Exact target parity** (`observed_sha == TARGET_SHA`) is different from
+**operational coverage**. SUPERSEDED means GitLab is ahead (a descendant
+of TARGET_SHA is already mirrored) — exact parity is false, but the
+mirror is operationally valid. The summary displays both separately.
+
+**Runtime verdict tests** (`r169-phase-b-verdict-runtime.test.ts`) extract
+the real Bash verdict block from the workflow YAML and execute it with
+a complete env matrix — verifying exit code, verdict output, and summary
+content for SUCCESS, SUPERSEDED, and all FAILED paths.
+
 ### What NOT to do
 
 - Do not add GitHub's `web-flow` GPG key to a GitLab user profile
@@ -371,9 +425,8 @@ mirror will refuse to replicate it to GitLab.
 ### Script
 
 `scripts/ci/verify-github-commit-signature.sh` — the canonical verifier.
-Phase A: exists with full test coverage (47 runtime tests + 32 source
-inspection tests), not yet called by the workflow. Phase B: will be
-called by the mirror workflow with `ref: <Phase A squash SHA>` before
-checkout of `TARGET_SHA`. Uses `GITHUB_TOKEN` (no new secrets). Retries
-on transient errors (max 3, backoff 1s/2s). Fails closed on all other
-errors.
+Phase A: completed (squash-merged as `f5d42688d921f04b4323a017586af4566c17e381`).
+Phase B: active — the mirror workflow calls this script from the pinned
+immutable SHA before checkout of `TARGET_SHA`. Uses `GITHUB_TOKEN` (no
+new secrets). Retries on transient errors (max 3, backoff 1s/2s). Fails
+closed on all other errors.
