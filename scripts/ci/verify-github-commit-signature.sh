@@ -56,16 +56,24 @@ STATE_ERROR_CATEGORY="none"
 STATE_ATTEMPTS="0"
 OUTPUT_FILE="${OUTPUT_FILE:-}"
 SIGNATURE_RETRY_DELAY_SCALE="${SIGNATURE_RETRY_DELAY_SCALE:-1}"
+# SIG-R4-TEMP-01: Track temp file for centralized cleanup
+HEADER_FILE=""
 
-# ─── Output emission ─────────────────────────────────────────────────────
+# ─── Output emission + cleanup ───────────────────────────────────────────
 # SIG-R169-JSON-01: Values are passed via environment variables, NOT via
 #   string interpolation into Python code. This prevents apostrophe/backslash
 #   injection from breaking the JSON generator.
 # SIG-R169-JSON-02: No key=value fallback. If JSON generation fails, the
 #   script exits with code 2 (explicit failure, no silent degradation).
+# SIG-R4-TEMP-01: HEADER_FILE cleanup is centralized in the trap to avoid
+#   orphaned temp files on unexpected exits.
 # shellcheck disable=SC2329 # Invoked via trap, not directly
 emit_final_outputs() {
   local exit_code=$?
+  # SIG-R4-TEMP-01: Clean up temp file before emitting outputs
+  if [ -n "${HEADER_FILE:-}" ] && [ -f "$HEADER_FILE" ]; then
+    rm -f "$HEADER_FILE" 2>/dev/null || true
+  fi
   if [ -n "$OUTPUT_FILE" ]; then
     if ! STATE_VERIFIED="$STATE_VERIFIED" \
          STATE_REASON="$STATE_REASON" \
@@ -207,7 +215,11 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
     "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/commits/${TARGET_SHA}" 2>&1) || {
     STATE_ERROR_CATEGORY="GITHUB_SIGNATURE_API_NETWORK_ERROR"
     echo "::error::Network error" >&2
-    rm -f "$HEADER_FILE"
+    # SIG-R4-TEMP-01: HEADER_FILE cleanup is centralized in the trap
+    if [ -n "${HEADER_FILE:-}" ] && [ -f "$HEADER_FILE" ]; then
+      rm -f "$HEADER_FILE" 2>/dev/null || true
+    fi
+    HEADER_FILE=""
     if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
       echo "  Retrying in ${BACKOFF_DELAYS[$((attempt-1))]}s..."
       maybe_sleep "${BACKOFF_DELAYS[$((attempt-1))]}"
@@ -221,31 +233,61 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
   echo "  HTTP status: $HTTP_STATUS"
 
   if [ "$HTTP_STATUS" != "200" ]; then
-    # SIG-R3-RATE-01: GitHub can signal rate limits via 429 OR 403 + headers.
-    # Check x-ratelimit-remaining: 0 or secondary rate limit message.
+    # SIG-R3-RATE-01 + SIG-R4-RATE-01: GitHub rate limit detection.
+    #   - HTTP 429: primary rate limit
+    #   - HTTP 403 + x-ratelimit-remaining: 0: primary rate limit (exhausted)
+    #   - HTTP 403 + body contains 'secondary rate limit'
     # NOTE: grep returns exit 1 when no match — use || true to avoid
     # set -e + pipefail killing the script on non-rate-limit responses.
     RATE_LIMITED=false
+    PRIMARY_EXHAUSTED=false
+    RETRY_AFTER=""
     if [ -f "$HEADER_FILE" ]; then
       RL_REMAINING=$(grep -i '^x-ratelimit-remaining:' "$HEADER_FILE" 2>/dev/null | tr -d '\r' | awk '{print $2}' || true)
       if [ "$HTTP_STATUS" = "403" ] && [ "$RL_REMAINING" = "0" ]; then
         RATE_LIMITED=true
+        PRIMARY_EXHAUSTED=true
       fi
       # Secondary rate limits are 403 with a specific message in the body
       if [ "$HTTP_STATUS" = "403" ] && echo "$HTTP_BODY" | grep -qi 'secondary rate limit' 2>/dev/null; then
         RATE_LIMITED=true
       fi
+      # Capture Retry-After header (seconds) for 429 and secondary rate limits
+      RETRY_AFTER=$(grep -i '^retry-after:' "$HEADER_FILE" 2>/dev/null | tr -d '\r' | awk '{print $2}' || true)
     fi
-    rm -f "$HEADER_FILE"
+    # SIG-R4-TEMP-01: cleanup is centralized in the trap. Clear the variable
+    # so the trap knows we've already processed this file's headers.
+    HEADER_FILE=""
 
-    # SIG-AUD-04 + SIG-R3-RATE-01: Test 429 and 403-rate-limited before generic 5xx
+    # SIG-AUD-04 + SIG-R3-RATE-01 + SIG-R4-RATE-01:
+    # Rate limit handling with smart retry policy.
     if [ "$HTTP_STATUS" = "429" ] || [ "$RATE_LIMITED" = "true" ]; then
       STATE_ERROR_CATEGORY="GITHUB_SIGNATURE_API_RATE_LIMITED"
       echo "::error::HTTP $HTTP_STATUS — rate limited" >&2
+
+      # SIG-R4-RATE-01: 403 + remaining=0 (primary exhausted) → fail closed.
+      # Retrying with 1s/2s backoff won't succeed before the reset window.
+      if [ "$PRIMARY_EXHAUSTED" = "true" ]; then
+        echo "  Primary rate limit exhausted (remaining=0) — fail closed, re-run later" >&2
+        exit 1
+      fi
+
+      # SIG-R4-RATE-01: For 429/secondary, honor Retry-After if present and <= 10s.
+      # If Retry-After > 10s or absent, use default backoff (or fail if last attempt).
       if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-        echo "  Retrying in ${BACKOFF_DELAYS[$((attempt-1))]}s..."
-        maybe_sleep "${BACKOFF_DELAYS[$((attempt-1))]}"
-        continue
+        if [ -n "$RETRY_AFTER" ] && [ "$RETRY_AFTER" -le 10 ] 2>/dev/null; then
+          echo "  Retry-After: ${RETRY_AFTER}s — honoring" >&2
+          maybe_sleep "$RETRY_AFTER"
+          continue
+        elif [ -z "$RETRY_AFTER" ]; then
+          # No Retry-After header — use default backoff
+          echo "  Retrying in ${BACKOFF_DELAYS[$((attempt-1))]}s..." >&2
+          maybe_sleep "${BACKOFF_DELAYS[$((attempt-1))]}"
+          continue
+        else
+          echo "  Retry-After: ${RETRY_AFTER}s > 10s — fail closed" >&2
+          exit 1
+        fi
       fi
       exit 1
     elif [ "$HTTP_STATUS" = "500" ] || [ "$HTTP_STATUS" = "502" ] || \
@@ -272,11 +314,23 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
       exit 1
     fi
   fi
-  rm -f "$HEADER_FILE"
 
-  # SIG-AUD-07 + SIG-R169-SCHEMA-01: Strict JSON parsing with ISO timestamp validation
-  # Values are parsed in Python and returned as a pipe-delimited string.
-  # This avoids shell/Python interpolation issues.
+  # SIG-AUD-07 + SIG-R169-SCHEMA-01 + SIG-R4-VERIFYAT-01 + SIG-R4-PARSER-01:
+  # Strict JSON parsing respecting the REAL GitHub API contract.
+  #
+  # Contract:
+  #   - sha: always a 40-char hex string
+  #   - verification: always an object
+  #   - verified: always a bool
+  #   - reason: always a string from the official GitHub enum
+  #   - verified_at: ISO-8601+tz string on success (verified=true, reason=valid);
+  #                   may be null on refusal (verified=false, reason!=valid)
+  #
+  # Incoherent states (→ SCHEMA_ERROR):
+  #   - verified=true + reason!=valid
+  #   - verified=false + reason=valid
+  #   - verified=true + reason=valid + verified_at null/not-ISO/no-tz
+  #   - reason not in official enum
   PARSE_RESULT=$(echo "$HTTP_BODY" | python3 -c "
 import json, sys, re
 from datetime import datetime
@@ -301,23 +355,46 @@ reason = v.get('reason')
 if not isinstance(reason, str) or not reason:
     print('SCHEMA_ERROR|reason')
     sys.exit(0)
+# SIG-R4-PARSER-01: Validate reason against the official GitHub enum.
+# This prevents arbitrary strings from reaching the shell pipe parser.
+GITHUB_REASONS = {
+    'expired_key', 'not_signing_key', 'gpgverify_error',
+    'gpgverify_unavailable', 'unsigned', 'unknown_signature_type',
+    'no_user', 'unverified_email', 'bad_email', 'unknown_key',
+    'malformed_signature', 'invalid', 'valid',
+}
+if reason not in GITHUB_REASONS:
+    print('SCHEMA_ERROR|reason_enum')
+    sys.exit(0)
+# SIG-R4-VERIFYAT-01: Check verified/reason coherence.
+if verified and reason != 'valid':
+    print('SCHEMA_ERROR|verified_true_reason_not_valid')
+    sys.exit(0)
+if not verified and reason == 'valid':
+    print('SCHEMA_ERROR|verified_false_reason_valid')
+    sys.exit(0)
 verified_at = v.get('verified_at')
-if not isinstance(verified_at, str) or not verified_at:
-    print('SCHEMA_ERROR|verified_at')
-    sys.exit(0)
-# SIG-R169-SCHEMA-01 + SIG-R3-TIME-01: validate verified_at as ISO-8601
-# timestamp WITH timezone. Reject:
-#   - 'foo', '2026' (not a timestamp)
-#   - '2026-07-13T10:00:00' (no timezone)
-#   - '2026-07-13' (date-only, no timezone)
-try:
-    dt = datetime.fromisoformat(verified_at.replace('Z', '+00:00'))
-    if dt.tzinfo is None or dt.utcoffset() is None:
-        print('SCHEMA_ERROR|verified_at_timezone')
+# On success: verified_at must be an ISO-8601 string WITH timezone.
+# On refusal: verified_at may be null (or a string); normalize null to ''.
+if verified and reason == 'valid':
+    if not isinstance(verified_at, str) or not verified_at:
+        print('SCHEMA_ERROR|verified_at_success_required')
         sys.exit(0)
-except Exception:
-    print('SCHEMA_ERROR|verified_at_format')
-    sys.exit(0)
+    try:
+        dt = datetime.fromisoformat(verified_at.replace('Z', '+00:00'))
+        if dt.tzinfo is None or dt.utcoffset() is None:
+            print('SCHEMA_ERROR|verified_at_timezone')
+            sys.exit(0)
+    except Exception:
+        print('SCHEMA_ERROR|verified_at_format')
+        sys.exit(0)
+else:
+    # Refusal: normalize null/None to empty string for the output JSON.
+    if verified_at is None:
+        verified_at = ''
+    elif not isinstance(verified_at, str):
+        print('SCHEMA_ERROR|verified_at_type')
+        sys.exit(0)
 print(f'{sha}|{str(verified).lower()}|{reason}|{verified_at}')
 " 2>/dev/null)
 

@@ -125,12 +125,42 @@ describe("R169 SIG — script structure", () => {
     expect(script).toContain("isinstance(verified_at, str)");
   });
 
-  it("script validates verified_at as ISO-8601 WITH timezone (SIG-R3-TIME-01)", () => {
+  it("script validates verified_at as ISO-8601 WITH timezone on success (SIG-R3-TIME-01, SIG-R4-VERIFYAT-01)", () => {
     const script = readScript();
     expect(script).toContain("datetime.fromisoformat");
     expect(script).toContain("verified_at_format");
     expect(script).toContain("verified_at_timezone");
     expect(script).toContain("dt.tzinfo is None");
+  });
+
+  it("script allows null verified_at on refusal (SIG-R4-VERIFYAT-01)", () => {
+    const script = readScript();
+    // The parser must normalize null verified_at to '' on refusal paths
+    expect(script).toContain("verified_at_success_required");
+    expect(script).toContain("verified_at is None");
+    expect(script).toContain("verified_at = ''");
+  });
+
+  it("script validates reason against official GitHub enum (SIG-R4-PARSER-01)", () => {
+    const script = readScript();
+    expect(script).toContain("GITHUB_REASONS");
+    expect(script).toContain("reason_enum");
+    // Check all 13 official reasons are in the enum
+    const reasons = [
+      "expired_key", "not_signing_key", "gpgverify_error",
+      "gpgverify_unavailable", "unsigned", "unknown_signature_type",
+      "no_user", "unverified_email", "bad_email", "unknown_key",
+      "malformed_signature", "invalid", "valid",
+    ];
+    for (const r of reasons) {
+      expect(script).toContain(`'${r}'`);
+    }
+  });
+
+  it("script checks verified/reason coherence (SIG-R4-VERIFYAT-01)", () => {
+    const script = readScript();
+    expect(script).toContain("verified_true_reason_not_valid");
+    expect(script).toContain("verified_false_reason_valid");
   });
 
   it("script uses env vars for JSON generation, not interpolation (SIG-R169-JSON-01)", () => {
@@ -155,9 +185,7 @@ describe("R169 SIG — script structure", () => {
 
   it("script validates SIGNATURE_RETRY_DELAY_SCALE (SIG-R3-RETRY-02)", () => {
     const script = readScript();
-    // Must reject values other than 0 and 1
     expect(script).toContain("0|1)");
-    // Must reject scale != 1 in production
     expect(script).toContain("!= \"1\"");
   });
 
@@ -171,10 +199,7 @@ describe("R169 SIG — script structure", () => {
 
   it("script does NOT retry malformed JSON (SIG-R3-RETRY-01)", () => {
     const script = readScript();
-    // The malformed JSON error message should say "not retryable"
     expect(script).toContain("Malformed JSON (not retryable)");
-    // The malformed JSON handler should NOT have a continue/retry block
-    // Find the bash if block for MALFORMED_JSON
     const malformedIdx = script.indexOf('"MALFORMED_JSON" ]; then');
     expect(malformedIdx).toBeGreaterThan(-1);
     const fiIdx = script.indexOf("fi", malformedIdx);
@@ -183,11 +208,28 @@ describe("R169 SIG — script structure", () => {
     expect(malformedBlock).not.toContain("maybe_sleep");
   });
 
-  it("script captures response headers for rate limit detection (SIG-R3-RATE-01)", () => {
+  it("script captures response headers for rate limit detection (SIG-R3-RATE-01, SIG-R4-RATE-01)", () => {
     const script = readScript();
     expect(script).toContain("--dump-header");
     expect(script).toContain("x-ratelimit-remaining");
     expect(script).toContain("secondary rate limit");
+    expect(script).toContain("retry-after");
+    expect(script).toContain("PRIMARY_EXHAUSTED");
+    expect(script).toContain("RETRY_AFTER");
+  });
+
+  it("script has centralized HEADER_FILE cleanup in trap (SIG-R4-TEMP-01)", () => {
+    const script = readScript();
+    expect(script).toContain('HEADER_FILE=""');
+    // The trap function should clean up HEADER_FILE — find the function body
+    // by looking for the cleanup comment inside emit_final_outputs
+    const trapIdx = script.indexOf("emit_final_outputs() {");
+    expect(trapIdx).toBeGreaterThan(-1);
+    // Look for HEADER_FILE cleanup within the first ~500 chars of the trap function
+    const trapSection = script.substring(trapIdx, trapIdx + 600);
+    expect(trapSection).toContain("HEADER_FILE");
+    expect(trapSection).toContain("rm -f");
+    expect(trapSection).toContain("SIG-R4-TEMP-01");
   });
 });
 

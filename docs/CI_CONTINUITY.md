@@ -227,9 +227,11 @@ the mirror will fail closed.
 - GitLab remains at the last successfully mirrored SHA
 - No manual unsigned bypass
 - Re-run the mirror workflow after GitHub API recovers
-- The signature gate will retry 3 times with backoff (1s, 2s) before failing
-- Rate limits (HTTP 429 or 403+x-ratelimit-remaining:0) are classified
-  as `GITHUB_SIGNATURE_API_RATE_LIMITED` and retried
+- The signature gate retries with a smart policy:
+  - Network errors, HTTP 5xx, gpgverify_error/unavailable: 3 attempts, backoff 1s/2s
+  - HTTP 429 or secondary rate limit with `Retry-After` ≤ 10s: honor it
+  - HTTP 403 + `x-ratelimit-remaining: 0` (primary exhausted): fail closed immediately
+  - HTTP 429 with `Retry-After` > 10s: fail closed (don't waste CI time)
 
 ### Acceptable
 

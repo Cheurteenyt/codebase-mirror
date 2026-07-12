@@ -345,6 +345,12 @@ If any of these checks fail, the mirror does not proceed. No GitLab
 SSH key is written to disk. No push is attempted. GitLab remains at
 the last successfully mirrored SHA.
 
+The `verified_at` field follows the real GitHub API contract
+(SIG-R4-VERIFYAT-01): it is required (ISO-8601 with timezone) only on
+success (`verified=true`, `reason=valid`); on refusal it may be `null`
+and is normalized to `""` in the output. The `reason` field is validated
+against the official GitHub enum (SIG-R4-PARSER-01).
+
 After successful mirror: `GitLab main SHA == TARGET_SHA` proves the
 exact Git object verified by GitHub is now present on GitLab.
 

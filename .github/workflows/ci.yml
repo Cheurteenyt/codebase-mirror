@@ -90,6 +90,15 @@ jobs:
       - name: Incremental benchmark invariants
         run: npm run bench:incremental:smoke
 
+      # SIG-R4-CI-01: ShellCheck security-critical CI scripts.
+      # Uses the shellcheck action pinned by SHA for reproducibility.
+      # This step runs inside the Backend job — no new required check.
+      - name: ShellCheck security-critical CI scripts
+        uses: ludeeus/action-shellcheck@00cae500b0842d2615dcb9bddb7339b0d1f4f6f8 # 2.0.0
+        with:
+          severity: warning
+          additional_paths: scripts/ci/verify-github-commit-signature.sh scripts/ci/mirror-main-to-gitlab.sh
+
   # ── Frontend (graph-ui): typecheck + build + test ──────────────
   frontend:
     name: Frontend (graph-ui)

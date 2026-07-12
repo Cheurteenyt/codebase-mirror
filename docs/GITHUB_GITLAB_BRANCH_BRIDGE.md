@@ -618,10 +618,32 @@ commit.verification.verified_at is a valid ISO-8601 timestamp WITH timezone
 
 All four conditions must be met. No partial acceptance.
 
-The `verified_at` field is validated as an ISO-8601 timestamp WITH
-timezone (SIG-R3-TIME-01) — values like `"foo"`, `"2026"`,
-`"2026-07-13T10:00:00"` (no timezone), and `"2026-07-13"` (date-only)
-are all rejected.
+#### verified_at contract (SIG-R4-VERIFYAT-01)
+
+The `verified_at` field follows the REAL GitHub API contract:
+
+- **On success** (`verified=true`, `reason=valid`): `verified_at` must
+  be a non-null ISO-8601 string WITH timezone. Values like `"foo"`,
+  `"2026"`, `"2026-07-13T10:00:00"` (no timezone), and `"2026-07-13"`
+  (date-only) are all rejected as `SCHEMA_ERROR`.
+- **On refusal** (`verified=false`, `reason!=valid`): `verified_at` may
+  be `null` (this is the actual GitHub response for unsigned/invalid
+  commits). The parser normalizes `null` to `""` in the output JSON.
+
+Incoherent states are rejected as `SCHEMA_ERROR`:
+- `verified=true` + `reason!=valid`
+- `verified=false` + `reason=valid`
+
+### Reason validation (SIG-R4-PARSER-01)
+
+The `reason` field is validated against the official GitHub enum:
+`expired_key`, `not_signing_key`, `gpgverify_error`, `gpgverify_unavailable`,
+`unsigned`, `unknown_signature_type`, `no_user`, `unverified_email`,
+`bad_email`, `unknown_key`, `malformed_signature`, `invalid`, `valid`.
+
+Any reason not in this enum is rejected as `SCHEMA_ERROR` — this prevents
+arbitrary strings from reaching the shell pipe parser and forces a
+conscious audit when GitHub introduces new reason values.
 
 ### Error categories
 
@@ -630,9 +652,9 @@ are all rejected.
 | `GITHUB_SIGNATURE_CONFIG_ERROR` | Missing/invalid env vars | No |
 | `GITHUB_SIGNATURE_API_NETWORK_ERROR` | curl failure | Yes (3×) |
 | `GITHUB_SIGNATURE_API_HTTP_ERROR` | 401/404/403(non-rate-limit)/other | No |
-| `GITHUB_SIGNATURE_API_RATE_LIMITED` | HTTP 429 or 403+x-ratelimit-remaining:0 or secondary rate limit | Yes (3×) |
+| `GITHUB_SIGNATURE_API_RATE_LIMITED` | HTTP 429 or 403+remaining:0 or secondary rate limit | Conditional (see below) |
 | `GITHUB_SIGNATURE_API_MALFORMED_JSON` | Invalid JSON | No (SIG-R3-RETRY-01) |
-| `GITHUB_SIGNATURE_API_SCHEMA_ERROR` | Missing/malformed verification, bad verified_at | No |
+| `GITHUB_SIGNATURE_API_SCHEMA_ERROR` | Missing/malformed verification, bad verified_at, unknown reason | No |
 | `GITHUB_SIGNATURE_SHA_MISMATCH` | API SHA != TARGET_SHA | No |
 | `GITHUB_SIGNATURE_UNSIGNED` | reason=unsigned | No |
 | `GITHUB_SIGNATURE_INVALID` | reason=invalid/malformed_signature | No |
@@ -643,23 +665,32 @@ are all rejected.
 
 - Max 3 attempts
 - Backoff: 1s, 2s (between attempts 1→2 and 2→3)
-- Retries: network errors, HTTP 429, HTTP 403 rate-limited, HTTP 5xx,
-  gpgverify_error/unavailable
+- Retries: network errors, HTTP 429 (with Retry-After ≤10s), HTTP 403
+  secondary rate limit, HTTP 5xx, gpgverify_error/unavailable
 - NO retry for: malformed JSON (SIG-R3-RETRY-01), schema errors,
-  unsigned, invalid, SHA mismatch, HTTP 401/404, HTTP 403 non-rate-limit
+  unsigned, invalid, SHA mismatch, HTTP 401/404, HTTP 403 non-rate-limit,
+  HTTP 403+remaining=0 (primary exhausted)
 - `SIGNATURE_RETRY_DELAY_SCALE`: production must be `1`; test mode may
   be `0` or `1` (SIG-R3-RETRY-02). Any other value is rejected.
 
-### Rate limit handling (SIG-R3-RATE-01)
+### Rate limit handling (SIG-R3-RATE-01 + SIG-R4-RATE-01)
 
 GitHub can signal rate limits via:
 - HTTP 429 (primary rate limit)
-- HTTP 403 + `x-ratelimit-remaining: 0` header (primary rate limit)
-- HTTP 403 + body containing "secondary rate limit" (secondary rate limit)
+- HTTP 403 + `x-ratelimit-remaining: 0` header (primary rate limit exhausted)
+- HTTP 403 + body containing "secondary rate limit"
 
-All three are classified as `GITHUB_SIGNATURE_API_RATE_LIMITED` and
-receive the same retry policy (max 3, backoff 1s/2s). Response headers
-are captured via `curl --dump-header` to detect the 403+header case.
+**Smart retry policy:**
+
+| Condition | Action |
+|-----------|--------|
+| HTTP 403 + remaining=0 (primary exhausted) | **Fail closed immediately** — retrying with 1s/2s won't succeed before reset |
+| HTTP 429 or secondary rate limit + `Retry-After` ≤ 10s | Honor `Retry-After`, retry once |
+| HTTP 429 or secondary rate limit + `Retry-After` > 10s | **Fail closed** — don't waste CI time |
+| HTTP 429 or secondary rate limit + no `Retry-After` | Use default backoff (1s/2s) |
+
+Response headers are captured via `curl --dump-header` to detect the
+403+header case and read `Retry-After`.
 
 ### JSON output (SIG-AUD-05, SIG-R169-JSON-01/02)
 
@@ -731,14 +762,17 @@ The verifier script has both source-inspection tests and runtime tests:
 
 - `v2/tests/ci/r169-signature-gate.test.ts` — source structure,
   token-leak detection with negative fixtures, Phase A bootstrap
-  verification
+  verification, parser contract verification
 - `v2/tests/ci/r169-signature-runtime.test.ts` — executes the real
-  script against a local HTTP fixture server with 47 test cases:
-  - Success: valid, valid+offset, 429-then-valid, 403-rate-limit-then-valid,
+  script against a local HTTP fixture server with 52 test cases:
+  - Success: valid, valid+offset, 429-then-valid, 429+Retry-After,
     403-secondary-then-valid, gpgverify-then-valid
-  - Refusal: unsigned, invalid, malformed_signature, unknown_key,
-    SHA mismatch, verified=true+reason!=valid, verified=false+reason=valid
-  - HTTP: 500, 502, 503, 504, 429-permanent, 401, 404, 403-non-rate-limit
+  - Refusal (realistic null verified_at): unsigned, invalid,
+    malformed_signature, unknown_key, SHA mismatch, gpgverify_error (retry),
+    gpgverify_unavailable (retry), verified=true+reason!=valid (SCHEMA_ERROR),
+    verified=false+reason=valid (SCHEMA_ERROR), unknown reason (SCHEMA_ERROR)
+  - HTTP: 500, 502, 503, 504, 429-permanent, 401, 404, 403-non-rate-limit,
+    403+remaining=0 (fail closed), 429+Retry-After=60 (fail closed)
   - JSON/schema: malformed, missing-verification, verified_at absent/foo/2026/no-tz/date-only,
     verified wrong type, reason wrong type
   - Config: missing TARGET_SHA, invalid SHA, missing TOKEN/URL/REPO,

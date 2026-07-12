@@ -214,12 +214,40 @@ function runScriptSync(envOverrides: Record<string, string>): ScriptResult {
 
 // ─── Body builders ──────────────────────────────────────────────────────
 
+// SIG-R4-VERIFYAT-01: Body builders use the REAL GitHub API contract.
+// Success: signature/payload/verified_at are strings.
+// Refusal: signature=null, payload=null, verified_at=null (realistic).
+
 function validBody(sha: string, ts: string = ISO_TS): string {
-  return JSON.stringify({ sha, commit: { verification: { verified: true, reason: "valid", verified_at: ts } } });
+  return JSON.stringify({
+    sha,
+    commit: {
+      verification: {
+        verified: true,
+        reason: "valid",
+        signature: "pgp-signature-data",
+        payload: "payload-data",
+        verified_at: ts,
+      },
+    },
+  });
 }
 
-function refusalBody(sha: string, reason: string, ts: string = ISO_TS): string {
-  return JSON.stringify({ sha, commit: { verification: { verified: false, reason, verified_at: ts } } });
+// Realistic refusal body: signature=null, payload=null, verified_at=null
+// This matches the actual GitHub API response for unsigned/invalid commits.
+function refusalBody(sha: string, reason: string, ts: string | null = null): string {
+  return JSON.stringify({
+    sha,
+    commit: {
+      verification: {
+        verified: false,
+        reason,
+        signature: null,
+        payload: null,
+        verified_at: ts,
+      },
+    },
+  });
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────
@@ -279,7 +307,9 @@ describe("R169 SIG runtime — success cases", () => {
     }
   });
 
-  it("403 with x-ratelimit-remaining: 0 then valid → exit 0, RATE_LIMITED (SIG-R3-RATE-01)", async () => {
+  it("403 with x-ratelimit-remaining: 0 → exit 1, RATE_LIMITED, fail closed (SIG-R4-RATE-01)", async () => {
+    // SIG-R4-RATE-01: Primary rate limit exhausted (remaining=0) → fail closed.
+    // Retrying with 1s/2s backoff won't succeed before the reset window.
     const srv = await startServer([
       {
         status: 403,
@@ -290,8 +320,47 @@ describe("R169 SIG runtime — success cases", () => {
     ]);
     try {
       const r = await runScriptAsync(srv.port);
+      expect(r.exitCode).toBe(1);
+      expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_API_RATE_LIMITED");
+      expect(r.outputs?.attempts).toBe("1"); // No retry — fail closed
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("429 with Retry-After: 1 then valid → exit 0, attempts=2 (SIG-R4-RATE-01)", async () => {
+    const srv = await startServer([
+      {
+        status: 429,
+        body: JSON.stringify({ message: "rate limited" }),
+        headers: { "retry-after": "1" },
+      },
+      { status: 200, body: validBody(TARGET_SHA) },
+    ]);
+    try {
+      const r = await runScriptAsync(srv.port);
       expect(r.exitCode).toBe(0);
       expect(r.outputs?.attempts).toBe("2");
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it("429 with Retry-After: 60 (>10s) → exit 1, fail closed (SIG-R4-RATE-01)", async () => {
+    // SIG-R4-RATE-01: Retry-After > 10s → fail closed (don't waste CI time)
+    const srv = await startServer([
+      {
+        status: 429,
+        body: JSON.stringify({ message: "rate limited" }),
+        headers: { "retry-after": "60" },
+      },
+      { status: 200, body: validBody(TARGET_SHA) },
+    ]);
+    try {
+      const r = await runScriptAsync(srv.port);
+      expect(r.exitCode).toBe(1);
+      expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_API_RATE_LIMITED");
+      expect(r.outputs?.attempts).toBe("1"); // No retry — fail closed
     } finally {
       await srv.close();
     }
@@ -330,8 +399,8 @@ describe("R169 SIG runtime — success cases", () => {
   });
 });
 
-describe("R169 SIG runtime — refusal cases", () => {
-  it("unsigned → exit 1, UNSIGNED, all fields populated (SIG-R169-DIAG-01)", async () => {
+describe("R169 SIG runtime — refusal cases (realistic fixtures with null verified_at)", () => {
+  it("unsigned + null verified_at → exit 1, UNSIGNED, verified_at normalized to '' (SIG-R4-VERIFYAT-01)", async () => {
     const srv = await startServer([{ status: 200, body: refusalBody(TARGET_SHA, "unsigned") }]);
     try {
       const r = await runScriptAsync(srv.port);
@@ -341,22 +410,24 @@ describe("R169 SIG runtime — refusal cases", () => {
       expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_UNSIGNED");
       expect(r.outputs?.attempts).toBe("1");
       expect(r.outputs?.api_sha).toBe(TARGET_SHA);
-      expect(r.outputs?.verified_at).toBe(ISO_TS);
+      // SIG-R4-VERIFYAT-01: null verified_at is normalized to ""
+      expect(r.outputs?.verified_at).toBe("");
     } finally {
       await srv.close();
     }
   });
 
-  it("invalid → exit 1, INVALID", async () => {
+  it("invalid + null verified_at → exit 1, INVALID (SIG-R4-VERIFYAT-01)", async () => {
     const srv = await startServer([{ status: 200, body: refusalBody(TARGET_SHA, "invalid") }]);
     try {
       const r = await runScriptAsync(srv.port);
       expect(r.exitCode).toBe(1);
       expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_INVALID");
+      expect(r.outputs?.verified_at).toBe("");
     } finally { await srv.close(); }
   });
 
-  it("malformed_signature → exit 1, INVALID", async () => {
+  it("malformed_signature + null verified_at → exit 1, INVALID (SIG-R4-VERIFYAT-01)", async () => {
     const srv = await startServer([{ status: 200, body: refusalBody(TARGET_SHA, "malformed_signature") }]);
     try {
       const r = await runScriptAsync(srv.port);
@@ -386,7 +457,7 @@ describe("R169 SIG runtime — refusal cases", () => {
     } finally { await srv.close(); }
   });
 
-  it("verified=true but reason!=valid → exit 1 (SIG-R3-TESTCOVER-01)", async () => {
+  it("verified=true but reason!=valid → exit 1, SCHEMA_ERROR (SIG-R4-VERIFYAT-01 coherence)", async () => {
     const srv = await startServer([
       {
         status: 200,
@@ -399,10 +470,11 @@ describe("R169 SIG runtime — refusal cases", () => {
     try {
       const r = await runScriptAsync(srv.port);
       expect(r.exitCode).toBe(1);
+      expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_API_SCHEMA_ERROR");
     } finally { await srv.close(); }
   });
 
-  it("verified=false but reason=valid → exit 1 (SIG-R3-TESTCOVER-01)", async () => {
+  it("verified=false but reason=valid → exit 1, SCHEMA_ERROR (SIG-R4-VERIFYAT-01 coherence)", async () => {
     const srv = await startServer([
       {
         status: 200,
@@ -415,6 +487,56 @@ describe("R169 SIG runtime — refusal cases", () => {
     try {
       const r = await runScriptAsync(srv.port);
       expect(r.exitCode).toBe(1);
+      expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_API_SCHEMA_ERROR");
+    } finally { await srv.close(); }
+  });
+
+  it("unknown reason (not in enum) → exit 1, SCHEMA_ERROR (SIG-R4-PARSER-01)", async () => {
+    const srv = await startServer([
+      {
+        status: 200,
+        body: JSON.stringify({
+          sha: TARGET_SHA,
+          commit: { verification: { verified: false, reason: "totally_made_up_reason", verified_at: null } },
+        }),
+      },
+    ]);
+    try {
+      const r = await runScriptAsync(srv.port);
+      expect(r.exitCode).toBe(1);
+      expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_API_SCHEMA_ERROR");
+    } finally { await srv.close(); }
+  });
+
+  it("gpgverify_error + null verified_at → exit 1, TRANSIENT, attempts=3 (SIG-R4-VERIFYAT-01 retry path)", async () => {
+    // SIG-R4-VERIFYAT-01: gpgverify_error with null verified_at must still
+    // reach the retry logic (not be rejected as SCHEMA_ERROR).
+    const srv = await startServer([
+      { status: 200, body: refusalBody(TARGET_SHA, "gpgverify_error") },
+      { status: 200, body: refusalBody(TARGET_SHA, "gpgverify_error") },
+      { status: 200, body: refusalBody(TARGET_SHA, "gpgverify_error") },
+    ]);
+    try {
+      const r = await runScriptAsync(srv.port);
+      expect(r.exitCode).toBe(1);
+      expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_TRANSIENT_VERIFIER_ERROR");
+      expect(r.outputs?.attempts).toBe("3");
+      expect(r.outputs?.verified_at).toBe("");
+    } finally { await srv.close(); }
+  });
+
+  it("gpgverify_unavailable + null verified_at → exit 1, TRANSIENT, attempts=3 (SIG-R4-VERIFYAT-01)", async () => {
+    const srv = await startServer([
+      { status: 200, body: refusalBody(TARGET_SHA, "gpgverify_unavailable") },
+      { status: 200, body: refusalBody(TARGET_SHA, "gpgverify_unavailable") },
+      { status: 200, body: refusalBody(TARGET_SHA, "gpgverify_unavailable") },
+    ]);
+    try {
+      const r = await runScriptAsync(srv.port);
+      expect(r.exitCode).toBe(1);
+      expect(r.outputs?.error_category).toBe("GITHUB_SIGNATURE_TRANSIENT_VERIFIER_ERROR");
+      expect(r.outputs?.attempts).toBe("3");
+      expect(r.outputs?.verified_at).toBe("");
     } finally { await srv.close(); }
   });
 });
