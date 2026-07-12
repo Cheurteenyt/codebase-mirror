@@ -293,24 +293,30 @@ describe("R169 SIG — token leak detection (SIG-R169-TOKEN-01)", () => {
   });
 });
 
-// ─── Phase A workflow state tests ───────────────────────────────────────
+// ─── Phase B activation state tests ─────────────────────────────────────
+// Phase A was squash-merged as f5d42688d921f04b4323a017586af4566c17e381.
+// Phase B is now ACTIVE — the workflow loads the verifier from that pinned SHA.
 
-describe("R169 SIG — Phase A bootstrap (SIG-R3-TRUST-01)", () => {
+describe("R169 SIG — Phase B activation (SIG-R169-Phase-B)", () => {
   const workflow = readWorkflow("mirror-main-to-gitlab.yml");
 
-  it("Phase A: workflow does NOT yet activate the signature gate", () => {
-    // The gate is NOT active in Phase A. The workflow is in its pre-SIG-R169
-    // state. Phase B will activate it with ref=<Phase A squash SHA>.
-    expect(workflow).not.toContain("Verify GitHub commit signature");
-    expect(workflow).not.toContain("verify-github-commit-signature.sh");
+  it("Phase B: workflow DOES activate the signature gate", () => {
+    // The gate IS active in Phase B. The workflow checks out the verifier
+    // from the pinned Phase A squash SHA and runs it before target checkout.
+    expect(workflow).toContain("Verify GitHub commit signature");
+    expect(workflow).toContain("verify-github-commit-signature.sh");
   });
 
-  it("Phase A: workflow still has the basic mirror steps", () => {
-    // The mirror workflow still functions normally without the gate
+  it("Phase B: workflow still has the basic mirror steps", () => {
+    // The mirror workflow still functions with the gate in front
     expect(workflow).toContain("Validate event identity");
     expect(workflow).toContain("Checkout exact CI-validated SHA");
     expect(workflow).toContain("Materialize SSH key");
     expect(workflow).toContain("Run mirror state machine");
+  });
+
+  it("Phase B: TRUSTED_VERIFIER_SHA is pinned to Phase A squash SHA", () => {
+    expect(workflow).toContain("f5d42688d921f04b4323a017586af4566c17e381");
   });
 });
 

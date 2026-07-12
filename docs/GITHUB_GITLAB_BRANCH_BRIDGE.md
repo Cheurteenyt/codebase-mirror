@@ -538,18 +538,34 @@ If any of these seems necessary, stop and declare an incident.
 
 ## 19. GitHub signature verification gate (SIG-R169)
 
-### Current state: Phase A (not yet activated)
+### Current state: Phase B ACTIVATED
 
-The signature gate is being deployed in a **2-phase bootstrap** to
-establish a non-circular trust root (SIG-R3-TRUST-01):
+The signature gate is now **active** (Phase B merged). The 2-phase
+bootstrap is complete:
 
-- **Phase A (current):** The canonical verifier script, runtime tests,
-  and documentation are published. The mirror workflow does NOT yet
-  call the verifier. The workflow remains in its pre-SIG-R169 state.
-- **Phase B (next PR):** The mirror workflow is modified to checkout
-  the verifier at `ref: <Phase A squash SHA>` (an immutable 40-char
-  Git SHA) and call it before target checkout. This ensures the
-  verifier cannot come from `TARGET_SHA` or a future `main`.
+- **Phase A (completed):** The canonical verifier script, runtime tests,
+  and documentation were published and squash-merged as:
+  ```
+  f5d42688d921f04b4323a017586af4566c17e381
+  ```
+- **Phase B (active):** The mirror workflow loads the verifier from
+  this immutable pinned SHA and executes it before target checkout.
+
+```
+TRUSTED_VERIFIER_SHA = f5d42688d921f04b4323a017586af4566c17e381
+```
+
+### Rotation procedure
+
+To update the verifier:
+1. Publish a new Phase A PR (script + tests + docs only, gate NOT activated)
+2. Squash-merge and verify CI green + mirror green
+3. Record the new squash SHA
+4. Update `TRUSTED_VERIFIER_SHA` in `.github/workflows/mirror-main-to-gitlab.yml`
+   in a separate PR
+
+Never use `main`, `HEAD`, `TARGET_SHA`, `github.sha`, or any moving ref as
+the verifier source.
 
 Rationale: If the workflow checked out the verifier from the default
 branch without a `ref`, `actions/checkout` would use the event SHA
@@ -557,7 +573,7 @@ branch without a `ref`, `actions/checkout` would use the event SHA
 This means `TARGET_SHA` could supply its own verifier — a circular
 trust root. Pinning to the Phase A SHA breaks the circle.
 
-### Purpose (Phase B)
+### Purpose
 
 Once activated, the gate will verify that GitHub has cryptographically
 verified the commit at `TARGET_SHA` **before** the mirror workflow
@@ -822,5 +838,5 @@ targets `scripts/ci`, version is explicit, step is in the Backend job.
 ### Script
 
 `scripts/ci/verify-github-commit-signature.sh` — the canonical verifier.
-Phase A: exists with full test coverage, not yet called by the workflow.
-Phase B: will be called by the workflow with `ref: <Phase A squash SHA>`.
+Phase A: completed (squash-merged as f5d42688d921f04b4323a017586af4566c17e381).
+Phase B: active — the mirror workflow calls this script from the pinned SHA.
