@@ -10,8 +10,8 @@ COPY graph-ui/ ./
 RUN npm run build
 
 # ── Stage 2: Build v2 backend ──────────────────────────────────────
+# node:20 (full) includes build tools for native modules (better-sqlite3)
 FROM node:20 AS builder
-    python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY v2/package.json v2/package-lock.json ./
 RUN npm ci
