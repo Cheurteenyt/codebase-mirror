@@ -19,7 +19,7 @@ COPY v2/ ./
 RUN npm run build
 COPY --from=ui-builder /graph-ui/dist ./dist/ui
 # Prune to production deps for runtime
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm prune --omit=dev && npm cache clean --force
 
 # ── Stage 3: Runtime (no build tools needed) ───────────────────────
 FROM node:20-slim AS runtime
