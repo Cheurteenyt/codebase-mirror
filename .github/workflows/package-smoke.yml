@@ -1,6 +1,9 @@
 # R168.3a — Package smoke test
+# R169 baseline fix: robust npm pack parsing, no pre-build, UI/MCP smoke
+#
 # Tests that npm pack produces a valid tarball with UI assets,
 # and that the installed package works from an arbitrary cwd.
+# The prepack hook (build-package.mjs) must build everything autonomously.
 
 name: Package Smoke
 
@@ -15,6 +18,7 @@ on:
       - 'graph-ui/package.json'
       - 'graph-ui/package-lock.json'
   pull_request:
+    branches: [main]
     paths:
       - 'v2/package.json'
       - 'v2/package-lock.json'
@@ -31,7 +35,7 @@ jobs:
   package-smoke:
     name: npm pack + install + CLI + UI smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -44,29 +48,43 @@ jobs:
           cache: npm
           cache-dependency-path: v2/package-lock.json
 
-      - name: Build graph-ui (for prepack to find)
-        working-directory: graph-ui
-        run: |
-          npm ci
-          npm run build
+      # R169 fix: do NOT pre-build graph-ui. The prepack hook must
+      # build everything autonomously. This is the real proof.
+      - name: npm ci (v2 only)
+        working-directory: v2
+        run: npm ci
 
-      - name: npm pack (triggers prepack → build-package.mjs)
+      # R169 fix: use --pack-destination instead of parsing stdout JSON
+      # npm pack --json can be polluted by prepack log output
+      - name: npm pack (triggers prepack → build-package.mjs autonomously)
         working-directory: v2
         run: |
-          npm ci
-          npm pack --json > pack-result.json
-          cat pack-result.json
-          TARBALL=$(python3 -c "import json; print(json.load(open('pack-result.json'))[0]['filename'])")
-          echo "TARBALL=$TARBALL" >> $GITHUB_ENV
+          PACK_DIR="$RUNNER_TEMP/cbm-pack"
+          mkdir -p "$PACK_DIR"
+          npm pack --pack-destination "$PACK_DIR"
+
+          # Find exactly one tarball
+          TARBALLS=()
+          while IFS= read -r f; do
+            TARBALLS+=("$f")
+          done < <(find "$PACK_DIR" -maxdepth 1 -type f -name '*.tgz' -print)
+
+          if [ "${#TARBALLS[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly 1 tarball, found ${#TARBALLS[@]}" >&2
+            exit 1
+          fi
+
+          TARBALL="${TARBALLS[0]}"
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
+          echo "Tarball: $TARBALL"
 
       - name: Inspect tarball contents
-        working-directory: v2
         run: |
           echo "=== Tarball contents ==="
-          tar -tf ${{ env.TARBALL }} | sort
+          tar -tf "${{ env.TARBALL }}" | sort
           echo ""
           echo "=== Required files check ==="
-          CONTENTS=$(tar -tf ${{ env.TARBALL }})
+          CONTENTS=$(tar -tf "${{ env.TARBALL }}")
           for required in \
             "package/package.json" \
             "package/LICENSE" \
@@ -99,8 +117,9 @@ jobs:
       - name: Install tarball in temp directory
         run: |
           mkdir -p /tmp/cbm-install
-          npm install --prefix /tmp/cbm-install v2/${{ env.TARBALL }}
+          npm install --prefix /tmp/cbm-install "${{ env.TARBALL }}"
 
+      # R169 fix: run from /tmp (arbitrary cwd, no source repo)
       - name: CLI smoke test from arbitrary cwd
         working-directory: /tmp
         run: |
