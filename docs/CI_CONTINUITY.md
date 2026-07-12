@@ -261,15 +261,10 @@ exit code 2
 - GitLab remained at the last valid SHA
 - No manual GitLab push was needed
 
-**Recovery:**
-- A hotfix PR (`hotfix/sig-r169-gate-wrapper-syntax`) fixed the syntax
-- No manual mirror bypass was used
-- The new workflow fast-forwarded GitLab from Phase A to the hotfix SHA
-- The Phase B commit `aa6486c` was included as an ancestor
-
-**Runbook — when an inline GitHub Actions Bash step fails:**
-1. Do not re-run the old workflow if the workflow source is defective
-2. Fix through a new PR
-3. Wait for push/main CI to pass
-4. Let the new workflow mirror the new main SHA
-5. Verify exact GitHub/GitLab parity
+**Recovery procedure:**
+- Fix the wrapper through a normal GitHub hotfix PR.
+- Do not re-run the defective workflow.
+- Do not use a manual GitLab push or bypass.
+- After the hotfix is merged and push/main CI succeeds, the corrected
+  workflow must fast-forward GitLab to the new main SHA.
+- Verify exact GitHub/GitLab SHA parity before closing the incident.
