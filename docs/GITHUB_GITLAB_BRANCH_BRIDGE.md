@@ -761,27 +761,52 @@ The verdict requires `steps.cleanup.outcome == success` for SUCCESS/SUPERSEDED.
 **Three verdicts:**
 
 ```text
-SUCCESS:
-  - final_result = mirrored | already-mirrored
-  - observed_sha == TARGET_SHA (exact target parity)
-  - signature verified == true
-  - API SHA == TARGET_SHA
-  - cleanup outcome == success
+Common MIRROR_INVARIANTS_OK (required for SUCCESS and SUPERSEDED):
+  - POST_VERIFY_RESULT == success
+  - CLIENT_FP_VERIFIED == true
+  - HOST_FP_VERIFIED == true
+  - ERROR_CATEGORY == none (or empty)
+  - ERROR_PHASE == none (or empty)
+  - GITHUB_MAIN_SHA non-empty
+  - JOB_STATUS == success
+  - CLEANUP_OUTCOME == success
+
+SUCCESS mirrored:
+  - final_result = mirrored
+  - exact parity = true (observed_sha == TARGET_SHA)
+  - push_attempted = true
+  - push_completed = true
+  - MIRROR_INVARIANTS_OK = true
+  - signature verified == true + API SHA == TARGET_SHA
+
+SUCCESS already-mirrored:
+  - final_result = already-mirrored
+  - exact parity = true (observed_sha == TARGET_SHA)
+  - push_attempted = false
+  - push_completed = false
+  - MIRROR_INVARIANTS_OK = true
+  - signature verified == true + API SHA == TARGET_SHA
 
 SUPERSEDED:
   - final_result = newer-valid-mirror-present
-  - post_verify_result == success
+  - exact parity = false (observed_sha != TARGET_SHA)
   - observed_sha non-empty (GitLab is ahead — a descendant of TARGET_SHA)
-  - github_main_sha non-empty
-  - signature verified == true
-  - API SHA == TARGET_SHA
-  - cleanup outcome == success
+  - push_attempted = false
+  - push_completed = false
+  - MIRROR_INVARIANTS_OK = true
+  - signature verified == true + API SHA == TARGET_SHA
 
 FAILED:
   - everything else → exit 1
 ```
 
 **SUCCESS and SUPERSEDED leave the job green.** FAILED exits 1.
+
+**Push coherence (SIG-R169-Phase-B-FINAL-INVARIANTS-02):**
+- `mirrored` requires `push_attempted=true` AND `push_completed=true`
+- `already-mirrored` requires `push_attempted=false` AND `push_completed=false`
+- `SUPERSEDED` requires `push_attempted=false` AND `push_completed=false`
+- Any mismatch (e.g. `mirrored` + `push_completed=false`) → FAILED
 
 **Exact target parity vs operational coverage:**
 - `Exact target parity: true` means `observed_sha == TARGET_SHA` (GitLab
@@ -870,27 +895,39 @@ Structural tests in `r169-signature-gate.test.ts` verify the CI YAML:
 action ref is a 40-char SHA, `additional_paths` is absent, `scandir`
 targets `scripts/ci`, version is explicit, step is in the Backend job.
 
-### Phase B tests (SIG-R169-Phase-B-TEST-01)
+### Phase B tests (SIG-R169-Phase-B-TEST-01, TEST-FINAL-R169-01)
 
-Phase B adds two test files:
+Phase B adds three test files:
 
-- `v2/tests/ci/r169-phase-b-structural.test.ts` — 46 structural tests
+- `v2/tests/ci/r169-phase-b-structural.test.ts` — 50 structural tests
   verifying: verifier pin (exact SHA, ref, path, persist-credentials),
   step ordering (gate before target/SSH, cleanup before verdict, verdict
   is last), fail-closed gate (no continue-on-error, no `|| true`, JSON
-  validation, attempts range), three verdicts (SUCCESS/SUPERSEDED/FAILED,
-  newer-valid gives SUPERSEDED not SUCCESS), executable verdict (exit 1
-  on FAILED, no FAILED path leaves job green), cleanup step (id, if:always,
-  outcome referenced), permissions (contents:read only, no new secrets).
+  validation, strict attempts regex `^[0-3]$`), three verdicts
+  (SUCCESS/SUPERSEDED/FAILED, newer-valid gives SUPERSEDED not SUCCESS),
+  MIRROR_INVARIANTS_OK common requirement, push coherence per verdict,
+  executable verdict (exit 1 on FAILED, no FAILED path leaves job green),
+  cleanup step (id, if:always, outcome referenced), permissions
+  (contents:read only, no new secrets).
 
-- `v2/tests/ci/r169-phase-b-wrapper.test.ts` — 25 wrapper validation tests.
+- `v2/tests/ci/r169-phase-b-wrapper.test.ts` — 29 wrapper validation tests.
   **Extracts the REAL Python wrapper code from the workflow YAML** and
   executes it with fixtures — no duplication. Tests fail if the block
   cannot be extracted, if multiple candidates exist, or if the workflow
   and fixtures are incompatible. Covers: valid JSON, absent/empty/malformed
-  JSON, missing/extra keys, multiline values, attempts range (0-3,
-  success 1-3, negative/>3 rejected), exit 0 inconsistency, exit non-zero
-  inconsistency.
+  JSON, missing/extra keys, multiline values, strict attempts validation
+  (string type, regex `^[0-3]$`, success 1-3, diagnostic 0-3, bool/float/
+  negative/>3 rejected), exit 0 inconsistency, exit non-zero inconsistency.
+
+- `v2/tests/ci/r169-phase-b-verdict-runtime.test.ts` — 22 verdict runtime
+  tests. **Extracts the REAL Bash verdict block from the workflow YAML**
+  and executes it with a complete env matrix. Verifies exit code, verdict
+  output, and summary content. Matrix: SUCCESS (mirrored, already-mirrored),
+  SUPERSEDED (newer-valid, parity false, observed != target), FAILED
+  (signature false, API SHA mismatch, cleanup failure, post_verify failure,
+  client/host fingerprint false, error_category/phase != none, github_main_sha
+  empty, job_status failure, push coherence violations, newer-valid with
+  exact parity). Summary content verified for each verdict.
 
 ### Script
 

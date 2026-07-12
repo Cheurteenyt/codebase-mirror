@@ -211,21 +211,19 @@ jobs:
                   print("WRAPPER_ERROR|multiline_value")
                   sys.exit(0)
 
-          # SIG-R169-Phase-B-WRAPPER-02: Validate attempts is an integer
-          # in the valid range.
+          # SIG-R169-Phase-B-WRAPPER-03: Strict attempts validation.
+          #   - attempts must be a string (not bool, float, or other type)
+          #   - must match regex ^[0-3]$ (single digit 0-3)
           #   - success (script_exit == 0): attempts must be 1-3
           #   - diagnostic/config (script_exit != 0): attempts must be 0-3
-          #   - negative or >3: WRAPPER_ERROR
-          try:
-              attempts_int = int(d["attempts"])
-          except (ValueError, TypeError):
-              print("WRAPPER_ERROR|attempts_not_int")
+          import re as _re
+          if not isinstance(d["attempts"], str):
+              print("WRAPPER_ERROR|attempts_not_string")
               sys.exit(0)
-
-          if attempts_int < 0 or attempts_int > 3:
-              print("WRAPPER_ERROR|attempts_out_of_range")
+          if not _re.match(r"^[0-3]$", d["attempts"]):
+              print("WRAPPER_ERROR|attempts_not_canonical")
               sys.exit(0)
-
+          attempts_int = int(d["attempts"])
           if script_exit == "0" and attempts_int < 1:
               print("WRAPPER_ERROR|attempts_success_too_low")
               sys.exit(0)
@@ -418,42 +416,76 @@ jobs:
           #             a descendant of TARGET_SHA is already mirrored)
           # FAILED: everything else
           #
-          # Both SUCCESS and SUPERSEDED require:
-          #   - signature gate passed (SIG_VERIFIED == true)
-          #   - cleanup succeeded (CLEANUP_OUTCOME == success)
+          # SIG-R169-Phase-B-FINAL-INVARIANTS-02: Common MIRROR_INVARIANTS_OK
+          # required for BOTH SUCCESS and SUPERSEDED:
+          #   - POST_VERIFY_RESULT == success
+          #   - CLIENT_FP_VERIFIED == true
+          #   - HOST_FP_VERIFIED == true
+          #   - ERROR_CATEGORY == none (or empty)
+          #   - ERROR_PHASE == none (or empty)
+          #   - GITHUB_MAIN_SHA non-empty
+          #   - JOB_STATUS == success
+          #   - CLEANUP_OUTCOME == success
+          #
+          # Push coherence per verdict:
+          #   SUCCESS mirrored:       push_attempted=true,  push_completed=true
+          #   SUCCESS already-mirrored: push_attempted=false, push_completed=false
+          #   SUPERSEDED:             push_attempted=false, push_completed=false
 
           SIG_OK="false"
           if [ "${SIG_VERIFIED:-}" = "true" ] && [ "${SIG_SHA_MATCH}" = "true" ]; then
             SIG_OK="true"
           fi
 
-          CLEANUP_OK="false"
-          if [ "${CLEANUP_OUTCOME:-}" = "success" ]; then
-            CLEANUP_OK="true"
+          # SIG-R169-Phase-B-FINAL-INVARIANTS-02: Common mirror invariants
+          MIRROR_INVARIANTS_OK="false"
+          if [ "${POST_VERIFY_RESULT:-}" = "success" ] \
+             && [ "${CLIENT_FP_VERIFIED:-}" = "true" ] \
+             && [ "${HOST_FP_VERIFIED:-}" = "true" ] \
+             && [ -z "${ERROR_CATEGORY:-}" -o "${ERROR_CATEGORY:-}" = "none" ] \
+             && [ -z "${ERROR_PHASE:-}" -o "${ERROR_PHASE:-}" = "none" ] \
+             && [ -n "${GITHUB_MAIN_SHA:-}" ] \
+             && [ "${JOB_STATUS:-}" = "success" ] \
+             && [ "${CLEANUP_OUTCOME:-}" = "success" ]; then
+            MIRROR_INVARIANTS_OK="true"
           fi
 
           VERDICT="FAILED"
 
-          # SUCCESS: mirrored or already-mirrored + exact parity + sig + cleanup
-          case "${FINAL_RESULT:-}" in
-            mirrored|already-mirrored)
-              if [ "$EXACT_PARITY" = "true" ] && [ "$SIG_OK" = "true" ] && [ "$CLEANUP_OK" = "true" ]; then
-                VERDICT="SUCCESS"
-              fi
-              ;;
-          esac
+          # SUCCESS mirrored: exact parity + push_attempted=true + push_completed=true
+          #   + invariants + sig
+          if [ "${FINAL_RESULT:-}" = "mirrored" ] \
+             && [ "$EXACT_PARITY" = "true" ] \
+             && [ "${PUSH_ATTEMPTED:-}" = "true" ] \
+             && [ "${PUSH_COMPLETED:-}" = "true" ] \
+             && [ "$MIRROR_INVARIANTS_OK" = "true" ] \
+             && [ "$SIG_OK" = "true" ]; then
+            VERDICT="SUCCESS"
+          fi
 
-          # SUPERSEDED: newer-valid-mirror-present + post_verify success
-          #   + observed_sha non-empty + github_main_sha non-empty
-          #   + sig + cleanup
-          if [ "${FINAL_RESULT:-}" = "newer-valid-mirror-present" ]; then
-            if [ -n "${OBSERVED_SHA:-}" ] \
-               && [ -n "${GITHUB_MAIN_SHA:-}" ] \
-               && [ "${POST_VERIFY_RESULT:-}" = "success" ] \
-               && [ "$SIG_OK" = "true" ] \
-               && [ "$CLEANUP_OK" = "true" ]; then
-              VERDICT="SUPERSEDED"
-            fi
+          # SUCCESS already-mirrored: exact parity + push_attempted=false + push_completed=false
+          #   + invariants + sig
+          if [ "${FINAL_RESULT:-}" = "already-mirrored" ] \
+             && [ "$EXACT_PARITY" = "true" ] \
+             && [ "${PUSH_ATTEMPTED:-}" = "false" ] \
+             && [ "${PUSH_COMPLETED:-}" = "false" ] \
+             && [ "$MIRROR_INVARIANTS_OK" = "true" ] \
+             && [ "$SIG_OK" = "true" ]; then
+            VERDICT="SUCCESS"
+          fi
+
+          # SUPERSEDED: newer-valid-mirror-present + exact parity false
+          #   + observed_sha != TARGET_SHA + push_attempted=false + push_completed=false
+          #   + invariants + sig
+          if [ "${FINAL_RESULT:-}" = "newer-valid-mirror-present" ] \
+             && [ "$EXACT_PARITY" = "false" ] \
+             && [ -n "${OBSERVED_SHA:-}" ] \
+             && [ "${OBSERVED_SHA:-}" != "$TARGET_SHA" ] \
+             && [ "${PUSH_ATTEMPTED:-}" = "false" ] \
+             && [ "${PUSH_COMPLETED:-}" = "false" ] \
+             && [ "$MIRROR_INVARIANTS_OK" = "true" ] \
+             && [ "$SIG_OK" = "true" ]; then
+            VERDICT="SUPERSEDED"
           fi
 
           # ── Write summary ──────────────────────────────────────────

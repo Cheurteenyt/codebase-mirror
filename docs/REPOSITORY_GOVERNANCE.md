@@ -368,7 +368,7 @@ against the official GitHub enum (SIG-R4-PARSER-01).
 After successful mirror: `GitLab main SHA == TARGET_SHA` proves the
 exact Git object verified by GitHub is now present on GitLab.
 
-### Three verdicts (SIG-R169-Phase-B-CONC, SIG-R169-Phase-B-FINAL)
+### Three verdicts (SIG-R169-Phase-B-CONC, SIG-R169-Phase-B-FINAL, FINAL-INVARIANTS-02)
 
 The mirror workflow has a **final verdict step** (last step, `if: always()`)
 that **exits 1 on FAILED**. The job goes red if the effective state is
@@ -377,16 +377,32 @@ FAILED, not just if an earlier step failed.
 Cleanup runs BEFORE the verdict (`id: cleanup`, `if: always()`). The
 verdict requires `steps.cleanup.outcome == success`.
 
+**Common MIRROR_INVARIANTS_OK** (required for SUCCESS and SUPERSEDED):
+`POST_VERIFY_RESULT == success`, `CLIENT_FP_VERIFIED == true`,
+`HOST_FP_VERIFIED == true`, `ERROR_CATEGORY == none`, `ERROR_PHASE == none`,
+`GITHUB_MAIN_SHA` non-empty, `JOB_STATUS == success`, `CLEANUP_OUTCOME == success`.
+
+**Push coherence** per verdict:
+- SUCCESS mirrored: `push_attempted=true`, `push_completed=true`
+- SUCCESS already-mirrored: `push_attempted=false`, `push_completed=false`
+- SUPERSEDED: `push_attempted=false`, `push_completed=false`
+
 ```text
-SUCCESS:    mirrored|already-mirrored + observed_sha==TARGET_SHA + sig valid + cleanup ok
-SUPERSEDED: newer-valid-mirror-present + post_verify==success + sig valid + cleanup ok
-FAILED:     everything else → exit 1
+SUCCESS mirrored:         mirrored + exact parity + push true + invariants + sig
+SUCCESS already-mirrored: already-mirrored + exact parity + push false + invariants + sig
+SUPERSEDED:               newer-valid + parity false + observed != target + push false + invariants + sig
+FAILED:                   everything else → exit 1
 ```
 
 **Exact target parity** (`observed_sha == TARGET_SHA`) is different from
 **operational coverage**. SUPERSEDED means GitLab is ahead (a descendant
 of TARGET_SHA is already mirrored) — exact parity is false, but the
 mirror is operationally valid. The summary displays both separately.
+
+**Runtime verdict tests** (`r169-phase-b-verdict-runtime.test.ts`) extract
+the real Bash verdict block from the workflow YAML and execute it with
+a complete env matrix — verifying exit code, verdict output, and summary
+content for SUCCESS, SUPERSEDED, and all FAILED paths.
 
 ### What NOT to do
 

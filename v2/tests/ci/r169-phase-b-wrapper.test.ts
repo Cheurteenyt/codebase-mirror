@@ -204,7 +204,9 @@ describe("R169 SIG Phase B wrapper — extraction from workflow (SIG-R169-Phase-
     expect(WRAPPER_PYTHON).toContain("invalid_keys");
     expect(WRAPPER_PYTHON).toContain("multiline_value");
     expect(WRAPPER_PYTHON).toContain("exit0_inconsistent");
-    expect(WRAPPER_PYTHON).toContain("attempts_out_of_range");
+    expect(WRAPPER_PYTHON).toContain("attempts_not_string");
+    expect(WRAPPER_PYTHON).toContain("attempts_not_canonical");
+    expect(WRAPPER_PYTHON).toContain("attempts_success_too_low");
   });
 });
 
@@ -311,52 +313,93 @@ describe("R169 SIG Phase B wrapper — multiline value failures", () => {
   });
 });
 
-// ─── attempts validation (SIG-R169-Phase-B-WRAPPER-02) ──────────────────
+// ─── attempts validation (SIG-R169-Phase-B-WRAPPER-03) ──────────────────
+// Strict: must be a string matching ^[0-3]$, success requires 1-3, diagnostic 0-3.
 
-describe("R169 SIG Phase B wrapper — attempts range validation (WRAPPER-02)", () => {
-  it("exit 0 + attempts not int → WRAPPER_ERROR (attempts_not_int)", () => {
+describe("R169 SIG Phase B wrapper — strict attempts validation (WRAPPER-03)", () => {
+  it("exit 0 + attempts not a string (number) → WRAPPER_ERROR (attempts_not_string)", () => {
+    // JSON number, not string — makeValidJson uses string, so craft manually
+    const json = JSON.stringify({
+      verified: "true",
+      reason: "valid",
+      verified_at: "2026-07-13T10:00:00Z",
+      api_sha: "a".repeat(40),
+      error_category: "none",
+      attempts: 2, // number, not string
+    });
+    const r = runWrapper(json, "0");
+    expect(r.hasWrapperError).toBe(true);
+    expect(r.errorDetail).toBe("attempts_not_string");
+  });
+
+  it("exit 0 + attempts not a string (bool) → WRAPPER_ERROR (attempts_not_string)", () => {
+    const json = JSON.stringify({
+      verified: "true",
+      reason: "valid",
+      verified_at: "2026-07-13T10:00:00Z",
+      api_sha: "a".repeat(40),
+      error_category: "none",
+      attempts: true, // bool, not string
+    });
+    const r = runWrapper(json, "0");
+    expect(r.hasWrapperError).toBe(true);
+    expect(r.errorDetail).toBe("attempts_not_string");
+  });
+
+  it("exit 0 + attempts == 'not-a-number' (non-canonical) → WRAPPER_ERROR (attempts_not_canonical)", () => {
     const r = runWrapper(makeValidJson("a".repeat(40), "not-a-number"), "0");
     expect(r.hasWrapperError).toBe(true);
-    expect(r.errorDetail).toBe("attempts_not_int");
+    expect(r.errorDetail).toBe("attempts_not_canonical");
   });
 
-  it("exit 0 + attempts == 4 (>3) → WRAPPER_ERROR (attempts_out_of_range)", () => {
+  it("exit 0 + attempts == '4' (>3, non-canonical) → WRAPPER_ERROR (attempts_not_canonical)", () => {
     const r = runWrapper(makeValidJson("a".repeat(40), "4"), "0");
     expect(r.hasWrapperError).toBe(true);
-    expect(r.errorDetail).toBe("attempts_out_of_range");
+    expect(r.errorDetail).toBe("attempts_not_canonical");
   });
 
-  it("exit 0 + attempts == -1 (negative) → WRAPPER_ERROR (attempts_out_of_range)", () => {
+  it("exit 0 + attempts == '-1' (negative, non-canonical) → WRAPPER_ERROR (attempts_not_canonical)", () => {
     const r = runWrapper(makeValidJson("a".repeat(40), "-1"), "0");
     expect(r.hasWrapperError).toBe(true);
-    expect(r.errorDetail).toBe("attempts_out_of_range");
+    expect(r.errorDetail).toBe("attempts_not_canonical");
   });
 
-  it("exit 0 + attempts == 0 (success requires 1-3) → WRAPPER_ERROR (attempts_success_too_low)", () => {
+  it("exit 0 + attempts == '10' (two digits, non-canonical) → WRAPPER_ERROR (attempts_not_canonical)", () => {
+    const r = runWrapper(makeValidJson("a".repeat(40), "10"), "0");
+    expect(r.hasWrapperError).toBe(true);
+    expect(r.errorDetail).toBe("attempts_not_canonical");
+  });
+
+  it("exit 0 + attempts == '0' (success requires 1-3) → WRAPPER_ERROR (attempts_success_too_low)", () => {
     const r = runWrapper(makeValidJson("a".repeat(40), "0"), "0");
     expect(r.hasWrapperError).toBe(true);
     expect(r.errorDetail).toBe("attempts_success_too_low");
   });
 
-  it("exit 0 + attempts == 3 (max for success) → OK", () => {
+  it("exit 0 + attempts == '1' (min for success) → OK", () => {
+    const r = runWrapper(makeValidJson("a".repeat(40), "1"), "0");
+    expect(r.hasWrapperError).toBe(false);
+  });
+
+  it("exit 0 + attempts == '3' (max for success) → OK", () => {
     const r = runWrapper(makeValidJson("a".repeat(40), "3"), "0");
     expect(r.hasWrapperError).toBe(false);
   });
 
-  it("exit 1 + attempts == 0 (diagnostic allows 0-3) → OK", () => {
+  it("exit 1 + attempts == '0' (diagnostic allows 0-3) → OK", () => {
     const r = runWrapper(makeRefusalJson("unsigned", "a".repeat(40), "0"), "1");
     expect(r.hasWrapperError).toBe(false);
   });
 
-  it("exit 1 + attempts == 3 (max for diagnostic) → OK", () => {
+  it("exit 1 + attempts == '3' (max for diagnostic) → OK", () => {
     const r = runWrapper(makeRefusalJson("unsigned", "a".repeat(40), "3"), "1");
     expect(r.hasWrapperError).toBe(false);
   });
 
-  it("exit 1 + attempts == 4 (>3) → WRAPPER_ERROR (attempts_out_of_range)", () => {
+  it("exit 1 + attempts == '4' (>3, non-canonical) → WRAPPER_ERROR (attempts_not_canonical)", () => {
     const r = runWrapper(makeRefusalJson("unsigned", "a".repeat(40), "4"), "1");
     expect(r.hasWrapperError).toBe(true);
-    expect(r.errorDetail).toBe("attempts_out_of_range");
+    expect(r.errorDetail).toBe("attempts_not_canonical");
   });
 });
 

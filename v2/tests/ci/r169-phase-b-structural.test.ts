@@ -206,13 +206,15 @@ describe("R169 SIG Phase B — fail-closed gate (SIG-R169-Phase-B-FAILCLOSED)", 
     expect(gateSection).toContain("exit0_inconsistent");
   });
 
-  it("gate validates attempts range (0-3, success requires 1-3)", () => {
+  it("gate validates attempts with strict regex (SIG-R169-Phase-B-WRAPPER-03)", () => {
     const gateSection = workflow.substring(
       workflow.indexOf("Verify GitHub commit signature"),
       workflow.indexOf("Checkout exact CI-validated SHA")
     );
-    expect(gateSection).toContain("attempts_out_of_range");
+    expect(gateSection).toContain("attempts_not_string");
+    expect(gateSection).toContain("attempts_not_canonical");
     expect(gateSection).toContain("attempts_success_too_low");
+    expect(gateSection).toContain("^[0-3]$");
   });
 });
 
@@ -236,7 +238,8 @@ describe("R169 SIG Phase B — three verdicts (SIG-R169-Phase-B-CONC)", () => {
   });
 
   it("SUCCESS requires mirrored or already-mirrored", () => {
-    expect(verdictSection).toContain("mirrored|already-mirrored");
+    expect(verdictSection).toContain('"mirrored"');
+    expect(verdictSection).toContain('"already-mirrored"');
   });
 
   it("SUPERSEDED requires newer-valid-mirror-present", () => {
@@ -244,16 +247,19 @@ describe("R169 SIG Phase B — three verdicts (SIG-R169-Phase-B-CONC)", () => {
   });
 
   it("newer-valid-mirror-present does NOT give SUCCESS (exact parity impossible)", () => {
-    // The SUCCESS case statement (the bash `case` block) must NOT include
-    // newer-valid-mirror-present. We search for the actual case pattern
-    // in the bash code, not in comments.
-    const caseStart = verdictSection.indexOf("mirrored|already-mirrored)");
-    expect(caseStart).toBeGreaterThan(-1);
-    // Find the next `;;` which closes the SUCCESS case branch
-    const caseEnd = verdictSection.indexOf(";;", caseStart);
-    expect(caseEnd).toBeGreaterThan(caseStart);
-    const successCase = verdictSection.substring(caseStart, caseEnd);
-    expect(successCase).not.toContain("newer-valid-mirror-present");
+    // The SUCCESS blocks (mirrored and already-mirrored) must NOT include
+    // newer-valid-mirror-present. Check each SUCCESS if-block.
+    const mirroredIdx = verdictSection.indexOf('"mirrored"');
+    expect(mirroredIdx).toBeGreaterThan(-1);
+    // Find the end of the mirrored if-block (next blank line or "fi")
+    const alreadyIdx = verdictSection.indexOf('"already-mirrored"', mirroredIdx);
+    const mirroredBlock = verdictSection.substring(mirroredIdx, alreadyIdx);
+    expect(mirroredBlock).not.toContain("newer-valid-mirror-present");
+
+    // The already-mirrored block also must not contain it
+    const newerIdx = verdictSection.indexOf("newer-valid-mirror-present", alreadyIdx);
+    const alreadyBlock = verdictSection.substring(alreadyIdx, newerIdx);
+    expect(alreadyBlock).not.toContain("newer-valid-mirror-present");
   });
 
   it("SUPERSEDED requires post_verify_result == success", () => {
@@ -277,9 +283,45 @@ describe("R169 SIG Phase B — three verdicts (SIG-R169-Phase-B-CONC)", () => {
     expect(verdictSection).toContain("SIG_VERIFIED");
   });
 
-  it("both SUCCESS and SUPERSEDED require cleanup success", () => {
-    expect(verdictSection).toContain("CLEANUP_OUTCOME");
-    expect(verdictSection).toContain("CLEANUP_OK");
+  it("both SUCCESS and SUPERSEDED require MIRROR_INVARIANTS_OK (SIG-R169-Phase-B-FINAL-INVARIANTS-02)", () => {
+    expect(verdictSection).toContain("MIRROR_INVARIANTS_OK");
+    expect(verdictSection).toContain("POST_VERIFY_RESULT");
+    expect(verdictSection).toContain("CLIENT_FP_VERIFIED");
+    expect(verdictSection).toContain("HOST_FP_VERIFIED");
+    expect(verdictSection).toContain("ERROR_CATEGORY");
+    expect(verdictSection).toContain("ERROR_PHASE");
+    expect(verdictSection).toContain("GITHUB_MAIN_SHA");
+    expect(verdictSection).toContain("JOB_STATUS");
+  });
+
+  it("SUCCESS mirrored requires push_attempted=true and push_completed=true", () => {
+    expect(verdictSection).toContain("PUSH_ATTEMPTED");
+    expect(verdictSection).toContain("PUSH_COMPLETED");
+  });
+
+  it("SUCCESS already-mirrored requires push_attempted=false and push_completed=false", () => {
+    // The already-mirrored block should check push_attempted=false
+    const alreadyMirroredIdx = verdictSection.indexOf('"already-mirrored"');
+    expect(alreadyMirroredIdx).toBeGreaterThan(-1);
+    const block = verdictSection.substring(alreadyMirroredIdx, alreadyMirroredIdx + 400);
+    expect(block).toContain('"false"');
+  });
+
+  it("SUPERSEDED requires push_attempted=false and push_completed=false", () => {
+    // The SUPERSEDED if-block starts at newer-valid-mirror-present and
+    // contains PUSH_ATTEMPTED and PUSH_COMPLETED checks. Search a wider window.
+    const supersededIdx = verdictSection.indexOf("newer-valid-mirror-present");
+    expect(supersededIdx).toBeGreaterThan(-1);
+    // The block extends to the "Write summary" section
+    const summaryIdx = verdictSection.indexOf("Write summary", supersededIdx);
+    const block = verdictSection.substring(supersededIdx, summaryIdx > 0 ? summaryIdx : supersededIdx + 800);
+    expect(block).toContain("PUSH_ATTEMPTED");
+    expect(block).toContain("PUSH_COMPLETED");
+  });
+
+  it("SUPERSEDED requires OBSERVED_SHA != TARGET_SHA (exact parity false)", () => {
+    expect(verdictSection).toContain("OBSERVED_SHA");
+    expect(verdictSection).toContain("TARGET_SHA");
   });
 });
 
