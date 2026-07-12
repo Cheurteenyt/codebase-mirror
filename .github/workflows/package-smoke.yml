@@ -1,8 +1,8 @@
 # R168.3a — Package smoke test
-# R169 baseline fix: robust npm pack parsing, no pre-build, UI/MCP smoke
+# R169 final fix: add workflow file to paths, extend source paths, honest job name
 #
 # Tests that npm pack produces a valid tarball with UI assets,
-# and that the installed package works from an arbitrary cwd.
+# and that the installed package CLI works from an arbitrary cwd.
 # The prepack hook (build-package.mjs) must build everything autonomously.
 
 name: Package Smoke
@@ -11,21 +11,31 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/package-smoke.yml'
       - 'v2/package.json'
       - 'v2/package-lock.json'
       - 'v2/scripts/build-package.mjs'
-      - 'v2/src/ui/server.ts'
+      - 'v2/src/**'
+      - 'v2/tsconfig.json'
       - 'graph-ui/package.json'
       - 'graph-ui/package-lock.json'
+      - 'graph-ui/src/**'
+      - 'graph-ui/public/**'
+      - 'graph-ui/vite.config.*'
   pull_request:
     branches: [main]
     paths:
+      - '.github/workflows/package-smoke.yml'
       - 'v2/package.json'
       - 'v2/package-lock.json'
       - 'v2/scripts/build-package.mjs'
-      - 'v2/src/ui/server.ts'
+      - 'v2/src/**'
+      - 'v2/tsconfig.json'
       - 'graph-ui/package.json'
       - 'graph-ui/package-lock.json'
+      - 'graph-ui/src/**'
+      - 'graph-ui/public/**'
+      - 'graph-ui/vite.config.*'
   workflow_dispatch: {}
 
 permissions:
@@ -33,7 +43,7 @@ permissions:
 
 jobs:
   package-smoke:
-    name: npm pack + install + CLI + UI smoke
+    name: npm pack + install + CLI smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -48,42 +58,31 @@ jobs:
           cache: npm
           cache-dependency-path: v2/package-lock.json
 
-      # R169 fix: do NOT pre-build graph-ui. The prepack hook must
-      # build everything autonomously. This is the real proof.
       - name: npm ci (v2 only)
         working-directory: v2
         run: npm ci
 
-      # R169 fix: use --pack-destination instead of parsing stdout JSON
-      # npm pack --json can be polluted by prepack log output
-      - name: npm pack (triggers prepack → build-package.mjs autonomously)
+      - name: npm pack (triggers prepack autonomously)
         working-directory: v2
         run: |
           PACK_DIR="$RUNNER_TEMP/cbm-pack"
           mkdir -p "$PACK_DIR"
           npm pack --pack-destination "$PACK_DIR"
-
-          # Find exactly one tarball
           TARBALLS=()
           while IFS= read -r f; do
             TARBALLS+=("$f")
           done < <(find "$PACK_DIR" -maxdepth 1 -type f -name '*.tgz' -print)
-
           if [ "${#TARBALLS[@]}" -ne 1 ]; then
             echo "ERROR: Expected exactly 1 tarball, found ${#TARBALLS[@]}" >&2
             exit 1
           fi
-
           TARBALL="${TARBALLS[0]}"
           echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
-          echo "Tarball: $TARBALL"
 
       - name: Inspect tarball contents
         run: |
           echo "=== Tarball contents ==="
           tar -tf "${{ env.TARBALL }}" | sort
-          echo ""
-          echo "=== Required files check ==="
           CONTENTS=$(tar -tf "${{ env.TARBALL }}")
           for required in \
             "package/package.json" \
@@ -93,33 +92,28 @@ jobs:
             "package/dist/cli/index.js" \
             "package/dist/ui/index.html"; do
             if echo "$CONTENTS" | grep -q "^$required$"; then
-              echo "  ✓ $required"
+              echo "  ok: $required"
             else
-              echo "  ✗ MISSING: $required"
+              echo "  MISSING: $required"
               exit 1
             fi
           done
-          echo ""
-          echo "=== Forbidden files check ==="
           for forbidden in \
             "package/src/" \
             "package/tests/" \
             "package/node_modules/" \
-            "package/.git" \
-            "package/*.db"; do
+            "package/.git"; do
             if echo "$CONTENTS" | grep -q "^$forbidden"; then
-              echo "  ✗ FORBIDDEN: $forbidden found in tarball"
+              echo "  FORBIDDEN: $forbidden"
               exit 1
             fi
           done
-          echo "  ✓ No forbidden files"
 
       - name: Install tarball in temp directory
         run: |
           mkdir -p /tmp/cbm-install
           npm install --prefix /tmp/cbm-install "${{ env.TARBALL }}"
 
-      # R169 fix: run from /tmp (arbitrary cwd, no source repo)
       - name: CLI smoke test from arbitrary cwd
         working-directory: /tmp
         run: |

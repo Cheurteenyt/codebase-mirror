@@ -1,8 +1,5 @@
 # R168.3a — Docker smoke test
-# R169 baseline fix: UID readonly, --entrypoint sh, pull_request trigger
-#
-# Tests that docker build --no-cache produces a working image
-# with CLI, non-root user, and UI assets.
+# R169 final fix: add workflow file to paths, --entrypoint sh, CONTAINER_UID
 
 name: Docker Smoke
 
@@ -10,6 +7,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.github/workflows/docker-smoke.yml'
       - 'Dockerfile'
       - '.dockerignore'
       - 'v2/package.json'
@@ -24,6 +22,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - '.github/workflows/docker-smoke.yml'
       - 'Dockerfile'
       - '.dockerignore'
       - 'v2/package.json'
@@ -42,7 +41,7 @@ permissions:
 
 jobs:
   docker-smoke:
-    name: Docker build + CLI + non-root + UI smoke
+    name: Docker build + CLI + non-root smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -52,43 +51,24 @@ jobs:
           persist-credentials: false
 
       - name: Build Docker image (no cache)
-        run: |
-          docker build --no-cache -t cbm-v2:test .
+        run: docker build --no-cache -t cbm-v2:test .
 
       - name: CLI version
-        run: |
-          docker run --rm cbm-v2:test --version
+        run: docker run --rm cbm-v2:test --version
 
       - name: CLI help
-        run: |
-          docker run --rm cbm-v2:test --help
+        run: docker run --rm cbm-v2:test --help
 
-      # R169 fix: UID is readonly in Bash — use CONTAINER_UID
-      # R169 fix: use --entrypoint sh to override the node ENTRYPOINT
       - name: Non-root user check
         run: |
-          CONTAINER_UID="$(
-            docker run \
-              --rm \
-              --entrypoint sh \
-              cbm-v2:test \
-              -c 'id -u'
-          )"
+          CONTAINER_UID="$(docker run --rm --entrypoint sh cbm-v2:test -c 'id -u')"
           echo "Container runs as UID: $CONTAINER_UID"
           test "$CONTAINER_UID" = "1000"
 
       - name: Cache directory writable
         run: |
-          docker run \
-            --rm \
-            --entrypoint sh \
-            cbm-v2:test \
-            -c 'mkdir -p /home/cbm/.cache/codebase-memory-mcp && touch /home/cbm/.cache/codebase-memory-mcp/test && echo "Cache writable"'
+          docker run --rm --entrypoint sh cbm-v2:test -c 'mkdir -p /home/cbm/.cache/codebase-memory-mcp && touch /home/cbm/.cache/codebase-memory-mcp/test && echo "Cache writable"'
 
       - name: UI assets present
         run: |
-          docker run \
-            --rm \
-            --entrypoint sh \
-            cbm-v2:test \
-            -c 'test -f /app/dist/ui/index.html && echo "UI index.html present"'
+          docker run --rm --entrypoint sh cbm-v2:test -c 'test -f /app/dist/ui/index.html && echo "UI index.html present"'
