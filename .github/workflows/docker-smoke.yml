@@ -1,5 +1,5 @@
 # R168.3a — Docker smoke test
-# R169 final fix: add workflow file to paths, --entrypoint sh, CONTAINER_UID
+# R169 final fix: use existing 'node' user (UID 1000), --entrypoint sh
 
 name: Docker Smoke
 
@@ -67,7 +67,7 @@ jobs:
 
       - name: Cache directory writable
         run: |
-          docker run --rm --entrypoint sh cbm-v2:test -c 'mkdir -p /home/cbm/.cache/codebase-memory-mcp && touch /home/cbm/.cache/codebase-memory-mcp/test && echo "Cache writable"'
+          docker run --rm --entrypoint sh cbm-v2:test -c 'mkdir -p /home/node/.cache/codebase-memory-mcp && touch /home/node/.cache/codebase-memory-mcp/test && echo "Cache writable"'
 
       - name: UI assets present
         run: |
