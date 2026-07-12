@@ -8,7 +8,7 @@
     "cbm-v2": "dist/cli/index.js"
   },
   "scripts": {
-    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "clean": "node --eval \"require(\"node:fs\").rmSync(\"dist\",{recursive:true,force:true})\"",
     "build": "npm run clean && tsc -p tsconfig.json",
     "dev": "tsx src/cli/index.ts",
     "start": "node dist/cli/index.js",
