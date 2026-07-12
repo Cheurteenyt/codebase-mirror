@@ -1,9 +1,15 @@
 /**
  * R169 SIG Phase B — Wrapper validation tests.
  *
- * These tests verify the fail-closed JSON wrapper logic that the workflow
- * uses to validate the verifier script's output. The wrapper is extracted
- * as a standalone Python script so it can be tested in isolation.
+ * SIG-R169-Phase-B-TEST-01: These tests extract the REAL Python wrapper
+ * code from the workflow YAML and execute it with fixtures. This ensures
+ * the tests validate the exact code that runs in production — no
+ * duplication that could drift.
+ *
+ * The test fails if:
+ *   - The Python block cannot be extracted from the YAML
+ *   - Multiple candidate blocks exist (ambiguous extraction)
+ *   - The workflow and fixtures are no longer compatible
  *
  * Test matrix:
  *   - exit 0 + valid JSON → success (outputs published)
@@ -17,85 +23,100 @@
  *   - exit 0 + extra key → failure
  *   - exit 0 + multiline value → failure
  *   - exit 0 + attempts not int → failure
+ *   - exit 0 + attempts > 3 → failure
+ *   - exit 0 + attempts negative → failure
+ *   - exit 0 + attempts == 0 (success requires 1-3) → failure
  *   - exit 1 + valid diagnostic JSON → diagnostics published, then failure
  *   - exit 1 + verified=true → failure (inconsistent)
+ *   - exit 1 + attempts == 0 (diagnostic allows 0-3) → success
  *   - exit 0 + reason != valid → failure
  *   - exit 0 + verified_at empty → failure
  */
 
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
+const WORKFLOW_PATH = join(REPO_ROOT, ".github", "workflows", "mirror-main-to-gitlab.yml");
 
-// The wrapper validation Python code, extracted from the workflow YAML.
-// This is the EXACT same logic that runs in the GitHub Actions step.
-const WRAPPER_PYTHON = `
-import json
-import os
-import sys
+// ─── Extract the REAL Python wrapper from the workflow YAML ─────────────
+// SIG-R169-Phase-B-TEST-01: No duplication — read the actual code.
 
-path = os.environ["OUTPUT_FILE"]
-target = os.environ["TARGET_SHA"]
-script_exit = os.environ["SCRIPT_EXIT"]
+function extractWrapperPython(): string {
+  const yaml = readFileSync(WORKFLOW_PATH, "utf-8");
 
-try:
-    with open(path, encoding="utf-8") as f:
-        d = json.load(f)
-except Exception:
-    print("WRAPPER_ERROR|malformed_json")
-    sys.exit(0)
+  // The wrapper is invoked as: python3 -c '...'
+  // The Python block ends with ' followed by ; then (shell if-statement)
+  // Strategy: find all `python3 -c '` occurrences, extract the code until
+  // the closing `'` that is followed by `;` or newline, and identify the
+  // one that contains "WRAPPER_ERROR" (the wrapper validation marker).
 
-# Exact key set — no missing, no extra
-required = {
-    "verified",
-    "reason",
-    "verified_at",
-    "api_sha",
-    "error_category",
-    "attempts",
+  const candidates: string[] = [];
+  const marker = "python3 -c '";
+  let searchFrom = 0;
+
+  while (true) {
+    const startIdx = yaml.indexOf(marker, searchFrom);
+    if (startIdx === -1) break;
+
+    const codeStart = startIdx + marker.length;
+    // Find the closing single quote — it's followed by either ';' or '\n'
+    let endIdx = codeStart;
+    while (endIdx < yaml.length) {
+      if (yaml[endIdx] === "'" && (yaml[endIdx + 1] === ";" || yaml[endIdx + 1] === "\n")) {
+        break;
+      }
+      endIdx++;
+    }
+
+    if (endIdx >= yaml.length) {
+      searchFrom = codeStart;
+      continue;
+    }
+
+    const code = yaml.substring(codeStart, endIdx);
+    if (code.includes("WRAPPER_ERROR")) {
+      candidates.push(code);
+    }
+
+    searchFrom = endIdx + 1;
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(
+      "Could not extract wrapper Python from workflow YAML — no python3 -c block containing WRAPPER_ERROR found"
+    );
+  }
+
+  if (candidates.length > 1) {
+    throw new Error(
+      `Ambiguous extraction: found ${candidates.length} candidate Python blocks containing WRAPPER_ERROR`
+    );
+  }
+
+  // Dedent: strip the common leading whitespace from each line so the
+  // Python code can be executed by `python3 -c`. The YAML indents the
+  // code block by 10 spaces (the run: block indentation level).
+  const raw = candidates[0];
+  const lines = raw.split("\n");
+  // Find minimum indentation across non-empty lines
+  let minIndent = Infinity;
+  for (const line of lines) {
+    if (line.trim().length === 0) continue;
+    const indent = line.match(/^\s*/)?.[0].length ?? 0;
+    if (indent < minIndent) minIndent = indent;
+  }
+  if (minIndent === Infinity) minIndent = 0;
+  const dedented = lines.map((line) => line.substring(minIndent)).join("\n");
+
+  return dedented;
 }
-if set(d.keys()) != required:
-    print("WRAPPER_ERROR|invalid_keys")
-    sys.exit(0)
 
-# Reject multiline values
-for key, value in d.items():
-    if "\\n" in str(value) or "\\r" in str(value):
-        print("WRAPPER_ERROR|multiline_value")
-        sys.exit(0)
-
-# Validate attempts is an integer
-try:
-    int(d["attempts"])
-except (ValueError, TypeError):
-    print("WRAPPER_ERROR|attempts_not_int")
-    sys.exit(0)
-
-# If script exit 0, outputs must be consistent with success
-if script_exit == "0":
-    if not (
-        d["verified"] == "true"
-        and d["reason"] == "valid"
-        and d["verified_at"]
-        and d["api_sha"] == target
-        and d["error_category"] == "none"
-    ):
-        print("WRAPPER_ERROR|exit0_inconsistent")
-        sys.exit(0)
-
-# If script exit != 0, verified must not be "true"
-if script_exit != "0" and d["verified"] == "true":
-    print("WRAPPER_ERROR|exit_nonzero_but_verified_true")
-    sys.exit(0)
-
-# All checks passed — emit key=value pairs for GITHUB_OUTPUT
-for key, value in d.items():
-    print(f"{key}={value}")
-`;
+// Extract once at module level — if this fails, ALL tests fail
+const WRAPPER_PYTHON = extractWrapperPython();
 
 interface WrapperResult {
   stdout: string;
@@ -148,27 +169,44 @@ function runWrapper(
   return { stdout, hasWrapperError, errorDetail, outputs };
 }
 
-function makeValidJson(sha: string = "a".repeat(40)): string {
+function makeValidJson(sha: string = "a".repeat(40), attempts: string = "1"): string {
   return JSON.stringify({
     verified: "true",
     reason: "valid",
     verified_at: "2026-07-13T10:00:00Z",
     api_sha: sha,
     error_category: "none",
-    attempts: "1",
+    attempts,
   });
 }
 
-function makeRefusalJson(reason: string, sha: string = "a".repeat(40)): string {
+function makeRefusalJson(reason: string, sha: string = "a".repeat(40), attempts: string = "1"): string {
   return JSON.stringify({
     verified: "false",
     reason,
     verified_at: "",
     api_sha: sha,
     error_category: `GITHUB_SIGNATURE_${reason.toUpperCase()}`,
-    attempts: "1",
+    attempts,
   });
 }
+
+// ─── Extraction validation ──────────────────────────────────────────────
+
+describe("R169 SIG Phase B wrapper — extraction from workflow (SIG-R169-Phase-B-TEST-01)", () => {
+  it("wrapper Python is successfully extracted from the workflow YAML", () => {
+    expect(WRAPPER_PYTHON).toBeTruthy();
+    expect(WRAPPER_PYTHON.length).toBeGreaterThan(100);
+  });
+
+  it("extracted wrapper contains the required validation markers", () => {
+    expect(WRAPPER_PYTHON).toContain("WRAPPER_ERROR");
+    expect(WRAPPER_PYTHON).toContain("invalid_keys");
+    expect(WRAPPER_PYTHON).toContain("multiline_value");
+    expect(WRAPPER_PYTHON).toContain("exit0_inconsistent");
+    expect(WRAPPER_PYTHON).toContain("attempts_out_of_range");
+  });
+});
 
 // ─── Success cases ──────────────────────────────────────────────────────
 
@@ -196,7 +234,6 @@ describe("R169 SIG Phase B wrapper — success cases", () => {
 
 describe("R169 SIG Phase B wrapper — JSON file failures", () => {
   it("exit 0 + JSON absent → WRAPPER_ERROR (malformed_json)", () => {
-    // Pass null to skip writing the file
     const r = runWrapper(null, "0");
     expect(r.hasWrapperError).toBe(true);
     expect(r.errorDetail).toBe("malformed_json");
@@ -225,7 +262,6 @@ describe("R169 SIG Phase B wrapper — key set failures", () => {
       verified_at: "2026-07-13T10:00:00Z",
       api_sha: "a".repeat(40),
       error_category: "none",
-      // attempts missing
     });
     const r = runWrapper(json, "0");
     expect(r.hasWrapperError).toBe(true);
@@ -275,21 +311,52 @@ describe("R169 SIG Phase B wrapper — multiline value failures", () => {
   });
 });
 
-// ─── Failure cases: attempts not integer ────────────────────────────────
+// ─── attempts validation (SIG-R169-Phase-B-WRAPPER-02) ──────────────────
 
-describe("R169 SIG Phase B wrapper — attempts validation", () => {
+describe("R169 SIG Phase B wrapper — attempts range validation (WRAPPER-02)", () => {
   it("exit 0 + attempts not int → WRAPPER_ERROR (attempts_not_int)", () => {
-    const json = JSON.stringify({
-      verified: "true",
-      reason: "valid",
-      verified_at: "2026-07-13T10:00:00Z",
-      api_sha: "a".repeat(40),
-      error_category: "none",
-      attempts: "not-a-number",
-    });
-    const r = runWrapper(json, "0");
+    const r = runWrapper(makeValidJson("a".repeat(40), "not-a-number"), "0");
     expect(r.hasWrapperError).toBe(true);
     expect(r.errorDetail).toBe("attempts_not_int");
+  });
+
+  it("exit 0 + attempts == 4 (>3) → WRAPPER_ERROR (attempts_out_of_range)", () => {
+    const r = runWrapper(makeValidJson("a".repeat(40), "4"), "0");
+    expect(r.hasWrapperError).toBe(true);
+    expect(r.errorDetail).toBe("attempts_out_of_range");
+  });
+
+  it("exit 0 + attempts == -1 (negative) → WRAPPER_ERROR (attempts_out_of_range)", () => {
+    const r = runWrapper(makeValidJson("a".repeat(40), "-1"), "0");
+    expect(r.hasWrapperError).toBe(true);
+    expect(r.errorDetail).toBe("attempts_out_of_range");
+  });
+
+  it("exit 0 + attempts == 0 (success requires 1-3) → WRAPPER_ERROR (attempts_success_too_low)", () => {
+    const r = runWrapper(makeValidJson("a".repeat(40), "0"), "0");
+    expect(r.hasWrapperError).toBe(true);
+    expect(r.errorDetail).toBe("attempts_success_too_low");
+  });
+
+  it("exit 0 + attempts == 3 (max for success) → OK", () => {
+    const r = runWrapper(makeValidJson("a".repeat(40), "3"), "0");
+    expect(r.hasWrapperError).toBe(false);
+  });
+
+  it("exit 1 + attempts == 0 (diagnostic allows 0-3) → OK", () => {
+    const r = runWrapper(makeRefusalJson("unsigned", "a".repeat(40), "0"), "1");
+    expect(r.hasWrapperError).toBe(false);
+  });
+
+  it("exit 1 + attempts == 3 (max for diagnostic) → OK", () => {
+    const r = runWrapper(makeRefusalJson("unsigned", "a".repeat(40), "3"), "1");
+    expect(r.hasWrapperError).toBe(false);
+  });
+
+  it("exit 1 + attempts == 4 (>3) → WRAPPER_ERROR (attempts_out_of_range)", () => {
+    const r = runWrapper(makeRefusalJson("unsigned", "a".repeat(40), "4"), "1");
+    expect(r.hasWrapperError).toBe(true);
+    expect(r.errorDetail).toBe("attempts_out_of_range");
   });
 });
 
@@ -297,15 +364,7 @@ describe("R169 SIG Phase B wrapper — attempts validation", () => {
 
 describe("R169 SIG Phase B wrapper — exit 0 inconsistency", () => {
   it("exit 0 + verified=false → WRAPPER_ERROR (exit0_inconsistent)", () => {
-    const json = JSON.stringify({
-      verified: "false",
-      reason: "unsigned",
-      verified_at: "",
-      api_sha: "a".repeat(40),
-      error_category: "GITHUB_SIGNATURE_UNSIGNED",
-      attempts: "1",
-    });
-    const r = runWrapper(json, "0");
+    const r = runWrapper(makeRefusalJson("unsigned"), "0");
     expect(r.hasWrapperError).toBe(true);
     expect(r.errorDetail).toBe("exit0_inconsistent");
   });
@@ -325,8 +384,7 @@ describe("R169 SIG Phase B wrapper — exit 0 inconsistency", () => {
   });
 
   it("exit 0 + api_sha != TARGET_SHA → WRAPPER_ERROR (exit0_inconsistent)", () => {
-    const json = makeValidJson("b".repeat(40)); // different SHA
-    const r = runWrapper(json, "0", "a".repeat(40)); // target is a*40
+    const r = runWrapper(makeValidJson("b".repeat(40)), "0", "a".repeat(40));
     expect(r.hasWrapperError).toBe(true);
     expect(r.errorDetail).toBe("exit0_inconsistent");
   });
@@ -364,15 +422,7 @@ describe("R169 SIG Phase B wrapper — exit 0 inconsistency", () => {
 
 describe("R169 SIG Phase B wrapper — exit non-zero inconsistency", () => {
   it("exit 1 + verified=true → WRAPPER_ERROR (exit_nonzero_but_verified_true)", () => {
-    const json = JSON.stringify({
-      verified: "true",
-      reason: "valid",
-      verified_at: "2026-07-13T10:00:00Z",
-      api_sha: "a".repeat(40),
-      error_category: "none",
-      attempts: "1",
-    });
-    const r = runWrapper(json, "1");
+    const r = runWrapper(makeValidJson(), "1");
     expect(r.hasWrapperError).toBe(true);
     expect(r.errorDetail).toBe("exit_nonzero_but_verified_true");
   });

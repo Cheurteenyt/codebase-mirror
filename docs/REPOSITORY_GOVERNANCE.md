@@ -368,6 +368,26 @@ against the official GitHub enum (SIG-R4-PARSER-01).
 After successful mirror: `GitLab main SHA == TARGET_SHA` proves the
 exact Git object verified by GitHub is now present on GitLab.
 
+### Three verdicts (SIG-R169-Phase-B-CONC, SIG-R169-Phase-B-FINAL)
+
+The mirror workflow has a **final verdict step** (last step, `if: always()`)
+that **exits 1 on FAILED**. The job goes red if the effective state is
+FAILED, not just if an earlier step failed.
+
+Cleanup runs BEFORE the verdict (`id: cleanup`, `if: always()`). The
+verdict requires `steps.cleanup.outcome == success`.
+
+```text
+SUCCESS:    mirrored|already-mirrored + observed_sha==TARGET_SHA + sig valid + cleanup ok
+SUPERSEDED: newer-valid-mirror-present + post_verify==success + sig valid + cleanup ok
+FAILED:     everything else → exit 1
+```
+
+**Exact target parity** (`observed_sha == TARGET_SHA`) is different from
+**operational coverage**. SUPERSEDED means GitLab is ahead (a descendant
+of TARGET_SHA is already mirrored) — exact parity is false, but the
+mirror is operationally valid. The summary displays both separately.
+
 ### What NOT to do
 
 - Do not add GitHub's `web-flow` GPG key to a GitLab user profile

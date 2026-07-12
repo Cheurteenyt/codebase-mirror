@@ -745,20 +745,55 @@ the JSON output fail-closed:
 This prevents a fail-open scenario where a missing/malformed JSON
 allows the push to proceed.
 
-### Phase B: Strict summary (SIG-R3-SUMMARY-01)
+### Phase B: Three verdicts (SIG-R169-Phase-B-CONC, SIG-R169-Phase-B-FINAL)
 
-The workflow summary will require ALL of the following for
-`Overall: SUCCESS`:
+The workflow has a **final verdict step** that runs LAST (after cleanup)
+and **exits 1 on FAILED** — the job goes red if the effective state is
+FAILED, not just if an earlier step failed.
+
+**Step ordering (SIG-R169-Phase-B-CLEANUP):**
+1. Steps 1-6: validate, checkout verifier, gate, checkout target, SSH, mirror
+2. Step 7: **Cleanup** (`id: cleanup`, `if: always()`) — runs before verdict
+3. Step 8: **Final verdict + summary** (`if: always()`, LAST step) — exits 1 on FAILED
+
+The verdict requires `steps.cleanup.outcome == success` for SUCCESS/SUPERSEDED.
+
+**Three verdicts:**
 
 ```text
-SIG_VERIFIED == true
-SIG_SHA_MATCH == true
-MIRROR_SUCCESS == true (mirrored|already-mirrored|newer-valid-mirror-present)
-GITLAB_PARITY == true
-JOB_STATUS == success
+SUCCESS:
+  - final_result = mirrored | already-mirrored
+  - observed_sha == TARGET_SHA (exact target parity)
+  - signature verified == true
+  - API SHA == TARGET_SHA
+  - cleanup outcome == success
+
+SUPERSEDED:
+  - final_result = newer-valid-mirror-present
+  - post_verify_result == success
+  - observed_sha non-empty (GitLab is ahead — a descendant of TARGET_SHA)
+  - github_main_sha non-empty
+  - signature verified == true
+  - API SHA == TARGET_SHA
+  - cleanup outcome == success
+
+FAILED:
+  - everything else → exit 1
 ```
 
-If any condition is false, the result is `FAILED`.
+**SUCCESS and SUPERSEDED leave the job green.** FAILED exits 1.
+
+**Exact target parity vs operational coverage:**
+- `Exact target parity: true` means `observed_sha == TARGET_SHA` (GitLab
+  is at exactly the commit we wanted to mirror).
+- `SUPERSEDED` means GitLab is AHEAD of TARGET_SHA — exact parity is
+  `false`, but the mirror is operationally valid because a descendant
+  is already present and post-verification succeeded.
+- The summary displays these separately:
+  - `Exact target parity: true|false`
+  - `Operational result: SUCCESS|SUPERSEDED|FAILED`
+
+Never present SUPERSEDED as exact parity.
 
 ### Expected GitLab UI badge
 
@@ -834,6 +869,28 @@ scripts. Configuration:
 Structural tests in `r169-signature-gate.test.ts` verify the CI YAML:
 action ref is a 40-char SHA, `additional_paths` is absent, `scandir`
 targets `scripts/ci`, version is explicit, step is in the Backend job.
+
+### Phase B tests (SIG-R169-Phase-B-TEST-01)
+
+Phase B adds two test files:
+
+- `v2/tests/ci/r169-phase-b-structural.test.ts` — 46 structural tests
+  verifying: verifier pin (exact SHA, ref, path, persist-credentials),
+  step ordering (gate before target/SSH, cleanup before verdict, verdict
+  is last), fail-closed gate (no continue-on-error, no `|| true`, JSON
+  validation, attempts range), three verdicts (SUCCESS/SUPERSEDED/FAILED,
+  newer-valid gives SUPERSEDED not SUCCESS), executable verdict (exit 1
+  on FAILED, no FAILED path leaves job green), cleanup step (id, if:always,
+  outcome referenced), permissions (contents:read only, no new secrets).
+
+- `v2/tests/ci/r169-phase-b-wrapper.test.ts` — 25 wrapper validation tests.
+  **Extracts the REAL Python wrapper code from the workflow YAML** and
+  executes it with fixtures — no duplication. Tests fail if the block
+  cannot be extracted, if multiple candidates exist, or if the workflow
+  and fixtures are incompatible. Covers: valid JSON, absent/empty/malformed
+  JSON, missing/extra keys, multiline values, attempts range (0-3,
+  success 1-3, negative/>3 rejected), exit 0 inconsistency, exit non-zero
+  inconsistency.
 
 ### Script
 
