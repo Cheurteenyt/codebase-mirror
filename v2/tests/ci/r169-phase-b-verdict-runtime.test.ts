@@ -90,10 +90,11 @@ const VERDICT_BASH = extractVerdictBash();
 
 // ─── Test runner ────────────────────────────────────────────────────────
 
-const TARGET_SHA = "a".repeat(40);
+const TARGET_SHA = "a".repeat(40);       // A — the commit we wanted to mirror
 const OTHER_SHA = "b".repeat(40);
-const OBSERVED_DESCENDANT = "c".repeat(40);
-const GITHUB_MAIN = "a".repeat(40); // GitHub main == target in normal case
+const OBSERVED_DESCENDANT = "c".repeat(40); // B — GitLab is at a descendant
+const GITHUB_MAIN = "a".repeat(40);      // GitHub main == target in normal case
+const GITHUB_MAIN_NEWER = "d".repeat(40); // C — GitHub main advanced past target
 
 interface VerdictResult {
   exitCode: number;
@@ -241,31 +242,73 @@ describe("R169 SIG Phase B verdict runtime — SUCCESS", () => {
   });
 });
 
-// ─── SUPERSEDED cases ───────────────────────────────────────────────────
+// ─── SUPERSEDED cases (SIG-R169-Phase-B-CONC-R3-01) ─────────────────────
+// Two valid origins: PREEXISTING (push false/false) and AFTER_PUSH_RACE
+// (push true/true). GITHUB_MAIN_SHA must differ from TARGET_SHA.
 
 describe("R169 SIG Phase B verdict runtime — SUPERSEDED", () => {
-  it("newer-valid + parity false + observed != target + push false + invariants + sig → SUPERSEDED, exit 0", () => {
+  it("newer-valid + push false/false (PREEXISTING) → SUPERSEDED, exit 0", () => {
     const r = runVerdict({
       FINAL_RESULT: "newer-valid-mirror-present",
-      OBSERVED_SHA: OBSERVED_DESCENDANT, // different from TARGET_SHA
+      OBSERVED_SHA: OBSERVED_DESCENDANT, // B != A
+      GITHUB_MAIN_SHA: GITHUB_MAIN_NEWER, // C != A
       PUSH_ATTEMPTED: "false",
       PUSH_COMPLETED: "false",
-      POST_VERIFY_RESULT: "success",
-      CLIENT_FP_VERIFIED: "true",
-      HOST_FP_VERIFIED: "true",
-      ERROR_CATEGORY: "none",
-      ERROR_PHASE: "none",
-      GITHUB_MAIN_SHA: GITHUB_MAIN,
-      JOB_STATUS: "success",
-      CLEANUP_OUTCOME: "success",
-      SIG_VERIFIED: "true",
-      SIG_API_SHA: TARGET_SHA,
     });
     expect(r.exitCode).toBe(0);
     expect(r.verdict).toBe("SUPERSEDED");
     expect(r.exactParity).toBe("false");
     expect(r.summary).toContain("Operational result: SUPERSEDED");
     expect(r.summary).toContain("GitLab is ahead");
+  });
+
+  it("newer-valid + push true/true (AFTER_PUSH_RACE) → SUPERSEDED, exit 0", () => {
+    const r = runVerdict({
+      FINAL_RESULT: "newer-valid-mirror-present",
+      OBSERVED_SHA: OBSERVED_DESCENDANT, // B != A
+      GITHUB_MAIN_SHA: GITHUB_MAIN_NEWER, // C != A
+      PUSH_ATTEMPTED: "true",
+      PUSH_COMPLETED: "true",
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.verdict).toBe("SUPERSEDED");
+    expect(r.exactParity).toBe("false");
+  });
+
+  it("newer-valid + push true/false (push failed) → FAILED, exit 1", () => {
+    const r = runVerdict({
+      FINAL_RESULT: "newer-valid-mirror-present",
+      OBSERVED_SHA: OBSERVED_DESCENDANT,
+      GITHUB_MAIN_SHA: GITHUB_MAIN_NEWER,
+      PUSH_ATTEMPTED: "true",
+      PUSH_COMPLETED: "false", // push failed — incoherent
+    });
+    expect(r.exitCode).toBe(1);
+    expect(r.verdict).toBe("FAILED");
+  });
+
+  it("newer-valid + push false/true (impossible) → FAILED, exit 1", () => {
+    const r = runVerdict({
+      FINAL_RESULT: "newer-valid-mirror-present",
+      OBSERVED_SHA: OBSERVED_DESCENDANT,
+      GITHUB_MAIN_SHA: GITHUB_MAIN_NEWER,
+      PUSH_ATTEMPTED: "false",
+      PUSH_COMPLETED: "true", // impossible — incoherent
+    });
+    expect(r.exitCode).toBe(1);
+    expect(r.verdict).toBe("FAILED");
+  });
+
+  it("newer-valid + GITHUB_MAIN_SHA == TARGET_SHA → FAILED (descendant can't belong to same main)", () => {
+    const r = runVerdict({
+      FINAL_RESULT: "newer-valid-mirror-present",
+      OBSERVED_SHA: OBSERVED_DESCENDANT,
+      GITHUB_MAIN_SHA: TARGET_SHA, // same as target — contradictory
+      PUSH_ATTEMPTED: "false",
+      PUSH_COMPLETED: "false",
+    });
+    expect(r.exitCode).toBe(1);
+    expect(r.verdict).toBe("FAILED");
   });
 });
 
@@ -405,6 +448,7 @@ describe("R169 SIG Phase B verdict runtime — summary content", () => {
     const r = runVerdict({
       FINAL_RESULT: "newer-valid-mirror-present",
       OBSERVED_SHA: OBSERVED_DESCENDANT,
+      GITHUB_MAIN_SHA: GITHUB_MAIN_NEWER, // C != A
       PUSH_ATTEMPTED: "false",
       PUSH_COMPLETED: "false",
     });

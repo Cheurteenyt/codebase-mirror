@@ -175,6 +175,19 @@ class BareRepoTestEnv {
    * Checks out the target SHA first (simulating actions/checkout@v7 ref: TARGET_SHA).
    */
   runMirror(targetSha: string): { exitCode: number; outputs: MirrorOutputs } {
+    return this.runMirrorWithHooks(targetSha, {});
+  }
+
+  /**
+   * Run the mirror script with test-only hooks enabled.
+   * SIG-R169-Phase-B-CONC-R3-01: Used for the AFTER_PUSH_RACE integration test.
+   * The hooks object maps hook names to shell commands that mutate state at
+   * specific points during the mirror state machine.
+   */
+  runMirrorWithHooks(
+    targetSha: string,
+    hooks: Record<string, string>,
+  ): { exitCode: number; outputs: MirrorOutputs } {
     // Checkout the target SHA (simulating actions/checkout in the real workflow)
     execSync(`git -C "${this.workRepo}" checkout "${targetSha}" 2>/dev/null`, {
       stdio: "pipe",
@@ -188,6 +201,8 @@ class BareRepoTestEnv {
       SKIP_SSH_CONFIG: "yes",
       SKIP_FP_CHECKS: "yes",
       OUTPUT_FILE: this.outputFile,
+      CBM_MIRROR_TEST_MODE: "1",
+      ...hooks,
     };
 
     let exitCode = 0;
@@ -574,6 +589,48 @@ describe("R168.1 — Real race condition tests (TEST-R168.1-01)", () => {
     expect(outputs.final_result).toBe("newer-valid-mirror-present");
     expect(outputs.observed_sha).toBe(sha3);
     expect(outputs.post_verify_result).toBe("success");
+  });
+
+  it("SIG-R169-Phase-B-CONC-R3-01: race after push via MIRROR_TEST_AFTER_PUSH hook → newer-valid with push_attempted=true", () => {
+    // This is the REAL integration test using the test-only hook.
+    // Scenario:
+    //   1. GitLab starts behind (at sha1)
+    //   2. The script pushes TARGET_SHA (sha2) → push_attempted=true, push_completed=true
+    //   3. The MIRROR_TEST_AFTER_PUSH hook fires — it advances GitLab to sha3
+    //      (simulating a newer mirror run that pushed a descendant)
+    //   4. GitHub main is also at sha3 (advanced by the newer run)
+    //   5. Post-verification confirms sha3 is a valid descendant
+    //   6. final_result=newer-valid-mirror-present
+    //
+    // This verifies the Phase B verdict's SUPERSEDED_AFTER_PUSH_RACE case
+    // is compatible with the real state machine.
+
+    const sha1 = env.commit("R165");
+    env.pushToGithub();
+    const sha2 = env.commit("R166");
+    env.pushToGithub();
+    const sha3 = env.commit("R167");
+    env.pushToGithub();
+
+    // GitLab starts at sha1 (behind) → push will happen
+    env.setGitLabMain(sha1);
+
+    // Hook: AFTER the script pushes sha2, advance GitLab to sha3
+    // This simulates a concurrent mirror run that pushed sha3 while we were pushing sha2
+    const hookCmd = `git -C "${env.workRepo}" push gitlab ${sha3}:refs/heads/main --force 2>/dev/null || true`;
+
+    const { exitCode, outputs } = env.runMirrorWithHooks(sha2, {
+      MIRROR_TEST_AFTER_PUSH: hookCmd,
+    });
+
+    expect(exitCode).toBe(0);
+    expect(outputs.final_result).toBe("newer-valid-mirror-present");
+    expect(outputs.push_attempted).toBe("true");
+    expect(outputs.push_completed).toBe("true");
+    expect(outputs.observed_sha).toBe(sha3);
+    expect(outputs.post_verify_result).toBe("success");
+    // GitHub main should be re-read as sha3 (the newer commit)
+    expect(outputs.github_main_sha).toBe(sha3);
   });
 
   it("GitHub main re-read at end detects changes (MIRROR-R168.1-01)", () => {

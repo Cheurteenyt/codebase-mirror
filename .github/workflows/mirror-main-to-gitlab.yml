@@ -475,14 +475,32 @@ jobs:
           fi
 
           # SUPERSEDED: newer-valid-mirror-present + exact parity false
-          #   + observed_sha != TARGET_SHA + push_attempted=false + push_completed=false
-          #   + invariants + sig
+          #   + observed_sha != TARGET_SHA + GITHUB_MAIN_SHA != TARGET_SHA
+          #   + push coherence (either false/false OR true/true) + invariants + sig
+          #
+          # SIG-R169-Phase-B-CONC-R3-01: Two valid SUPERSEDED origins:
+          #   1. PREEXISTING: GitLab was already ahead before this run
+          #      (push_attempted=false, push_completed=false)
+          #   2. AFTER_PUSH_RACE: this run pushed TARGET_SHA, then a newer
+          #      mirror pushed a descendant before post-verification
+          #      (push_attempted=true, push_completed=true)
+          # Both are valid operational successes — no rollback needed.
+          # Rejected: push_attempted=true + push_completed=false (push failed)
+          #           push_attempted=false + push_completed=true (impossible)
+          SUPERSEDED_PUSH_COHERENT="false"
+          if [ "${PUSH_ATTEMPTED:-}" = "false" ] && [ "${PUSH_COMPLETED:-}" = "false" ]; then
+            SUPERSEDED_PUSH_COHERENT="true"
+          elif [ "${PUSH_ATTEMPTED:-}" = "true" ] && [ "${PUSH_COMPLETED:-}" = "true" ]; then
+            SUPERSEDED_PUSH_COHERENT="true"
+          fi
+
           if [ "${FINAL_RESULT:-}" = "newer-valid-mirror-present" ] \
              && [ "$EXACT_PARITY" = "false" ] \
              && [ -n "${OBSERVED_SHA:-}" ] \
              && [ "${OBSERVED_SHA:-}" != "$TARGET_SHA" ] \
-             && [ "${PUSH_ATTEMPTED:-}" = "false" ] \
-             && [ "${PUSH_COMPLETED:-}" = "false" ] \
+             && [ -n "${GITHUB_MAIN_SHA:-}" ] \
+             && [ "${GITHUB_MAIN_SHA:-}" != "$TARGET_SHA" ] \
+             && [ "$SUPERSEDED_PUSH_COHERENT" = "true" ] \
              && [ "$MIRROR_INVARIANTS_OK" = "true" ] \
              && [ "$SIG_OK" = "true" ]; then
             VERDICT="SUPERSEDED"

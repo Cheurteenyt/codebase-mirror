@@ -385,7 +385,11 @@ verdict requires `steps.cleanup.outcome == success`.
 **Push coherence** per verdict:
 - SUCCESS mirrored: `push_attempted=true`, `push_completed=true`
 - SUCCESS already-mirrored: `push_attempted=false`, `push_completed=false`
-- SUPERSEDED: `push_attempted=false`, `push_completed=false`
+- SUPERSEDED: accepts EITHER `push_attempted=false` + `push_completed=false`
+  (PREEXISTING — GitLab was already ahead) OR `push_attempted=true` +
+  `push_completed=true` (AFTER_PUSH_RACE — a newer mirror pushed a
+  descendant after this run's push). Both are valid operational successes;
+  no rollback needed. SUPERSEDED also requires `GITHUB_MAIN_SHA != TARGET_SHA`.
 
 ```text
 SUCCESS mirrored:         mirrored + exact parity + push true + invariants + sig

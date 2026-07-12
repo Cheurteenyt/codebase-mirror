@@ -791,8 +791,8 @@ SUPERSEDED:
   - final_result = newer-valid-mirror-present
   - exact parity = false (observed_sha != TARGET_SHA)
   - observed_sha non-empty (GitLab is ahead — a descendant of TARGET_SHA)
-  - push_attempted = false
-  - push_completed = false
+  - GITHUB_MAIN_SHA != TARGET_SHA (GitHub main advanced past target)
+  - push coherence: EITHER (false/false) OR (true/true) — see below
   - MIRROR_INVARIANTS_OK = true
   - signature verified == true + API SHA == TARGET_SHA
 
@@ -802,11 +802,25 @@ FAILED:
 
 **SUCCESS and SUPERSEDED leave the job green.** FAILED exits 1.
 
-**Push coherence (SIG-R169-Phase-B-FINAL-INVARIANTS-02):**
+**Push coherence (SIG-R169-Phase-B-FINAL-INVARIANTS-02, CONC-R3-01):**
 - `mirrored` requires `push_attempted=true` AND `push_completed=true`
 - `already-mirrored` requires `push_attempted=false` AND `push_completed=false`
-- `SUPERSEDED` requires `push_attempted=false` AND `push_completed=false`
-- Any mismatch (e.g. `mirrored` + `push_completed=false`) → FAILED
+- `SUPERSEDED` accepts TWO valid origins (SUPERSEDED_PUSH_COHERENT):
+  1. **PREEXISTING**: `push_attempted=false` AND `push_completed=false`
+     (GitLab was already ahead before this run)
+  2. **AFTER_PUSH_RACE**: `push_attempted=true` AND `push_completed=true`
+     (this run pushed TARGET_SHA, then a newer mirror pushed a descendant
+     before post-verification)
+- Rejected: `push_attempted=true` + `push_completed=false` (push failed)
+- Rejected: `push_attempted=false` + `push_completed=true` (impossible)
+- Any mismatch → FAILED
+
+**Two origins of SUPERSEDED (SIG-R169-Phase-B-CONC-R3-01):**
+1. GitLab was already ahead before this run started — no push needed.
+2. A race condition: this run pushed TARGET_SHA successfully, but a newer
+   mirror run pushed a descendant before post-verification completed.
+   Both runs succeed operationally; no rollback is needed. The last run
+   eventually restores convergence.
 
 **Exact target parity vs operational coverage:**
 - `Exact target parity: true` means `observed_sha == TARGET_SHA` (GitLab
