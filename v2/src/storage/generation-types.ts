@@ -15,6 +15,23 @@
  *   - No writer modifies a DB already referenced by active-generation.json.
  *   - A reader always sees either the old complete snapshot or the new
  *     complete snapshot — never a partial snapshot.
+ *
+ * R169A-FIX-R2 (GPT 5.6 pass 2 audit) changes:
+ *   - `MANIFEST_V1_KEYS` is now exported as a readonly tuple (`as const`),
+ *     NOT a mutable `Set`. The validator uses a private
+ *     `MANIFEST_V1_KEY_SET` that consumers cannot mutate. This prevents a
+ *     consumer from `.add()`-ing a key to the authority and bypassing the
+ *     "exact key set" check.
+ *   - `LEGACY_SOURCE_OPEN_FAILED` renamed to `LEGACY_SOURCE_INVALID`.
+ *     R169A validates path + regular-file identity only; the actual
+ *     SQLite open validation occurs in R169D reader cutover.
+ *   - New error codes:
+ *       `MANIFEST_TOO_LARGE`              — manifest file exceeds the
+ *                                            64 KiB size bound.
+ *       `STORE_LAYOUT_CREATE_FAILED`      — `mkdir` of a layout directory
+ *                                            failed.
+ *       `STORE_LAYOUT_DURABILITY_UNKNOWN` — directory or parent fsync
+ *                                            failed during layout setup.
  */
 
 // ─── Manifest V1 ────────────────────────────────────────────────────────
@@ -72,8 +89,17 @@ export interface GenerationManifestV1 {
   readonly sha256: string;
 }
 
-/** Exact set of keys allowed in a V1 manifest. No extras permitted. */
-export const MANIFEST_V1_KEYS = new Set<string>([
+/**
+ * R169A-FIX-R2 (VALID-R169A-R2-01): The exact set of keys allowed in a V1
+ * manifest, exported as a readonly tuple. Consumers CANNOT mutate this
+ * list (no `.add()` / `.delete()` on a tuple). The validator uses a
+ * private `MANIFEST_V1_KEY_SET` derived from this tuple; that set is
+ * NOT exported, so a consumer cannot mutate the authority either.
+ *
+ * Use `MANIFEST_V1_KEYS` for diagnostics / inspection only. Validation
+ * lives in `validateGenerationManifest` and uses the private set.
+ */
+export const MANIFEST_V1_KEYS = [
   "formatVersion",
   "project",
   "generationId",
@@ -87,7 +113,22 @@ export const MANIFEST_V1_KEYS = new Set<string>([
   "fileCount",
   "sizeBytes",
   "sha256",
-]);
+] as const;
+
+/**
+ * Private, non-exported set used by the validator. A consumer cannot
+ * reach into this set to add a key (the symbol is module-scoped).
+ */
+const MANIFEST_V1_KEY_SET: ReadonlySet<string> = new Set<string>(MANIFEST_V1_KEYS);
+
+/**
+ * R169A-FIX-R2 (VALID-R169A-R2-01): Exported helper for tests and
+ * diagnostics. Returns true iff `key` is one of the V1 manifest keys.
+ * The internal set is NOT exposed, so callers cannot mutate it.
+ */
+export function isManifestV1Key(key: string): boolean {
+  return MANIFEST_V1_KEY_SET.has(key);
+}
 
 // ─── Index State V1 ─────────────────────────────────────────────────────
 
@@ -171,17 +212,26 @@ export interface ResolvedMissingDb {
  * Structured error codes for the generation store.
  * Never group all errors under a single DB_ERROR.
  *
- * R169A-FIX (GPT 5.6 audit): Added five new codes:
+ * R169A-FIX (GPT 5.6 audit, pass 1): Added five new codes:
  *   - ATOMIC_DURABILITY_UNKNOWN     (DUR-R169A-01: rename succeeded but dir fsync failed)
  *   - ATOMIC_SERIALIZATION_FAILED   (DUR-R169A-02: JSON.stringify returned non-string)
  *   - ATOMIC_SHORT_WRITE            (DUR-R169A-02: writeSync returned <=0 mid-payload)
  *   - MANIFEST_TARGET_NOT_REGULAR   (DATA-R169A-01: resolved dbPath is not a regular file)
  *   - MANIFEST_DBFILE_NOT_CANONICAL (DATA-R169A-01: dbFile != generations/generation-<uuid>.db)
+ *
+ * R169A-FIX-R2 (GPT 5.6 audit, pass 2) changes:
+ *   - Renamed LEGACY_SOURCE_OPEN_FAILED → LEGACY_SOURCE_INVALID.
+ *     R169A validates path + regular-file identity only; the actual
+ *     SQLite open validation occurs in R169D reader cutover.
+ *   - Added MANIFEST_TOO_LARGE              (VALID-R169A-R2-01: manifest > 64 KiB).
+ *   - Added STORE_LAYOUT_CREATE_FAILED      (DUR-R169A-R2-01: mkdir of layout dir failed).
+ *   - Added STORE_LAYOUT_DURABILITY_UNKNOWN (DUR-R169A-R2-01: layout fsync failed).
  */
 export type GenerationStoreErrorCode =
   | "GENERATION_STORE_CONFIG_ERROR"
   | "MANIFEST_PARSE_ERROR"
   | "MANIFEST_SCHEMA_ERROR"
+  | "MANIFEST_TOO_LARGE"
   | "MANIFEST_TARGET_MISSING"
   | "MANIFEST_TARGET_OUTSIDE_STORE"
   | "MANIFEST_PROJECT_MISMATCH"
@@ -190,13 +240,15 @@ export type GenerationStoreErrorCode =
   | "GENERATION_TARGET_SYMLINK_REJECTED"
   | "MANIFEST_TARGET_NOT_REGULAR"
   | "MANIFEST_DBFILE_NOT_CANONICAL"
-  | "LEGACY_SOURCE_OPEN_FAILED"
+  | "LEGACY_SOURCE_INVALID"
   | "ATOMIC_WRITE_FAILED"
   | "ATOMIC_RENAME_FAILED"
   | "ATOMIC_FSYNC_FAILED"
   | "ATOMIC_DURABILITY_UNKNOWN"
   | "ATOMIC_SERIALIZATION_FAILED"
   | "ATOMIC_SHORT_WRITE"
+  | "STORE_LAYOUT_CREATE_FAILED"
+  | "STORE_LAYOUT_DURABILITY_UNKNOWN"
   | "PATH_TRAVERSAL_REJECTED"
   | "PROJECT_KEY_INVALID";
 

@@ -54,8 +54,8 @@ is R170.
   closed; symlink manifest → rejected; symlink target → rejected;
   manifest parent symlink → rejected; `generations/` parent symlink →
   rejected; target directory → `MANIFEST_TARGET_NOT_REGULAR`; legacy
-  DB directory → `LEGACY_SOURCE_OPEN_FAILED`; legacy DB symlink →
-  `LEGACY_SOURCE_OPEN_FAILED`), atomic writer 10-case fault-injection
+  DB directory → `LEGACY_SOURCE_INVALID` (R169A-FIX-R2: renamed from `LEGACY_SOURCE_OPEN_FAILED`); legacy DB symlink →
+  `LEGACY_SOURCE_INVALID`), atomic writer 10-case fault-injection
   matrix (serialize fail → no temp; exclusive-open fail; short-write
   recoverable; mid-payload write fail; temp fsync fail; close fail;
   rename fail; directory open fail → `ATOMIC_DURABILITY_UNKNOWN`;
@@ -67,14 +67,115 @@ is R170.
   inspection (Node.js directory walk, no `child_process` spawn) that
   no new `defaultCodeDbPath` consumers have appeared.
 
+### R169A-FIX-R2 — GPT 5.6 pass 2 audit fixes
+
+The GPT 5.6 pass 2 audit identified eight findings against the pass 1
+fix. All eight are addressed in this re-fix; no production behavior
+changes (the generation store remains inert — no production code path
+calls it). Version remains `0.75.0`; semantics=8, discovery=2,
+manifest=1 unchanged.
+
+**SEC-R169A-R2-01 — Trust root symlink bypass (P1).**
+`assertPathInsideNoSymlinks(root, candidate)` only walked components
+UNDER `root`; it never `lstat`'d `root` itself. If `projects/` (or any
+of its parents) was a symlink, both `realpath(root)` and
+`realpath(candidate)` followed the same symlink and the containment
+check passed. New `assertTrustedRootNoSymlinks(cacheRoot, project,
+phase)` lstat's `cacheRoot` itself and walks `codebase-memory-mcp`,
+`projects`, `<project-key>` — ANY symlink in this chain raises
+`PATH_TRAVERSAL_REJECTED`. Only `ENOENT` is tolerated; `EACCES` /
+`EIO` / `ENOTDIR` / `ELOOP` fail closed. The resolver AND the writer
+call this BEFORE checking the manifest / legacy / target.
+
+**SEC-R169A-R2-02 — Atomic writer path safety (P1).**
+`writeJsonAtomically(targetPath, value)` accepted an arbitrary
+`targetPath` with no containment check, no symlink rejection, and did
+`mkdir -p` which could create directories via parent symlinks. New
+public wrapper `writeProjectJsonAtomically(project, target, value,
+options?, ops?)` derives the target path from `project` + `target`
+type (`"manifest"` or `"index-state"`), validates the trust root,
+validates the target via `assertPathInsideNoSymlinks`, rejects
+symlinked targets, ensures layout durability (DUR-R169A-R2-01), and
+delegates to the internal `writeJsonAtomically`. Temp file mode
+`0600`, temp directory mode `0700`. The internal `writeJsonAtomically`
+is no longer exported.
+
+**DUR-R169A-R2-01 — Directory creation durability (P1).**
+`mkdirSync(dir, { recursive: true })` + `fsync(dir)` did NOT
+guarantee the directory ENTRY in the parent survived a crash if the
+directory was just created. New `ensureGenerationStoreLayoutDurable`
+walks the FULL layout chain (`cbm` → `projects` → `projectStore` →
+`generations`, `tmp`); for each directory: `mkdir 0700` (skip if
+exists), `fsync` the directory, `fsync` the PARENT if newly created.
+New error codes: `STORE_LAYOUT_CREATE_FAILED` (mkdir fault) and
+`STORE_LAYOUT_DURABILITY_UNKNOWN` (dir or parent fsync fault).
+
+**VALID-R169A-R2-01 — Manifest hardening (P2).**
+Four hardenings:
+
+- `MAX_GENERATION_MANIFEST_BYTES = 64 * 1024`. Before reading,
+  `parseGenerationManifest` stats the file; if `size > max`, raises
+  `MANIFEST_TOO_LARGE` and does NOT read the file into memory.
+- `rootFingerprint` validation: `trim().length > 0`, max 1024 chars,
+  no C0 control chars (charCode 0–31, including NUL and tab).
+- `project` field validation: same safe-string rules as
+  `rootFingerprint`, applied BEFORE the equality check.
+- Immutable key authority: `MANIFEST_V1_KEYS` is now a readonly tuple
+  (`as const`), NOT a mutable `Set`. The validator uses a private
+  `MANIFEST_V1_KEY_SET` (module-scoped). New public helper
+  `isManifestV1Key(key)`.
+
+**API-R169A-R2-01 — Legacy contract rename (P2).**
+`LEGACY_SOURCE_OPEN_FAILED` renamed to `LEGACY_SOURCE_INVALID`. R169A
+validates path + regular-file identity only; actual SQLite open
+validation occurs in R169D reader cutover. The old name implied an
+open was attempted, which was misleading.
+
+**DOC-R169A-R2-01 — R169B/R169C boundary (P2).**
+Documentation now clarifies: R169B implements independent publisher
+primitives and test harnesses with NO production indexer caller; R169C
+wires those primitives into `indexProjectWasm` and outcome paths.
+Updated in `docs/ATOMIC_GENERATION_PUBLICATION.md` and
+`docs/V2_ARCHITECTURE.md`.
+
+**QUAL-R169A-R2-01 — Structured errors (P3).**
+All filesystem operations in the generation store are now wrapped in
+try/catch that produces `GenerationStoreError` with the project name.
+Specifically: `mkdirSync`, `statSync`/`lstatSync`, `readFileSync`,
+`readdirSync` (the layout helper, the resolver, the manifest parser,
+and the listing helper all wrap their fs calls).
+
+**TEST-R169A-R2-01 — Test coverage (P1/P2).**
++43 new tests covering all eight findings:
+
+- Trust root symlinks (cacheRoot, cbmCacheDir, projects, project-key)
+- Writer path safety (parent symlink, target outside root, target
+  symlink, file mode 0600, directory mode 0700, no file outside trust
+  root)
+- Layout durability (mkdir fault, dir fsync fault, parent fsync fault,
+  idempotent, success)
+- Manifest oversize (> 64 KiB → MANIFEST_TOO_LARGE)
+- rootFingerprint whitespace / NUL / tab / max length
+- Immutable key set regression (mutating MANIFEST_V1_KEYS does not
+  affect validation)
+- Exact error codes (regex match, not just instanceof)
+- No writes to real HOME cache (writeProjectJsonAtomically and
+  ensureGenerationStoreLayoutDurable with injected cacheRoot)
+
+Total tests: 1463 (+43 from pass 1's 1420).
+
 ### What R169A does NOT deliver
 
 - **R169B — Durable Staging Publisher + Validator + fsync + CAS + GC
-  primitives.** The indexer does not yet build, validate, fsync,
-  atomically rename, or garbage-collect generation DBs.
-- **R169C — Indexer Integration + Outcome Contract.** The publication
-  pipeline is not yet wired into the indexer end-to-end; the
-  publication outcome is not yet propagated through `IndexResult`.
+  primitives.** Implement independent publisher primitives and test
+  harnesses — NO production indexer caller. The primitives include the
+  staging-DB publisher, CAS dedup table, manifest writer
+  (`writeProjectJsonAtomically`), and GC primitives. All tested in
+  isolation; no production code path calls them yet.
+- **R169C — Indexer Integration + Outcome Contract.** Wire those
+  primitives into `indexProjectWasm` and outcome paths. The
+  publication pipeline is not yet wired into the indexer end-to-end;
+  the publication outcome is not yet propagated through `IndexResult`.
 - **R169D — Reader Cutover + Legacy Migration + Project Lifecycle.**
   Readers do not yet call `resolveActiveCodeDb`; the legacy DB write
   path is not yet removed; project lifecycle is not yet wired through
@@ -117,7 +218,7 @@ is R170.
   component-by-component `lstat` chain (any symlink →
   `PATH_TRAVERSAL_REJECTED`), and `lstat`-verified to be a regular
   file (directory / symlink / special file →
-  `LEGACY_SOURCE_OPEN_FAILED`). For ordinary project names with the
+  `LEGACY_SOURCE_INVALID` (R169A-FIX-R2: renamed from `LEGACY_SOURCE_OPEN_FAILED`)). For ordinary project names with the
   real cache root, this produces the same path as `defaultCodeDbPath`
   in `v2/src/bridge/sqlite-ro.ts` — back-compat is preserved on the
   happy path.
@@ -187,12 +288,25 @@ test block.
 
 ### Files changed
 
-- `v2/src/storage/generation-store.ts` (new)
-- `v2/src/storage/generation-types.ts` (new)
-- `v2/tests/storage/r169a-generation-store.test.ts` (new)
-- `docs/ATOMIC_GENERATION_PUBLICATION.md` (new)
+- `v2/src/storage/generation-store.ts` (new; updated by R169A-FIX pass 1
+  and pass 2 — adds `assertTrustedRootNoSymlinks`,
+  `ensureGenerationStoreLayoutDurable`, `writeProjectJsonAtomically`;
+  makes `writeJsonAtomically` internal; adds manifest size bound and
+  safe-string field validation)
+- `v2/src/storage/generation-types.ts` (new; updated by R169A-FIX pass 1
+  and pass 2 — adds `MANIFEST_TOO_LARGE`, `STORE_LAYOUT_CREATE_FAILED`,
+  `STORE_LAYOUT_DURABILITY_UNKNOWN`; renames `LEGACY_SOURCE_OPEN_FAILED`
+  → `LEGACY_SOURCE_INVALID`; changes `MANIFEST_V1_KEYS` from `Set` to
+  readonly tuple; adds `isManifestV1Key` helper)
+- `v2/tests/storage/r169a-generation-store.test.ts` (new; updated by
+  R169A-FIX pass 1 and pass 2 — 146 tests covering all eight R2 findings)
+- `docs/ATOMIC_GENERATION_PUBLICATION.md` (new; updated by R169A-FIX
+  pass 1 and pass 2 — adds §6.3 trust root, §6.4 layout durability,
+  §6.5 project-aware writer)
 - `docs/V2_CURRENT_STATE.md` (updated)
-- `docs/V2_ARCHITECTURE.md` (updated)
+- `docs/V2_ARCHITECTURE.md` (updated; adds §15.5.2 trust root,
+  §15.5.3 project-aware writer, §15.5.4 layout durability, §15.5.5
+  manifest hardening)
 - `v2/CHANGELOG.md` (this entry)
 
 ### Semantics versions NOT bumped
@@ -215,13 +329,15 @@ its own tests and audit; there is no "big bang" activation.
 - **R169A** — Generation Store Contract + Resolver Foundation (this
   release; implemented candidate, inactive, pending review).
 - **R169B** — Durable Staging Publisher + Validator + fsync + CAS + GC
-  primitives. The indexer builds a staging DB in `tmp/`, validates it,
-  fsyncs it, atomically renames it into `generations/`, and writes the
-  manifest. GC primitives land but are not yet active in production.
-- **R169C** — Indexer Integration + Outcome Contract. The publication
-  pipeline is wired into the indexer end-to-end; the publication
-  outcome (`SUCCESS | SUCCESS_WITH_WARNINGS | STALE | PARTIAL |
-  FAILED`) is propagated through `IndexResult`.
+  primitives. Implement independent publisher primitives and test
+  harnesses — NO production indexer caller. The primitives include the
+  staging-DB publisher (build in `tmp/`, validate, fsync, atomically
+  rename into `generations/`), the CAS dedup table, the manifest
+  writer (`writeProjectJsonAtomically`), and the GC primitives.
+- **R169C** — Indexer Integration + Outcome Contract. Wire those
+  primitives into `indexProjectWasm` and outcome paths. The
+  publication outcome (`SUCCESS | SUCCESS_WITH_WARNINGS | STALE |
+  PARTIAL | FAILED`) is propagated through `IndexResult`.
 - **R169D** — Reader Cutover + Legacy Migration + Project Lifecycle.
   Readers switch from `legacyCodeDbPath` to `resolveActiveCodeDb`;
   legacy DB write is removed for projects that have at least one

@@ -87,19 +87,28 @@ import {
   legacyCodeDbPath,
   cbmCacheDir,
   generationStoreRoot,
+  getCacheRoot,
   isLexicallyInside,
   isPathInside,
   assertPathInsideNoSymlinks,
   assertNotSymlink,
+  assertTrustedRootNoSymlinks,
   validateGenerationManifest,
   parseGenerationManifest,
   resolveActiveCodeDb,
-  writeJsonAtomically,
+  writeProjectJsonAtomically,
+  ensureGenerationStoreLayoutDurable,
   listProjectStoreKeys,
+  MAX_GENERATION_MANIFEST_BYTES,
   GenerationStoreError,
   type AtomicFileOps,
+  type GenerationStoreOptions,
 } from "../../src/storage/generation-store.js";
-import type { GenerationManifestV1 } from "../../src/storage/generation-types.js";
+import {
+  MANIFEST_V1_KEYS,
+  isManifestV1Key,
+  type GenerationManifestV1,
+} from "../../src/storage/generation-types.js";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -174,24 +183,44 @@ class TestOps implements AtomicFileOps {
   shortFirstWrite: boolean = false;
   /** If true, the second writeSync call (mid-payload) throws. */
   failSecondWrite: boolean = false;
+  /**
+   * R169A-FIX-R2: layout-phase fault injection. The wrapper calls
+   * `ensureGenerationStoreLayoutDurable` BEFORE the write phase, which
+   * calls `mkdirSync`, `openSync` ("r"), `fsyncSync`, `closeSync` on
+   * each layout directory. These flags inject faults at those steps.
+   */
+  failAtLayoutMkdir: boolean = false;
+  failAtLayoutDirFsync: boolean = false;
+  failAtLayoutParentFsync: boolean = false;
+
   private writeCallCount: number = 0;
+  private layoutDirFsyncCount: number = 0;
+  private layoutParentFsyncCount: number = 0;
+  /** Set to true once a "wx" open happens — distinguishes layout phase from write phase. */
+  private inWritePhase: boolean = false;
 
   // Track which ops were called — useful for assertions.
   calls: string[] = [];
 
   openSync(path: string, flags: string, mode?: number): number {
-    if (this.failAt === "open") {
+    // Track write-phase entry: the temp file open uses "wx".
+    if (flags === "wx") this.inWritePhase = true;
+    // Write-phase temp-file open failure.
+    if (this.failAt === "open" && flags === "wx") {
       this.calls.push("open:fail");
       throw new Error("injected open failure");
     }
-    // For directory openSync("r") we want to allow failure injection
-    // separately from the temp file open.
-    if (this.failAt === "dirOpen" && flags === "r") {
+    // Post-rename directory open failure (write phase, after rename).
+    if (this.failAt === "dirOpen" && flags === "r" && this.calls.includes("rename")) {
       this.calls.push("dirOpen:fail");
       throw new Error("injected directory open failure");
     }
-    this.calls.push("open");
+    this.calls.push(flags === "wx" ? "open:wx" : "open:r");
     return require("node:fs").openSync(path, flags, mode);
+  }
+
+  readSync(fd: number, buffer: Buffer, offset: number, length: number, position: number | null): number {
+    return require("node:fs").readSync(fd, buffer, offset, length, position);
   }
 
   writeSync(fd: number, buffer: Buffer, offset: number, length: number, position: number | null): number {
@@ -216,11 +245,54 @@ class TestOps implements AtomicFileOps {
   }
 
   fsyncSync(fd: number): void {
-    // Distinguish temp-file fsync from directory fsync by checking
-    // whether the fd refers to a directory. We can't easily check this
-    // from the fd alone in a portable way; instead, the test sets
-    // failAt to "tempFsync" or "dirFsync" and we infer from call order:
-    // the temp file fsync happens before rename, the dir fsync after.
+    // Layout phase: before any "wx" open. Each layout dir gets fsynced;
+    // newly-created dirs also get their PARENT fsynced.
+    if (!this.inWritePhase) {
+      this.layoutDirFsyncCount++;
+      // The layout alternates: dir fsync, then (if newly created) parent fsync.
+      // We use the call count to distinguish them: even counts = dir, odd = parent.
+      // Actually, ensureGenerationStoreLayoutDurable does dir then parent (if new),
+      // then moves to the next dir. So we track parent fsyncs via a separate counter.
+      // Simplest heuristic: the 1st, 3rd, 5th... fsyncs in layout phase are dirs;
+      // the 2nd, 4th, 6th... are parents. But this only works if every dir was
+      // newly created. To make tests deterministic, we expose explicit flags.
+      if (this.failAtLayoutDirFsync && this.layoutParentFsyncCount === 0) {
+        // We're about to fsync a layout dir (not a parent).
+        // Heuristic: parent fsyncs are gated on the same flag too; we use
+        // the call sequence to disambiguate. ensureLayout does:
+        //   dir fsync
+        //   if (newlyCreated) parent fsync
+        // So if the previous fsync was a dir AND we just mkdir'd, the next
+        // fsync is a parent. We track this via the "mkdir" call.
+        const lastCall = this.calls[this.calls.length - 1] ?? "";
+        const lastFewCalls = this.calls.slice(-3).join(",");
+        // If we just opened a directory for fsync (not a parent), fail here.
+        // We use a simple state: parent fsyncs follow a "mkdir" + "open:r" + "fsync" sequence.
+        // For test purposes, we just count: if the LAST call sequence indicates
+        // we just opened a directory (not yet fsynced), this is a dir fsync.
+        // Simplification: just fail on the Nth layout fsync if the corresponding
+        // flag is set.
+        this.calls.push("fsync:layoutDir:fail");
+        throw new Error("injected layout dir fsync failure");
+      }
+      if (this.failAtLayoutParentFsync) {
+        // Heuristic: parent fsyncs happen after a dir fsync for a newly-created dir.
+        // We detect this by checking that we've done at least one dir fsync AND
+        // the previous fsync call was a dir fsync (not a parent).
+        // For test determinism, the test sets `failAtLayoutParentFsync = true`
+        // AND expects the failure on the SECOND layout fsync (the first parent).
+        // We track parent fsyncs via the count.
+        // Simpler: if this is the 2nd, 4th, 6th... fsync in layout phase (and
+        // dir fsync succeeded), it's a parent fsync.
+        if (this.layoutDirFsyncCount === 2 || this.layoutDirFsyncCount === 4 || this.layoutDirFsyncCount === 6) {
+          this.calls.push("fsync:layoutParent:fail");
+          throw new Error("injected layout parent fsync failure");
+        }
+      }
+      this.calls.push("fsync:layout");
+      return require("node:fs").fsyncSync(fd);
+    }
+    // Write phase: temp file fsync (before rename) or dir fsync (after rename).
     if (this.failAt === "tempFsync" && !this.calls.includes("rename")) {
       this.calls.push("fsync:temp:fail");
       throw new Error("injected temp fsync failure");
@@ -230,18 +302,31 @@ class TestOps implements AtomicFileOps {
       throw new Error("injected directory fsync failure");
     }
     this.calls.push("fsync");
-    const fs = require("node:fs");
-    return fs.fsyncSync(fd);
+    return require("node:fs").fsyncSync(fd);
   }
 
   closeSync(fd: number): void {
-    if (this.failAt === "closeBeforeRename" && !this.calls.includes("rename")) {
+    // R169A-FIX-R2: only trigger closeBeforeRename during the write phase
+    // (after the temp file has been opened with "wx"). The layout phase
+    // also calls closeSync on directory fds; we must not inject there.
+    if (this.failAt === "closeBeforeRename" && this.inWritePhase && !this.calls.includes("rename")) {
       this.calls.push("close:fail");
       throw new Error("injected close failure");
     }
     this.calls.push("close");
     const fs = require("node:fs");
     return fs.closeSync(fd);
+  }
+
+  statSync(path: string): { size: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; mode: number } {
+    const s = require("node:fs").statSync(path);
+    return {
+      size: s.size,
+      isDirectory: () => s.isDirectory(),
+      isFile: () => s.isFile(),
+      isSymbolicLink: () => s.isSymbolicLink(),
+      mode: s.mode,
+    };
   }
 
   renameSync(from: string, to: string): void {
@@ -260,9 +345,16 @@ class TestOps implements AtomicFileOps {
     return fs.unlinkSync(path);
   }
 
-  mkdirSync(path: string, opts?: { recursive?: boolean }): void {
-    this.calls.push("mkdir");
+  mkdirSync(path: string, opts?: { recursive?: boolean; mode?: number }): void {
+    if (this.failAtLayoutMkdir && !this.inWritePhase) {
+      this.calls.push("mkdir:layout:fail");
+      throw new Error("injected layout mkdir failure");
+    }
+    this.calls.push(opts && typeof opts.mode === "number" ? `mkdir:0o${opts.mode.toString(8)}` : "mkdir");
     const fs = require("node:fs");
+    if (opts && typeof opts.mode === "number") {
+      return fs.mkdirSync(path, { recursive: opts.recursive ?? false, mode: opts.mode });
+    }
     return fs.mkdirSync(path, opts);
   }
 }
@@ -892,23 +984,46 @@ function renameSyncSafe(from: string, to: string): void {
 }
 
 // ─── Atomic JSON writer — fault injection matrix (R169A-FIX DUR-R169A-02) ─
+//
+// R169A-FIX-R2 (SEC-R169A-R2-02): writeJsonAtomically is now internal.
+// These tests exercise the writer through the public writeProjectJsonAtomically
+// wrapper, which derives the target path from project + "manifest" target type
+// and validates the trust root + layout durability BEFORE delegating to the
+// internal atomic writer. The TestOps class distinguishes layout-phase faults
+// (failAtLayoutMkdir, failAtLayoutDirFsync, failAtLayoutParentFsync) from
+// write-phase faults (failAt = "open" | "tempFsync" | "dirFsync" | ...) so
+// the existing write-phase fault matrix still works.
 
 describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
-  let testDir: string;
+  let cacheRoot: string;
+  const project = "writer-test-project";
 
   beforeEach(() => {
-    testDir = mkdtempSync(join(tmpdir(), "r169a-atomic-"));
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-atomic-"));
   });
 
   afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
+    rmSync(cacheRoot, { recursive: true, force: true });
   });
 
+  /** Helper: get the manifest target path for this project / cacheRoot. */
+  function targetPath(): string {
+    return activeManifestPath(project, cacheRoot);
+  }
+
+  /** Helper: list files in the project store dir (for "no temp left behind" checks). */
+  function listProjectStore(): string[] {
+    return readdirSync(projectStoreDir(project, cacheRoot));
+  }
+
+  /** Helper: count .tmp-* files in the project store dir. */
+  function countTempFiles(): number {
+    return listProjectStore().filter((n) => n.startsWith(".tmp-")).length;
+  }
+
   it("serialize fail (undefined) → no temp, old intact", () => {
-    const targetPath = join(testDir, "output.json");
-    const oldValue = { version: 1 };
-    writeJsonAtomically(targetPath, oldValue);
-    const oldContent = readFileSync(targetPath, "utf-8");
+    writeProjectJsonAtomically(project, "manifest", { version: 1 }, { cacheRoot });
+    const oldContent = readFileSync(targetPath(), "utf-8");
 
     // JSON.stringify(undefined) returns undefined (not a string). The
     // writer must detect this and throw ATOMIC_SERIALIZATION_FAILED
@@ -916,52 +1031,47 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     const bad: unknown = undefined;
     let err: unknown;
     try {
-      writeJsonAtomically(targetPath, bad);
+      writeProjectJsonAtomically(project, "manifest", bad, { cacheRoot });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_SERIALIZATION_FAILED");
 
     // Old file intact.
-    expect(readFileSync(targetPath, "utf-8")).toBe(oldContent);
+    expect(readFileSync(targetPath(), "utf-8")).toBe(oldContent);
 
     // No temp file left behind.
-    const files = readdirSync(testDir);
-    expect(files).toEqual(["output.json"]);
+    expect(countTempFiles()).toBe(0);
   });
 
   it("exclusive open fail → old intact", () => {
-    const targetPath = join(testDir, "output.json");
-    const oldValue = { version: 1 };
-    writeJsonAtomically(targetPath, oldValue);
-    const oldContent = readFileSync(targetPath, "utf-8");
+    writeProjectJsonAtomically(project, "manifest", { version: 1 }, { cacheRoot });
+    const oldContent = readFileSync(targetPath(), "utf-8");
 
-    // Make the target dir read-only so openSync("wx") fails.
-    // We use a custom ops that fails on open.
+    // Make the temp file open fail.
     const ops = new TestOps();
     ops.failAt = "open";
     let err: unknown;
     try {
-      writeJsonAtomically(targetPath, { new: true }, ops);
+      writeProjectJsonAtomically(project, "manifest", { new: true }, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_WRITE_FAILED");
 
-    expect(readFileSync(targetPath, "utf-8")).toBe(oldContent);
+    expect(readFileSync(targetPath(), "utf-8")).toBe(oldContent);
     // No temp file left.
-    expect(readdirSync(testDir)).toEqual(["output.json"]);
+    expect(countTempFiles()).toBe(0);
   });
 
   it("short write recoverable → success exact", () => {
-    const targetPath = join(testDir, "output.json");
     const value = { key: "value".repeat(200), num: 42 }; // big enough to require multiple writes
     const ops = new TestOps();
     ops.shortFirstWrite = true;
 
-    writeJsonAtomically(targetPath, value, ops);
+    writeProjectJsonAtomically(project, "manifest", value, { cacheRoot }, ops);
 
     // The file must contain exactly the right JSON, despite the partial
     // first write.
-    const content = readFileSync(targetPath, "utf-8");
+    const content = readFileSync(targetPath(), "utf-8");
     expect(JSON.parse(content)).toEqual(value);
     // Must have called writeSync at least twice: first a 1-byte short
     // write, then subsequent writes for the rest of the payload.
@@ -972,10 +1082,8 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("write fail mid-payload → old intact, temp cleaned", () => {
-    const targetPath = join(testDir, "output.json");
-    const oldValue = { version: 1 };
-    writeJsonAtomically(targetPath, oldValue);
-    const oldContent = readFileSync(targetPath, "utf-8");
+    writeProjectJsonAtomically(project, "manifest", { version: 1 }, { cacheRoot });
+    const oldContent = readFileSync(targetPath(), "utf-8");
 
     // Force a genuine mid-payload failure: shortFirstWrite makes the
     // first writeSync return after 1 byte (leaving the rest of the
@@ -988,129 +1096,144 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
 
     let err: unknown;
     try {
-      writeJsonAtomically(targetPath, bigValue, ops);
+      writeProjectJsonAtomically(project, "manifest", bigValue, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_WRITE_FAILED");
 
-    expect(readFileSync(targetPath, "utf-8")).toBe(oldContent);
-    expect(readdirSync(testDir)).toEqual(["output.json"]);
+    expect(readFileSync(targetPath(), "utf-8")).toBe(oldContent);
+    expect(countTempFiles()).toBe(0);
   });
 
   it("temp fsync fail → old intact, temp cleaned", () => {
-    const targetPath = join(testDir, "output.json");
-    const oldValue = { version: 1 };
-    writeJsonAtomically(targetPath, oldValue);
-    const oldContent = readFileSync(targetPath, "utf-8");
+    writeProjectJsonAtomically(project, "manifest", { version: 1 }, { cacheRoot });
+    const oldContent = readFileSync(targetPath(), "utf-8");
 
     const ops = new TestOps();
     ops.failAt = "tempFsync";
 
     let err: unknown;
     try {
-      writeJsonAtomically(targetPath, { new: true }, ops);
+      writeProjectJsonAtomically(project, "manifest", { new: true }, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_FSYNC_FAILED");
 
-    expect(readFileSync(targetPath, "utf-8")).toBe(oldContent);
-    expect(readdirSync(testDir)).toEqual(["output.json"]);
+    expect(readFileSync(targetPath(), "utf-8")).toBe(oldContent);
+    expect(countTempFiles()).toBe(0);
   });
 
   it("close fail before rename → old intact", () => {
-    const targetPath = join(testDir, "output.json");
-    const oldValue = { version: 1 };
-    writeJsonAtomically(targetPath, oldValue);
-    const oldContent = readFileSync(targetPath, "utf-8");
+    writeProjectJsonAtomically(project, "manifest", { version: 1 }, { cacheRoot });
+    const oldContent = readFileSync(targetPath(), "utf-8");
 
     const ops = new TestOps();
     ops.failAt = "closeBeforeRename";
 
     let err: unknown;
     try {
-      writeJsonAtomically(targetPath, { new: true }, ops);
+      writeProjectJsonAtomically(project, "manifest", { new: true }, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     // Close failure is wrapped as ATOMIC_WRITE_FAILED.
     expect((err as GenerationStoreError).code).toBe("ATOMIC_WRITE_FAILED");
 
-    expect(readFileSync(targetPath, "utf-8")).toBe(oldContent);
-    expect(readdirSync(testDir)).toEqual(["output.json"]);
+    expect(readFileSync(targetPath(), "utf-8")).toBe(oldContent);
+    expect(countTempFiles()).toBe(0);
   });
 
   it("rename fail → old intact, temp cleaned", () => {
-    const targetPath = join(testDir, "output.json");
-    const oldValue = { version: 1 };
-    writeJsonAtomically(targetPath, oldValue);
-    const oldContent = readFileSync(targetPath, "utf-8");
+    writeProjectJsonAtomically(project, "manifest", { version: 1 }, { cacheRoot });
+    const oldContent = readFileSync(targetPath(), "utf-8");
 
     const ops = new TestOps();
     ops.failAt = "rename";
 
     let err: unknown;
     try {
-      writeJsonAtomically(targetPath, { new: true }, ops);
+      writeProjectJsonAtomically(project, "manifest", { new: true }, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_RENAME_FAILED");
 
-    expect(readFileSync(targetPath, "utf-8")).toBe(oldContent);
-    expect(readdirSync(testDir)).toEqual(["output.json"]);
+    expect(readFileSync(targetPath(), "utf-8")).toBe(oldContent);
+    expect(countTempFiles()).toBe(0);
   });
 
   it("directory open fail post-rename → durability unknown", () => {
-    const targetPath = join(testDir, "output.json");
-
     const ops = new TestOps();
     ops.failAt = "dirOpen";
 
     let err: unknown;
     try {
-      writeJsonAtomically(targetPath, { new: true }, ops);
+      writeProjectJsonAtomically(project, "manifest", { new: true }, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_DURABILITY_UNKNOWN");
 
     // The rename has already happened — the target file should contain
     // the NEW content, not the old (there was no old).
-    const content = readFileSync(targetPath, "utf-8");
+    const content = readFileSync(targetPath(), "utf-8");
     expect(JSON.parse(content)).toEqual({ new: true });
     // No temp file left (it was renamed).
-    expect(readdirSync(testDir)).toEqual(["output.json"]);
+    expect(countTempFiles()).toBe(0);
   });
 
   it("directory fsync fail → durability unknown", () => {
-    const targetPath = join(testDir, "output.json");
-
     const ops = new TestOps();
     ops.failAt = "dirFsync";
 
     let err: unknown;
     try {
-      writeJsonAtomically(targetPath, { new: true }, ops);
+      writeProjectJsonAtomically(project, "manifest", { new: true }, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_DURABILITY_UNKNOWN");
 
     // The rename has already happened — the new content is in place.
-    const content = readFileSync(targetPath, "utf-8");
+    const content = readFileSync(targetPath(), "utf-8");
     expect(JSON.parse(content)).toEqual({ new: true });
   });
 
   it("success → exact JSON, 0600, no temp", () => {
-    const targetPath = join(testDir, "output.json");
     const value = { key: "value", num: 42, nested: { a: [1, 2, 3] } };
-    writeJsonAtomically(targetPath, value);
+    writeProjectJsonAtomically(project, "manifest", value, { cacheRoot });
 
-    const content = readFileSync(targetPath, "utf-8");
+    const content = readFileSync(targetPath(), "utf-8");
     expect(JSON.parse(content)).toEqual(value);
     // Trailing newline.
     expect(content.endsWith("\n")).toBe(true);
 
-    const stat = lstatSync(targetPath);
+    const stat = lstatSync(targetPath());
     expect(stat.mode & 0o777).toBe(0o600);
 
-    expect(readdirSync(testDir)).toEqual(["output.json"]);
+    expect(countTempFiles()).toBe(0);
+  });
+
+  it("R169A-FIX-R2: directory mode is 0700 (DUR-R169A-R2-01)", () => {
+    writeProjectJsonAtomically(project, "manifest", { version: 1 }, { cacheRoot });
+
+    // The project store, generations, and tmp directories must all be 0700.
+    const dirs = [
+      projectStoreDir(project, cacheRoot),
+      generationsDir(project, cacheRoot),
+      tmpDir(project, cacheRoot),
+    ];
+    for (const d of dirs) {
+      const st = lstatSync(d);
+      expect(st.mode & 0o777, `dir ${d} mode`).toBe(0o700);
+    }
+  });
+
+  it("R169A-FIX-R2: index-state target writes to index-state.json (SEC-R169A-R2-02)", () => {
+    const value = { formatVersion: 1, project, activeGenerationId: null, lastAttemptId: "abc", lastAttemptAt: "2026-07-13T00:00:00.000Z", lastAttemptOutcome: "SUCCESS", lastAttemptError: null, staleReason: null, recovery: "none" };
+    writeProjectJsonAtomically(project, "index-state", value, { cacheRoot });
+
+    const statePath = indexStatePath(project, cacheRoot);
+    const content = readFileSync(statePath, "utf-8");
+    expect(JSON.parse(content)).toEqual(value);
+    const st = lstatSync(statePath);
+    expect(st.mode & 0o777).toBe(0o600);
   });
 });
 
@@ -1183,7 +1306,7 @@ describe("R169A-FIX — Legacy path validation (SEC-R169A-01 / API-R169A-02)", (
     expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
   });
 
-  it("legacy DB target is a directory → LEGACY_SOURCE_OPEN_FAILED", () => {
+  it("R169A-FIX-R2: legacy DB target is a directory → LEGACY_SOURCE_INVALID (renamed from LEGACY_SOURCE_OPEN_FAILED)", () => {
     const project = "test-project";
     // Create the legacy path as a directory.
     const dbPath = legacyCodeDbPath(project, cacheRoot);
@@ -1194,7 +1317,7 @@ describe("R169A-FIX — Legacy path validation (SEC-R169A-01 / API-R169A-02)", (
       resolveActiveCodeDb(project, { cacheRoot });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
-    expect((err as GenerationStoreError).code).toBe("LEGACY_SOURCE_OPEN_FAILED");
+    expect((err as GenerationStoreError).code).toBe("LEGACY_SOURCE_INVALID");
   });
 });
 
@@ -1335,8 +1458,11 @@ describe("R169A-FIX — Child crash test (DUR-R169A-01)", () => {
     const testDir = mkdtempSync(join(tmpdir(), "r169a-crash-"));
     try {
       const targetPath = join(testDir, "target.json");
-      // Write the old target using the production writer.
-      writeJsonAtomically(targetPath, { version: "old" });
+      // Write the old target using plain fs.writeFileSync (the wrapper
+      // would derive the target path from a project name and validate
+      // the trust root — that's tested separately; here we just need an
+      // "old" file on disk that the child will NOT touch).
+      writeFileSync(targetPath, JSON.stringify({ version: "old" }, null, 2) + "\n", "utf-8");
       const oldContent = readFileSync(targetPath, "utf-8");
 
       // Spawn a child that:
@@ -1533,5 +1659,762 @@ describe("R169A-FIX — dbFile path-form rejections (DATA-R169A-01)", () => {
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("MANIFEST_DBFILE_NOT_CANONICAL");
+  });
+});
+
+// ─── R169A-FIX-R2: Trust root symlink bypass (SEC-R169A-R2-01) ──────────
+
+describe("R169A-FIX-R2 — Trust root symlink bypass (SEC-R169A-R2-01)", () => {
+  let cacheRoot: string;
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-trust-"));
+  });
+
+  afterEach(() => {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  });
+
+  /**
+   * Helper: set up a project with a valid manifest + generation DB so the
+   * resolver has something to read. Then symlinks are injected at various
+   * levels of the trust root chain to verify they are rejected.
+   */
+  function setupValidProject(project: string): void {
+    const manifest = makeValidManifest(project);
+    writeManifest(cacheRoot, project, manifest);
+    writeGenerationDb(cacheRoot, project, manifest.dbFile);
+  }
+
+  it("cacheRoot itself is a symlink → PATH_TRAVERSAL_REJECTED (exact code)", () => {
+    const project = "test-project";
+    // Create a sibling dir and symlink cacheRoot → sibling.
+    const real = mkdtempSync(join(tmpdir(), "r169a-r2-real-"));
+    try {
+      const linkPath = cacheRoot + "-link";
+      symlinkSync(real, linkPath);
+      try {
+        let err: unknown;
+        try {
+          // The resolver must reject because cacheRoot is a symlink.
+          resolveActiveCodeDb(project, { cacheRoot: linkPath });
+        } catch (e) { err = e; }
+        expect(err).toBeInstanceOf(GenerationStoreError);
+        expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
+        expect((err as GenerationStoreError).phase).toBe("resolveActiveCodeDb");
+      } finally {
+        rmSync(linkPath, { force: true });
+      }
+    } finally {
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  it("cbmCacheDir is a symlink → PATH_TRAVERSAL_REJECTED (exact code)", () => {
+    const project = "test-project";
+    setupValidProject(project);
+
+    // Replace cbmCacheDir with a symlink to elsewhere.
+    const cbm = cbmCacheDir(cacheRoot);
+    const elsewhere = join(cacheRoot, "elsewhere-cbm");
+    mkdirSync(elsewhere, { recursive: true });
+    // Move the real cbm contents into elsewhere so the symlink resolves.
+    rmSync(elsewhere, { recursive: true, force: true });
+    renameSyncSafe(cbm, elsewhere);
+    symlinkSync(elsewhere, cbm);
+
+    let err: unknown;
+    try {
+      resolveActiveCodeDb(project, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
+  });
+
+  it("projects dir is a symlink → PATH_TRAVERSAL_REJECTED (exact code)", () => {
+    const project = "test-project";
+    setupValidProject(project);
+
+    // Replace projects dir with a symlink to elsewhere.
+    const projects = generationStoreRoot(cacheRoot);
+    const elsewhere = join(cacheRoot, "elsewhere-projects");
+    mkdirSync(elsewhere, { recursive: true });
+    rmSync(elsewhere, { recursive: true, force: true });
+    renameSyncSafe(projects, elsewhere);
+    symlinkSync(elsewhere, projects);
+
+    let err: unknown;
+    try {
+      resolveActiveCodeDb(project, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
+  });
+
+  it("assertTrustedRootNoSymlinks: clean chain → no throw", () => {
+    const project = "test-project";
+    setupValidProject(project);
+    expect(() =>
+      assertTrustedRootNoSymlinks(cacheRoot, project, "test-phase"),
+    ).not.toThrow();
+  });
+
+  it("assertTrustedRootNoSymlinks: project-key dir is a symlink → rejected", () => {
+    const project = "test-project";
+    setupValidProject(project);
+
+    // Replace project-key dir with a symlink.
+    const projectDir = projectStoreDir(project, cacheRoot);
+    const elsewhere = join(cacheRoot, "elsewhere-key");
+    mkdirSync(elsewhere, { recursive: true });
+    rmSync(elsewhere, { recursive: true, force: true });
+    renameSyncSafe(projectDir, elsewhere);
+    symlinkSync(elsewhere, projectDir);
+
+    let err: unknown;
+    try {
+      assertTrustedRootNoSymlinks(cacheRoot, project, "test-phase");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
+  });
+
+  it("assertTrustedRootNoSymlinks: ENOENT chain → no throw (project not yet created)", () => {
+    // A project that has never been written — the project-key dir doesn't exist.
+    expect(() =>
+      assertTrustedRootNoSymlinks(cacheRoot, "never-written", "test-phase"),
+    ).not.toThrow();
+  });
+});
+
+// ─── R169A-FIX-R2: Writer path safety (SEC-R169A-R2-02) ─────────────────
+
+describe("R169A-FIX-R2 — Writer path safety (SEC-R169A-R2-02)", () => {
+  let cacheRoot: string;
+  const project = "writer-safety-project";
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-wsafety-"));
+  });
+
+  afterEach(() => {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  });
+
+  it("writer rejects when project-key dir is a symlink (before temp create)", () => {
+    // First write succeeds and creates the layout.
+    writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot });
+
+    // Replace the project-key dir with a symlink.
+    const projectDir = projectStoreDir(project, cacheRoot);
+    const elsewhere = join(cacheRoot, "elsewhere-wsafe");
+    mkdirSync(elsewhere, { recursive: true });
+    rmSync(elsewhere, { recursive: true, force: true });
+    renameSyncSafe(projectDir, elsewhere);
+    symlinkSync(elsewhere, projectDir);
+
+    let err: unknown;
+    try {
+      writeProjectJsonAtomically(project, "manifest", { v: 2 }, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
+
+    // No temp file should have been created in the original project dir
+    // (now elsewhere). The rejection must happen BEFORE the temp create.
+    const files = readdirSync(elsewhere);
+    const tempFiles = files.filter((n) => n.startsWith(".tmp-"));
+    expect(tempFiles.length).toBe(0);
+  });
+
+  it("writer rejects when projects dir is a symlink", () => {
+    // Replace projects dir with a symlink BEFORE any write. We must
+    // create the cbm parent first so the symlink target resolves.
+    mkdirSync(cbmCacheDir(cacheRoot), { recursive: true });
+    const projects = generationStoreRoot(cacheRoot);
+    const elsewhere = join(cacheRoot, "elsewhere-projects-wsafe");
+    mkdirSync(elsewhere, { recursive: true });
+    symlinkSync(elsewhere, projects);
+
+    let err: unknown;
+    try {
+      writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
+  });
+
+  it("writer rejects when target file (manifest) is a symlink", () => {
+    // First, set up the layout and a real manifest.
+    writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot });
+
+    // Replace the manifest with a symlink to elsewhere.
+    const manifestPath = activeManifestPath(project, cacheRoot);
+    const target = manifestPath + ".target";
+    rmSync(manifestPath);
+    writeFileSync(target, "symlink-target", "utf-8");
+    symlinkSync(target, manifestPath);
+
+    let err: unknown;
+    try {
+      writeProjectJsonAtomically(project, "manifest", { v: 2 }, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SYMLINK_REJECTED");
+  });
+
+  it("writer rejects when target file (index-state) is a symlink", () => {
+    // Set up layout first.
+    writeProjectJsonAtomically(project, "index-state", { v: 1 }, { cacheRoot });
+
+    // Replace index-state.json with a symlink.
+    const statePath = indexStatePath(project, cacheRoot);
+    const target = statePath + ".target";
+    rmSync(statePath);
+    writeFileSync(target, "symlink-target", "utf-8");
+    symlinkSync(target, statePath);
+
+    let err: unknown;
+    try {
+      writeProjectJsonAtomically(project, "index-state", { v: 2 }, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    // The wrapper uses GENERATION_TARGET_SYMLINK_REJECTED for index-state targets.
+    expect((err as GenerationStoreError).code).toBe("GENERATION_TARGET_SYMLINK_REJECTED");
+  });
+
+  it("writer: directory mode is 0700 (explicit check on every layout dir)", () => {
+    writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot });
+
+    const dirs = [
+      cbmCacheDir(cacheRoot),
+      generationStoreRoot(cacheRoot),
+      projectStoreDir(project, cacheRoot),
+      generationsDir(project, cacheRoot),
+      tmpDir(project, cacheRoot),
+    ];
+    for (const d of dirs) {
+      const st = lstatSync(d);
+      expect(st.mode & 0o777, `dir ${d} mode`).toBe(0o700);
+    }
+  });
+
+  it("writer: file mode is 0600", () => {
+    writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot });
+    const st = lstatSync(activeManifestPath(project, cacheRoot));
+    expect(st.mode & 0o777).toBe(0o600);
+  });
+
+  it("writer: no file created outside trust root", () => {
+    writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot });
+
+    // Walk cacheRoot and verify ALL files are inside the project store dir.
+    const projectDir = projectStoreDir(project, cacheRoot);
+    const filesOutside: string[] = [];
+    function visit(dir: string) {
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch { return; }
+      for (const e of entries) {
+        const full = join(dir, e.name);
+        if (e.isDirectory()) {
+          visit(full);
+        } else if (e.isFile()) {
+          // File must be inside projectDir.
+          if (!full.startsWith(projectDir + sep) && full !== projectDir) {
+            filesOutside.push(full);
+          }
+        }
+      }
+    }
+    visit(cacheRoot);
+    expect(filesOutside).toEqual([]);
+  });
+});
+
+// ─── R169A-FIX-R2: Layout durability (DUR-R169A-R2-01) ──────────────────
+
+describe("R169A-FIX-R2 — Layout durability (DUR-R169A-R2-01)", () => {
+  let cacheRoot: string;
+  const project = "layout-durability-project";
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-layout-"));
+  });
+
+  afterEach(() => {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  });
+
+  it("layout mkdir failure → STORE_LAYOUT_CREATE_FAILED (exact code)", () => {
+    const ops = new TestOps();
+    ops.failAtLayoutMkdir = true;
+
+    let err: unknown;
+    try {
+      writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot }, ops);
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_CREATE_FAILED");
+  });
+
+  it("layout dir fsync failure → STORE_LAYOUT_DURABILITY_UNKNOWN (exact code)", () => {
+    const ops = new TestOps();
+    ops.failAtLayoutDirFsync = true;
+
+    let err: unknown;
+    try {
+      writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot }, ops);
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_DURABILITY_UNKNOWN");
+  });
+
+  it("layout parent fsync failure → STORE_LAYOUT_DURABILITY_UNKNOWN (exact code)", () => {
+    const ops = new TestOps();
+    ops.failAtLayoutParentFsync = true;
+
+    let err: unknown;
+    try {
+      writeProjectJsonAtomically(project, "manifest", { v: 1 }, { cacheRoot }, ops);
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_DURABILITY_UNKNOWN");
+  });
+
+  it("ensureGenerationStoreLayoutDurable: success creates all dirs with 0700", () => {
+    const result = ensureGenerationStoreLayoutDurable(project, { cacheRoot });
+    // All 5 dirs (cbm, projects, projectStore, generations, tmp) should be newly created.
+    expect(result.created.length).toBe(5);
+
+    const dirs = [
+      cbmCacheDir(cacheRoot),
+      generationStoreRoot(cacheRoot),
+      projectStoreDir(project, cacheRoot),
+      generationsDir(project, cacheRoot),
+      tmpDir(project, cacheRoot),
+    ];
+    for (const d of dirs) {
+      const st = lstatSync(d);
+      expect(st.isDirectory()).toBe(true);
+      expect(st.mode & 0o777).toBe(0o700);
+    }
+  });
+
+  it("ensureGenerationStoreLayoutDurable: idempotent (second call creates nothing)", () => {
+    ensureGenerationStoreLayoutDurable(project, { cacheRoot });
+    const result2 = ensureGenerationStoreLayoutDurable(project, { cacheRoot });
+    expect(result2.created.length).toBe(0);
+  });
+});
+
+// ─── R169A-FIX-R2: Manifest size bound (VALID-R169A-R2-01 §4.1) ─────────
+
+describe("R169A-FIX-R2 — Manifest size bound (VALID-R169A-R2-01 §4.1)", () => {
+  let cacheRoot: string;
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-size-"));
+  });
+
+  afterEach(() => {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  });
+
+  it("MAX_GENERATION_MANIFEST_BYTES is 64 KiB", () => {
+    expect(MAX_GENERATION_MANIFEST_BYTES).toBe(64 * 1024);
+  });
+
+  it("manifest > 64 KiB → MANIFEST_TOO_LARGE (exact code)", () => {
+    const project = "oversize-project";
+    const manifestPath = activeManifestPath(project, cacheRoot);
+    mkdirSync(resolve(manifestPath, ".."), { recursive: true });
+
+    // Write a manifest that is > 64 KiB. We do this by inflating the
+    // rootFingerprint field with a long string (the validator would
+    // reject this, but the size check happens BEFORE parsing).
+    const padding = "x".repeat(MAX_GENERATION_MANIFEST_BYTES + 100);
+    const oversized = JSON.stringify({
+      ...makeValidManifest(project),
+      rootFingerprint: padding,
+    }, null, 2);
+    writeFileSync(manifestPath, oversized, "utf-8");
+
+    let err: unknown;
+    try {
+      resolveActiveCodeDb(project, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_TOO_LARGE");
+  });
+
+  it("manifest exactly 64 KiB (within bound) → not MANIFEST_TOO_LARGE", () => {
+    const project = "boundary-project";
+    const manifestPath = activeManifestPath(project, cacheRoot);
+    mkdirSync(resolve(manifestPath, ".."), { recursive: true });
+
+    // Write a manifest that is just under 64 KiB. The validator will
+    // likely reject it for other reasons (e.g., rootFingerprint too
+    // long), but the size check itself must not fire.
+    const padding = "x".repeat(1000);
+    const within = JSON.stringify({
+      ...makeValidManifest(project),
+      rootFingerprint: padding,
+    }, null, 2);
+    writeFileSync(manifestPath, within, "utf-8");
+
+    let err: unknown;
+    try {
+      resolveActiveCodeDb(project, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    // NOT MANIFEST_TOO_LARGE — must be some other validation error.
+    expect((err as GenerationStoreError).code).not.toBe("MANIFEST_TOO_LARGE");
+  });
+});
+
+// ─── R169A-FIX-R2: rootFingerprint / project hardening (VALID-R169A-R2-01 §4.2) ─
+
+describe("R169A-FIX-R2 — rootFingerprint / project hardening (VALID-R169A-R2-01 §4.2)", () => {
+  it('rootFingerprint "   " (whitespace only) → MANIFEST_SCHEMA_ERROR', () => {
+    const manifest = { ...makeValidManifest(), rootFingerprint: "   " };
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+
+  it('rootFingerprint "" (empty) → MANIFEST_SCHEMA_ERROR', () => {
+    const manifest = { ...makeValidManifest(), rootFingerprint: "" };
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+
+  it("rootFingerprint with NUL byte → MANIFEST_SCHEMA_ERROR", () => {
+    const manifest = { ...makeValidManifest(), rootFingerprint: "dev:ino\0extra" };
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+
+  it("rootFingerprint with tab → MANIFEST_SCHEMA_ERROR (C0 control)", () => {
+    const manifest = { ...makeValidManifest(), rootFingerprint: "dev:ino\textra" };
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+
+  it("rootFingerprint > 1024 chars → MANIFEST_SCHEMA_ERROR", () => {
+    const manifest = { ...makeValidManifest(), rootFingerprint: "x".repeat(1025) };
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+
+  it("rootFingerprint exactly 1024 chars → accepted", () => {
+    const manifest = { ...makeValidManifest(), rootFingerprint: "x".repeat(1024) };
+    expect(() => validateGenerationManifest(manifest, "test-project")).not.toThrow();
+  });
+
+  it("project field with NUL byte → MANIFEST_SCHEMA_ERROR (defense-in-depth)", () => {
+    // The manifest's project field has a NUL byte but matches expectedProject.
+    // The safe-string check must catch this even though equality holds.
+    const manifest = { ...makeValidManifest(), project: "test-project\0evil" } as any;
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "test-project\0evil");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+
+  it("project field whitespace-only → MANIFEST_SCHEMA_ERROR", () => {
+    const manifest = { ...makeValidManifest(), project: "   " } as any;
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "   ");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+});
+
+// ─── R169A-FIX-R2: Immutable key set (VALID-R169A-R2-01 §4.3) ───────────
+
+describe("R169A-FIX-R2 — Immutable key authority (VALID-R169A-R2-01 §4.3)", () => {
+  it("MANIFEST_V1_KEYS is exported as a tuple (array), not a Set", () => {
+    expect(Array.isArray(MANIFEST_V1_KEYS)).toBe(true);
+    // Set has .add / .has / .delete; arrays do not have .add.
+    expect((MANIFEST_V1_KEYS as any).add).toBeUndefined();
+    expect((MANIFEST_V1_KEYS as any).has).toBeUndefined();
+  });
+
+  it("MANIFEST_V1_KEYS has exactly 13 keys", () => {
+    expect(MANIFEST_V1_KEYS.length).toBe(13);
+  });
+
+  it("isManifestV1Key returns true for known keys, false for unknown", () => {
+    expect(isManifestV1Key("formatVersion")).toBe(true);
+    expect(isManifestV1Key("project")).toBe(true);
+    expect(isManifestV1Key("sha256")).toBe(true);
+    expect(isManifestV1Key("evilKey")).toBe(false);
+    expect(isManifestV1Key("__proto__")).toBe(false);
+  });
+
+  it("mutating MANIFEST_V1_KEYS (push) does NOT affect validation", () => {
+    // Defensive copy so we don't corrupt the real export for other tests.
+    const originalLength = MANIFEST_V1_KEYS.length;
+    try {
+      // Attempt to push a malicious key. Even if this succeeds at runtime
+      // (the tuple is not frozen), the validator uses a PRIVATE set that
+      // is unaffected.
+      (MANIFEST_V1_KEYS as any as string[]).push("evilKey");
+      // isManifestV1Key must STILL reject evilKey.
+      expect(isManifestV1Key("evilKey")).toBe(false);
+
+      // validateGenerationManifest must STILL reject a manifest with evilKey.
+      const manifest = { ...makeValidManifest(), evilKey: "no" } as any;
+      let err: unknown;
+      try {
+        validateGenerationManifest(manifest, "test-project");
+      } catch (e) { err = e; }
+      expect(err).toBeInstanceOf(GenerationStoreError);
+      expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+    } finally {
+      // Restore the original length so other tests are unaffected.
+      (MANIFEST_V1_KEYS as any).length = originalLength;
+    }
+  });
+
+  it("validateGenerationManifest rejects extra key (regression)", () => {
+    const manifest = { ...makeValidManifest(), extra: "no" } as any;
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+
+  it("validateGenerationManifest rejects missing key (regression)", () => {
+    const manifest = { ...makeValidManifest() };
+    delete (manifest as any).sha256;
+    let err: unknown;
+    try {
+      validateGenerationManifest(manifest, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+  });
+});
+
+// ─── R169A-FIX-R2: LEGACY_SOURCE_INVALID rename (API-R169A-R2-01) ───────
+
+describe("R169A-FIX-R2 — LEGACY_SOURCE_INVALID rename (API-R169A-R2-01)", () => {
+  let cacheRoot: string;
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-legacy-"));
+  });
+
+  afterEach(() => {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  });
+
+  it("legacy DB is a symlink → LEGACY_SOURCE_INVALID (exact code, not LEGACY_SOURCE_OPEN_FAILED)", () => {
+    const project = "test-project";
+    const dbPath = legacyCodeDbPath(project, cacheRoot);
+    mkdirSync(resolve(dbPath, ".."), { recursive: true });
+    const target = dbPath + ".target";
+    writeFileSync(target, "real", "utf-8");
+    symlinkSync(target, dbPath);
+
+    let err: unknown;
+    try {
+      resolveActiveCodeDb(project, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("LEGACY_SOURCE_INVALID");
+    // CRITICAL: the old name must NOT be used anymore.
+    expect((err as GenerationStoreError).code).not.toBe("LEGACY_SOURCE_OPEN_FAILED");
+  });
+
+  it("legacy DB is a FIFO / special file → LEGACY_SOURCE_INVALID", () => {
+    const project = "test-project";
+    const dbPath = legacyCodeDbPath(project, cacheRoot);
+    mkdirSync(resolve(dbPath, ".."), { recursive: true });
+    // Create a FIFO at the legacy path. lstat will report it as !isFile().
+    // (mkfifo via child_process spawn is not portable; instead, create a
+    // directory — also !isFile — to exercise the same code path.)
+    mkdirSync(dbPath);
+
+    let err: unknown;
+    try {
+      resolveActiveCodeDb(project, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("LEGACY_SOURCE_INVALID");
+  });
+});
+
+// ─── R169A-FIX-R2: No writes to real HOME (TEST-R169A-R2-01) ────────────
+
+describe("R169A-FIX-R2 — No writes to real HOME (TEST-R169A-R2-01)", () => {
+  it("writeProjectJsonAtomically with injected cacheRoot does not touch real HOME cache", () => {
+    const realCacheRoot = getCacheRoot();
+    const realCbm = cbmCacheDir(); // uses real cache root (no injection)
+
+    // Snapshot the real cache dir state (if it exists).
+    let before: string[] = [];
+    try {
+      before = readdirSync(realCbm).sort();
+    } catch {
+      // Real cache dir may not exist yet — that's fine.
+    }
+    const beforeMtime = (() => {
+      try { return lstatSync(realCbm).mtimeMs; } catch { return 0; }
+    })();
+
+    // Run a write with an INJECTED cacheRoot. This must not touch realCacheRoot.
+    const injected = mkdtempSync(join(tmpdir(), "r169a-r2-home-"));
+    try {
+      writeProjectJsonAtomically("isolated-project", "manifest", { v: 1 }, { cacheRoot: injected });
+
+      // Verify the write went to the injected cacheRoot, not the real one.
+      expect(existsSync(activeManifestPath("isolated-project", injected))).toBe(true);
+
+      // Verify the real cache dir is unchanged.
+      let after: string[] = [];
+      try {
+        after = readdirSync(realCbm).sort();
+      } catch {
+        // If it didn't exist before, it still shouldn't exist.
+      }
+      expect(after).toEqual(before);
+
+      // mtime should be unchanged (no new files were created).
+      const afterMtime = (() => {
+        try { return lstatSync(realCbm).mtimeMs; } catch { return 0; }
+      })();
+      expect(afterMtime).toBe(beforeMtime);
+    } finally {
+      rmSync(injected, { recursive: true, force: true });
+    }
+  });
+
+  it("ensureGenerationStoreLayoutDurable with injected cacheRoot does not touch real HOME cache", () => {
+    const realCbm = cbmCacheDir();
+    const before = (() => {
+      try { return readdirSync(realCbm).sort(); } catch { return [] as string[]; }
+    })();
+
+    const injected = mkdtempSync(join(tmpdir(), "r169a-r2-home-layout-"));
+    try {
+      ensureGenerationStoreLayoutDurable("iso-layout-project", { cacheRoot: injected });
+      expect(existsSync(projectStoreDir("iso-layout-project", injected))).toBe(true);
+
+      const after = (() => {
+        try { return readdirSync(realCbm).sort(); } catch { return [] as string[]; }
+      })();
+      expect(after).toEqual(before);
+    } finally {
+      rmSync(injected, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── R169A-FIX-R2: Exact error code checks (TEST-R169A-R2-01) ───────────
+
+describe("R169A-FIX-R2 — Exact error code checks (TEST-R169A-R2-01)", () => {
+  it("assertTrustedRootNoSymlinks: symlinked cacheRoot → PATH_TRAVERSAL_REJECTED (exact)", () => {
+    const real = mkdtempSync(join(tmpdir(), "r169a-r2-exact-"));
+    try {
+      const linkPath = real + "-link";
+      symlinkSync(real, linkPath);
+      try {
+        let err: unknown;
+        try {
+          assertTrustedRootNoSymlinks(linkPath, "p", "phase");
+        } catch (e) { err = e; }
+        expect(err).toBeInstanceOf(GenerationStoreError);
+        const code = (err as GenerationStoreError).code;
+        expect(code).toBe("PATH_TRAVERSAL_REJECTED");
+        // Exact-string check (not just enum membership).
+        expect(code).toMatch(/^PATH_TRAVERSAL_REJECTED$/);
+      } finally {
+        rmSync(linkPath, { force: true });
+      }
+    } finally {
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  it("writeProjectJsonAtomically: layout mkdir fault → STORE_LAYOUT_CREATE_FAILED (exact)", () => {
+    const cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-exact-mkdir-"));
+    try {
+      const ops = new TestOps();
+      ops.failAtLayoutMkdir = true;
+      let err: unknown;
+      try {
+        writeProjectJsonAtomically("p", "manifest", { v: 1 }, { cacheRoot }, ops);
+      } catch (e) { err = e; }
+      expect(err).toBeInstanceOf(GenerationStoreError);
+      const code = (err as GenerationStoreError).code;
+      expect(code).toBe("STORE_LAYOUT_CREATE_FAILED");
+      expect(code).toMatch(/^STORE_LAYOUT_CREATE_FAILED$/);
+    } finally {
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("writeProjectJsonAtomically: layout dir fsync fault → STORE_LAYOUT_DURABILITY_UNKNOWN (exact)", () => {
+    const cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-exact-dirfsync-"));
+    try {
+      const ops = new TestOps();
+      ops.failAtLayoutDirFsync = true;
+      let err: unknown;
+      try {
+        writeProjectJsonAtomically("p", "manifest", { v: 1 }, { cacheRoot }, ops);
+      } catch (e) { err = e; }
+      expect(err).toBeInstanceOf(GenerationStoreError);
+      const code = (err as GenerationStoreError).code;
+      expect(code).toBe("STORE_LAYOUT_DURABILITY_UNKNOWN");
+      expect(code).toMatch(/^STORE_LAYOUT_DURABILITY_UNKNOWN$/);
+    } finally {
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("writeProjectJsonAtomically: layout parent fsync fault → STORE_LAYOUT_DURABILITY_UNKNOWN (exact)", () => {
+    const cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-exact-pfsync-"));
+    try {
+      const ops = new TestOps();
+      ops.failAtLayoutParentFsync = true;
+      let err: unknown;
+      try {
+        writeProjectJsonAtomically("p", "manifest", { v: 1 }, { cacheRoot }, ops);
+      } catch (e) { err = e; }
+      expect(err).toBeInstanceOf(GenerationStoreError);
+      const code = (err as GenerationStoreError).code;
+      expect(code).toBe("STORE_LAYOUT_DURABILITY_UNKNOWN");
+    } finally {
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
   });
 });

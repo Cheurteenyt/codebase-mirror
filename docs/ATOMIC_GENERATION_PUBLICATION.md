@@ -164,11 +164,11 @@ bumping `formatVersion` and a migration plan.
 | Key | Type | Constraint |
 |---|---|---|
 | `formatVersion` | integer | Must be `1`. Any other value → `MANIFEST_UNSUPPORTED_VERSION`. |
-| `project` | string | Must match the requested project exactly. |
+| `project` | string | Non-empty after trim; max 1024 chars; no C0 control chars; must match the requested project exactly. |
 | `generationId` | string | Canonical UUID v4 (lowercase, with hyphens). |
 | `dbFile` | string | **Canonical form**: must equal exactly `generations/generation-<generationId>.db` (where `<generationId>` is the manifest's own `generationId`). Any other form — `.`, `active-generation.json`, `tmp/foo.db`, a different UUID, an absolute path, a backslash separator, or any `..` segment — is rejected with `MANIFEST_DBFILE_NOT_CANONICAL`. |
 | `createdAt` | string | ISO-8601 **with timezone**. `Z` or `±HH:MM`. |
-| `rootFingerprint` | string | Non-empty. Stable fingerprint of the project root (e.g. `dev:ino`). |
+| `rootFingerprint` | string | Non-empty after trim; max 1024 chars; no C0 control chars (charCode 0–31, including NUL and tab). Stable fingerprint of the project root (e.g. `dev:ino`). |
 | `extractorSemanticsVersion` | integer | `>= 0`. |
 | `discoveryPolicyVersion` | integer | `>= 0`. |
 | `nodeCount` | integer | `>= 0`. |
@@ -178,7 +178,13 @@ bumping `formatVersion` and a migration plan.
 | `sha256` | string | 64 lowercase hex chars. |
 
 The exact set of keys is exported as `MANIFEST_V1_KEYS` in
-`v2/src/storage/generation-types.ts`.
+`v2/src/storage/generation-types.ts` — a **readonly tuple** (`as const`), NOT
+a mutable `Set`. R169A-FIX-R2 (VALID-R169A-R2-01): consumers cannot `.add()`
+or `.delete()` from the authority. The validator uses a private
+`MANIFEST_V1_KEY_SET` (module-scoped, not exported) so that even if a
+consumer were to mutate the exported tuple at runtime, validation would be
+unaffected. The public helper `isManifestV1Key(key)` is the only supported
+way to query the set from outside the module.
 
 ### 4.2 Validation rules
 
@@ -209,7 +215,11 @@ The exact set of keys is exported as `MANIFEST_V1_KEYS` in
    the components are calendar-validated: month 1–12, day 1–N where N is
    the number of days in `(year, month)` (leap years handled correctly),
    hour 0–23, minute 0–59, second 0–59 (POSIX — no leap seconds).
-8. `rootFingerprint` is a non-empty string.
+8. `rootFingerprint` is a **safe string**: non-empty after `.trim()`
+   (whitespace-only rejected), at most 1024 chars, and contains no C0
+   control characters (charCode 0–31, including NUL and tab). The
+   "no multiline" rule (11) is a separate defense-in-depth that catches
+   `\n` and `\r`.
 9. `extractorSemanticsVersion`, `discoveryPolicyVersion`, `nodeCount`,
    `edgeCount`, `fileCount`, `sizeBytes` are **safe integers** `>= 0`
    (`Number.isSafeInteger`). Floats, negatives, `Infinity`, `NaN`, and
@@ -217,6 +227,19 @@ The exact set of keys is exported as `MANIFEST_V1_KEYS` in
 10. `sha256` matches `^[0-9a-f]{64}$`. Uppercase hex is rejected.
 11. No string field contains `\n` or `\r`. This keeps the manifest a
     single-line-friendly record and prevents newline-injection tricks.
+12. **Size bound (R169A-FIX-R2 VALID-R169A-R2-01).** The manifest file on
+    disk MUST be at most `MAX_GENERATION_MANIFEST_BYTES` (64 KiB). Before
+    reading, `parseGenerationManifest` stats the file; if `size > max`,
+    it raises `MANIFEST_TOO_LARGE` and does NOT read the file into memory.
+    Reads are done via `openSync` + `readSync` + `closeSync` so the exact
+    byte count is controlled. The 64 KiB bound is generous for the V1
+    schema (which serializes to <1 KiB) but bounded enough to prevent a
+    malicious / corrupted manifest from exhausting memory.
+13. **Project field hardening (R169A-FIX-R2 VALID-R169A-R2-01).** The
+    `project` field is validated as a safe string (rule 8) BEFORE the
+    equality check against `expectedProject`. This is defense-in-depth:
+    even if a corrupted manifest happened to match `expectedProject`, a
+    NUL byte or other control character would still be rejected.
 
 A manifest that fails any of these is **invalid** and triggers fail-closed
 behavior in the resolver (section 8).
@@ -377,6 +400,107 @@ path uses the same walk and the same `lstat` chain.
 This is implemented in `assertPathInsideNoSymlinks` and
 `assertNotSymlink` in `v2/src/storage/generation-store.ts`.
 
+### 6.3 Trust root validation (R169A-FIX-R2 SEC-R169A-R2-01)
+
+`assertPathInsideNoSymlinks(root, candidate)` only walks components UNDER
+`root`. It never `lstat`'s `root` itself. If `projects/` (or any of its
+parents) is a symlink to an attacker-controlled directory, both
+`realpath(root)` and `realpath(candidate)` follow the same symlink, and
+the containment check passes — bypassing the trust boundary.
+
+R169A-FIX-R2 closes this bypass with `assertTrustedRootNoSymlinks`. The
+resolver AND the writer call this BEFORE checking the manifest / legacy
+path / target. The function:
+
+1. `lstat`'s `cacheRoot` itself — reject if symlink.
+2. Walks `codebase-memory-mcp`, `projects`, `<project-key>` — `lstat`
+   each, reject ANY symlink.
+3. Only `ENOENT` is OK (component doesn't exist yet — common during the
+   first write for a project). `EACCES` / `EIO` / `ENOTDIR` / `ELOOP`
+   fail closed with `PATH_TRAVERSAL_REJECTED`.
+4. Then calls `assertPathInsideNoSymlinks(generationStoreRoot,
+   projectStoreDir, ...)` for a final `realpath` containment check on
+   the validated root.
+
+This closes the bypass where `cacheRoot`, `cbmCacheDir`, or `projects`
+is itself a symlink. Implemented in `assertTrustedRootNoSymlinks` in
+`v2/src/storage/generation-store.ts`.
+
+### 6.4 Layout durability (R169A-FIX-R2 DUR-R169A-R2-01)
+
+`mkdirSync(dir, { recursive: true })` + `fsync(dir)` does NOT guarantee
+the directory ENTRY in the parent survives a crash if the directory was
+just created. The mkdir creates the entry in the parent, but the parent's
+directory metadata may not be flushed to disk. A crash after mkdir but
+before the parent's metadata is flushed may leave the new directory
+orphaned — even though `mkdir -p` returned successfully.
+
+R169A-FIX-R2 closes this with `ensureGenerationStoreLayoutDurable`. The
+writer calls this BEFORE writing the manifest / index-state file. The
+function walks the FULL layout chain:
+
+```
+<cacheRoot>/codebase-memory-mcp/         (parent: cacheRoot)
+<cacheRoot>/codebase-memory-mcp/projects/ (parent: cbmCacheDir)
+<cacheRoot>/codebase-memory-mcp/projects/<sha256>/   (parent: projects)
+<cacheRoot>/codebase-memory-mcp/projects/<sha256>/generations/  (parent: projectStore)
+<cacheRoot>/codebase-memory-mcp/projects/<sha256>/tmp/          (parent: projectStore)
+```
+
+For each directory:
+
+1. `lstat` — if it doesn't exist, `mkdir` with mode `0700` (NOT default
+   `0777 & ~umask`). Failure (other than `EEXIST`) →
+   `STORE_LAYOUT_CREATE_FAILED`.
+2. `fsync` the directory itself. Failure →
+   `STORE_LAYOUT_DURABILITY_UNKNOWN`.
+3. If the directory was newly created, `fsync` the PARENT directory so
+   the directory ENTRY in the parent is durable. Failure →
+   `STORE_LAYOUT_DURABILITY_UNKNOWN`.
+
+The chain does NOT include `cacheRoot` itself — that is the user's HOME
+cache dir, created by the OS / XDG machinery, and we do not `fsync`
+`cacheRoot`'s parent (which may be `/tmp` or `/home`, owned by root).
+
+The `mkdir` mode is `0700` (NOT the default `0777 & ~umask`): the
+project store, generations, and tmp directories contain potentially
+sensitive information (DB file paths, manifest contents) and should not
+be readable by other users on the host.
+
+### 6.5 Project-aware atomic writer (R169A-FIX-R2 SEC-R169A-R2-02)
+
+`writeJsonAtomically(targetPath, value)` accepts an arbitrary
+`targetPath` with no containment check, no symlink rejection, and does
+`mkdir -p` which can create directories via parent symlinks. R169A-FIX-R2
+introduces a project-aware wrapper, `writeProjectJsonAtomically`, which
+is now the ONLY public writer API. The internal `writeJsonAtomically` is
+not exported.
+
+The wrapper:
+
+1. **Derives the target path** from `project` + `target` type (`"manifest"`
+   → `activeManifestPath(project)`; `"index-state"` →
+   `indexStatePath(project)`). The caller CANNOT specify an arbitrary
+   path.
+2. **Validates the trust root** via `assertTrustedRootNoSymlinks` (§6.3).
+3. **Validates the target path** via `assertPathInsideNoSymlinks` from
+   `generationStoreRoot` down to the target file. Symlink code is
+   `MANIFEST_SYMLINK_REJECTED` for manifest targets,
+   `GENERATION_TARGET_SYMLINK_REJECTED` for index-state targets.
+4. **Rejects symlinked targets** via `assertNotSymlink` (defense-in-depth
+   on the final file, in case the chain walk missed it).
+5. **Ensures layout durability** via `ensureGenerationStoreLayoutDurable`
+   (§6.4) — `mkdir 0700` + `fsync` chain + `fsync` parent of newly
+   created dirs.
+6. **Delegates to the internal `writeJsonAtomically`** for the
+   temp-rename-fsync pattern. Temp file mode `0600`, temp directory mode
+   `0700`.
+
+All errors are wrapped in `GenerationStoreError` with the project name
+and phase. The wrapper NEVER accepts an arbitrary target path — the path
+is always derived from `project` + `target`. This eliminates the entire
+class of "writer with arbitrary path" attacks.
+
 ## 7. Reader contract
 
 The reader contract is the **only** thing readers need to know:
@@ -428,7 +552,7 @@ The resolver's decision table:
 |---|---|---|
 | valid | (ignored) | `generation` |
 | absent | exists and is a regular file inside the trust root with no symlink chain | `legacy` |
-| absent | exists but is a directory, symlink, special file, or outside the trust root | **FAIL CLOSED** — `LEGACY_SOURCE_OPEN_FAILED` |
+| absent | exists but is a directory, symlink, special file, or outside the trust root | **FAIL CLOSED** — `LEGACY_SOURCE_INVALID` (R169A-FIX-R2: renamed from `LEGACY_SOURCE_OPEN_FAILED`) |
 | absent | absent | `missing` |
 | invalid (any reason) | (ignored) | **FAIL CLOSED** — `GenerationStoreError` |
 | manifest target missing | (ignored) | **FAIL CLOSED** — `MANIFEST_TARGET_MISSING` |
@@ -456,8 +580,10 @@ validated with the same security invariants as the generation path:
    chain raises `PATH_TRAVERSAL_REJECTED`.
 3. **Regular file.** `lstatSync(legacyPath)` must report a regular
    file. A directory, symlink, FIFO, socket, or device node raises
-   `LEGACY_SOURCE_OPEN_FAILED`. There is no "open it read-only anyway"
-   fallback.
+   `LEGACY_SOURCE_INVALID` (R169A-FIX-R2 API-R169A-R2-01: renamed from
+   `LEGACY_SOURCE_OPEN_FAILED`; R169A validates path + regular-file
+   identity only — actual SQLite open validation occurs in R169D reader
+   cutover). There is no "open it read-only anyway" fallback.
 
 For ordinary project names with the real cache root, this produces the
 same path as `defaultCodeDbPath` in `v2/src/bridge/sqlite-ro.ts`, so
@@ -487,16 +613,21 @@ and audit. There is no "big bang" activation.
   exist as an implemented candidate. No production code calls them.
   Legacy path is the only path used. `DATA-CARRY-01` remains OPEN.
 - **R169B — Durable Staging Publisher + Validator + fsync + CAS + GC
-  primitives.** The indexer builds a staging DB in `tmp/`, validates
-  it, fsyncs it, atomically renames it into `generations/`, and writes
-  the manifest. GC primitives (keep active + 2 previous, `tmp/` sweep)
-  are landed but not yet active in production. Resolver still not
-  called by production readers.
-- **R169C — Indexer Integration + Outcome Contract.** The publication
-  pipeline is wired into the indexer end-to-end. The publication
-  outcome (`SUCCESS | SUCCESS_WITH_WARNINGS | STALE | PARTIAL |
-  FAILED`) is propagated through `IndexResult`. Legacy DB is still
-  written as a fallback; readers still open the legacy path directly.
+  primitives.** Implement independent publisher primitives and test
+  harnesses — NO production indexer caller. The primitives include the
+  staging-DB publisher (build in `tmp/`, validate, fsync, atomically
+  rename into `generations/`), the CAS dedup table, the manifest
+  writer (`writeProjectJsonAtomically`), and the GC primitives (keep
+  active + 2 previous, `tmp/` sweep). All primitives are tested in
+  isolation; no production code path calls them yet. Resolver still
+  not called by production readers.
+- **R169C — Indexer Integration + Outcome Contract.** Wire those
+  primitives into `indexProjectWasm` and outcome paths. The
+  publication pipeline is wired into the indexer end-to-end; the
+  publication outcome (`SUCCESS | SUCCESS_WITH_WARNINGS | STALE |
+  PARTIAL | FAILED`) is propagated through `IndexResult`. Legacy DB
+  is still written as a fallback; readers still open the legacy path
+  directly.
 - **R169D — Reader Cutover + Legacy Migration + Project Lifecycle.**
   Readers switch from `legacyCodeDbPath` to `resolveActiveCodeDb`. The
   legacy DB write path is removed for projects that have at least one
@@ -525,6 +656,7 @@ type GenerationStoreErrorCode =
   | "GENERATION_STORE_CONFIG_ERROR"          // misconfiguration (e.g. bad store root)
   | "MANIFEST_PARSE_ERROR"                   // file unreadable or invalid JSON
   | "MANIFEST_SCHEMA_ERROR"                  // JSON valid but schema wrong
+  | "MANIFEST_TOO_LARGE"                     // manifest file > MAX_GENERATION_MANIFEST_BYTES (64 KiB); not read into memory
   | "MANIFEST_TARGET_MISSING"                // dbFile does not exist
   | "MANIFEST_TARGET_OUTSIDE_STORE"          // dbFile escapes the project store
   | "MANIFEST_TARGET_NOT_REGULAR"            // dbFile resolves to a directory / symlink / special file
@@ -533,18 +665,20 @@ type GenerationStoreErrorCode =
   | "MANIFEST_UNSUPPORTED_VERSION"           // formatVersion != 1
   | "MANIFEST_SYMLINK_REJECTED"              // manifest path is a symlink
   | "GENERATION_TARGET_SYMLINK_REJECTED"     // dbFile is a symlink
-  | "LEGACY_SOURCE_OPEN_FAILED"              // legacy DB exists but is a directory/symlink/special/outside store
+  | "LEGACY_SOURCE_INVALID"                  // legacy DB exists but is a directory/symlink/special/outside store (R169A-FIX-R2: renamed from LEGACY_SOURCE_OPEN_FAILED; R169A validates path + regular-file identity only — actual SQLite open validation occurs in R169D reader cutover)
   | "ATOMIC_WRITE_FAILED"                    // generic write failure (open / write / close)
   | "ATOMIC_RENAME_FAILED"                   // rename failed (e.g. cross-device)
   | "ATOMIC_FSYNC_FAILED"                    // fsync of the temp file failed
   | "ATOMIC_DURABILITY_UNKNOWN"              // directory open or fsync failed post-rename; target MAY be new, caller must re-read
   | "ATOMIC_SERIALIZATION_FAILED"            // JSON.stringify threw or returned non-string; no temp file created
   | "ATOMIC_SHORT_WRITE"                     // writeSync returned <= 0; partial write never reached rename
-  | "PATH_TRAVERSAL_REJECTED"                // path escapes store OR any component in the walk is a symlink / EACCES / EIO / ENOTDIR / ELOOP
+  | "STORE_LAYOUT_CREATE_FAILED"             // mkdir of a layout directory (cbm / projects / projectStore / generations / tmp) failed during ensureGenerationStoreLayoutDurable
+  | "STORE_LAYOUT_DURABILITY_UNKNOWN"        // directory or PARENT fsync failed during layout setup; the directory entry MAY not be durable
+  | "PATH_TRAVERSAL_REJECTED"                // path escapes store OR any component in the trust-root walk is a symlink / EACCES / EIO / ENOTDIR / ELOOP
   | "PROJECT_KEY_INVALID";                   // project name was empty/non-string
 ```
 
-The five codes added in R169A (after the GPT 5.6 audit fix) are:
+The five codes added in R169A pass 1 (after the first GPT 5.6 audit) are:
 
 - `MANIFEST_TARGET_NOT_REGULAR` — the resolved `dbFile` exists but is a
   directory, symlink, or special file. The reader must never open a
@@ -568,20 +702,41 @@ The five codes added in R169A (after the GPT 5.6 audit fix) are:
   offset on partial writes; this code is reserved for the "wrote zero
   or negative bytes" case that cannot make progress.
 
+R169A-FIX-R2 (GPT 5.6 pass 2 audit) adds four more codes:
+
+- `MANIFEST_TOO_LARGE` — the manifest file on disk exceeds
+  `MAX_GENERATION_MANIFEST_BYTES` (64 KiB). Raised BEFORE the file is
+  read into memory. Defense against a malicious / corrupted manifest
+  that would otherwise exhaust memory.
+- `STORE_LAYOUT_CREATE_FAILED` — `mkdir` of a layout directory (cbm /
+  projects / projectStore / generations / tmp) failed during
+  `ensureGenerationStoreLayoutDurable`. The directory entry could not
+  be created; the write is aborted before any temp file is opened.
+- `STORE_LAYOUT_DURABILITY_UNKNOWN` — fsync of a layout directory OR
+  its PARENT failed during `ensureGenerationStoreLayoutDurable`. The
+  directory MAY exist on disk (mkdir succeeded) but its entry in the
+  parent directory may not be durable. The caller MUST re-stat and
+  diagnose.
+- `LEGACY_SOURCE_INVALID` — renamed from `LEGACY_SOURCE_OPEN_FAILED`.
+  R169A validates path + regular-file identity only — the actual
+  SQLite open validation occurs in R169D reader cutover. The old name
+  implied an open was attempted, which was misleading.
+
 `GenerationStoreError` carries:
 
 - `code` — one of the above.
 - `phase` — the function name where the error was raised, e.g.
   `"validateGenerationManifest"`, `"resolveActiveCodeDb"`,
-  `"writeJsonAtomically"`.
+  `"writeProjectJsonAtomically"`,
+  `"ensureGenerationStoreLayoutDurable"`.
 - `project` — the project name being operated on (may be `""` for
   writer-level errors).
 - `message` — human-readable detail.
 
 This taxonomy is exhaustive on the foundation path. New failure modes
 that emerge during R169B–R169E will be added as new codes, never folded
-into existing ones. The R169A foundation exports 20 codes (15 original
-plus the 5 added by the audit fix).
+into existing ones. The R169A foundation exports 24 codes (15 original
+plus 5 from pass 1 plus 4 from pass 2).
 
 ## 10. GC policy
 
@@ -746,8 +901,11 @@ What R169A delivers:
 
 What R169A does **not** deliver:
 
-- R169B — Durable Staging Publisher + Validator + fsync + CAS + GC primitives.
-- R169C — Indexer Integration + Outcome Contract.
+- R169B — Durable Staging Publisher + Validator + fsync + CAS + GC
+  primitives. Implement independent publisher primitives and test
+  harnesses — NO production indexer caller.
+- R169C — Indexer Integration + Outcome Contract. Wire those primitives
+  into `indexProjectWasm` and outcome paths.
 - R169D — Reader Cutover + Legacy Migration + Project Lifecycle.
 - R169E — Crash Matrix + Performance + Activation + Version (and the
   formal close-out of `DATA-CARRY-01`).
