@@ -1160,8 +1160,12 @@ export function parseGenerationManifest(
     } catch (e) {
       const errCode = (e as NodeJS.ErrnoException).code;
       if (errCode === "ENOENT") {
+        // R169B-STEP4 (MANIFEST-R169B-A2-15): raise MANIFEST_NOT_FOUND
+        // (distinct from MANIFEST_PARSE_ERROR) so readOptionalGenerationManifest
+        // can distinguish real ENOENT from corrupt manifest without string
+        // matching.
         throw new GenerationStoreError(
-          "MANIFEST_PARSE_ERROR",
+          "MANIFEST_NOT_FOUND",
           phase,
           expectedProject,
           `Manifest file not found: ${manifestPath}`,
@@ -1207,8 +1211,9 @@ export function parseGenerationManifest(
     } catch (e) {
       const errCode = (e as NodeJS.ErrnoException).code;
       if (errCode === "ENOENT") {
+        // R169B-STEP4 (MANIFEST-R169B-A2-15): raise MANIFEST_NOT_FOUND.
         throw new GenerationStoreError(
-          "MANIFEST_PARSE_ERROR",
+          "MANIFEST_NOT_FOUND",
           phase,
           expectedProject,
           `Manifest file not found: ${manifestPath}`,
@@ -1234,8 +1239,9 @@ export function parseGenerationManifest(
     } catch (e) {
       const errCode = (e as NodeJS.ErrnoException).code;
       if (errCode === "ENOENT") {
+        // R169B-STEP4 (MANIFEST-R169B-A2-15): raise MANIFEST_NOT_FOUND.
         throw new GenerationStoreError(
-          "MANIFEST_PARSE_ERROR",
+          "MANIFEST_NOT_FOUND",
           phase,
           expectedProject,
           `Manifest file not found (open): ${manifestPath}`,
@@ -1422,10 +1428,10 @@ export function parseGenerationManifest(
  *     corrupt" and refuse to publish / GC).
  *
  * Implementation: we delegate to `parseGenerationManifest` and
- * translate a `MANIFEST_PARSE_ERROR` whose message starts with
- * "Manifest file not found" (or whose underlying errno is ENOENT)
- * into `null`. We re-tag every other `MANIFEST_PARSE_ERROR` so the
- * caller can distinguish them via the error code.
+ * translate a `MANIFEST_NOT_FOUND` error code (raised ONLY on real
+ * ENOENT) into `null`. Every other error code is re-raised as-is.
+ * R169B-STEP4 (MANIFEST-R169B-A2-15): no more string matching on
+ * the error message — the code is the authority.
  */
 export function readOptionalGenerationManifest(
   manifestPath: string,
@@ -1435,21 +1441,15 @@ export function readOptionalGenerationManifest(
     return parseGenerationManifest(manifestPath, expectedProject);
   } catch (e) {
     if (e instanceof GenerationStoreError) {
-      // The parseGenerationManifest implementation raises
-      // MANIFEST_PARSE_ERROR for ENOENT with a message that starts
-      // with "Manifest file not found". We translate that ONE case
-      // to null.
-      if (
-        e.code === "MANIFEST_PARSE_ERROR" &&
-        (e.message.includes("Manifest file not found") ||
-          e.message.includes("Manifest file not found (open)"))
-      ) {
+      // R169B-STEP4 (MANIFEST-R169B-A2-15): parseGenerationManifest now
+      // raises MANIFEST_NOT_FOUND (distinct code) on real ENOENT. We
+      // translate ONLY that code to null. Every other error (corrupt
+      // JSON, invalid UTF-8, symlink, too large, schema invalid,
+      // project mismatch, EACCES, EIO, short read, growth during read)
+      // is re-raised as-is so the caller fails-closed.
+      if (e.code === "MANIFEST_NOT_FOUND") {
         return null;
       }
-      // Any other error (MANIFEST_PARSE_ERROR for JSON/UTF-8/short
-      // read, MANIFEST_TOO_LARGE, MANIFEST_SYMLINK_REJECTED,
-      // MANIFEST_TARGET_NOT_REGULAR, MANIFEST_SCHEMA_ERROR,
-      // MANIFEST_PROJECT_MISMATCH, etc.) is re-raised as-is.
       throw e;
     }
     throw e;

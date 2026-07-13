@@ -1,14 +1,17 @@
 # Atomic Generation Publication — R169 Target Architecture
 
-> **Status: FOUNDATION / INACTIVE — R169A is merged and remains FOUNDATION / INACTIVE. R169B-STEP3 (correctness closure) is implemented but NOT merged; no production path uses the generation store.**
+> **Status: FOUNDATION / INACTIVE — R169A is merged and remains FOUNDATION / INACTIVE. R169B-STEP4 (immutability + GC/CAS closure) is implemented but NOT merged; no production path uses the generation store.**
 >
 > This document describes the **target architecture** for atomic generation
 > publication in Codebase Memory V2. As of R169A the foundational pieces are
 > merged and remain FOUNDATION / INACTIVE — no production path uses the
 > generation store. R169B-STEP2 added the publisher / CAS / GC primitives
-> (still FOUNDATION / INACTIVE). R169B-STEP3 (this revision) closes the 22
-> findings from the GPT 5.6 Pass 1 audit. R169C will wire the publisher
-> into the indexer's success path
+> (still FOUNDATION / INACTIVE). R169B-STEP3 closed the 22 findings from
+> the GPT 5.6 Pass 1 audit. R169B-STEP4 (this revision) closes the 19
+> findings from the GPT 5.6 Pass 2 audit — most critically, the published
+> DB is now immutable (copy/reflink to a new inode, not hard-link) and
+> the GC holds the CAS lock for the entire deletion (Model A). R169C will
+> wire the publisher into the indexer's success path
 > (`v2/src/storage/generation-store.ts`,
 > `v2/src/storage/generation-types.ts`,
 > `v2/tests/storage/r169a-generation-store.test.ts`). The indexer still
@@ -1083,10 +1086,11 @@ RESERVE              reserveGenerationStaging
 POPULATE             (by future R169C caller — the indexer)
 
 FINALIZE WAL         prepareGenerationForPublication
-                     → wal_checkpoint(TRUNCATE)
+                     → synchronous = FULL (BEFORE checkpoint)
+                     → wal_checkpoint(TRUNCATE) — inspect busy/log
                      → journal_mode = DELETE
-                     → synchronous = FULL
                      → close
+                     → fsync staging DB
                      → verify no -wal/-shm/-journal sidecars
 
 VALIDATE DB          → quick_check = ok
@@ -1100,7 +1104,8 @@ VALIDATE DB          → quick_check = ok
                      → COUNT(nodes/edges/file_hashes) matches projects row
                      → no dangling edges
 
-HASH / SEAL          → lstat (reject symlink, require regular)
+HASH / SEAL          → computeSha256WithIdentityChecks (unified secure hash)
+                     → lstat (reject symlink, require regular)
                      → open(O_RDONLY | O_NOFOLLOW)
                      → fstat fd, compare dev/ino vs lstat (TOCTOU)
                      → streaming SHA-256 in 64 KiB chunks
@@ -1128,7 +1133,10 @@ PUBLISH              publishPreparedGeneration (REQUIRED: expectedActiveGenerati
                          effective paths = dedup's paths
                          unlink staging (best-effort)
                      → ELSE:
-                         link(staging, final) — no-clobber
+                         copy/reflink(staging, final, COPYFILE_EXCL|COPYFILE_FICLONE)
+                           — NEW INODE (IMMUT-R169B-A2-01)
+                         re-hash final DB, verify matches manifest (SEAL-R169B-A2-05)
+                         fsync final DB
                          fsync(generations/) — BLOCKS on failure
                          unlink staging (best-effort)
                      → IF NOT dedup:
@@ -1141,15 +1149,38 @@ PUBLISH              publishPreparedGeneration (REQUIRED: expectedActiveGenerati
                      → optional: setCatalogPinned + appendPublicationHistory(PIN)
                      → COMMIT
                      → token state → CONSUMED
+
+GC                   planGenerationGc + applyGenerationGcPlan
+                     → plan: retain (active + N previous + pinned)
+                            delete (ACTIVE stale)
+                            recovery (DELETING from previous incomplete pass)
+                            sweepTmp (with identity snapshot)
+                     → apply (Model A — CAS lock held during ENTIRE delete):
+                         BEGIN IMMEDIATE
+                         re-read active under lock
+                         verify candidate != active
+                         verify not pinned
+                         verify status (ACTIVE for fresh; DELETING for recovery)
+                         mark DELETING (skip for recovery)
+                         delete DB
+                         fsync generations/
+                         delete metadata
+                         fsync generations/
+                         confirm both absent (lstat ENOENT)
+                         mark DELETED + history
+                         COMMIT
+                     → sweep tmp (identity check: dev/ino/size/mtimeMs)
+                     → fsync tmp/
 ```
 
-### Durability guarantees (R169B-STEP3)
+### Durability guarantees (R169B-STEP4)
 
 The manifest can be written ONLY if:
-- the final DB is complete (WAL finalized, no sidecars);
+- the final DB is complete (WAL finalized, no sidecars, fsync'd);
 - the final DB hash is verified (re-computed at publish, matches manifest);
 - the staging content was not mutated between prepare and publish;
-- the `generations/` directory fsync succeeded after `link()`;
+- the final DB is a NEW inode (copy/reflink, not hard-link) — immutable;
+- the `generations/` directory fsync succeeded after copy;
 - the metadata sidecar is durable (atomic write with fsync);
 - the expected active generation ID was validated (optimistic lock).
 
@@ -1158,19 +1189,38 @@ aborted and the token reverts to PREPARED (caller can retry or discard).
 If any fails AFTER the manifest write, the publication is in an
 indeterminate state and the caller must run recovery.
 
-### Honest limitations (R169B-STEP3)
+### Immutability guarantees (R169B-STEP4)
+
+- The final DB is a NEW inode (copy/reflink), NOT the same inode as the
+  staging DB. An old writable fd on the staging path cannot mutate the
+  final DB.
+- The publisher and GC never open a `generations/*.db` file writable.
+- The final DB's sha256 is re-computed after copy and verified against
+  the manifest. Any mismatch aborts the publication.
+
+### GC concurrency guarantees (R169B-STEP4)
+
+- The GC holds the CAS lock for the ENTIRE deletion (Model A). The
+  publisher cannot activate a generation mid-delete because the CAS
+  lock serializes them.
+- The GC re-reads the active generation ID under the lock before each
+  delete. If the candidate became active, the delete is refused.
+- DELETING entries from a previous incomplete GC pass are recovered
+  idempotently by the next GC pass.
+
+### Honest limitations (R169B-STEP4)
 
 - R169B is FOUNDATION / INACTIVE — no production code calls the publisher.
 - Linux-only certified at this stage.
 - Multi-host coordination is NOT safe (R170 fencing is absent).
 - R169C indexer integration is absent.
 - R169E crash matrix integration is not certified.
-- The `PublisherOps` fault-injection harness is wired into the public
-  API via `PROD_PUBLISHER_OPS`, but the `publishPreparedGeneration`
-  function does not yet accept a custom `ops` argument (the fault
-  injection tests use child processes and filesystem-level injection
-  instead). A future step may expose `publishPreparedGenerationInternal`
-  for in-process fault injection.
+- The `PublisherOps` fault-injection harness is available but the
+  crash matrix tests use child processes and filesystem-level injection
+  (the audit allows either approach).
+- Per-phase benchmark timing instrumentation is deferred.
+- The `ACTIVE → AVAILABLE` catalog status rename and `user_version`
+  schema versioning are deferred (not blocking for FOUNDATION / INACTIVE).
 
 ## 13. Performance contract
 

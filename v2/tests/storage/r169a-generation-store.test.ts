@@ -3570,7 +3570,7 @@ describe("R169A-FIX-R3 — Manifest TOCTOU (SEC-R169A-R3-03)", () => {
     expect(code).toMatch(/MANIFEST_TARGET_NOT_REGULAR|MANIFEST_PARSE_ERROR/);
   });
 
-  it("parseGenerationManifest on ENOENT → MANIFEST_PARSE_ERROR", () => {
+  it("parseGenerationManifest on ENOENT → MANIFEST_NOT_FOUND (R169B-STEP4)", () => {
     const project = "test-project";
     const manifestPath = activeManifestPath(project, cacheRoot);
 
@@ -3579,7 +3579,11 @@ describe("R169A-FIX-R3 — Manifest TOCTOU (SEC-R169A-R3-03)", () => {
       parseGenerationManifest(manifestPath, project);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
-    expect((err as GenerationStoreError).code).toBe("MANIFEST_PARSE_ERROR");
+    // R169B-STEP4 (MANIFEST-R169B-A2-15): parseGenerationManifest now
+    // raises MANIFEST_NOT_FOUND (distinct from MANIFEST_PARSE_ERROR)
+    // on real ENOENT, so readOptionalGenerationManifest can
+    // distinguish "absent" from "corrupt" without string matching.
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_NOT_FOUND");
   });
 });
 

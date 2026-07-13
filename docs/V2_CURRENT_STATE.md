@@ -1,7 +1,7 @@
 # V2 Current State — Codebase Memory V2
 
-> **Authoritative snapshot of the current product state.** Updated R169B-STEP3 (2026-07-14) — correctness closure implemented, FOUNDATION / INACTIVE.
-> R169A landed the generation-store foundation (path helpers, manifest V1 types, resolver, atomic JSON writer) and is merged. R169B-STEP2 added the publisher / CAS / GC primitives. R169B-STEP3 (this revision) closes the 22 findings from the GPT 5.6 Pass 1 audit. All three remain FOUNDATION / INACTIVE — the indexer and readers still use the legacy `<project>.db` path. `DATA-CARRY-01` (P1) remains open until R169E (after crash matrix + concurrency + performance + activation).
+> **Authoritative snapshot of the current product state.** Updated R169B-STEP4 (2026-07-14) — immutability, crash harness, GC/CAS closure.
+> R169A landed the generation-store foundation (path helpers, manifest V1 types, resolver, atomic JSON writer) and is merged. R169B-STEP2 added the publisher / CAS / GC primitives. R169B-STEP3 closed the 22 findings from the GPT 5.6 Pass 1 audit. R169B-STEP4 (this revision) closes the 19 findings from the GPT 5.6 Pass 2 audit — most critically, the published DB is now immutable (copy/reflink to a new inode, not hard-link) and the GC holds the CAS lock for the entire deletion (Model A, no publisher/GC race). All four remain FOUNDATION / INACTIVE — the indexer and readers still use the legacy `<project>.db` path. `DATA-CARRY-01` (P1) remains open until R169E (after crash matrix + concurrency + performance + activation).
 > For the historical roadmap, see [V2_ROADMAP.md](V2_ROADMAP.md) (archive, 0.15.9 era).
 > For the authoritative version and bug count, see `v2/package.json` and `v2/CHANGELOG.md`.
 

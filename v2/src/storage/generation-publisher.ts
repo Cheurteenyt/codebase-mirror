@@ -84,7 +84,7 @@ import {
   lstatSync,
   fstatSync,
   unlinkSync,
-  linkSync,
+  copyFileSync,
   existsSync,
   readSync,
   constants as fsConstants,
@@ -520,21 +520,55 @@ export function prepareGenerationForPublication(
 
   try {
     db.pragma("busy_timeout = 5000");
-    // 2. WAL checkpoint TRUNCATE — flush WAL into main DB, truncate WAL.
+    // R169B-STEP4 (SQLITE-R169B-A2-03): set synchronous = FULL BEFORE
+    // the checkpoint so the checkpoint itself is durable. The previous
+    // code set synchronous = FULL AFTER the checkpoint, which did not
+    // retroactively strengthen the checkpoint.
     try {
-      const chk = db.pragma("wal_checkpoint(TRUNCATE)", { simple: true }) as
-        | { log: number; checkpoint: number; busy: number }
-        | number
-        | unknown;
-      // better-sqlite3 returns { log, checkpoint, busy } for wal_checkpoint
-      // in newer versions, or a number in older. We treat any error below.
-      void chk;
+      db.pragma("synchronous = FULL");
+    } catch (e) {
+      throw new GenerationStoreError(
+        "STAGING_DB_STATE_INVALID",
+        phase,
+        project,
+        `synchronous = FULL failed (pre-checkpoint): ${(e as Error).message}`,
+        generationId,
+      );
+    }
+    // 2. WAL checkpoint TRUNCATE — flush WAL into main DB, truncate WAL.
+    // R169B-STEP4 (SQLITE-R169B-A2-03): inspect the result precisely.
+    // The result is an array of { log, checkpoint, busy }:
+    //   - busy: 0 means the checkpoint completed; 1 means it was busy
+    //     and could not complete.
+    //   - log: number of frames in the WAL log. 0 after TRUNCATE on a
+    //     WAL-mode DB. -1 means the DB is NOT in WAL mode (e.g. the
+    //     staging DB was copied from a DELETE-mode published DB for
+    //     dedup testing) — there is no WAL to checkpoint, which is OK.
+    //   - checkpoint: number of frames checkpointed. 0 or -1 (same
+    //     semantics as log).
+    // We require busy == 0. log == 0 (WAL emptied) or log == -1 (no WAL).
+    try {
+      const chkRaw = db.pragma("wal_checkpoint(TRUNCATE)");
+      const chkRows = chkRaw as Array<{ log: number; checkpoint: number; busy: number }>;
+      if (!Array.isArray(chkRows) || chkRows.length === 0) {
+        throw new Error(`wal_checkpoint(TRUNCATE) returned no rows: ${JSON.stringify(chkRaw)}`);
+      }
+      const chk = chkRows[0];
+      if (chk.busy !== 0) {
+        throw new Error(`wal_checkpoint(TRUNCATE) was busy (busy=${chk.busy}) — another connection is holding a read lock`);
+      }
+      // log == -1 means the DB is not in WAL mode (no WAL to checkpoint).
+      // log == 0 means the WAL was emptied. Both are OK.
+      // Any other log value means the checkpoint did not empty the WAL.
+      if (chk.log !== 0 && chk.log !== -1) {
+        throw new Error(`wal_checkpoint(TRUNCATE) did not empty the WAL (log=${chk.log})`);
+      }
     } catch (e) {
       throw new GenerationStoreError(
         "STAGING_DB_WAL_DIRTY",
         phase,
         project,
-        `wal_checkpoint(TRUNCATE) failed: ${(e as Error).message}`,
+        `wal_checkpoint(TRUNCATE) failed or incomplete: ${(e as Error).message}`,
         generationId,
       );
     }
@@ -560,20 +594,31 @@ export function prepareGenerationForPublication(
         generationId,
       );
     }
-    // 4. PRAGMA synchronous = FULL (durability for the next writer).
-    try {
-      db.pragma("synchronous = FULL");
-    } catch (e) {
-      throw new GenerationStoreError(
-        "STAGING_DB_STATE_INVALID",
-        phase,
-        project,
-        `synchronous = FULL failed: ${(e as Error).message}`,
-        generationId,
-      );
-    }
   } finally {
     try { db.close(); } catch { /* best effort */ }
+  }
+
+  // R169B-STEP4 (SQLITE-R169B-A2-03): fsync the staging DB file after
+  // close. SQLite's close does not guarantee the file's bytes are
+  // durable on disk — we must fsync explicitly. This makes the WAL
+  // checkpoint and journal_mode switch durable.
+  let stagingFd: number | null = null;
+  try {
+    stagingFd = openSync(stagingPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    fsyncSync(stagingFd);
+    closeSync(stagingFd);
+    stagingFd = null;
+  } catch (e) {
+    if (stagingFd !== null) {
+      try { closeSync(stagingFd); } catch { /* best effort */ }
+    }
+    throw new GenerationStoreError(
+      "STAGING_DB_WAL_DIRTY",
+      phase,
+      project,
+      `fsync of staging DB after WAL finalization failed: ${(e as Error).message}`,
+      generationId,
+    );
   }
 
   // 6. Verify no sidecars exist.
@@ -866,76 +911,28 @@ export function prepareGenerationForPublication(
   }
 
   // 22-24. Streaming SHA-256 + sizeBytes + TOCTOU re-stat.
+  // R169B-STEP4 (HASH-R169B-A2-04): use the unified secure hash
+  // primitive (computeSha256WithIdentityChecks) — same one used at
+  // publish time and for dedup candidate validation. The previous
+  // code used a non-secure inline hash (no O_NOFOLLOW, no fstat
+  // identity checks, no mid-hash swap detection).
+  const sha256 = computeSha256WithIdentityChecks(stagingPath, project, phase, generationId);
+  // sizeBytes is derived from a fresh lstat (the secure hash primitive
+  // already verifies dev/ino/size stability internally).
   const preStat = lstatSync(stagingPath);
   if (preStat.isSymbolicLink() || !preStat.isFile()) {
     throw new GenerationStoreError(
       "STAGING_TARGET_INVALID",
       phase,
       project,
-      `Staging file is not a regular file at hash time: ${stagingPath}`,
+      `Staging file is not a regular file at token-creation time: ${stagingPath}`,
       generationId,
     );
   }
   const preDev = preStat.dev;
   const preIno = preStat.ino;
   const preSize = preStat.size;
-
-  let hashFd: number | null = null;
-  let sha256: string;
-  try {
-    hashFd = openSync(stagingPath, fsConstants.O_RDONLY);
-    const hasher = createHash("sha256");
-    const chunk = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
-    let totalRead = 0;
-    while (true) {
-      let bytesRead: number;
-      try {
-        bytesRead = readSync(hashFd, chunk, 0, HASH_CHUNK_BYTES, null);
-      } catch (e) {
-        throw new GenerationStoreError(
-          "GENERATION_HASH_FAILED",
-          phase,
-          project,
-          `readSync failed at offset ${totalRead}: ${(e as Error).message}`,
-          generationId,
-        );
-      }
-      if (bytesRead === 0) break;
-      hasher.update(chunk.subarray(0, bytesRead));
-      totalRead += bytesRead;
-    }
-    sha256 = hasher.digest("hex");
-  } catch (e) {
-    if (e instanceof GenerationStoreError) throw e;
-    throw new GenerationStoreError(
-      "GENERATION_HASH_FAILED",
-      phase,
-      project,
-      `Failed to compute SHA-256: ${(e as Error).message}`,
-      generationId,
-    );
-  } finally {
-    if (hashFd !== null) {
-      try { closeSync(hashFd); } catch { /* best effort */ }
-    }
-  }
-
-  // Re-stat after hash, verify dev/ino/size unchanged.
-  const postStat = lstatSync(stagingPath);
-  if (
-    postStat.dev !== preDev ||
-    postStat.ino !== preIno ||
-    postStat.size !== preSize
-  ) {
-    throw new GenerationStoreError(
-      "PUBLICATION_TOKEN_INVALID",
-      phase,
-      project,
-      `TOCTOU: staging file identity changed between hash start and re-stat (dev/ino/size: pre=${preDev}/${preIno}/${preSize}, post=${postStat.dev}/${postStat.ino}/${postStat.size})`,
-      generationId,
-    );
-  }
-  const sizeBytes = postStat.size;
+  const sizeBytes = preStat.size;
 
   // 25-26. Build the manifest from DB-derived values.
   const manifestInput: GenerationManifestV1 = {
@@ -1358,14 +1355,36 @@ export function publishPreparedGeneration(
         });
       }
     } else {
-      // Not deduped: promote the staging DB via link().
+      // Not deduped: promote the staging DB via copy/reflink to a
+      // NEW INODE (R169B-STEP4 IMMUT-R169B-A2-01).
+      //
+      // R169B-STEP3 used `linkSync(stagingPath, finalPath)` which
+      // creates a second directory entry for the SAME inode. After
+      // `unlink(stagingPath)`, any writable fd opened on the staging
+      // path BEFORE the unlink still references the same inode as
+      // the final DB — a process can mutate the "immutable" published
+      // DB through the old fd. This violates the core R169 invariant
+      // "A published generation is immutable".
+      //
+      // R169B-STEP4 replaces link+unlink with `copyFileSync(staging,
+      // final, COPYFILE_EXCL | COPYFILE_FICLONE)`. This creates a
+      // NEW inode for the final DB:
+      //   - COPYFILE_EXCL: fail with EEXIST if the target exists
+      //     (no-clobber, same contract as link).
+      //   - COPYFILE_FICLONE: use copy-on-write reflink when the
+      //     filesystem supports it (btrfs, xfs) — fast. Fall back to
+      //     a regular copy on ext4 / tmpfs.
+      // The staging DB and the final DB are now independent inodes.
+      // A writable fd on the staging path cannot mutate the final DB.
       effectiveGenerationId = generationId;
       effectiveMetadataPath = metadataPath;
       effectiveManifest = manifest;
 
-      // 9. link(staging, final) — no-clobber.
+      // 9. copy/reflink (staging, final) — no-clobber, new inode.
+      const COPYFILE_EXCL = fsConstants.COPYFILE_EXCL;
+      const COPYFILE_FICLONE = fsConstants.COPYFILE_FICLONE;
       try {
-        linkSync(stagingPath, finalPath);
+        copyFileSync(stagingPath, finalPath, COPYFILE_EXCL | COPYFILE_FICLONE);
       } catch (e) {
         const errCode = (e as NodeJS.ErrnoException).code;
         if (errCode === "EEXIST") {
@@ -1373,28 +1392,98 @@ export function publishPreparedGeneration(
             "GENERATION_PROMOTION_CONFLICT",
             phase,
             project,
-            `link() target already exists: ${finalPath} (EEXIST — generation UUID was previously published and not GC'd)`,
+            `copy/reflink target already exists: ${finalPath} (EEXIST — generation UUID was previously published and not GC'd)`,
             generationId,
           );
         }
-        throw new GenerationStoreError(
-          "GENERATION_PROMOTION_FAILED",
-          phase,
-          project,
-          `link("${stagingPath}", "${finalPath}") failed: ${(e as Error).message}`,
-          generationId,
-        );
+        // ENOTSUP means the filesystem doesn't support FICLONE —
+        // retry with EXCL only (regular copy).
+        if (errCode === "ENOTSUP" || errCode === "EXDEV" || errCode === "EOPNOTSUPP") {
+          try {
+            copyFileSync(stagingPath, finalPath, COPYFILE_EXCL);
+          } catch (e2) {
+            const errCode2 = (e2 as NodeJS.ErrnoException).code;
+            if (errCode2 === "EEXIST") {
+              throw new GenerationStoreError(
+                "GENERATION_PROMOTION_CONFLICT",
+                phase,
+                project,
+                `copy target already exists: ${finalPath} (EEXIST — generation UUID was previously published and not GC'd)`,
+                generationId,
+              );
+            }
+            throw new GenerationStoreError(
+              "GENERATION_PROMOTION_FAILED",
+              phase,
+              project,
+              `copy("${stagingPath}", "${finalPath}") failed (fallback after FICLONE unsupported): ${(e2 as Error).message}`,
+              generationId,
+            );
+          }
+        } else {
+          throw new GenerationStoreError(
+            "GENERATION_PROMOTION_FAILED",
+            phase,
+            project,
+            `copy/reflink("${stagingPath}", "${finalPath}") failed: ${(e as Error).message}`,
+            generationId,
+          );
+        }
       }
       visibleMutation = true;
 
+      // R169B-STEP4 (SEAL-R169B-A2-05): the copy/reflink is the
+      // sealing boundary. We now re-hash the FINAL DB and verify
+      // it matches the prepared manifest's sha256. This catches any
+      // mutation of the staging file between the prepare-time hash
+      // and the copy. We also fsync the final DB to make it durable.
+      const finalHash = computeSha256WithIdentityChecks(finalPath, project, phase, generationId);
+      if (finalHash !== manifest.sha256) {
+        // The final DB's hash does not match the prepared manifest.
+        // The staging file was mutated between prepare and copy.
+        // Roll back: unlink the final DB (it's unreferenced by any
+        // manifest), raise PUBLICATION_STAGING_MUTATED.
+        try { unlinkSync(finalPath); } catch { /* best effort */ }
+        visibleMutation = false;
+        throw new GenerationStoreError(
+          "PUBLICATION_STAGING_MUTATED",
+          phase,
+          project,
+          `Final DB sha256 ${finalHash} does not match prepared manifest sha256 ${manifest.sha256} (staging was mutated between prepare and copy)`,
+          generationId,
+        );
+      }
+
+      // fsync the final DB file (durability — the copy may be in
+      // page cache only).
+      let finalFd: number | null = null;
+      try {
+        finalFd = openSync(finalPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+        fsyncSync(finalFd);
+        closeSync(finalFd);
+        finalFd = null;
+      } catch (e) {
+        if (finalFd !== null) {
+          try { closeSync(finalFd); } catch { /* best effort */ }
+        }
+        // The final DB exists but its fsync failed. The bytes may
+        // not survive a crash. Block the manifest publication.
+        try { unlinkSync(finalPath); } catch { /* best effort */ }
+        visibleMutation = false;
+        throw new GenerationStoreError(
+          "GENERATION_PROMOTION_DURABILITY_UNKNOWN",
+          phase,
+          project,
+          `fsync of final DB failed after copy — manifest publication BLOCKED: ${(e as Error).message}`,
+          generationId,
+        );
+      }
+
       // R169B-STEP3 (DUR-R169B-A1-02): fsync(generations/) failure
-      // BLOCKS the manifest write. The previous code surfaced this
-      // as a warning and continued — that violated the documented
-      // contract "si fsync destination échoue, le manifest swap MUST
-      // NOT proceed". The link succeeded but the directory entry may
-      // not survive a crash; writing the manifest would create a
-      // durable manifest pointing at a non-durable target — exactly
-      // the bug R169 was created to eliminate.
+      // BLOCKS the manifest write. The copy succeeded but the
+      // directory entry may not survive a crash; writing the manifest
+      // would create a durable manifest pointing at a non-durable
+      // target — exactly the bug R169 was created to eliminate.
       let dirFd: number | null = null;
       try {
         const opened = openDirectoryNoFollow(generations, PROD_OPS);
@@ -1408,25 +1497,25 @@ export function publishPreparedGeneration(
         }
         // BLOCK: do NOT write the metadata, do NOT write the manifest,
         // do NOT advance the CAS. Roll back the CAS transaction. The
-        // link is on disk but unreferenced by any manifest; the next
-        // GC pass will sweep it (it's in generations/ but no manifest
-        // points at it — GC treats it as an orphan).
+        // final DB is on disk but unreferenced by any manifest; the
+        // next GC pass will sweep it as an orphan.
         throw new GenerationStoreError(
           "GENERATION_PROMOTION_DURABILITY_UNKNOWN",
           phase,
           project,
-          `fsync of generations/ directory failed after link — manifest publication BLOCKED (the link is on disk but unreferenced; the next GC pass will sweep the orphan): ${(e as Error).message}`,
+          `fsync of generations/ directory failed after copy — manifest publication BLOCKED (the final DB is on disk but unreferenced; the next GC pass will sweep the orphan): ${(e as Error).message}`,
           generationId,
         );
       }
 
-      // Unlink the staging alias (best-effort).
+      // Unlink the staging DB (best-effort). The staging and final
+      // are now independent inodes, so unlinking the staging is safe.
       try {
         unlinkSync(stagingPath);
       } catch (e) {
         warnings.push({
           code: "STAGING_ALIAS_CLEANUP_DEFERRED",
-          message: `Failed to unlink staging alias "${stagingPath}" after promotion: ${(e as Error).message}`,
+          message: `Failed to unlink staging DB "${stagingPath}" after promotion: ${(e as Error).message}`,
         });
       }
     }

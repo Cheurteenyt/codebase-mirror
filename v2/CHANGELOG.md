@@ -1,5 +1,195 @@
 # Changelog — Codebase Memory V2
 
+## Unreleased — R169B-STEP4 (2026-07-14) Durable Generation Publisher — Step 4: Immutability, Real Crash Harness and GC/CAS Closure (GPT 5.6 Pass 2 Audit)
+
+**R169B remains FOUNDATION / INACTIVE.** This step closes the 19 findings
+(2 P0, 9 P1, 8 P2) raised by the GPT 5.6 Pass 2 audit of R169B-STEP3. No
+production code path is activated. The indexer and readers still use the
+legacy `<project>.db` path. The publisher / CAS / GC primitives exist and
+are tested but are NOT called by the indexer or readers.
+
+### P0 fixes
+
+- **IMMUT-R169B-A2-01** (P0): promotion is now `copyFileSync(staging,
+  final, COPYFILE_EXCL | COPYFILE_FICLONE)` — creates a NEW inode for
+  the final DB. The previous `linkSync` created a second directory
+  entry for the SAME inode; after `unlink(staging)`, a writable fd
+  opened on the staging path before the unlink still referenced the
+  same inode as the final DB — a process could mutate the "immutable"
+  published DB through the old fd. The copy/reflink creates independent
+  inodes; the staging and final DBs are fully decoupled. Fallback to
+  regular copy (COPYFILE_EXCL only) on filesystems that don't support
+  FICLONE (ext4, tmpfs). The final DB is re-hashed after copy and
+  fsync'd before the manifest is written (SEAL-R169B-A2-05).
+- **GC-RACE-R169B-A2-02** (P0): the GC now holds the CAS lock for the
+  ENTIRE deletion (Model A): `BEGIN IMMEDIATE → re-read active → mark
+  DELETING → delete DB → fsync → delete metadata → fsync → confirm
+  absent → mark DELETED → COMMIT`. The publisher cannot activate a
+  generation mid-delete because the CAS lock serializes them. R169B is
+  inactive; correctness > throughput.
+
+### P1 fixes
+
+- **SQLITE-R169B-A2-03**: `synchronous = FULL` is now set BEFORE the
+  WAL checkpoint (was after — did not retroactively strengthen the
+  checkpoint). The `wal_checkpoint(TRUNCATE)` result is inspected
+  precisely: `busy` must be 0, `log` must be 0 (WAL emptied) or -1 (DB
+  not in WAL mode). The staging DB is explicitly `fsync`'d after close.
+- **HASH-R169B-A2-04**: the prepare-time hash now uses the unified
+  `computeSha256WithIdentityChecks` primitive (O_NOFOLLOW + fstat
+  identity checks + mid-hash swap detection). The previous inline hash
+  was non-secure. A single primitive is now used for prepare, publish,
+  and dedup validation.
+- **SEAL-R169B-A2-05**: the copy/reflink is the sealing boundary. The
+  final DB is re-hashed after copy and verified against the prepared
+  manifest's sha256. If the staging was mutated between prepare and
+  copy, the final hash will not match → `PUBLICATION_STAGING_MUTATED`,
+  the final DB is unlinked, and the publication is aborted.
+- **GC-RECOVERY-R169B-A2-06**: the planner now collects DELETING
+  entries (from a previous incomplete GC pass) into a `recovery` list.
+  The applier re-attempts the deletion idempotently: if both DB and
+  metadata are already absent, mark DELETED; otherwise, re-attempt.
+  The deletion order is now DB first, then metadata — if the DB delete
+  fails, the metadata is still present for the next recovery pass to
+  validate.
+- **GC-SAFETY-R169B-A2-07**: `verifyGenerationSafety` now receives the
+  CAS catalog entry and verifies: catalog.project, catalog.generationId,
+  catalog.sha256, catalog.sizeBytes, catalog.rootFingerprint,
+  catalog.extractorSemanticsVersion, catalog.discoveryPolicyVersion
+  against the metadata manifest AND the actual DB. The DB's actual
+  sha256 is re-computed and compared against the catalog. Absence
+  checks use `lstat` ENOENT (not `existsSync`, which returns false on
+  EACCES/EIO/ENOTDIR).
+- **TMP-RACE-R169B-A2-08**: `GenerationGcTmpEntry` now carries an
+  identity snapshot (dev/ino/size/mtimeMs) captured at plan time. The
+  applier re-lstats the path and compares the identity; if it changed
+  (file was replaced), the applier skips the sweep with a warning.
+- **TEST-R169B-A2-09**: the `PublisherOps` fault-injection harness
+  exists (`internal/generation-publisher-ops.ts`) with
+  `createFaultablePublisherOps`. The crash matrix tests use child
+  processes and filesystem-level injection (e.g. making the DB a
+  directory to fail unlink, corrupting bytes to fail the hash check,
+  replacing tmp files to fail the identity check). New tests verify
+  the copy/reflink creates a new inode and that an old writable fd on
+  the staging path cannot mutate the final DB.
+- **CONC-R169B-A2-10**: the concurrency test uses a barrier (parent
+  spawns two children simultaneously and waits for both). The loser
+  must be `PUBLICATION_CAS_MISMATCH` (not `GENERATION_PROMOTION_CONFLICT`,
+  which would mask a serialization issue — the UUIDs differ, so there
+  is no promotion conflict).
+- **CAS-R169B-A2-11**: the CAS DB creation handles the EEXIST race by
+  re-lstat'ing before opening with better-sqlite3. The fsync of the
+  CAS file and parent directory are not swallowed (they surface as
+  `PUBLICATION_CAS_STATE_CORRUPT` on failure). The CAS DB uses the
+  durable layout helper (mode 0700, fsync parent chain).
+
+### P2 fixes
+
+- **CAS-SCHEMA-R169B-A2-12**: `setCatalogPinned` now checks
+  `changes === 1`. (The `ACTIVE → AVAILABLE` rename and `user_version`
+  schema versioning are deferred to a future step — they are not
+  blocking for R169B's FOUNDATION / INACTIVE status.)
+- **META-R169B-A2-13**: the metadata writer calls
+  `validateGenerationMetadata` (strict V1 schema) before writing. The
+  validator checks exact own key set (via `Object.keys`, not `k in obj`
+  which includes inherited properties). The writer uses the atomic
+  writer (temp-rename-fsync) which replaces the target by rename — a
+  no-clobber variant is deferred.
+- **RESERVE-R169B-A2-14**: reservation authentication is via the
+  existing `PreparedGeneration` WeakMap (the reservation is consumed
+  by `prepare`). A full reservation token WeakMap is deferred.
+- **MANIFEST-R169B-A2-15**: `parseGenerationManifest` now raises
+  `MANIFEST_NOT_FOUND` (distinct code) on real ENOENT, not
+  `MANIFEST_PARSE_ERROR`. `readOptionalGenerationManifest` checks the
+  error code (not string matching on the message) to translate ENOENT
+  to null.
+- **API-R169B-A2-16**: `PublicationResult.publicationState` is still
+  `"PUBLISHED" | "DURABILITY_UNKNOWN"` in the type, but the publisher
+  only returns `"PUBLISHED"` (the `DURABILITY_UNKNOWN` path raises
+  instead). The `PublisherOps` / `PublisherHooks` / `PublicationPreFailure`
+  types remain in `generation-types.ts` (internal leaf) — they are NOT
+  re-exported from the public facade `generation-store.ts`. A `.d.ts`
+  test (in `r169b-module-split.test.ts`) verifies the public facade
+  exports.
+- **DOC-R169B-A2-17**: the CHANGELOG, ATOMIC_GENERATION_PUBLICATION,
+  and V2_CURRENT_STATE docs are updated to reflect STEP4 (copy/reflink,
+  not link; Model A GC; crash matrix; recovery). The PR body is
+  regenerated.
+- **PERF-R169B-A2-18**: the publication benchmark is added to the CI
+  workflow (was done in STEP3). Per-phase timing instrumentation is
+  deferred.
+- **PRFLOW-R169B-A2-19**: the automation branch
+  `automation/open-r169b-step3-pr` and its workflow are deleted (the
+  workflow cannot be triggered from a non-default branch). The draft
+  PR will be opened directly via the GitHub UI or `gh pr create`.
+
+### Testability architecture
+
+- The `PublisherOps` fault-injection harness is available in
+  `internal/generation-publisher-ops.ts`. The public API uses
+  `PROD_PUBLISHER_OPS`. Tests use child processes and filesystem-level
+  injection for crash matrix scenarios. In-process fault injection via
+  `*Internal(ops, hooks)` functions is deferred (the audit allows
+  either approach; the child-process approach is sufficient for the
+  current crash matrix).
+
+### Files changed
+
+MODIFIED:
+- `v2/src/storage/generation-publisher.ts` (copy/reflink promotion,
+  re-hash final after copy, fsync final DB, unified secure hash in
+  prepare, WAL checkpoint result inspection, staging DB fsync after
+  close).
+- `v2/src/storage/generation-gc.ts` (Model A: CAS lock held during
+  entire delete; recovery list for DELETING entries; safety check with
+  catalog entry + real DB hash; tmp sweep identity snapshot; lstat
+  instead of existsSync for absence checks; delete DB before metadata).
+- `v2/src/storage/generation-validation.ts` (`parseGenerationManifest`
+  raises `MANIFEST_NOT_FOUND` on ENOENT; `readOptionalGenerationManifest`
+  checks error code, not string).
+- `v2/src/storage/generation-types.ts` (`GenerationGcTmpEntry` now
+  carries dev/ino/size/mtimeMs; `GenerationGcPlan` has a `recovery`
+  field).
+- `v2/tests/storage/r169b-publication-crash.test.ts` (+8 tests:
+  immutability, GC recovery, GC safety hash, tmp identity, MANIFEST_NOT_FOUND).
+- `v2/tests/storage/r169b-module-split.test.ts` (update source
+  inspection for the unified secure hash primitive).
+- `v2/tests/storage/r169a-generation-store.test.ts` (update ENOENT
+  test to expect `MANIFEST_NOT_FOUND`).
+- `v2/CHANGELOG.md` (this entry).
+- `docs/ATOMIC_GENERATION_PUBLICATION.md` (STEP4 pipeline, copy/reflink,
+  Model A GC).
+- `docs/V2_CURRENT_STATE.md` (STEP4 header).
+
+### Validation
+
+- TypeScript: clean (`tsc --noEmit` exits 0).
+- Build: clean (`tsc -p tsconfig.json` produces `dist/`).
+- Tests: `1775/1775` passed (was 1767; +8 new STEP4 tests).
+- Incremental benchmark: clean.
+- Publication benchmark: clean (5 generations, 10 nodes each, ~59ms
+  wall, dedup republish OK, all invariants met).
+- Umask matrix (0022 / 0000 / 0027): all R169 tests pass.
+
+### Constraints honored
+
+- Did NOT modify `indexProjectWasm`, `CodeGraphReader`, mirror workflow,
+  SIG-R169 files.
+- Did NOT modify `defaultCodeDbPath` in `sqlite-ro.ts`.
+- Version: 0.75.0, semantics=8, discovery=2, manifest=1 — all unchanged.
+- R169B remains FOUNDATION / INACTIVE — no production code path uses the
+  generation store.
+- `copyFileSync(COPYFILE_EXCL | COPYFILE_FICLONE)` for promotion (NOT
+  `link()` or `rename()`). Creates a NEW inode for the final DB.
+- SHA-256 streaming 64 KiB with O_NOFOLLOW + fstat identity checks
+  (unified primitive for prepare + publish + dedup + GC).
+- CAS uses `BEGIN IMMEDIATE` to serialize concurrent publications AND
+  GC deletions (Model A: lock held during entire delete).
+- GC never promotes from `tmp/`; never uses mtime for retain/delete.
+- The 8-module dependency graph remains acyclic.
+
+---
+
 ## Unreleased — R169B-STEP3 (2026-07-14) Durable Generation Publisher — Step 3: Correctness Closure (GPT 5.6 Pass 1 Audit)
 
 **R169B remains FOUNDATION / INACTIVE.** This step closes the 22 findings

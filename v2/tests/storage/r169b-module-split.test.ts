@@ -966,9 +966,12 @@ describe("R169B-STEP2 — Publisher / CAS / GC module structure", () => {
     // The publisher MUST NOT use readFileSync to read the staging DB
     // for hashing (it must stream in chunks).
     expect(src).not.toMatch(/readFileSync\(stagingPath/);
-    // Verify the chunk-based read is present.
+    // R169B-STEP4 (HASH-R169B-A2-04): the publisher now uses the
+    // unified secure hash primitive (computeSha256WithIdentityChecks)
+    // for BOTH prepare and publish. The chunk-based read is inside
+    // that primitive.
     expect(src).toMatch(/HASH_CHUNK_BYTES/);
-    expect(src).toMatch(/readSync\(hashFd/);
+    expect(src).toMatch(/computeSha256WithIdentityChecks/);
   });
 
   it("the publisher uses a WeakMap for PreparedGeneration tokens (forge-resistant)", () => {

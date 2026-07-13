@@ -933,10 +933,21 @@ export interface GenerationGcPlanEntry {
 
 /**
  * R169B-STEP2: A tmp/ artifact to sweep in the GC plan.
+ *
+ * R169B-STEP4 (TMP-RACE-R169B-A2-08): the entry now carries an
+ * identity snapshot (dev/ino/size/mtimeMs) captured at plan time.
+ * The applier re-lstats the path and compares the identity; if it
+ * changed (file was replaced), the applier skips the sweep with a
+ * warning. This prevents the race where a file is replaced between
+ * plan and apply.
  */
 export interface GenerationGcTmpEntry {
   readonly path: string;
   readonly reason: string;
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
 }
 
 /**
@@ -954,6 +965,13 @@ export interface GenerationGcPlan {
   readonly casRevision: number;
   readonly retain: readonly GenerationGcPlanEntry[];
   readonly delete: readonly GenerationGcPlanEntry[];
+  /**
+   * R169B-STEP4 (GC-RECOVERY-R169B-A2-06): entries in DELETING status
+   * from a previous incomplete GC pass. The applier re-attempts the
+   * deletion idempotently: if both DB and metadata are already absent,
+   * mark DELETED; otherwise, re-attempt the deletion.
+   */
+  readonly recovery: readonly GenerationGcPlanEntry[];
   readonly sweepTmp: readonly GenerationGcTmpEntry[];
   readonly reasons: Readonly<Record<string, string>>;
 }

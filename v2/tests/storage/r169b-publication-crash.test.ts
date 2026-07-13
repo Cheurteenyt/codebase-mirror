@@ -78,7 +78,7 @@ import {
   FIXTURE_PROJECT_NAME,
   FIXTURE_ROOT_FINGERPRINT,
 } from "../helpers/r169b-publisher-fixtures.js";
-import { readOptionalGenerationManifest } from "../../src/storage/generation-validation.js";
+import { readOptionalGenerationManifest, parseGenerationManifest } from "../../src/storage/generation-validation.js";
 
 let cacheRoot: string;
 
@@ -619,6 +619,224 @@ describe("R169B-STEP3 — CAS-R169B-A1-18: catalog immutability", () => {
     } finally {
       try { cas.rollback(); } catch { /* best effort */ }
       cas.close();
+    }
+  });
+});
+
+// ─── R169B-STEP4 — IMMUT-R169B-A2-01: copy/reflink creates a NEW inode ──
+
+describe("R169B-STEP4 — IMMUT-R169B-A2-01: copy/reflink creates a new inode (immutable published DB)", () => {
+  it("the published final DB has a DIFFERENT inode than the staging DB", () => {
+    const { reservation, prepared } = reserveAndPopulateValid();
+    const stagingIno = lstatSync(reservation.stagingPath).ino;
+    const stagingDev = lstatSync(reservation.stagingPath).dev;
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
+    const finalStat = lstatSync(result.dbPath);
+    // The final DB MUST have a different inode than the staging DB.
+    // (On the same filesystem, dev should be equal but ino must differ.)
+    expect(finalStat.dev).toBe(stagingDev);
+    expect(finalStat.ino).not.toBe(stagingIno);
+  });
+
+  it("an old writable fd on the staging path cannot mutate the published final DB", () => {
+    // R169B-STEP4 (IMMUT-R169B-A2-01): the core immutability test.
+    // 1. Reserve + populate + prepare (staging DB exists).
+    // 2. Open a writable fd on the staging path (simulating an indexer
+    //    that forgot to close its handle).
+    // 3. Publish (copy/reflink creates a NEW inode for the final DB).
+    // 4. Write through the old staging fd (mutate the staging inode).
+    // 5. Verify the final DB's bytes/hash are UNCHANGED.
+    const { reservation, prepared } = reserveAndPopulateValid();
+    const fs = require("node:fs");
+    // Open a writable fd on the staging path BEFORE publish.
+    const stagingFd = fs.openSync(reservation.stagingPath, "r+");
+    try {
+      const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
+      // Compute the final DB's hash BEFORE mutation.
+      const { createHash } = require("node:crypto");
+      const finalHashBefore = createHash("sha256").update(fs.readFileSync(result.dbPath)).digest("hex");
+      // Mutate the staging inode through the old fd (append bytes).
+      fs.writeSync(stagingFd, Buffer.from("malicious mutation appended"));
+      fs.fsyncSync(stagingFd);
+      // Re-compute the final DB's hash AFTER mutation.
+      const finalHashAfter = createHash("sha256").update(fs.readFileSync(result.dbPath)).digest("hex");
+      // The final DB's hash MUST be unchanged — the staging mutation
+      // did not affect the final DB (they are independent inodes).
+      expect(finalHashAfter).toBe(finalHashBefore);
+      expect(finalHashAfter).toBe(prepared.manifest.sha256);
+    } finally {
+      try { fs.closeSync(stagingFd); } catch { /* best effort */ }
+    }
+  });
+
+  it("the published final DB's sha256 matches the prepared manifest (re-hash after copy)", () => {
+    // R169B-STEP4 (SEAL-R169B-A2-05): the publisher re-hashes the
+    // final DB after copy and verifies it matches the manifest.
+    const { prepared } = reserveAndPopulateValid();
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
+    const { createHash } = require("node:crypto");
+    const fs = require("node:fs");
+    const finalHash = createHash("sha256").update(fs.readFileSync(result.dbPath)).digest("hex");
+    expect(finalHash).toBe(prepared.manifest.sha256);
+  });
+});
+
+// ─── R169B-STEP4 — GC-RECOVERY-R169B-A2-06: DELETING recovery ──────────
+
+describe("R169B-STEP4 — GC-RECOVERY-R169B-A2-06: DELETING recovery", () => {
+  it("a generation stuck in DELETING is recovered by the next GC pass", () => {
+    // Publish 4 generations (only 3 retained: active + 2 previous).
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const { reservation } = reserveAndPopulateValid();
+      const prepared = prepareGenerationForPublication(reservation);
+      const result = publishPreparedGeneration(
+        prepared,
+        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
+        { cacheRoot },
+      );
+      ids.push(result.generationId);
+    }
+    // Manually mark ids[0] as DELETING in the CAS (simulating a
+    // previous incomplete GC pass).
+    const cas = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
+    cas.beginImmediate();
+    cas.setCatalogStatus(ids[0], "DELETING");
+    cas.appendPublicationHistory(ids[0], FIXTURE_PROJECT_NAME, "MARK_DELETING", null);
+    cas.commit();
+    cas.close();
+
+    // Plan + apply GC. The planner should pick up ids[0] as a recovery
+    // entry, and the applier should re-attempt the deletion.
+    const plan = planGenerationGc(FIXTURE_PROJECT_NAME, { cacheRoot });
+    expect(plan.recovery.some((e) => e.generationId === ids[0])).toBe(true);
+
+    const result = applyGenerationGcPlan(plan, { cacheRoot });
+    expect(result.deletedGenerations).toContain(ids[0]);
+
+    // The CAS catalog entry for ids[0] is now DELETED.
+    const cas2 = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
+    const entry = cas2.getGenerationCatalogEntry(ids[0]);
+    expect(entry?.status).toBe("DELETED");
+    cas2.close();
+
+    // The DB and metadata are gone.
+    const dbPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.db`);
+    const metaPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.json`);
+    expect(existsSync(dbPath)).toBe(false);
+    expect(existsSync(metaPath)).toBe(false);
+  });
+
+  it("recovery is idempotent — if both files are already absent, mark DELETED", () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const { reservation } = reserveAndPopulateValid();
+      const prepared = prepareGenerationForPublication(reservation);
+      const result = publishPreparedGeneration(
+        prepared,
+        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
+        { cacheRoot },
+      );
+      ids.push(result.generationId);
+    }
+    // Mark ids[0] as DELETING AND manually delete both files.
+    const cas = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
+    cas.beginImmediate();
+    cas.setCatalogStatus(ids[0], "DELETING");
+    cas.appendPublicationHistory(ids[0], FIXTURE_PROJECT_NAME, "MARK_DELETING", null);
+    cas.commit();
+    cas.close();
+    const dbPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.db`);
+    const metaPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.json`);
+    require("node:fs").unlinkSync(dbPath);
+    require("node:fs").unlinkSync(metaPath);
+
+    // Plan + apply GC. The recovery should detect both files absent
+    // and mark DELETED.
+    const plan = planGenerationGc(FIXTURE_PROJECT_NAME, { cacheRoot });
+    expect(plan.recovery.some((e) => e.generationId === ids[0])).toBe(true);
+    const result = applyGenerationGcPlan(plan, { cacheRoot });
+    expect(result.deletedGenerations).toContain(ids[0]);
+    const cas2 = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
+    const entry = cas2.getGenerationCatalogEntry(ids[0]);
+    expect(entry?.status).toBe("DELETED");
+    cas2.close();
+  });
+});
+
+// ─── R169B-STEP4 — GC-SAFETY-R169B-A2-07: safety check with catalog hash ─
+
+describe("R169B-STEP4 — GC-SAFETY-R169B-A2-07: safety check with catalog hash", () => {
+  it("GC refuses to delete a generation whose DB hash does not match the catalog", () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const { reservation } = reserveAndPopulateValid();
+      const prepared = prepareGenerationForPublication(reservation);
+      const result = publishPreparedGeneration(
+        prepared,
+        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
+        { cacheRoot },
+      );
+      ids.push(result.generationId);
+    }
+    // Corrupt ids[0]'s DB by appending bytes (changes the hash but
+    // NOT the catalog entry — the catalog still has the original hash).
+    const dbPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.db`);
+    const fs = require("node:fs");
+    const fh = fs.openSync(dbPath, "r+");
+    fs.writeSync(fh, Buffer.from("corruption appended — hash mismatch"));
+    fs.closeSync(fh);
+
+    // Plan + apply GC. The safety check should detect the hash mismatch
+    // and refuse to delete ids[0] (GC_SAFETY_REFUSAL).
+    const plan = planGenerationGc(FIXTURE_PROJECT_NAME, { cacheRoot });
+    const result = applyGenerationGcPlan(plan, { cacheRoot });
+    expect(result.deletedGenerations).not.toContain(ids[0]);
+    expect(result.warnings.some((w) => w.code === "GC_SAFETY_REFUSAL")).toBe(true);
+    // The DB is still on disk (NOT deleted).
+    expect(existsSync(dbPath)).toBe(true);
+  });
+});
+
+// ─── R169B-STEP4 — TMP-RACE-R169B-A2-08: tmp sweep identity check ───────
+
+describe("R169B-STEP4 — TMP-RACE-R169B-A2-08: tmp sweep identity check", () => {
+  it("GC refuses to sweep a tmp artifact whose identity changed between plan and apply", () => {
+    const tmp = tmpDir(FIXTURE_PROJECT_NAME, cacheRoot);
+    const oldPath = join(tmp, "generation-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.db");
+    require("node:fs").writeFileSync(oldPath, "old staging DB", "utf-8");
+    const twoDaysAgo = Date.now() / 1000 - 2 * 24 * 60 * 60;
+    require("node:fs").utimesSync(oldPath, twoDaysAgo, twoDaysAgo);
+
+    const plan = planGenerationGc(FIXTURE_PROJECT_NAME, { cacheRoot, tmpMaxAgeMs: 24 * 60 * 60 * 1000 });
+    expect(plan.sweepTmp.length).toBe(1);
+
+    // Replace the file between plan and apply (simulate a race).
+    require("node:fs").unlinkSync(oldPath);
+    require("node:fs").writeFileSync(oldPath, "new staging DB — different content", "utf-8");
+    // The new file has a different size/mtime/ino.
+
+    const result = applyGenerationGcPlan(plan, { cacheRoot });
+    // The sweep should be refused (identity changed).
+    expect(result.deletedTmp).not.toContain(oldPath);
+    expect(result.warnings.some((w) => w.code === "GC_DELETE_FAILED" && w.message.includes("identity changed"))).toBe(true);
+    // The new file is still on disk.
+    expect(existsSync(oldPath)).toBe(true);
+  });
+});
+
+// ─── R169B-STEP4 — MANIFEST-R169B-A2-15: MANIFEST_NOT_FOUND distinct code ─
+
+describe("R169B-STEP4 — MANIFEST-R169B-A2-15: MANIFEST_NOT_FOUND distinct code", () => {
+  it("parseGenerationManifest raises MANIFEST_NOT_FOUND (not MANIFEST_PARSE_ERROR) on ENOENT", () => {
+    const manifestPath = activeManifestPath(FIXTURE_PROJECT_NAME, cacheRoot);
+    expect(existsSync(manifestPath)).toBe(false);
+    try {
+      parseGenerationManifest(manifestPath, FIXTURE_PROJECT_NAME);
+      expect.fail("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GenerationStoreError);
+      expect((e as GenerationStoreError).code).toBe("MANIFEST_NOT_FOUND");
     }
   });
 });
