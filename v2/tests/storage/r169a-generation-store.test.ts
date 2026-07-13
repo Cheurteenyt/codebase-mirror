@@ -105,17 +105,25 @@ import {
   parseGenerationManifest,
   resolveActiveCodeDb,
   writeIndexStateAtomically,
-  writeIndexStateAtomicallyInternal,
   ensureGenerationStoreLayoutDurable,
-  ensureGenerationStoreLayoutDurableInternal,
   listProjectStoreKeys,
   MAX_GENERATION_MANIFEST_BYTES,
   GenerationStoreError,
+  type GenerationStoreOptions,
+} from "../../src/storage/generation-store.js";
+
+// R169A-FIX-R8 (API-R169A-R8-01): Internal symbols are imported from the
+// dedicated internal module. The public module `generation-store.ts`
+// no longer exports `AtomicFileOps`, `WriterTestHook`, `PROD_OPS`, or
+// the `*Internal` functions. This keeps the public API surface clean
+// (the generated `.d.ts` does not contain these symbols).
+import {
   type AtomicFileOps,
   PROD_OPS,
-  type GenerationStoreOptions,
   type WriterTestHook,
-} from "../../src/storage/generation-store.js";
+  writeIndexStateAtomicallyInternal,
+  ensureGenerationStoreLayoutDurableInternal,
+} from "../../src/storage/internal/generation-store-io.js";
 
 // R169A-FIX-R7 (API-R169A-R7-01): Tests import the internal function
 // directly. The public function has exactly 3 params and does NOT
@@ -3619,6 +3627,159 @@ describe("R169A-FIX-R5 — __test__ / writeGenerationManifestAtomically NOT expo
     expect(src).not.toMatch(/export\s*\{[^}]*\b__test__\b[^}]*\}/);
     // `export { ... writeGenerationManifestAtomically ... }` re-export must NOT appear.
     expect(src).not.toMatch(/export\s*\{[^}]*\bwriteGenerationManifestAtomically\b[^}]*\}/);
+  });
+});
+
+// ─── R169A-FIX-R8: internal symbols NOT exported from public module ──────
+//
+// R169A-FIX-R8 (API-R169A-R8-01): GPT 5.6 final audit pass found that
+// the public module `generation-store.ts` was still EXPORTING internal
+// symbols (`AtomicFileOps`, `WriterTestHook`, `PROD_OPS`, the `*Internal`
+// functions, etc.). Even though they were marked `@internal` in JSDoc,
+// they appeared in the generated `.d.ts` and were therefore part of the
+// public API surface. These tests verify that the module split moved
+// ALL internal symbols to `./internal/generation-store-io.js` and that
+// the public module does NOT export or re-export any of them.
+
+describe("R169A-FIX-R8 — internal symbols NOT exported from public module (API-R169A-R8-01)", () => {
+  // List of internal symbol names that MUST NOT be exported from the
+  // public module. These are now exclusively in the internal module.
+  const INTERNAL_SYMBOLS = [
+    "AtomicFileOps",
+    "WriterTestHook",
+    "PROD_OPS",
+    "writeIndexStateAtomicallyInternal",
+    "ensureGenerationStoreLayoutDurableInternal",
+    "writeProjectJsonAtomicallyInternal",
+    "writeJsonAtomically",
+    "prepareGenerationManifestForWrite",
+    "prepareIndexStateForWrite",
+    "openDirectoryNoFollow",
+    "assertLayoutDirPermissions",
+    "defaultSerializeJson",
+    "writeGenerationManifestAtomically",
+    "__test__",
+  ] as const;
+
+  for (const symbol of INTERNAL_SYMBOLS) {
+    it(`the generation-store module does NOT export ${symbol}`, async () => {
+      const mod = await import("../../src/storage/generation-store.js");
+      expect((mod as Record<string, unknown>)[symbol]).toBeUndefined();
+    });
+  }
+
+  it("the generation-store module DOES export the public façade writeIndexStateAtomically", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect(typeof (mod as Record<string, unknown>).writeIndexStateAtomically).toBe("function");
+  });
+
+  it("the generation-store module DOES export the public façade ensureGenerationStoreLayoutDurable", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect(typeof (mod as Record<string, unknown>).ensureGenerationStoreLayoutDurable).toBe("function");
+  });
+
+  it("source inspection: no `export` of any internal symbol in generation-store.ts", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "..", "..", "src", "storage", "generation-store.ts"),
+      "utf-8",
+    );
+    // For each internal symbol, verify no `export interface`, `export type`,
+    // `export const`, `export function`, or `export { ... symbol ... }`
+    // statement targets it.
+    for (const symbol of INTERNAL_SYMBOLS) {
+      // `export interface SymbolName`
+      expect(src).not.toMatch(new RegExp(`export\\s+interface\\s+${symbol}\\b`));
+      // `export type SymbolName`
+      expect(src).not.toMatch(new RegExp(`export\\s+type\\s+${symbol}\\b`));
+      // `export const SymbolName`
+      expect(src).not.toMatch(new RegExp(`export\\s+const\\s+${symbol}\\b`));
+      // `export function SymbolName`
+      expect(src).not.toMatch(new RegExp(`export\\s+function\\s+${symbol}\\b`));
+      // `export { ... SymbolName ... }` re-export
+      expect(src).not.toMatch(new RegExp(`export\\s*\\{[^}]*\\b${symbol}\\b[^}]*\\}`));
+    }
+  });
+
+  it("source inspection: generation-store.ts imports PROD_OPS and *Internal from internal module", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "..", "..", "src", "storage", "generation-store.ts"),
+      "utf-8",
+    );
+    // The public module MUST import PROD_OPS and the *Internal functions
+    // from the internal module (not define them locally).
+    expect(src).toMatch(/from\s+["']\.\/internal\/generation-store-io\.js["']/);
+    expect(src).toMatch(/\bPROD_OPS\b/);
+    expect(src).toMatch(/\bwriteIndexStateAtomicallyInternal\b/);
+    expect(src).toMatch(/\bensureGenerationStoreLayoutDurableInternal\b/);
+    expect(src).toMatch(/\bassertLayoutDirPermissions\b/);
+  });
+
+  it("source inspection: internal module exports all internal symbols", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "..", "..", "src", "storage", "internal", "generation-store-io.ts"),
+      "utf-8",
+    );
+    // The internal module MUST export each internal symbol.
+    expect(src).toMatch(/export\s+interface\s+AtomicFileOps\b/);
+    expect(src).toMatch(/export\s+interface\s+WriterTestHook\b/);
+    expect(src).toMatch(/export\s+const\s+PROD_OPS\b/);
+    expect(src).toMatch(/export\s+function\s+writeIndexStateAtomicallyInternal\b/);
+    expect(src).toMatch(/export\s+function\s+ensureGenerationStoreLayoutDurableInternal\b/);
+    expect(src).toMatch(/export\s+function\s+writeProjectJsonAtomicallyInternal\b/);
+    expect(src).toMatch(/export\s+function\s+writeJsonAtomically\b/);
+    expect(src).toMatch(/export\s+function\s+prepareGenerationManifestForWrite\b/);
+    expect(src).toMatch(/export\s+function\s+prepareIndexStateForWrite\b/);
+    expect(src).toMatch(/export\s+function\s+openDirectoryNoFollow\b/);
+    expect(src).toMatch(/export\s+function\s+assertLayoutDirPermissions\b/);
+  });
+
+  it("generated .d.ts inspection: dist/storage/generation-store.d.ts does NOT contain internal symbols", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const dtsPath = path.resolve(__dirname, "..", "..", "dist", "storage", "generation-store.d.ts");
+    // The dist/ directory is created by `npm run build` (the pretest hook).
+    // If the file doesn't exist, the test fails with a clear message.
+    if (!fs.existsSync(dtsPath)) {
+      expect.fail(`Generated .d.ts not found at ${dtsPath}. Run 'npm run build' first.`);
+    }
+    const dts = fs.readFileSync(dtsPath, "utf-8");
+    // Each internal symbol MUST NOT appear as an export in the .d.ts.
+    for (const symbol of INTERNAL_SYMBOLS) {
+      // Match `declare interface SymbolName`, `declare type SymbolName`,
+      // `declare const SymbolName`, `declare function SymbolName`, or
+      // `export { SymbolName }` / `export { ..., SymbolName, ... }`.
+      const patterns = [
+        new RegExp(`declare\s+interface\s+${symbol}\b`),
+        new RegExp(`declare\s+type\s+${symbol}\b`),
+        new RegExp(`declare\s+const\s+${symbol}\b`),
+        new RegExp(`declare\s+function\s+${symbol}\b`),
+        new RegExp(`export\s*\{[^}]*\b${symbol}\b[^}]*\}`),
+      ];
+      for (const p of patterns) {
+        expect(dts).not.toMatch(p);
+      }
+    }
+  });
+
+  it("generated .d.ts inspection: dist/storage/generation-store.d.ts DOES contain public façades", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const dtsPath = path.resolve(__dirname, "..", "..", "dist", "storage", "generation-store.d.ts");
+    if (!fs.existsSync(dtsPath)) {
+      expect.fail(`Generated .d.ts not found at ${dtsPath}. Run 'npm run build' first.`);
+    }
+    const dts = fs.readFileSync(dtsPath, "utf-8");
+    // The public façades MUST appear in the .d.ts.
+    expect(dts).toMatch(/declare\s+function\s+writeIndexStateAtomically\b/);
+    expect(dts).toMatch(/declare\s+function\s+ensureGenerationStoreLayoutDurable\b/);
+    expect(dts).toMatch(/declare\s+function\s+listProjectStoreKeys\b/);
+    expect(dts).toMatch(/declare\s+function\s+resolveActiveCodeDb\b/);
   });
 });
 
