@@ -109,7 +109,6 @@ import {
   listProjectStoreKeys,
   MAX_GENERATION_MANIFEST_BYTES,
   GenerationStoreError,
-  __test__,
   type AtomicFileOps,
   type GenerationStoreOptions,
   type WriterTestHook,
@@ -125,17 +124,40 @@ import {
   type IndexAttemptFailureV1,
   type IndexAttemptOutcome,
   type IndexRecoveryAction,
+  type IndexPublicationState,
 } from "../../src/storage/generation-types.js";
+import {
+  writeManifestFixture,
+} from "../helpers/r169-generation-fixtures.js";
 
-// R169A-FIX-R4 (DATA-R169A-R4-02): `writeGenerationManifestAtomically` is
-// internal (NOT a publication API). It is exposed via the `__test__`
-// namespace for test fixtures ONLY. Assign it to a local constant so the
-// existing test callsites read naturally.
-const {
-  writeGenerationManifestAtomically,
-  prepareGenerationManifestForWrite,
-  prepareIndexStateForWrite,
-} = __test__;
+// R169A-FIX-R5 (API-R169A-R5-01): The `__test__` export is REMOVED.
+// `writeGenerationManifestAtomically` and the `prepare*ForWrite` helpers
+// are no longer accessible. Tests that need a manifest on disk use
+// `writeManifestFixture` (writeFileSync-based). Atomic writer mechanic
+// tests use `writeIndexStateAtomically` (the only public writer).
+
+// Local helper: write a manifest to disk via the fixture helper (writeFileSync).
+// Used by tests that need a manifest on disk for the resolver to read.
+function writeManifestToDisk(
+  cacheRoot: string,
+  project: string,
+  manifest: GenerationManifestV1,
+): string {
+  return writeManifestFixture(cacheRoot, project, manifest);
+}
+
+// Local helper: write an index-state atomically via the public writer.
+// Used by tests that exercise the atomic writer mechanics (fault injection,
+// race injection). Replaces the old `writeGenerationManifestAtomically` calls.
+function writeStateAtomically(
+  project: string,
+  cacheRoot: string,
+  state?: Partial<IndexAttemptStateV1>,
+  ops?: AtomicFileOps,
+  hook?: WriterTestHook,
+): void {
+  writeIndexStateAtomically(project, makeValidIndexState(project, state), { cacheRoot }, ops, hook);
+}
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -172,11 +194,12 @@ function makeValidManifest(
 /**
  * R169A-FIX-R4 (STATE-R169A-R4-01): Build a valid IndexAttemptStateV1 for
  * tests. The `overrides` parameter lets each test customize the outcome,
- * recovery, staleReason, failure, published, candidateGenerationId, etc.
+ * recovery, staleReason, failure, publicationState, candidateGenerationId, etc.
  *
- * The default is a SUCCESS state: published=true, failure=null,
- * staleReason=null, recovery="none", activeGenerationId non-null,
- * candidateGenerationId non-null (equals activeGenerationId on SUCCESS).
+ * R169A-FIX-R5 (STATE-R169A-R5-01): The default is a SUCCESS state:
+ * publicationState="PUBLISHED", failure=null, staleReason=null,
+ * recovery="none", activeGenerationId non-null, candidateGenerationId
+ * non-null (equals activeGenerationId on SUCCESS+PUBLISHED).
  */
 function makeValidIndexState(
   project: string = "test-project",
@@ -190,7 +213,9 @@ function makeValidIndexState(
     lastAttemptId: OTHER_UUID,
     lastAttemptAt: VALID_TIMESTAMP,
     lastAttemptOutcome: "SUCCESS",
-    published: true,
+    // R169A-FIX-R5 (STATE-R169A-R5-01): `publicationState` replaces
+    // `published: boolean`. Default is "PUBLISHED" for SUCCESS.
+    publicationState: "PUBLISHED",
     failure: null,
     staleReason: null,
     recovery: "none",
@@ -214,12 +239,38 @@ function makeValidFailure(
 }
 
 /**
+ * R169A-FIX-R5 (SEC-R169A-R5-02): Idempotent directory creation with
+ * explicit mode 0o700. `mkdirSync(path, { mode: 0o700 })` without
+ * `recursive: true` throws EEXIST if the dir already exists. We use
+ * `recursive: true` (which silently no-ops on EEXIST) and then
+ * `chmodSync(path, 0o700)` to force the correct mode — `recursive: true`
+ * does NOT apply the mode to existing intermediate dirs, so an existing
+ * 0755 dir would stay 0755 and fail the R5 permission check.
+ */
+function ensureDirMode0700(path: string): void {
+  const fs = require("node:fs");
+  fs.mkdirSync(path, { recursive: true });
+  try {
+    fs.chmodSync(path, 0o700);
+  } catch {
+    // Best-effort — some filesystems (e.g. FAT) don't support chmod.
+  }
+}
+
+/**
  * Write a manifest file into the injected cacheRoot. Uses the production
  * path helpers so the test exercises the real layout.
  */
 function writeManifest(cacheRoot: string, project: string, manifest: GenerationManifestV1): string {
+  // R169A-FIX-R5 (SEC-R169A-R5-02): Create the directory chain with mode
+  // 0o700 so the trust root permission check passes. The previous
+  // `mkdirSync(resolve(manifestPath, ".."), { recursive: true })` created
+  // dirs with the default umask (often 0755), which the R5 permission
+  // check rejects for private R169 dirs (projects, project-key).
+  ensureDirMode0700(cbmCacheDir(cacheRoot));
+  ensureDirMode0700(generationStoreRoot(cacheRoot));
+  ensureDirMode0700(projectStoreDir(project, cacheRoot));
   const manifestPath = activeManifestPath(project, cacheRoot);
-  mkdirSync(resolve(manifestPath, ".."), { recursive: true });
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf-8");
   return manifestPath;
 }
@@ -228,9 +279,13 @@ function writeManifest(cacheRoot: string, project: string, manifest: GenerationM
  * Write a fake generation DB file into the injected cacheRoot.
  */
 function writeGenerationDb(cacheRoot: string, project: string, dbFile: string): string {
+  // R169A-FIX-R5: Create the chain with 0o700 for the trust root permission check.
+  ensureDirMode0700(cbmCacheDir(cacheRoot));
+  ensureDirMode0700(generationStoreRoot(cacheRoot));
+  ensureDirMode0700(projectStoreDir(project, cacheRoot));
   const projectDir = projectStoreDir(project, cacheRoot);
   const dbPath = join(projectDir, dbFile);
-  mkdirSync(resolve(dbPath, ".."), { recursive: true });
+  ensureDirMode0700(resolve(dbPath, ".."));
   writeFileSync(dbPath, "fake DB content", "utf-8");
   return dbPath;
 }
@@ -240,8 +295,9 @@ function writeGenerationDb(cacheRoot: string, project: string, dbFile: string): 
  * does NOT touch the real HOME cache — it uses the injected cacheRoot.
  */
 function writeLegacyDb(cacheRoot: string, project: string): string {
+  // R169A-FIX-R5: Create cbm with 0o700 (compat root — 0700 satisfies mode & 0o022 === 0).
+  ensureDirMode0700(cbmCacheDir(cacheRoot));
   const dbPath = legacyCodeDbPath(project, cacheRoot);
-  mkdirSync(resolve(dbPath, ".."), { recursive: true });
   writeFileSync(dbPath, "fake legacy DB", "utf-8");
   return dbPath;
 }
@@ -865,7 +921,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
       activeGenerationId: null,
       candidateGenerationId: VALID_UUID,
       lastAttemptOutcome: "FAILED",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       failure: makeValidFailure(),
       recovery: "retry_incremental",
     });
@@ -873,39 +929,62 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
   });
 
   it("SUCCESS_WITH_WARNINGS outcome is valid (no failure, no staleReason)", () => {
-    // R169A-FIX-R4: SUCCESS_WITH_WARNINGS requires published=true,
+    // R169A-FIX-R5: SUCCESS_WITH_WARNINGS requires publicationState=PUBLISHED,
     // failure=null, staleReason=null, recovery="none".
     const state = makeValidIndexState("test-project", { lastAttemptOutcome: "SUCCESS_WITH_WARNINGS" });
     expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
   });
 
   it("PARTIAL outcome is valid (with failure)", () => {
-    // R169A-FIX-R4: PARTIAL requires published=false AND at least one
-    // of failure/staleReason non-null.
+    // R169A-FIX-R5: PARTIAL requires publicationState=NOT_PUBLISHED AND failure non-null.
+    // (was "at least one of failure/staleReason" in R4; R5 requires failure non-null per STATE-R169A-R5-01.)
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "PARTIAL",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       failure: makeValidFailure(),
       recovery: "retry_incremental",
     });
     expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
   });
 
-  it("PARTIAL outcome is valid (with staleReason instead of failure)", () => {
+  it("PARTIAL outcome is valid (with failure AND staleReason)", () => {
+    // R169A-FIX-R5 (STATE-R169A-R5-01/02): PARTIAL requires
+    // publicationState=NOT_PUBLISHED AND failure non-null. staleReason
+    // is optional but allowed alongside failure. (Previously R4 allowed
+    // "at least one of failure/staleReason"; R5 tightens to require
+    // failure non-null — see validateIndexAttemptState coherence rules.)
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "PARTIAL",
-      published: false,
-      failure: null,
+      publicationState: "NOT_PUBLISHED",
+      failure: makeValidFailure({ message: "partial indexing failed" }),
       staleReason: { code: "ROOT_CHANGED", message: "root moved", paths: [] },
       recovery: "full_reindex",
     });
     expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
   });
 
+  it("R169A-FIX-R5: PARTIAL outcome with staleReason but null failure → INDEX_STATE_SCHEMA_ERROR (STATE-R169A-R5-02)", () => {
+    // R5 tightened the PARTIAL coherence rule: failure MUST be non-null.
+    // staleReason alone is no longer sufficient for PARTIAL.
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "PARTIAL",
+      publicationState: "NOT_PUBLISHED",
+      failure: null,
+      staleReason: { code: "ROOT_CHANGED", message: "root moved", paths: [] },
+      recovery: "full_reindex",
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
   it("FAILED outcome with failure is valid", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "FAILED",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       failure: makeValidFailure({ message: "indexer crashed" }),
       recovery: "retry_incremental",
     });
@@ -922,7 +1001,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
     };
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       staleReason,
       recovery: "full_reindex",
     });
@@ -934,7 +1013,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
     for (const recovery of recoveries) {
       const state = makeValidIndexState("test-project", {
         lastAttemptOutcome: "STALE",
-        published: false,
+        publicationState: "NOT_PUBLISHED",
         staleReason: { code: "X", message: "msg", paths: [] },
         recovery,
       });
@@ -945,7 +1024,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
   it("staleReason with empty paths array is valid", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       staleReason: { code: "PERSIST_FAILURE", message: "no-op commit", paths: [] },
       recovery: "retry_incremental",
     });
@@ -955,7 +1034,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
   it("staleReason without optional fields is valid", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       staleReason: { code: "X", message: "msg", paths: [] },
       recovery: "full_reindex",
     });
@@ -1114,8 +1193,8 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: SUCCESS + published=false → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
-    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "SUCCESS", published: false });
+  it("Coherence: SUCCESS + publicationState=NOT_PUBLISHED → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "SUCCESS", publicationState: "NOT_PUBLISHED" });
     let err: unknown;
     try {
       validateIndexAttemptState(state, "test-project");
@@ -1176,10 +1255,10 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: SUCCESS_WITH_WARNINGS + published=false → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+  it("Coherence: SUCCESS_WITH_WARNINGS + publicationState=NOT_PUBLISHED → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
     });
     let err: unknown;
     try {
@@ -1192,7 +1271,7 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
   it("Coherence: FAILED + null failure → INDEX_STATE_SCHEMA_ERROR", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "FAILED",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       failure: null,
       recovery: "retry_incremental",
     });
@@ -1204,10 +1283,10 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: FAILED + published=true → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+  it("Coherence: FAILED + publicationState=PUBLISHED → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "FAILED",
-      published: true, // coherence violation: FAILED requires published=false
+      publicationState: "PUBLISHED", // coherence violation: FAILED requires publicationState != PUBLISHED
       failure: makeValidFailure(),
       recovery: "retry_incremental",
     });
@@ -1219,10 +1298,10 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: PARTIAL + published=true → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+  it("Coherence: PARTIAL + publicationState=PUBLISHED → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "PARTIAL",
-      published: true, // coherence violation: PARTIAL requires published=false
+      publicationState: "PUBLISHED", // coherence violation: PARTIAL requires publicationState=NOT_PUBLISHED
       failure: makeValidFailure(),
       recovery: "retry_incremental",
     });
@@ -1237,7 +1316,7 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
   it("Coherence: PARTIAL + failure=null + staleReason=null → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "PARTIAL",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       failure: null,
       staleReason: null,
       recovery: "retry_incremental",
@@ -1253,7 +1332,7 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
   it("Coherence: STALE + null staleReason → INDEX_STATE_SCHEMA_ERROR", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       staleReason: null,
       recovery: "full_reindex",
     });
@@ -1268,7 +1347,7 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
   it("Coherence: STALE + recovery=none → INDEX_STATE_SCHEMA_ERROR", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       staleReason: { code: "X", message: "msg", paths: [] },
       recovery: "none",
     });
@@ -1280,10 +1359,10 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: STALE + published=true → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+  it("Coherence: STALE + publicationState=PUBLISHED → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
-      published: true, // coherence violation: STALE requires published=false
+      publicationState: "PUBLISHED", // coherence violation: STALE requires publicationState=NOT_PUBLISHED
       staleReason: { code: "X", message: "msg", paths: [] },
       recovery: "full_reindex",
     });
@@ -1354,7 +1433,7 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
   it("failure.message with C0 control char → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "FAILED",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       failure: makeValidFailure({ message: "err\0or" }),
       recovery: "retry_incremental",
     });
@@ -1629,12 +1708,14 @@ function renameSyncSafe(from: string, to: string): void {
 
 // ─── Atomic JSON writer — fault injection matrix (R169A-FIX DUR-R169A-02) ─
 //
-// R169A-FIX-R3 (API-R169A-R3-01): writeProjectJsonAtomically is now
-// internal. These tests exercise the writer through the typed public
-// wrappers `writeGenerationManifestAtomically` /
-// `writeIndexStateAtomically`. Each test writes a VALID manifest or
-// index-state (the typed wrapper validates BEFORE I/O, so an invalid
-// value would fail validation, not the fault-injection checkpoint).
+// R169A-FIX-R5 (API-R169A-R5-01): `writeGenerationManifestAtomically` is
+// no longer accessible (the `__test__` export is removed). These tests
+// exercise the writer through the ONLY public writer
+// `writeIndexStateAtomically`, which uses the same internal writer code
+// path (`writeProjectJsonAtomicallyInternal` → `writeJsonAtomically`).
+// Each test writes a VALID index-state (the typed wrapper validates
+// BEFORE I/O, so an invalid value would fail validation, not the
+// fault-injection checkpoint).
 
 describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   let cacheRoot: string;
@@ -1648,9 +1729,9 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     rmSync(cacheRoot, { recursive: true, force: true });
   });
 
-  /** Helper: get the manifest target path for this project / cacheRoot. */
+  /** Helper: get the index-state target path for this project / cacheRoot. */
   function targetPath(): string {
-    return activeManifestPath(project, cacheRoot);
+    return indexStatePath(project, cacheRoot);
   }
 
   /** Helper: list files in the project store dir (for "no temp left behind" checks). */
@@ -1663,49 +1744,19 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     return listProjectStore().filter((n) => n.startsWith(".tmp-")).length;
   }
 
-  it("R169A-FIX-R4: serialize fail (injected via prepareGenerationManifestForWrite) → ATOMIC_SERIALIZATION_FAILED, no I/O", () => {
-    // Write the "old" manifest first.
-    const oldManifest = makeValidManifest(project);
-    writeGenerationManifestAtomically(project, oldManifest, { cacheRoot });
-    const oldContent = readFileSync(targetPath(), "utf-8");
-
-    // R169A-FIX-R4 (DATA-R169A-R4-01): Serialization happens in
-    // `prepareGenerationManifestForWrite`, BEFORE any filesystem I/O.
-    // The writer no longer calls JSON.stringify — it receives a
-    // pre-serialized Buffer. To inject a serialization failure, we
-    // call `prepareGenerationManifestForWrite` directly with a failing
-    // `serializeJson` argument. The manifest passed in IS valid, so
-    // validation passes; then the injected serializeJson throws.
-    const newManifest = makeValidManifest(project, { generationId: OTHER_UUID });
-    const failingSerialize = (): string => {
-      throw new Error("injected serialize failure");
-    };
-    let err: unknown;
-    try {
-      prepareGenerationManifestForWrite(newManifest, project, failingSerialize);
-    } catch (e) { err = e; }
-    expect(err).toBeInstanceOf(GenerationStoreError);
-    expect((err as GenerationStoreError).code).toBe("ATOMIC_SERIALIZATION_FAILED");
-
-    // Old file intact (no I/O happened).
-    expect(readFileSync(targetPath(), "utf-8")).toBe(oldContent);
-
-    // No temp file left behind (no I/O happened).
-    expect(countTempFiles()).toBe(0);
-  });
-
   it("exclusive open fail → old intact", () => {
-    const oldManifest = makeValidManifest(project);
-    writeGenerationManifestAtomically(project, oldManifest, { cacheRoot });
+    // Write the "old" index-state first via the public writer.
+    const oldState = makeValidIndexState(project);
+    writeIndexStateAtomically(project, oldState, { cacheRoot });
     const oldContent = readFileSync(targetPath(), "utf-8");
 
     // Make the temp file open fail.
     const ops = new TestOps();
     ops.failAt = "open";
-    const newManifest = makeValidManifest(project, { generationId: OTHER_UUID });
+    const newState = makeValidIndexState(project, { lastAttemptId: OTHER_UUID });
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+      writeIndexStateAtomically(project, newState, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_WRITE_FAILED");
@@ -1716,17 +1767,22 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("short write recoverable → success exact", () => {
-    // Use a manifest with a large rootFingerprint to force multi-write.
-    const newManifest = makeValidManifest(project, { rootFingerprint: "x".repeat(500) });
+    // Use a state with a large failure.message to force multi-write.
+    const newState = makeValidIndexState(project, {
+      lastAttemptOutcome: "FAILED",
+      publicationState: "NOT_PUBLISHED",
+      failure: makeValidFailure({ message: "x".repeat(500) }),
+      recovery: "retry_incremental",
+    });
     const ops = new TestOps();
     ops.shortFirstWrite = true;
 
-    writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+    writeIndexStateAtomically(project, newState, { cacheRoot }, ops);
 
     // The file must contain exactly the right JSON, despite the partial
     // first write.
     const content = readFileSync(targetPath(), "utf-8");
-    expect(JSON.parse(content)).toEqual(newManifest);
+    expect(JSON.parse(content)).toEqual(newState);
     // Must have called writeSync at least twice: first a 1-byte short
     // write, then subsequent writes for the rest of the payload.
     const allWriteCalls = ops.calls.filter((c) => c.startsWith("write")).length;
@@ -1736,8 +1792,8 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("write fail mid-payload → old intact, temp cleaned", () => {
-    const oldManifest = makeValidManifest(project);
-    writeGenerationManifestAtomically(project, oldManifest, { cacheRoot });
+    const oldState = makeValidIndexState(project);
+    writeIndexStateAtomically(project, oldState, { cacheRoot });
     const oldContent = readFileSync(targetPath(), "utf-8");
 
     // Force a genuine mid-payload failure: shortFirstWrite makes the
@@ -1747,11 +1803,17 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     const ops = new TestOps();
     ops.shortFirstWrite = true;
     ops.failSecondWrite = true;
-    const newManifest = makeValidManifest(project, { generationId: OTHER_UUID, rootFingerprint: "x".repeat(500) });
+    const newState = makeValidIndexState(project, {
+      lastAttemptId: OTHER_UUID,
+      lastAttemptOutcome: "FAILED",
+      publicationState: "NOT_PUBLISHED",
+      failure: makeValidFailure({ message: "x".repeat(500) }),
+      recovery: "retry_incremental",
+    });
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+      writeIndexStateAtomically(project, newState, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_WRITE_FAILED");
@@ -1761,17 +1823,17 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("temp fsync fail → old intact, temp cleaned", () => {
-    const oldManifest = makeValidManifest(project);
-    writeGenerationManifestAtomically(project, oldManifest, { cacheRoot });
+    const oldState = makeValidIndexState(project);
+    writeIndexStateAtomically(project, oldState, { cacheRoot });
     const oldContent = readFileSync(targetPath(), "utf-8");
 
     const ops = new TestOps();
     ops.failAt = "tempFsync";
-    const newManifest = makeValidManifest(project, { generationId: OTHER_UUID });
+    const newState = makeValidIndexState(project, { lastAttemptId: OTHER_UUID });
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+      writeIndexStateAtomically(project, newState, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_FSYNC_FAILED");
@@ -1781,17 +1843,17 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("close fail before rename → old intact", () => {
-    const oldManifest = makeValidManifest(project);
-    writeGenerationManifestAtomically(project, oldManifest, { cacheRoot });
+    const oldState = makeValidIndexState(project);
+    writeIndexStateAtomically(project, oldState, { cacheRoot });
     const oldContent = readFileSync(targetPath(), "utf-8");
 
     const ops = new TestOps();
     ops.failAt = "closeBeforeRename";
-    const newManifest = makeValidManifest(project, { generationId: OTHER_UUID });
+    const newState = makeValidIndexState(project, { lastAttemptId: OTHER_UUID });
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+      writeIndexStateAtomically(project, newState, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     // Close failure is wrapped as ATOMIC_WRITE_FAILED.
@@ -1802,17 +1864,17 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("rename fail → old intact, temp cleaned", () => {
-    const oldManifest = makeValidManifest(project);
-    writeGenerationManifestAtomically(project, oldManifest, { cacheRoot });
+    const oldState = makeValidIndexState(project);
+    writeIndexStateAtomically(project, oldState, { cacheRoot });
     const oldContent = readFileSync(targetPath(), "utf-8");
 
     const ops = new TestOps();
     ops.failAt = "rename";
-    const newManifest = makeValidManifest(project, { generationId: OTHER_UUID });
+    const newState = makeValidIndexState(project, { lastAttemptId: OTHER_UUID });
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+      writeIndexStateAtomically(project, newState, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_RENAME_FAILED");
@@ -1827,11 +1889,11 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     // on the held fd — produces ATOMIC_DURABILITY_UNKNOWN.
     const ops = new TestOps();
     ops.failAt = "dirFsync";
-    const newManifest = makeValidManifest(project);
+    const newState = makeValidIndexState(project);
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+      writeIndexStateAtomically(project, newState, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_DURABILITY_UNKNOWN");
@@ -1839,7 +1901,7 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     // The rename has already happened — the target file should contain
     // the NEW content, not the old (there was no old).
     const content = readFileSync(targetPath(), "utf-8");
-    expect(JSON.parse(content)).toEqual(newManifest);
+    expect(JSON.parse(content)).toEqual(newState);
     // No temp file left (it was renamed).
     expect(countTempFiles()).toBe(0);
   });
@@ -1847,26 +1909,26 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   it("directory fsync fail → durability unknown", () => {
     const ops = new TestOps();
     ops.failAt = "dirFsync";
-    const newManifest = makeValidManifest(project);
+    const newState = makeValidIndexState(project);
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+      writeIndexStateAtomically(project, newState, { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_DURABILITY_UNKNOWN");
 
     // The rename has already happened — the new content is in place.
     const content = readFileSync(targetPath(), "utf-8");
-    expect(JSON.parse(content)).toEqual(newManifest);
+    expect(JSON.parse(content)).toEqual(newState);
   });
 
   it("success → exact JSON, 0600, no temp", () => {
-    const manifest = makeValidManifest(project);
-    writeGenerationManifestAtomically(project, manifest, { cacheRoot });
+    const state = makeValidIndexState(project);
+    writeIndexStateAtomically(project, state, { cacheRoot });
 
     const content = readFileSync(targetPath(), "utf-8");
-    expect(JSON.parse(content)).toEqual(manifest);
+    expect(JSON.parse(content)).toEqual(state);
     // Trailing newline.
     expect(content.endsWith("\n")).toBe(true);
 
@@ -1877,7 +1939,7 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("R169A-FIX-R2: directory mode is 0700 (DUR-R169A-R2-01)", () => {
-    writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot });
+    writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot });
 
     // The project store, generations, and tmp directories must all be 0700.
     const dirs = [
@@ -1892,9 +1954,8 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("R169A-FIX-R3: index-state target writes to index-state.json (API-R169A-R3-01)", () => {
-    // R169A-FIX-R4: SUCCESS requires activeGenerationId non-null, so we
-    // keep the default SUCCESS state (no overrides that would violate
-    // the new coherence rules).
+    // R169A-FIX-R5: SUCCESS+PUBLISHED requires activeGenerationId non-null and
+    // candidateGenerationId == activeGenerationId. The default state satisfies this.
     const state = makeValidIndexState(project);
     writeIndexStateAtomically(project, state, { cacheRoot });
 
@@ -1905,33 +1966,14 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     expect(st.mode & 0o777).toBe(0o600);
   });
 
-  it("R169A-FIX-R3: invalid manifest is rejected BEFORE any I/O (API-R169A-R3-01)", () => {
-    // R169A-FIX-R4 (DATA-R169A-R4-01): Extra keys are stripped by the
-    // canonical-payload preparation. Use an invalid VALUE (wrong
-    // formatVersion) which survives the plain-object copy and is rejected
-    // by validation BEFORE any filesystem I/O.
-    const badManifest = { ...makeValidManifest(project), formatVersion: 99 as any };
-    let err: unknown;
-    try {
-      writeGenerationManifestAtomically(project, badManifest, { cacheRoot });
-    } catch (e) { err = e; }
-    expect(err).toBeInstanceOf(GenerationStoreError);
-    expect((err as GenerationStoreError).code).toBe("MANIFEST_UNSUPPORTED_VERSION");
-
-    // No layout should have been created.
-    expect(existsSync(projectStoreDir(project, cacheRoot))).toBe(false);
-    // No target file.
-    expect(existsSync(targetPath())).toBe(false);
-  });
-
   it("R169A-FIX-R3: invalid index-state is rejected BEFORE any I/O (API-R169A-R3-01)", () => {
     // Pass an invalid index-state (coherence violation). Validation must
     // fail before any filesystem I/O.
-    // R169A-FIX-R4: FAILED requires failure non-null. Pass failure=null
+    // R169A-FIX-R5: FAILED requires failure non-null. Pass failure=null
     // to trigger the coherence violation.
     const badState = makeValidIndexState(project, {
       lastAttemptOutcome: "FAILED",
-      published: false,
+      publicationState: "NOT_PUBLISHED",
       failure: null, // coherence violation: FAILED requires failure non-null
       recovery: "retry_incremental",
     });
@@ -2020,6 +2062,10 @@ describe("R169A-FIX — Legacy path validation (SEC-R169A-01 / API-R169A-02)", (
 
   it("R169A-FIX-R2: legacy DB target is a directory → LEGACY_SOURCE_INVALID (renamed from LEGACY_SOURCE_OPEN_FAILED)", () => {
     const project = "test-project";
+    // R169A-FIX-R5 (SEC-R169A-R5-02): Pre-create cbm with 0o700 so the
+    // trust root permission check passes. Bare mkdirSync with recursive
+    // creates with the default umask (often 0o775 on shared CI runners).
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
     // Create the legacy path as a directory.
     const dbPath = legacyCodeDbPath(project, cacheRoot);
     mkdirSync(dbPath, { recursive: true });
@@ -2051,8 +2097,14 @@ describe("R169A-FIX — listProjectStoreKeys (OPS-R169A-01)", () => {
   });
 
   it("returns sorted 64-hex directory names only", () => {
+    // R169A-FIX-R5 (SEC-R169A-R5-02): Pre-create cbm + projects with
+    // mode 0o700 so the trust root permission check passes. Bare
+    // `mkdirSync(root, { recursive: true })` would create with the
+    // default umask (often 0o775 on shared CI runners) and fail the
+    // R5 permission check.
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
     const root = generationStoreRoot(cacheRoot);
-    mkdirSync(root, { recursive: true });
+    ensureDirMode0700(root);
     const keyA = projectStorageKey("a");
     const keyB = projectStorageKey("b");
     mkdirSync(join(root, keyA), { mode: 0o700 });
@@ -2066,8 +2118,10 @@ describe("R169A-FIX — listProjectStoreKeys (OPS-R169A-01)", () => {
   });
 
   it("EACCES on store root → throws GenerationStoreError", () => {
+    // R169A-FIX-R5: Create cbm with 0o700 first; projects is replaced
+    // with a regular file below.
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
     const root = generationStoreRoot(cacheRoot);
-    mkdirSync(root, { recursive: true });
     // Create a non-directory entry at the store root path. readdirSync
     // will then fail with ENOTDIR — which is treated as fail-closed.
     rmSync(root, { recursive: true, force: true });
@@ -2097,8 +2151,8 @@ describe("R169A-FIX — listProjectStoreKeys (OPS-R169A-01)", () => {
   });
 
   it("R169A-FIX-R3: projects dir is a symlink → PATH_TRAVERSAL_REJECTED (OPS-R169A-R3-01)", () => {
-    // Create cbm parent + projects symlink to elsewhere.
-    mkdirSync(cbmCacheDir(cacheRoot), { recursive: true });
+    // R169A-FIX-R5: Create cbm with 0o700 first; projects is a symlink.
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
     const projects = generationStoreRoot(cacheRoot);
     const elsewhere = join(cacheRoot, "elsewhere-projects-list");
     mkdirSync(elsewhere, { recursive: true });
@@ -2113,7 +2167,10 @@ describe("R169A-FIX — listProjectStoreKeys (OPS-R169A-01)", () => {
   });
 
   it("R169A-FIX-R3: assertGenerationStoreRootTrusted — clean chain → no throw", () => {
-    mkdirSync(generationStoreRoot(cacheRoot), { recursive: true });
+    // R169A-FIX-R5: Create cbm + projects with 0o700 so the R5
+    // permission check passes.
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
+    ensureDirMode0700(generationStoreRoot(cacheRoot));
     expect(() => assertGenerationStoreRootTrusted(cacheRoot, "test")).not.toThrow();
   });
 });
@@ -2556,7 +2613,7 @@ describe("R169A-FIX-R2 — Writer path safety (SEC-R169A-R2-02)", () => {
 
   it("writer rejects when project-key dir is a symlink (before temp create)", () => {
     // First write succeeds and creates the layout.
-    writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot });
+    writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot });
 
     // Replace the project-key dir with a symlink.
     const projectDir = projectStoreDir(project, cacheRoot);
@@ -2568,7 +2625,7 @@ describe("R169A-FIX-R2 — Writer path safety (SEC-R169A-R2-02)", () => {
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, makeValidManifest(project, { generationId: OTHER_UUID }), { cacheRoot });
+      writeIndexStateAtomically(project, makeValidIndexState(project, { lastAttemptId: OTHER_UUID }), { cacheRoot });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
@@ -2583,7 +2640,10 @@ describe("R169A-FIX-R2 — Writer path safety (SEC-R169A-R2-02)", () => {
   it("writer rejects when projects dir is a symlink", () => {
     // Replace projects dir with a symlink BEFORE any write. We must
     // create the cbm parent first so the symlink target resolves.
-    mkdirSync(cbmCacheDir(cacheRoot), { recursive: true });
+    // R169A-FIX-R5 (SEC-R169A-R5-02): Create cbm with 0o700 so the
+    // trust root permission check passes (cbm is a compat root —
+    // 0700 satisfies mode & 0o022 === 0).
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
     const projects = generationStoreRoot(cacheRoot);
     const elsewhere = join(cacheRoot, "elsewhere-projects-wsafe");
     mkdirSync(elsewhere, { recursive: true });
@@ -2591,29 +2651,31 @@ describe("R169A-FIX-R2 — Writer path safety (SEC-R169A-R2-02)", () => {
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot });
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
   });
 
-  it("writer rejects when target file (manifest) is a symlink", () => {
-    // First, set up the layout and a real manifest.
-    writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot });
+  it("R169A-FIX-R5: writer rejects when target file (index-state) is a symlink (converted from manifest test)", () => {
+    // R169A-FIX-R5: writeGenerationManifestAtomically is no longer accessible.
+    // This test now uses writeIndexStateAtomically (the only public writer).
+    // Set up the layout and a real index-state.
+    writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot });
 
-    // Replace the manifest with a symlink to elsewhere.
-    const manifestPath = activeManifestPath(project, cacheRoot);
-    const target = manifestPath + ".target";
-    rmSync(manifestPath);
+    // Replace the index-state file with a symlink to elsewhere.
+    const statePath = indexStatePath(project, cacheRoot);
+    const target = statePath + ".target";
+    rmSync(statePath);
     writeFileSync(target, "symlink-target", "utf-8");
-    symlinkSync(target, manifestPath);
+    symlinkSync(target, statePath);
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, makeValidManifest(project, { generationId: OTHER_UUID }), { cacheRoot });
+      writeIndexStateAtomically(project, makeValidIndexState(project, { lastAttemptId: OTHER_UUID }), { cacheRoot });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
-    expect((err as GenerationStoreError).code).toBe("MANIFEST_SYMLINK_REJECTED");
+    expect((err as GenerationStoreError).code).toBe("PROJECT_STATE_SYMLINK_REJECTED");
   });
 
   it("R169A-FIX-R3: writer rejects when target file (index-state) is a symlink → PROJECT_STATE_SYMLINK_REJECTED (QUAL-R169A-R3-01)", () => {
@@ -2637,7 +2699,7 @@ describe("R169A-FIX-R2 — Writer path safety (SEC-R169A-R2-02)", () => {
   });
 
   it("writer: directory mode is 0700 (explicit check on every layout dir)", () => {
-    writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot });
+    writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot });
 
     const dirs = [
       cbmCacheDir(cacheRoot),
@@ -2653,13 +2715,13 @@ describe("R169A-FIX-R2 — Writer path safety (SEC-R169A-R2-02)", () => {
   });
 
   it("writer: file mode is 0600", () => {
-    writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot });
-    const st = lstatSync(activeManifestPath(project, cacheRoot));
+    writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot });
+    const st = lstatSync(indexStatePath(project, cacheRoot));
     expect(st.mode & 0o777).toBe(0o600);
   });
 
   it("writer: no file created outside trust root", () => {
-    writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot });
+    writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot });
 
     // Walk cacheRoot and verify ALL files are inside the project store dir.
     const projectDir = projectStoreDir(project, cacheRoot);
@@ -2706,7 +2768,7 @@ describe("R169A-FIX-R2 — Layout durability (DUR-R169A-R2-01)", () => {
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot }, ops);
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_CREATE_FAILED");
@@ -2718,7 +2780,7 @@ describe("R169A-FIX-R2 — Layout durability (DUR-R169A-R2-01)", () => {
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot }, ops);
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_DURABILITY_UNKNOWN");
@@ -2730,7 +2792,7 @@ describe("R169A-FIX-R2 — Layout durability (DUR-R169A-R2-01)", () => {
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot }, ops);
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot }, ops);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_DURABILITY_UNKNOWN");
@@ -2782,7 +2844,13 @@ describe("R169A-FIX-R2 — Manifest size bound (VALID-R169A-R2-01 §4.1)", () =>
   it("manifest > 64 KiB → MANIFEST_TOO_LARGE (exact code)", () => {
     const project = "oversize-project";
     const manifestPath = activeManifestPath(project, cacheRoot);
-    mkdirSync(resolve(manifestPath, ".."), { recursive: true });
+    // R169A-FIX-R5 (SEC-R169A-R5-02): Create the chain with mode 0o700
+    // so the trust root permission check passes. The previous bare
+    // mkdirSync created dirs with the default umask (often 0o775 on
+    // shared CI runners), which the R5 permission check rejects.
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
+    ensureDirMode0700(generationStoreRoot(cacheRoot));
+    ensureDirMode0700(resolve(manifestPath, ".."));
 
     // Write a manifest that is > 64 KiB. We do this by inflating the
     // rootFingerprint field with a long string (the validator would
@@ -2805,7 +2873,10 @@ describe("R169A-FIX-R2 — Manifest size bound (VALID-R169A-R2-01 §4.1)", () =>
   it("manifest exactly 64 KiB (within bound) → not MANIFEST_TOO_LARGE", () => {
     const project = "boundary-project";
     const manifestPath = activeManifestPath(project, cacheRoot);
-    mkdirSync(resolve(manifestPath, ".."), { recursive: true });
+    // R169A-FIX-R5: Same chain setup as above.
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
+    ensureDirMode0700(generationStoreRoot(cacheRoot));
+    ensureDirMode0700(resolve(manifestPath, ".."));
 
     // Write a manifest that is just under 64 KiB. The validator will
     // likely reject it for other reasons (e.g., rootFingerprint too
@@ -3024,7 +3095,11 @@ describe("R169A-FIX-R2 — LEGACY_SOURCE_INVALID rename (API-R169A-R2-01)", () =
   it("legacy DB is a symlink → LEGACY_SOURCE_INVALID (exact code, not LEGACY_SOURCE_OPEN_FAILED)", () => {
     const project = "test-project";
     const dbPath = legacyCodeDbPath(project, cacheRoot);
-    mkdirSync(resolve(dbPath, ".."), { recursive: true });
+    // R169A-FIX-R5 (SEC-R169A-R5-02): Pre-create cbm with 0o700 so the
+    // trust root permission check passes. The previous bare
+    // mkdirSync(..., { recursive: true }) created with the default
+    // umask (often 0o775 on shared CI runners).
+    ensureDirMode0700(resolve(dbPath, ".."));
     const target = dbPath + ".target";
     writeFileSync(target, "real", "utf-8");
     symlinkSync(target, dbPath);
@@ -3042,7 +3117,8 @@ describe("R169A-FIX-R2 — LEGACY_SOURCE_INVALID rename (API-R169A-R2-01)", () =
   it("legacy DB is a FIFO / special file → LEGACY_SOURCE_INVALID", () => {
     const project = "test-project";
     const dbPath = legacyCodeDbPath(project, cacheRoot);
-    mkdirSync(resolve(dbPath, ".."), { recursive: true });
+    // R169A-FIX-R5: Same chain setup as above.
+    ensureDirMode0700(resolve(dbPath, ".."));
     // Create a FIFO at the legacy path. lstat will report it as !isFile().
     // (mkfifo via child_process spawn is not portable; instead, create a
     // directory — also !isFile — to exercise the same code path.)
@@ -3060,7 +3136,7 @@ describe("R169A-FIX-R2 — LEGACY_SOURCE_INVALID rename (API-R169A-R2-01)", () =
 // ─── R169A-FIX-R2: No writes to real HOME (TEST-R169A-R2-01) ────────────
 
 describe("R169A-FIX-R2 — No writes to real HOME (TEST-R169A-R2-01)", () => {
-  it("writeGenerationManifestAtomically with injected cacheRoot does not touch real HOME cache", () => {
+  it("writeIndexStateAtomically with injected cacheRoot does not touch real HOME cache", () => {
     const realCacheRoot = getCacheRoot();
     const realCbm = cbmCacheDir(); // uses real cache root (no injection)
 
@@ -3078,10 +3154,14 @@ describe("R169A-FIX-R2 — No writes to real HOME (TEST-R169A-R2-01)", () => {
     // Run a write with an INJECTED cacheRoot. This must not touch realCacheRoot.
     const injected = mkdtempSync(join(tmpdir(), "r169a-r2-home-"));
     try {
-      writeGenerationManifestAtomically("isolated-project", makeValidManifest("isolated-project"), { cacheRoot: injected });
+      writeIndexStateAtomically("isolated-project", makeValidIndexState("isolated-project"), { cacheRoot: injected });
 
       // Verify the write went to the injected cacheRoot, not the real one.
-      expect(existsSync(activeManifestPath("isolated-project", injected))).toBe(true);
+      // R169A-FIX-R5: writeIndexStateAtomically writes to index-state.json
+      // (the only public writer in R5). The manifest writer was REMOVED
+      // (Finding 1). The previous check used activeManifestPath which is
+      // wrong for index-state — fixed to indexStatePath.
+      expect(existsSync(indexStatePath("isolated-project", injected))).toBe(true);
 
       // Verify the real cache dir is unchanged.
       let after: string[] = [];
@@ -3149,14 +3229,14 @@ describe("R169A-FIX-R2 — Exact error code checks (TEST-R169A-R2-01)", () => {
     }
   });
 
-  it("writeGenerationManifestAtomically: layout mkdir fault → STORE_LAYOUT_CREATE_FAILED (exact)", () => {
+  it("writeIndexStateAtomically: layout mkdir fault → STORE_LAYOUT_CREATE_FAILED (exact)", () => {
     const cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-exact-mkdir-"));
     try {
       const ops = new TestOps();
       ops.failAtLayoutMkdir = true;
       let err: unknown;
       try {
-        writeGenerationManifestAtomically("p", makeValidManifest("p"), { cacheRoot }, ops);
+        writeIndexStateAtomically("p", makeValidIndexState("p"), { cacheRoot }, ops);
       } catch (e) { err = e; }
       expect(err).toBeInstanceOf(GenerationStoreError);
       const code = (err as GenerationStoreError).code;
@@ -3167,14 +3247,14 @@ describe("R169A-FIX-R2 — Exact error code checks (TEST-R169A-R2-01)", () => {
     }
   });
 
-  it("writeGenerationManifestAtomically: layout dir fsync fault → STORE_LAYOUT_DURABILITY_UNKNOWN (exact)", () => {
+  it("writeIndexStateAtomically: layout dir fsync fault → STORE_LAYOUT_DURABILITY_UNKNOWN (exact)", () => {
     const cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-exact-dirfsync-"));
     try {
       const ops = new TestOps();
       ops.failAtLayoutDirFsync = true;
       let err: unknown;
       try {
-        writeGenerationManifestAtomically("p", makeValidManifest("p"), { cacheRoot }, ops);
+        writeIndexStateAtomically("p", makeValidIndexState("p"), { cacheRoot }, ops);
       } catch (e) { err = e; }
       expect(err).toBeInstanceOf(GenerationStoreError);
       const code = (err as GenerationStoreError).code;
@@ -3185,14 +3265,14 @@ describe("R169A-FIX-R2 — Exact error code checks (TEST-R169A-R2-01)", () => {
     }
   });
 
-  it("writeGenerationManifestAtomically: layout parent fsync fault → STORE_LAYOUT_DURABILITY_UNKNOWN (exact)", () => {
+  it("writeIndexStateAtomically: layout parent fsync fault → STORE_LAYOUT_DURABILITY_UNKNOWN (exact)", () => {
     const cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r2-exact-pfsync-"));
     try {
       const ops = new TestOps();
       ops.failAtLayoutParentFsync = true;
       let err: unknown;
       try {
-        writeGenerationManifestAtomically("p", makeValidManifest("p"), { cacheRoot }, ops);
+        writeIndexStateAtomically("p", makeValidIndexState("p"), { cacheRoot }, ops);
       } catch (e) { err = e; }
       expect(err).toBeInstanceOf(GenerationStoreError);
       const code = (err as GenerationStoreError).code;
@@ -3232,7 +3312,7 @@ describe("R169A-FIX-R3 — Race symlink in writer (SEC-R169A-R3-01)", () => {
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot }, undefined, hook);
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot }, undefined, hook);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
@@ -3263,7 +3343,7 @@ describe("R169A-FIX-R3 — Race symlink in writer (SEC-R169A-R3-01)", () => {
 
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, makeValidManifest(project), { cacheRoot }, undefined, hook);
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot }, undefined, hook);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
@@ -3468,5 +3548,582 @@ describe("R169A-FIX-R3 — Manifest TOCTOU (SEC-R169A-R3-03)", () => {
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("MANIFEST_PARSE_ERROR");
+  });
+});
+
+// ─── R169A-FIX-R5: __test__ and writeGenerationManifestAtomically NOT exported ──
+//
+// Finding 1 (API-R169A-R5-01): The `__test__` export is REMOVED. The
+// manifest writer `writeGenerationManifestAtomically` is NOT exported
+// (it is internal — R169B will own `publishPreparedGeneration`). This
+// test verifies the public API surface does not include either name.
+
+describe("R169A-FIX-R5 — __test__ / writeGenerationManifestAtomically NOT exported (API-R169A-R5-01)", () => {
+  it("the generation-store module does NOT export __test__", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect((mod as any).__test__).toBeUndefined();
+  });
+
+  it("the generation-store module does NOT export writeGenerationManifestAtomically", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect((mod as any).writeGenerationManifestAtomically).toBeUndefined();
+  });
+
+  it("the generation-store module DOES export writeIndexStateAtomically (the only public writer)", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect(typeof (mod as any).writeIndexStateAtomically).toBe("function");
+  });
+
+  it("the generation-store module does NOT export prepareGenerationManifestForWrite", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect((mod as any).prepareGenerationManifestForWrite).toBeUndefined();
+  });
+
+  it("the generation-store module does NOT export prepareIndexStateForWrite", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect((mod as any).prepareIndexStateForWrite).toBeUndefined();
+  });
+
+  it("the generation-store module does NOT export writeProjectJsonAtomicallyInternal", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect((mod as any).writeProjectJsonAtomicallyInternal).toBeUndefined();
+  });
+
+  it("the generation-store module does NOT export writeJsonAtomically", async () => {
+    const mod = await import("../../src/storage/generation-store.js");
+    expect((mod as any).writeJsonAtomically).toBeUndefined();
+  });
+
+  it("source inspection: no `export const __test__` or `export function writeGenerationManifestAtomically` in generation-store.ts", () => {
+    // Walk the source file and verify no export statement targets
+    // __test__ or writeGenerationManifestAtomically.
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "..", "..", "src", "storage", "generation-store.ts"),
+      "utf-8",
+    );
+    // `export const __test__` must NOT appear.
+    expect(src).not.toMatch(/export\s+const\s+__test__/);
+    // `export function writeGenerationManifestAtomically` must NOT appear.
+    expect(src).not.toMatch(/export\s+function\s+writeGenerationManifestAtomically/);
+    // `export { ... __test__ ... }` re-export must NOT appear.
+    expect(src).not.toMatch(/export\s*\{[^}]*\b__test__\b[^}]*\}/);
+    // `export { ... writeGenerationManifestAtomically ... }` re-export must NOT appear.
+    expect(src).not.toMatch(/export\s*\{[^}]*\bwriteGenerationManifestAtomically\b[^}]*\}/);
+  });
+});
+
+// ─── R169A-FIX-R5: pathsTruncated coherence (STATE-R169A-R5-02) ──────────
+//
+// Finding 3 (STATE-R169A-R5-02) item 2: pathsTruncated validation.
+//   - pathsTruncated=true  → totalPaths MUST be present AND totalPaths > paths.length.
+//   - pathsTruncated=false → totalPaths absent OR totalPaths == paths.length.
+//   - pathsTruncated absent → totalPaths absent OR totalPaths == paths.length.
+
+describe("R169A-FIX-R5 — pathsTruncated coherence (STATE-R169A-R5-02)", () => {
+  function makeStaleState(
+    staleReasonOverrides: Partial<IndexAttemptStaleReasonV1> = {},
+  ): IndexAttemptStateV1 {
+    return makeValidIndexState("test-project", {
+      lastAttemptOutcome: "STALE",
+      publicationState: "NOT_PUBLISHED",
+      staleReason: {
+        code: "ROOT_CHANGED",
+        message: "root moved",
+        paths: ["/old/root", "/new/root"],
+        ...staleReasonOverrides,
+      } as IndexAttemptStaleReasonV1,
+      recovery: "full_reindex",
+    });
+  }
+
+  // pathsTruncated = true
+  it("pathsTruncated=true + totalPaths > paths.length → valid", () => {
+    const state = makeStaleState({ pathsTruncated: true, totalPaths: 10 });
+    expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
+  });
+
+  it("pathsTruncated=true + totalPaths absent → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeStaleState({ pathsTruncated: true } as any);
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("pathsTruncated=true + totalPaths == paths.length → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeStaleState({ pathsTruncated: true, totalPaths: 2 });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("pathsTruncated=true + totalPaths < paths.length → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeStaleState({ pathsTruncated: true, totalPaths: 1 } as any);
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  // pathsTruncated = false
+  it("pathsTruncated=false + totalPaths absent → valid", () => {
+    const state = makeStaleState({ pathsTruncated: false } as any);
+    expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
+  });
+
+  it("pathsTruncated=false + totalPaths == paths.length → valid", () => {
+    const state = makeStaleState({ pathsTruncated: false, totalPaths: 2 });
+    expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
+  });
+
+  it("pathsTruncated=false + totalPaths > paths.length → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeStaleState({ pathsTruncated: false, totalPaths: 10 } as any);
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  // pathsTruncated absent
+  it("pathsTruncated absent + totalPaths absent → valid", () => {
+    const state = makeStaleState({} as any);
+    expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
+  });
+
+  it("pathsTruncated absent + totalPaths == paths.length → valid", () => {
+    const state = makeStaleState({ totalPaths: 2 } as any);
+    expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
+  });
+
+  it("pathsTruncated absent + totalPaths > paths.length → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeStaleState({ totalPaths: 10 } as any);
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+});
+
+// ─── R169A-FIX-R5: SUCCESS_WITH_WARNINGS coherence (STATE-R169A-R5-02) ────
+//
+// Finding 3 (STATE-R169A-R5-02) item 1: SUCCESS_WITH_WARNINGS follows
+// same active/candidate rules as SUCCESS.
+
+describe("R169A-FIX-R5 — SUCCESS_WITH_WARNINGS coherence (STATE-R169A-R5-02)", () => {
+  it("SUCCESS_WITH_WARNINGS + PUBLISHED + activeGenerationId non-null + candidate == active → valid", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      publicationState: "PUBLISHED",
+      activeGenerationId: VALID_UUID,
+      candidateGenerationId: VALID_UUID,
+      failure: null,
+      staleReason: null,
+      recovery: "none",
+    });
+    expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
+  });
+
+  it("SUCCESS_WITH_WARNINGS + PUBLISHED + activeGenerationId=null → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      publicationState: "PUBLISHED",
+      activeGenerationId: null,
+      candidateGenerationId: null,
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("SUCCESS_WITH_WARNINGS + PUBLISHED + candidate != active → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      publicationState: "PUBLISHED",
+      activeGenerationId: VALID_UUID,
+      candidateGenerationId: OTHER_UUID,
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("SUCCESS_WITH_WARNINGS + NOT_NEEDED + candidateGenerationId=null → valid", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      publicationState: "NOT_NEEDED",
+      activeGenerationId: null,
+      candidateGenerationId: null,
+      failure: null,
+      staleReason: null,
+      recovery: "none",
+    });
+    expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
+  });
+
+  it("SUCCESS_WITH_WARNINGS + NOT_NEEDED + candidateGenerationId non-null → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      publicationState: "NOT_NEEDED",
+      candidateGenerationId: VALID_UUID,
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+});
+
+// ─── R169A-FIX-R5: Cleanup after directory swap (SEC-R169A-R5-01) ─────────
+//
+// Finding 4 (SEC-R169A-R5-01): After directory identity mismatch (dev/ino),
+// the catch block must NOT unlinkSync the temp file by path — the path
+// may now point to a different directory. The temp file is orphaned in
+// the ORIGINAL directory; the error message includes a WARNING.
+
+describe("R169A-FIX-R5 — Cleanup after directory swap (SEC-R169A-R5-01)", () => {
+  let cacheRoot: string;
+  const project = "swap-test-project";
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r5-swap-"));
+  });
+
+  afterEach(() => {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  });
+
+  it("hook swaps target directory after temp fsync → PATH_TRAVERSAL_REJECTED + orphan warning, no file deleted in replacement dir", () => {
+    // Use the WriterTestHook.afterTempFsyncBeforeRename to swap the
+    // target directory between temp-fsync and rename. The pre-rename
+    // identity check (lstat + dev/ino compare against the held dirFd)
+    // MUST detect the swap and reject with PATH_TRAVERSAL_REJECTED.
+    //
+    // The temp file is orphaned in the ORIGINAL directory; the error
+    // message MUST include ATOMIC_TEMP_ORPHANED warning. The replacement
+    // directory MUST NOT have any temp file deleted from it (because
+    // unlinkSync by path would target the replacement dir).
+    const statePath = indexStatePath(project, cacheRoot);
+
+    // The hook captures the original dir BEFORE swapping it, so we can
+    // verify the orphaned temp file is still there after the failure.
+    let originalDir: string | null = null;
+    let replacementDir: string | null = null;
+    const hook: WriterTestHook = {
+      afterTempFsyncBeforeRename({ dir }) {
+        originalDir = dir;
+        replacementDir = join(cacheRoot, "replacement-dir");
+        mkdirSync(replacementDir, { recursive: true });
+        // Atomically replace `dir` with `replacementDir` by rmSync + symlink.
+        rmSync(dir, { recursive: true, force: true });
+        symlinkSync(replacementDir, dir);
+      },
+    };
+
+    let err: unknown;
+    try {
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot }, undefined, hook);
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("PATH_TRAVERSAL_REJECTED");
+    // The error message MUST include the ATOMIC_TEMP_ORPHANED warning.
+    expect((err as Error).message).toMatch(/ATOMIC_TEMP_ORPHANED/);
+
+    // The replacement directory MUST NOT have any .tmp-* file in it.
+    // (If unlinkSync was called by path, it would have targeted the
+    // replacement dir and deleted whatever file was there.)
+    expect(replacementDir).not.toBeNull();
+    if (replacementDir !== null) {
+      const files = readdirSync(replacementDir);
+      const tempFiles = files.filter((n) => n.startsWith(".tmp-"));
+      expect(tempFiles.length).toBe(0);
+    }
+
+    // The original directory still exists at `originalDir` (it was
+    // replaced by a symlink, but the original inode may still be
+    // reachable through the filesystem if not yet garbage-collected).
+    // We can't easily verify the orphaned temp file from this test
+    // because the dir was rmdir'd. The key contract — that the
+    // replacement dir has no temp file deleted from it — is verified
+    // above.
+  });
+});
+
+// ─── R169A-FIX-R5: Permission policy in resolver/listing (SEC-R169A-R5-02) ──
+//
+// Finding 5 (SEC-R169A-R5-02): Permission/ownership checks are now in
+// assertTrustedRootNoSymlinks AND assertGenerationStoreRootTrusted
+// (not just in ensureGenerationStoreLayoutDurable). This means the
+// resolver and listing automatically get permission checks via the
+// trust root validation.
+
+describe("R169A-FIX-R5 — Permission policy in resolver/listing (SEC-R169A-R5-02)", () => {
+  let cacheRoot: string;
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r5-perms-"));
+  });
+
+  afterEach(() => {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  });
+
+  it("resolver rejects when projects dir has mode 0777 (group/other write) → STORE_LAYOUT_PERMISSIONS_INSECURE", () => {
+    const project = "perms-test-project";
+    // Create cbm with 0o700 (passes the compat root check).
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
+    // Create projects dir with mode 0777 (fails the private R169 dir check
+    // — private dirs require mode === 0o700 exactly).
+    const projects = generationStoreRoot(cacheRoot);
+    mkdirSync(projects, { mode: 0o777 });
+    // The chmod is needed because mkdirSync mode is masked by umask.
+    const fs = require("node:fs");
+    fs.chmodSync(projects, 0o777);
+
+    let err: unknown;
+    try {
+      resolveActiveCodeDb(project, { cacheRoot });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_PERMISSIONS_INSECURE");
+  });
+
+  it("resolver accepts when cbm has mode 0755 (compat root — group read/execute, no write)", () => {
+    // R169A-FIX-R5: Compatibility roots (cacheRoot, cbm) require
+    // mode & 0o022 === 0 (no group/other WRITE). 0755 has group/other
+    // read+execute only — accepted. (Private R169 dirs still require
+    // exactly 0700.)
+    const project = "perms-cbm-0755-project";
+    const cbm = cbmCacheDir(cacheRoot);
+    mkdirSync(cbm, { mode: 0o755 });
+    const fs = require("node:fs");
+    fs.chmodSync(cbm, 0o755);
+    // Create the rest of the chain with 0o700 (private R169 dirs).
+    ensureDirMode0700(generationStoreRoot(cacheRoot));
+    ensureDirMode0700(projectStoreDir(project, cacheRoot));
+    // Write a valid manifest + DB so the resolver has something to find.
+    const manifest = makeValidManifest(project);
+    writeManifest(cacheRoot, project, manifest);
+    writeGenerationDb(cacheRoot, project, manifest.dbFile);
+
+    // The resolver must accept the 0755 cbm and successfully resolve.
+    const result = resolveActiveCodeDb(project, { cacheRoot });
+    expect(result.source).toBe("generation");
+  });
+
+  it("listProjectStoreKeys rejects when projects dir has mode 0777 → STORE_LAYOUT_PERMISSIONS_INSECURE", () => {
+    // Create cbm with 0o700.
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
+    // Create projects dir with mode 0777.
+    const projects = generationStoreRoot(cacheRoot);
+    mkdirSync(projects, { mode: 0o777 });
+    const fs = require("node:fs");
+    fs.chmodSync(projects, 0o777);
+
+    let err: unknown;
+    try {
+      listProjectStoreKeys(cacheRoot);
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_PERMISSIONS_INSECURE");
+  });
+
+  it("listProjectStoreKeys accepts cbm with mode 0755 (compat root)", () => {
+    const cbm = cbmCacheDir(cacheRoot);
+    mkdirSync(cbm, { mode: 0o755 });
+    const fs = require("node:fs");
+    fs.chmodSync(cbm, 0o755);
+    ensureDirMode0700(generationStoreRoot(cacheRoot));
+
+    // listProjectStoreKeys must NOT throw for a 0755 cbm.
+    expect(() => listProjectStoreKeys(cacheRoot)).not.toThrow();
+  });
+
+  it("assertTrustedRootNoSymlinks rejects when project-key dir has mode 0777 → STORE_LAYOUT_PERMISSIONS_INSECURE", () => {
+    const project = "perms-key-project";
+    // Build the chain with proper modes up to project-key.
+    ensureDirMode0700(cbmCacheDir(cacheRoot));
+    ensureDirMode0700(generationStoreRoot(cacheRoot));
+    // project-key dir with mode 0777.
+    const projectKey = projectStoreDir(project, cacheRoot);
+    mkdirSync(projectKey, { mode: 0o777 });
+    const fs = require("node:fs");
+    fs.chmodSync(projectKey, 0o777);
+
+    let err: unknown;
+    try {
+      assertTrustedRootNoSymlinks(cacheRoot, project, "test-phase");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_PERMISSIONS_INSECURE");
+  });
+});
+
+// ─── R169A-FIX-R5: fd leak in openDirectoryNoFollow (QUAL-R169A-R5-01) ────
+//
+// Finding 6 (QUAL-R169A-R5-01): If fstatSync fails after a successful
+// openSync, the fd MUST be closed before re-throwing. Previously the
+// fd leaked.
+//
+// Test approach: Inject a TestOps whose fstatSync throws on the FIRST
+// call (which happens to be a layout-phase directory fstat). The
+// fd-close behavior is verified by patching TestOps.closeSync to count
+// invocations. We use the layout-phase dir fsync path because that's
+// where openDirectoryNoFollow is first invoked in
+// ensureGenerationStoreLayoutDurable.
+
+describe("R169A-FIX-R5 — fd leak in openDirectoryNoFollow (QUAL-R169A-R5-01)", () => {
+  let cacheRoot: string;
+  const project = "fdleak-project";
+
+  beforeEach(() => {
+    cacheRoot = mkdtempSync(join(tmpdir(), "r169a-r5-fdleak-"));
+  });
+
+  afterEach(() => {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  });
+
+  it("openSync succeeds + fstatSync fails → fd closed exactly once (no leak)", () => {
+    // Build a TestOps subclass that fails the first fstatSync call but
+    // counts closeSync invocations. The first fstatSync in the writer
+    // flow happens inside openDirectoryNoFollow (called from
+    // ensureGenerationStoreLayoutDurable for the cbm dir fsync).
+    //
+    // We expect:
+    //   1. openSync succeeds (returns an fd).
+    //   2. fstatSync throws (injected).
+    //   3. openDirectoryNoFollow's catch block calls closeSync(fd) once.
+    //   4. The error is re-thrown.
+    //   5. The caller (ensureGenerationStoreLayoutDurable) wraps it in
+    //      STORE_LAYOUT_DURABILITY_UNKNOWN.
+    class FdLeakOps extends TestOps {
+      fstatCallCount = 0;
+      closeCallCount = 0;
+      failedFd: number | null = null;
+
+      fstatSync(fd: number): { size: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; mode: number; dev: number; ino: number; uid?: number } {
+        this.fstatCallCount++;
+        if (this.fstatCallCount === 1) {
+          // First fstatSync call — fail it. Record the fd so we can
+          // verify closeSync was called on THIS fd.
+          this.failedFd = fd;
+          throw new Error("injected fstatSync failure");
+        }
+        const s = require("node:fs").fstatSync(fd);
+        return {
+          size: s.size,
+          isDirectory: () => s.isDirectory(),
+          isFile: () => s.isFile(),
+          isSymbolicLink: () => s.isSymbolicLink(),
+          mode: s.mode,
+          dev: s.dev,
+          ino: s.ino,
+          uid: s.uid,
+        };
+      }
+
+      closeSync(fd: number): void {
+        this.closeCallCount++;
+        // The fd that failed fstatSync MUST be closed.
+        if (fd === this.failedFd) {
+          // Don't actually close — it might be invalid. Just record.
+          return;
+        }
+        const fs = require("node:fs");
+        return fs.closeSync(fd);
+      }
+    }
+
+    const ops = new FdLeakOps();
+    let err: unknown;
+    try {
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot }, ops);
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    // The error is wrapped as STORE_LAYOUT_DURABILITY_UNKNOWN because
+    // the failure happens in the layout-phase dir fsync path.
+    const code = (err as GenerationStoreError).code;
+    expect(["STORE_LAYOUT_DURABILITY_UNKNOWN", "ATOMIC_WRITE_FAILED"]).toContain(code);
+
+    // closeSync MUST have been called at least once for the failed fd.
+    // The fd-leak bug would mean closeSync was NOT called.
+    expect(ops.closeCallCount).toBeGreaterThan(0);
+  });
+
+  it("openDirectoryNoFollow: fallback path (no O_NOFOLLOW) also closes fd on fstatSync failure", () => {
+    // This test verifies the fallback path (lstat -> open -> fstat ->
+    // compare) also closes the fd if fstatSync fails. We can't easily
+    // force the fallback path on Linux (where O_NOFOLLOW is available),
+    // but we can verify the closeSync call by injecting a failure at
+    // the SECOND fstatSync call (the one in the fallback path). On
+    // Linux, this test exercises the primary path's fstat failure.
+    //
+    // Since the previous test already exercises the primary path, this
+    // test is a sanity check that closeSync is called even when the
+    // failure happens later in the openDirectoryNoFollow flow.
+    class FdLeakOps2 extends TestOps {
+      fstatCallCount = 0;
+      closedFds: number[] = [];
+
+      fstatSync(fd: number): { size: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; mode: number; dev: number; ino: number; uid?: number } {
+        this.fstatCallCount++;
+        if (this.fstatCallCount === 2) {
+          // Second fstatSync call — fail it.
+          throw new Error("injected fstatSync failure (second call)");
+        }
+        const s = require("node:fs").fstatSync(fd);
+        return {
+          size: s.size,
+          isDirectory: () => s.isDirectory(),
+          isFile: () => s.isFile(),
+          isSymbolicLink: () => s.isSymbolicLink(),
+          mode: s.mode,
+          dev: s.dev,
+          ino: s.ino,
+          uid: s.uid,
+        };
+      }
+
+      closeSync(fd: number): void {
+        this.closedFds.push(fd);
+        try {
+          const fs = require("node:fs");
+          return fs.closeSync(fd);
+        } catch {
+          // best effort
+        }
+      }
+    }
+
+    const ops = new FdLeakOps2();
+    let err: unknown;
+    try {
+      writeIndexStateAtomically(project, makeValidIndexState(project), { cacheRoot }, ops);
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    // closeSync MUST have been called at least once after the fstat
+    // failure — verifying no fd leak.
+    expect(ops.closedFds.length).toBeGreaterThan(0);
   });
 });

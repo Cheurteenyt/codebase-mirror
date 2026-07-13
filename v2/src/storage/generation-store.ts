@@ -157,8 +157,76 @@
  *   - READ-R169A-R4-01 (manifest read growth + UTF-8): `parseGenerationManifest`
  *     re-`fstat`s the fd after reading and compares size/dev/ino; reads
  *     one extra byte (must return 0 = EOF); decodes with
- *     `new TextDecoder("utf-8", { fatal: true })` so invalid UTF-8 -> 
+ *     `new TextDecoder("utf-8", { fatal: true })` so invalid UTF-8 ->
  *     MANIFEST_PARSE_ERROR.
+ *
+ * R169A-FIX-R5 (GPT 5.6 pass 5 audit) changes:
+ *   - API-R169A-R5-01 (remove __test__ export): The `__test__` export
+ *     is REMOVED. The manifest writer
+ *     `writeGenerationManifestAtomically` and the prepare*ForWrite
+ *     helpers are no longer accessible to production code (they were
+ *     already non-exported functions; only the __test__ namespace
+ *     exposed them). Tests that need a manifest on disk use the test
+ *     helper `v2/tests/helpers/r169-generation-fixtures.ts` which
+ *     writes via `writeFileSync`. Atomic writer mechanic tests use
+ *     `writeIndexStateAtomically` (the only public writer) which
+ *     exercises the same internal writer code path. A source
+ *     inspection test verifies `__test__` and
+ *     `writeGenerationManifestAtomically` are NOT exported.
+ *   - STATE-R169A-R5-01 (publicationState enum): `validateIndexAttemptState`
+ *     updated to validate `publicationState: IndexPublicationState`
+ *     (4-value enum) instead of `published: boolean`. Coherence rules
+ *     tightened per the four-value enum:
+ *       * SUCCESS / SUCCESS_WITH_WARNINGS + PUBLISHED: activeGenerationId
+ *         non-null, candidateGenerationId == activeGenerationId.
+ *       * SUCCESS / SUCCESS_WITH_WARNINGS + NOT_NEEDED:
+ *         candidateGenerationId == null.
+ *       * PARTIAL: NOT_PUBLISHED only; failure non-null.
+ *       * FAILED: NOT_PUBLISHED or DURABILITY_UNKNOWN; failure non-null.
+ *       * STALE: NOT_PUBLISHED only; staleReason non-null; recovery != "none".
+ *       * PUBLISHED forbidden for PARTIAL / FAILED / STALE.
+ *   - STATE-R169A-R5-02 (coherence fixes): SUCCESS_WITH_WARNINGS now
+ *     follows the same rules as SUCCESS for active/candidate. The
+ *     `pathsTruncated` <-> `totalPaths` invariant is tightened:
+ *       * pathsTruncated=true  -> totalPaths MUST be present AND
+ *         totalPaths > paths.length.
+ *       * pathsTruncated=false -> totalPaths absent OR totalPaths == paths.length.
+ *       * pathsTruncated absent -> totalPaths absent OR totalPaths == paths.length.
+ *   - SEC-R169A-R5-01 (cleanup after directory swap): When the
+ *     pre-rename dev/ino check fails, the catch block NO LONGER unlinks
+ *     the temp file by path. The temp file may be in the ORIGINAL
+ *     directory (which was swapped out); unlinking by path would
+ *     operate on the NEW directory. A `directoryIdentityStillValid`
+ *     flag gates the cleanup. The error message includes a
+ *     `[WARNING: ATOMIC_TEMP_ORPHANED ...]` note so the operator knows
+ *     a temp file may be orphaned. New error code `ATOMIC_TEMP_ORPHANED`
+ *     added to the taxonomy (as a warning, not a separate thrown error).
+ *   - SEC-R169A-R5-02 (permission policy in resolver/listing): The
+ *     two-tier permission policy (compat roots: mode & 0o022 === 0;
+ *     private R169 dirs: mode === 0o700) is now enforced in
+ *     `assertTrustedRootNoSymlinks` and `assertGenerationStoreRootTrusted`
+ *     for each EXISTING directory component. Previously the policy was
+ *     only in `ensureGenerationStoreLayoutDurable`; the resolver and
+ *     listing did not check permissions. Now the resolver, listing, AND
+ *     writer all use the same trust root validation. POSIX uid check
+ *     (stat.uid === process.getuid()) is best-effort (try/catch on
+ *     Windows where getuid is unavailable).
+ *   - QUAL-R169A-R5-01 (fd leak in openDirectoryNoFollow): If
+ *     `fstatSync(fd)` fails after a successful `openSync` in the
+ *     O_NOFOLLOW|O_DIRECTORY path, the fd is now closed before
+ *     re-throwing. Previously the fd leaked. (The fallback path
+ *     already had this fix.)
+ *   - API-R169A-R5-02 (ops/hook marked @internal): The `ops` and
+ *     `hook` parameters on `writeIndexStateAtomically` are marked
+ *     `@internal` in the JSDoc. They remain as optional parameters
+ *     (TypeScript types them) so tests can inject faults, but they
+ *     are NOT part of the public API contract. Production callers
+ *     MUST omit them.
+ *   - PORT-R169A-R5-01 (macOS support): Documentation updated to
+ *     reflect that Linux is certified for atomic generation
+ *     publication; macOS is planned (verified in R169E with CI
+ *     matrix); Windows remains legacy/inactive. No macOS CI job added
+ *     in R5 (R169E scope).
  */
 
 import {
@@ -196,6 +264,7 @@ import {
   IndexAttemptFailureV1,
   IndexAttemptOutcome,
   IndexRecoveryAction,
+  IndexPublicationState,
   MANIFEST_V1_KEYS,
   INDEX_STATE_V1_KEYS,
   ResolvedCodeDb,
@@ -213,6 +282,7 @@ export type {
   IndexAttemptFailureV1,
   IndexAttemptOutcome,
   IndexRecoveryAction,
+  IndexPublicationState,
   ResolvedCodeDb,
 } from "./generation-types.js";
 export {
@@ -830,15 +900,22 @@ export function assertTrustedRootNoSymlinks(
 ): void {
   // The trust root chain — every component MUST exist as a real directory
   // (or be absent). A symlink at ANY level is rejected.
+  // R169A-FIX-R5 (SEC-R169A-R5-02): Each EXISTING directory component is
+  // also permission-checked via assertLayoutDirPermissions (two-tier
+  // policy: compat roots cacheRoot/cbm require mode & 0o022 === 0;
+  // private R169 dirs projects/project-key require mode === 0o700).
+  // This closes the gap where the resolver and listing did not check
+  // permissions — now the resolver, listing, AND writer all use the
+  // same trust root validation.
   const key = projectStorageKey(project); // validates project is non-empty
-  const chain: Array<{ label: string; path: string }> = [
-    { label: "cacheRoot", path: cacheRoot },
-    { label: "codebase-memory-mcp", path: cbmCacheDir(cacheRoot) },
-    { label: "projects", path: generationStoreRoot(cacheRoot) },
-    { label: "project-key", path: join(generationStoreRoot(cacheRoot), key) },
+  const chain: Array<{ label: string; path: string; isCompatRoot: boolean }> = [
+    { label: "cacheRoot", path: cacheRoot, isCompatRoot: true },
+    { label: "codebase-memory-mcp", path: cbmCacheDir(cacheRoot), isCompatRoot: true },
+    { label: "projects", path: generationStoreRoot(cacheRoot), isCompatRoot: false },
+    { label: "project-key", path: join(generationStoreRoot(cacheRoot), key), isCompatRoot: false },
   ];
 
-  for (const { label, path } of chain) {
+  for (const { label, path, isCompatRoot } of chain) {
     let stat;
     try {
       stat = lstatSync(path);
@@ -866,6 +943,13 @@ export function assertTrustedRootNoSymlinks(
         project,
         `Trust-root component "${label}" at "${path}" is a symlink — rejected`,
       );
+    }
+    // R169A-FIX-R5 (SEC-R169A-R5-02): Permission check for existing
+    // directories. Non-directory entries (regular files, etc.) are
+    // skipped here — the caller will fail later when it tries to use
+    // the path as a directory (e.g. readdirSync throws ENOTDIR).
+    if (stat.isDirectory()) {
+      assertLayoutDirPermissions(stat, path, isCompatRoot, project, phase);
     }
   }
 
@@ -897,13 +981,18 @@ export function assertGenerationStoreRootTrusted(
   cacheRoot: string,
   phase: string,
 ): void {
-  const chain: Array<{ label: string; path: string }> = [
-    { label: "cacheRoot", path: cacheRoot },
-    { label: "codebase-memory-mcp", path: cbmCacheDir(cacheRoot) },
-    { label: "projects", path: generationStoreRoot(cacheRoot) },
+  // R169A-FIX-R5 (SEC-R169A-R5-02): Same two-tier permission policy as
+  // assertTrustedRootNoSymlinks. Compatibility roots (cacheRoot, cbm)
+  // require mode & 0o022 === 0; private R169 dirs (projects) require
+  // mode === 0o700. This closes the gap where listProjectStoreKeys did
+  // not check permissions.
+  const chain: Array<{ label: string; path: string; isCompatRoot: boolean }> = [
+    { label: "cacheRoot", path: cacheRoot, isCompatRoot: true },
+    { label: "codebase-memory-mcp", path: cbmCacheDir(cacheRoot), isCompatRoot: true },
+    { label: "projects", path: generationStoreRoot(cacheRoot), isCompatRoot: false },
   ];
 
-  for (const { label, path } of chain) {
+  for (const { label, path, isCompatRoot } of chain) {
     let stat;
     try {
       stat = lstatSync(path);
@@ -926,6 +1015,10 @@ export function assertGenerationStoreRootTrusted(
         "",
         `Trust-root component "${label}" at "${path}" is a symlink — rejected`,
       );
+    }
+    // R169A-FIX-R5 (SEC-R169A-R5-02): Permission check for existing directories.
+    if (stat.isDirectory()) {
+      assertLayoutDirPermissions(stat, path, isCompatRoot, "", phase);
     }
   }
 }
@@ -962,6 +1055,21 @@ const INDEX_RECOVERY_ACTIONS: ReadonlySet<IndexRecoveryAction> = new Set<IndexRe
   "full_reindex",
   "manifest_repair",
   "legacy_migration",
+]);
+
+/**
+ * R169A-FIX-R5 (STATE-R169A-R5-01): Index-state publication state enum.
+ * Replaces the R4 `published: boolean`. Four values:
+ *   - "PUBLISHED": manifest swap was durable.
+ *   - "NOT_NEEDED": indexer no-op (no candidate).
+ *   - "NOT_PUBLISHED": publication did not complete.
+ *   - "DURABILITY_UNKNOWN": rename succeeded but dir fsync failed (FAILED only).
+ */
+const INDEX_PUBLICATION_STATES: ReadonlySet<IndexPublicationState> = new Set<IndexPublicationState>([
+  "PUBLISHED",
+  "NOT_NEEDED",
+  "NOT_PUBLISHED",
+  "DURABILITY_UNKNOWN",
 ]);
 
 /**
@@ -1343,7 +1451,9 @@ export function validateGenerationManifest(
  *   - recovery: must be in the INDEX_RECOVERY_ACTIONS set (aligned with
  *     the indexer's `IndexResult.recovery` enum)
  *   - candidateGenerationId: null OR a canonical UUID v4 (R169A-FIX-R4)
- *   - published: boolean (R169A-FIX-R4)
+ *   - publicationState: one of "PUBLISHED" | "NOT_NEEDED" |
+ *     "NOT_PUBLISHED" | "DURABILITY_UNKNOWN" (R169A-FIX-R5; was
+ *     `published: boolean` in R4)
  *   - failure: null OR a structured object with:
  *       * code: non-empty safe string (max 256 chars)
  *       * phase: non-empty safe string (max 256 chars)
@@ -1353,16 +1463,29 @@ export function validateGenerationManifest(
  *       * message: non-empty safe string (max 8 KiB)
  *       * paths: array of safe strings (each max 32 KiB, up to 100 entries)
  *       * totalPaths: optional safe non-negative int >= paths.length
- *       * pathsTruncated: optional boolean; if true then totalPaths > paths.length
- *   - Coherence rules (R169A-FIX-R4 STATE-R169A-R4-01):
- *       * SUCCESS: published=true, failure=null, staleReason=null,
- *         recovery="none", activeGenerationId non-null
- *       * SUCCESS_WITH_WARNINGS: published=true, failure=null,
- *         staleReason=null, recovery="none"
- *       * PARTIAL: published=false, failure non-null (or at minimum
- *         one of failure / staleReason)
- *       * FAILED: published=false, failure non-null
- *       * STALE: published=false, staleReason non-null, recovery != "none"
+ *       * pathsTruncated: optional boolean; if true then totalPaths MUST
+ *         be present AND totalPaths > paths.length (R169A-FIX-R5 tightening)
+ *   - Coherence rules (R169A-FIX-R5 STATE-R169A-R5-01/02):
+ *       * SUCCESS / SUCCESS_WITH_WARNINGS + PUBLISHED: activeGenerationId
+ *         non-null, candidateGenerationId == activeGenerationId,
+ *         failure=null, staleReason=null, recovery="none".
+ *       * SUCCESS / SUCCESS_WITH_WARNINGS + NOT_NEEDED:
+ *         candidateGenerationId=null, failure=null, staleReason=null,
+ *         recovery="none".
+ *       * SUCCESS / SUCCESS_WITH_WARNINGS + NOT_PUBLISHED or
+ *         DURABILITY_UNKNOWN: REJECTED.
+ *       * PARTIAL: publicationState="NOT_PUBLISHED", failure non-null.
+ *         PUBLISHED / NOT_NEEDED / DURABILITY_UNKNOWN REJECTED.
+ *       * FAILED: publicationState="NOT_PUBLISHED" or "DURABILITY_UNKNOWN",
+ *         failure non-null. PUBLISHED / NOT_NEEDED REJECTED.
+ *       * STALE: publicationState="NOT_PUBLISHED", staleReason non-null,
+ *         recovery != "none". PUBLISHED / NOT_NEEDED / DURABILITY_UNKNOWN
+ *         REJECTED.
+ *       * pathsTruncated coherence (R169A-FIX-R5 STATE-R169A-R5-02):
+ *         - pathsTruncated=true  -> totalPaths MUST be present AND
+ *           totalPaths > paths.length.
+ *         - pathsTruncated=false -> totalPaths absent OR totalPaths == paths.length.
+ *         - pathsTruncated absent -> totalPaths absent OR totalPaths == paths.length.
  *
  * Throws GenerationStoreError on any validation failure. The error code
  * is INDEX_STATE_SCHEMA_ERROR for structural / type / coherence faults,
@@ -1499,16 +1622,17 @@ export function validateIndexAttemptState(
     }
   }
 
-  // R169A-FIX-R4 (STATE-R169A-R4-01): published must be a boolean.
-  if (typeof obj.published !== "boolean") {
+  // R169A-FIX-R5 (STATE-R169A-R5-01): publicationState must be one of the
+  // four enum values. Replaces the R4 `published: boolean` check.
+  if (typeof obj.publicationState !== "string" || !INDEX_PUBLICATION_STATES.has(obj.publicationState as IndexPublicationState)) {
     throw new GenerationStoreError(
       SCHEMA,
       phase,
       expectedProject,
-      `published must be a boolean, got: ${JSON.stringify(obj.published)}`,
+      `publicationState must be one of ${[...INDEX_PUBLICATION_STATES].join("|")}, got: ${JSON.stringify(obj.publicationState)}`,
     );
   }
-  const published = obj.published as boolean;
+  const publicationState = obj.publicationState as IndexPublicationState;
 
   // R169A-FIX-R4 (STATE-R169A-R4-01): failure is null OR a structured
   // object { code, phase, message }. Replaces the previous free-form
@@ -1661,9 +1785,11 @@ export function validateIndexAttemptState(
         );
       }
     }
-    // pathsTruncated: optional boolean. R169A-FIX-R4: if true, then
-    // totalPaths (when present) must be > paths.length. If false, then
-    // totalPaths (when present) must equal paths.length.
+    // pathsTruncated: optional boolean. R169A-FIX-R5 (STATE-R169A-R5-02):
+    //   - pathsTruncated=true  -> totalPaths MUST be present AND
+    //     totalPaths > paths.length.
+    //   - pathsTruncated=false -> totalPaths absent OR totalPaths == paths.length.
+    //   - pathsTruncated absent -> totalPaths absent OR totalPaths == paths.length.
     if (sr.pathsTruncated !== undefined && typeof sr.pathsTruncated !== "boolean") {
       throw new GenerationStoreError(
         SCHEMA,
@@ -1672,13 +1798,23 @@ export function validateIndexAttemptState(
         `staleReason.pathsTruncated must be a boolean, got: ${JSON.stringify(sr.pathsTruncated)}`,
       );
     }
-    if (sr.pathsTruncated === true && sr.totalPaths !== undefined && (sr.totalPaths as number) <= sr.paths.length) {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `staleReason.pathsTruncated=true but totalPaths (${sr.totalPaths}) <= paths.length (${sr.paths.length})`,
-      );
+    if (sr.pathsTruncated === true) {
+      if (sr.totalPaths === undefined) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `staleReason.pathsTruncated=true but totalPaths is absent (must be present and > paths.length=${sr.paths.length})`,
+        );
+      }
+      if ((sr.totalPaths as number) <= sr.paths.length) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `staleReason.pathsTruncated=true but totalPaths (${sr.totalPaths}) <= paths.length (${sr.paths.length})`,
+        );
+      }
     }
     if (sr.pathsTruncated === false && sr.totalPaths !== undefined && (sr.totalPaths as number) !== sr.paths.length) {
       throw new GenerationStoreError(
@@ -1686,6 +1822,14 @@ export function validateIndexAttemptState(
         phase,
         expectedProject,
         `staleReason.pathsTruncated=false but totalPaths (${sr.totalPaths}) != paths.length (${sr.paths.length})`,
+      );
+    }
+    if (sr.pathsTruncated === undefined && sr.totalPaths !== undefined && (sr.totalPaths as number) !== sr.paths.length) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `staleReason.pathsTruncated absent but totalPaths (${sr.totalPaths}) != paths.length (${sr.paths.length})`,
       );
     }
     staleReason = {
@@ -1697,115 +1841,131 @@ export function validateIndexAttemptState(
     };
   }
 
-  // Coherence rules (R169A-FIX-R4 STATE-R169A-R4-01).
+  // Coherence rules (R169A-FIX-R5 STATE-R169A-R5-01/02).
   //
-  // SUCCESS: published=true, failure=null, staleReason=null,
-  //   recovery="none", activeGenerationId non-null.
-  if (outcome === "SUCCESS") {
-    if (!published) {
+  // SUCCESS / SUCCESS_WITH_WARNINGS + PUBLISHED: activeGenerationId
+  //   non-null, candidateGenerationId == activeGenerationId, failure=null,
+  //   staleReason=null, recovery="none".
+  // SUCCESS / SUCCESS_WITH_WARNINGS + NOT_NEEDED: candidateGenerationId=null,
+  //   failure=null, staleReason=null, recovery="none".
+  // SUCCESS / SUCCESS_WITH_WARNINGS + NOT_PUBLISHED or DURABILITY_UNKNOWN:
+  //   REJECTED.
+  // PARTIAL: publicationState="NOT_PUBLISHED", failure non-null.
+  // FAILED: publicationState="NOT_PUBLISHED" or "DURABILITY_UNKNOWN",
+  //   failure non-null.
+  // STALE: publicationState="NOT_PUBLISHED", staleReason non-null,
+  //   recovery != "none".
+  // PUBLISHED forbidden for PARTIAL / FAILED / STALE.
+  if (outcome === "SUCCESS" || outcome === "SUCCESS_WITH_WARNINGS") {
+    if (publicationState === "PUBLISHED") {
+      if (obj.activeGenerationId === null) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=PUBLISHED but activeGenerationId is null (must reference the live generation)`,
+        );
+      }
+      if (obj.candidateGenerationId !== obj.activeGenerationId) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=PUBLISHED but candidateGenerationId (${JSON.stringify(obj.candidateGenerationId)}) != activeGenerationId (${JSON.stringify(obj.activeGenerationId)}) (on PUBLISHED the candidate becomes the active)`,
+        );
+      }
+      if (failure !== null) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=PUBLISHED but failure is non-null`,
+        );
+      }
+      if (staleReason !== null) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=PUBLISHED but staleReason is non-null`,
+        );
+      }
+      if (recovery !== "none") {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=PUBLISHED but recovery="${recovery}" (must be "none")`,
+        );
+      }
+    } else if (publicationState === "NOT_NEEDED") {
+      if (obj.candidateGenerationId !== null) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=NOT_NEEDED but candidateGenerationId is non-null (no-op must have no candidate)`,
+        );
+      }
+      if (failure !== null) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=NOT_NEEDED but failure is non-null`,
+        );
+      }
+      if (staleReason !== null) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=NOT_NEEDED but staleReason is non-null`,
+        );
+      }
+      if (recovery !== "none") {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `Coherence violation: outcome=${outcome} + publicationState=NOT_NEEDED but recovery="${recovery}" (must be "none")`,
+        );
+      }
+    } else {
+      // publicationState is NOT_PUBLISHED or DURABILITY_UNKNOWN - forbidden for SUCCESS / SUCCESS_WITH_WARNINGS.
       throw new GenerationStoreError(
         SCHEMA,
         phase,
         expectedProject,
-        `Coherence violation: outcome=SUCCESS but published=false (must be true)`,
-      );
-    }
-    if (failure !== null) {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `Coherence violation: outcome=SUCCESS but failure is non-null`,
-      );
-    }
-    if (staleReason !== null) {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `Coherence violation: outcome=SUCCESS but staleReason is non-null`,
-      );
-    }
-    if (recovery !== "none") {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `Coherence violation: outcome=SUCCESS but recovery="${recovery}" (must be "none")`,
-      );
-    }
-    if (obj.activeGenerationId === null) {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `Coherence violation: outcome=SUCCESS but activeGenerationId is null (must reference the live generation)`,
-      );
-    }
-  } else if (outcome === "SUCCESS_WITH_WARNINGS") {
-    // SUCCESS_WITH_WARNINGS: published=true, failure=null,
-    //   staleReason=null, recovery="none".
-    if (!published) {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `Coherence violation: outcome=SUCCESS_WITH_WARNINGS but published=false (must be true)`,
-      );
-    }
-    if (failure !== null) {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `Coherence violation: outcome=SUCCESS_WITH_WARNINGS but failure is non-null`,
-      );
-    }
-    if (staleReason !== null) {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `Coherence violation: outcome=SUCCESS_WITH_WARNINGS but staleReason is non-null`,
-      );
-    }
-    if (recovery !== "none") {
-      throw new GenerationStoreError(
-        SCHEMA,
-        phase,
-        expectedProject,
-        `Coherence violation: outcome=SUCCESS_WITH_WARNINGS but recovery="${recovery}" (must be "none")`,
+        `Coherence violation: outcome=${outcome} but publicationState="${publicationState}" (must be PUBLISHED or NOT_NEEDED)`,
       );
     }
   } else if (outcome === "PARTIAL") {
-    // PARTIAL: published=false, failure non-null (or at minimum one of
-    // failure / staleReason). PARTIAL means publication did NOT
-    // complete; either the indexer hit a recoverable error mid-way
-    // (failure) or discovered staleness mid-way (staleReason).
-    if (published) {
+    // PARTIAL: publicationState="NOT_PUBLISHED", failure non-null.
+    if (publicationState !== "NOT_PUBLISHED") {
       throw new GenerationStoreError(
         SCHEMA,
         phase,
         expectedProject,
-        `Coherence violation: outcome=PARTIAL but published=true (must be false)`,
+        `Coherence violation: outcome=PARTIAL but publicationState="${publicationState}" (must be NOT_PUBLISHED)`,
       );
     }
-    if (failure === null && staleReason === null) {
+    if (failure === null) {
       throw new GenerationStoreError(
         SCHEMA,
         phase,
         expectedProject,
-        `Coherence violation: outcome=PARTIAL but both failure and staleReason are null (at least one must be non-null)`,
+        `Coherence violation: outcome=PARTIAL but failure is null (must carry the failure record)`,
       );
     }
   } else if (outcome === "FAILED") {
-    // FAILED: published=false, failure non-null.
-    if (published) {
+    // FAILED: publicationState="NOT_PUBLISHED" or "DURABILITY_UNKNOWN", failure non-null.
+    if (publicationState !== "NOT_PUBLISHED" && publicationState !== "DURABILITY_UNKNOWN") {
       throw new GenerationStoreError(
         SCHEMA,
         phase,
         expectedProject,
-        `Coherence violation: outcome=FAILED but published=true (must be false)`,
+        `Coherence violation: outcome=FAILED but publicationState="${publicationState}" (must be NOT_PUBLISHED or DURABILITY_UNKNOWN)`,
       );
     }
     if (failure === null) {
@@ -1817,13 +1977,13 @@ export function validateIndexAttemptState(
       );
     }
   } else if (outcome === "STALE") {
-    // STALE: published=false, staleReason non-null, recovery != "none".
-    if (published) {
+    // STALE: publicationState="NOT_PUBLISHED", staleReason non-null, recovery != "none".
+    if (publicationState !== "NOT_PUBLISHED") {
       throw new GenerationStoreError(
         SCHEMA,
         phase,
         expectedProject,
-        `Coherence violation: outcome=STALE but published=true (must be false)`,
+        `Coherence violation: outcome=STALE but publicationState="${publicationState}" (must be NOT_PUBLISHED)`,
       );
     }
     if (staleReason === null) {
@@ -2812,9 +2972,17 @@ function openDirectoryNoFollow(
   if (O_DIRECTORY && O_NOFOLLOW) {
     // Preferred path: open with O_RDONLY | O_DIRECTORY | O_NOFOLLOW. The
     // kernel rejects symlinks (ELOOP) and non-directories (ENOTDIR).
+    // R169A-FIX-R5 (QUAL-R169A-R5-01): If fstatSync fails after a
+    // successful openSync, the fd MUST be closed before re-throwing.
+    // Previously the fd leaked.
     const fd = ops.openSync(path, fsConstants.O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-    const st = ops.fstatSync(fd);
-    return { fd, dev: st.dev, ino: st.ino };
+    try {
+      const st = ops.fstatSync(fd);
+      return { fd, dev: st.dev, ino: st.ino };
+    } catch (e) {
+      try { ops.closeSync(fd); } catch { /* best effort */ }
+      throw e;
+    }
   }
   // Fallback (no O_DIRECTORY / O_NOFOLLOW — e.g. Windows): lstat -> open
   // -> fstat -> compare dev+ino. If lstat shows a symlink, or if the
@@ -3129,6 +3297,15 @@ function writeJsonAtomically(
 
   let fd: number | null = null;
   let renameSucceeded = false;
+  // R169A-FIX-R5 (SEC-R169A-R5-01): Track whether the target directory's
+  // identity (dev+ino) is still valid. If the pre-rename identity check
+  // detects a swap (dev/ino mismatch or symlink), we set this to false
+  // and DO NOT unlink the temp file by path — the path may now point to
+  // a different directory, and unlinking would operate on the wrong dir.
+  // The temp file is orphaned in the ORIGINAL directory; we report a
+  // WARNING (ATOMIC_TEMP_ORPHANED) in the error message so the operator
+  // knows.
+  let directoryIdentityStillValid = true;
   try {
     // Exclusive create — fails if the file already exists
     try {
@@ -3221,6 +3398,11 @@ function writeJsonAtomically(
       );
     }
     if (dirLstat.isSymbolicLink()) {
+      // R169A-FIX-R5 (SEC-R169A-R5-01): The directory became a symlink.
+      // The temp file is in the ORIGINAL directory; tmpPath may now
+      // point elsewhere. Mark identity invalid so the catch block does
+      // NOT unlink by path.
+      directoryIdentityStillValid = false;
       throw new GenerationStoreError(
         "PATH_TRAVERSAL_REJECTED",
         phase,
@@ -3229,6 +3411,9 @@ function writeJsonAtomically(
       );
     }
     if (dirLstat.dev !== dirFdDev || dirLstat.ino !== dirFdIno) {
+      // R169A-FIX-R5 (SEC-R169A-R5-01): The directory was swapped
+      // (dev/ino mismatch). Same as symlink — temp may be orphaned.
+      directoryIdentityStillValid = false;
       throw new GenerationStoreError(
         "PATH_TRAVERSAL_REJECTED",
         phase,
@@ -3274,12 +3459,40 @@ function writeJsonAtomically(
     if (fd !== null) {
       try { ops.closeSync(fd); } catch { /* best effort */ }
     }
-    if (!renameSucceeded) {
+    // R169A-FIX-R5 (SEC-R169A-R5-01): Only unlink the temp file if the
+    // directory identity is still valid. If the pre-rename identity
+    // check detected a swap (dev/ino mismatch or symlink), tmpPath may
+    // now point to a different directory — unlinking by path would
+    // operate on the wrong directory. The temp file is orphaned in the
+    // ORIGINAL directory; we report a WARNING in the error message.
+    if (!renameSucceeded && directoryIdentityStillValid) {
       try { ops.unlinkSync(tmpPath); } catch { /* best effort */ }
     }
+    const orphaned = !renameSucceeded && !directoryIdentityStillValid;
 
-    if (e instanceof GenerationStoreError) throw e;
+    if (e instanceof GenerationStoreError) {
+      if (orphaned) {
+        // Append a WARNING about the orphaned temp file. The primary
+        // error code is unchanged (PATH_TRAVERSAL_REJECTED); the
+        // warning tells the operator a temp file may be orphaned.
+        throw new GenerationStoreError(
+          e.code,
+          e.phase,
+          e.project,
+          `${e.message} [WARNING: ATOMIC_TEMP_ORPHANED — temp file ${tmpPath} may be orphaned in the original directory because the target directory was swapped; not unlinked by path to avoid operating on the wrong directory]`,
+        );
+      }
+      throw e;
+    }
 
+    if (orphaned) {
+      throw new GenerationStoreError(
+        "ATOMIC_WRITE_FAILED",
+        phase,
+        project,
+        `Failed to write JSON atomically: ${(e as Error).message} [WARNING: ATOMIC_TEMP_ORPHANED — temp file ${tmpPath} may be orphaned in the original directory because the target directory was swapped; not unlinked by path to avoid operating on the wrong directory]`,
+      );
+    }
     throw new GenerationStoreError(
       "ATOMIC_WRITE_FAILED",
       phase,
@@ -3435,9 +3648,17 @@ function writeProjectJsonAtomicallyInternal(
  * public publication API: `publishPreparedGeneration(PreparedGeneration)`
  * which requires DB validation, hash, size, CAS before manifest write.
  *
- * R169A-FIX-R4 (DATA-R169A-R4-01): Calls
- * `prepareGenerationManifestForWrite(manifest, project)` BEFORE any
- * filesystem I/O. The preparation builds a plain (null-prototype)
+ * R169A-FIX-R5 (API-R169A-R5-01): The `writeGenerationManifestAtomically`
+ * wrapper function is REMOVED (it was only exposed via `__test__`, which
+ * is now removed). The underlying `writeProjectJsonAtomicallyInternal`
+ * with target "manifest" remains, exercised by R169B's future
+ * `publishPreparedGeneration`. Tests that need a manifest on disk use
+ * the test helper `v2/tests/helpers/r169-generation-fixtures.ts`
+ * (writeFileSync-based). Atomic writer mechanic tests use
+ * `writeIndexStateAtomically` (the only public writer).
+ *
+ * R169A-FIX-R4 (DATA-R169A-R4-01): The preparation
+ * (`prepareGenerationManifestForWrite`) builds a plain (null-prototype)
  * object from the 13 manifest fields, validates it, serializes to JSON,
  * parses the bytes back, revalidates, and returns the immutable payload
  * Buffer. The filesystem writer receives ONLY the Buffer. This closes
@@ -3450,24 +3671,7 @@ function writeProjectJsonAtomicallyInternal(
  *
  * On success, writes `manifest` to `<projectStore>/active-generation.json`
  * atomically (temp-rename-fsync pattern, temp file mode 0600).
- *
- * Exposed via the `__test__` namespace for test fixtures ONLY. Production
- * code MUST NOT call this — there is no DB validation, no hash check,
- * no size check, no CAS. R169B will wrap this in
- * `publishPreparedGeneration` with the full publication contract.
  */
-function writeGenerationManifestAtomically(
-  project: string,
-  manifest: GenerationManifestV1,
-  options?: GenerationStoreOptions,
-  ops?: AtomicFileOps,
-  hook?: WriterTestHook,
-): void {
-  // prepareGenerationManifestForWrite is called inside
-  // writeProjectJsonAtomicallyInternal. It validates BEFORE any I/O.
-  // If it throws, no temp / layout / target is created.
-  writeProjectJsonAtomicallyInternal(project, "manifest", manifest, options, ops, hook);
-}
 
 /**
  * R169A-FIX-R3 (API-R169A-R3-01): Public typed writer for the index-state
@@ -3492,17 +3696,21 @@ function writeGenerationManifestAtomically(
  * On success, writes `state` to `<projectStore>/index-state.json`
  * atomically (temp-rename-fsync pattern, temp file mode 0600).
  *
- * The optional `ops` parameter is for tests (fault injection). The
- * optional `hook` parameter is for tests (race injection between
- * layout creation and temp open — see SEC-R169A-R3-01; and between
- * temp fsync and rename — see SEC-R169A-R4-01).
+ * R169A-FIX-R5 (API-R169A-R5-02): The `ops` and `hook` parameters are
+ * `@internal` — they exist for test fault injection and race injection
+ * only. Production callers MUST omit them. They are NOT part of the
+ * public API contract and may be removed or restructured in future
+ * revisions without a semver bump.
+ *
+ * @internal ops Optional injectable filesystem operations (tests only).
+ * @internal hook Optional test hook for race injection (tests only).
  */
 export function writeIndexStateAtomically(
   project: string,
   state: IndexAttemptStateV1,
   options?: GenerationStoreOptions,
-  ops?: AtomicFileOps,
-  hook?: WriterTestHook,
+  /** @internal Test fault injection only. */ ops?: AtomicFileOps,
+  /** @internal Test race injection only. */ hook?: WriterTestHook,
 ): void {
   // prepareIndexStateForWrite is called inside
   // writeProjectJsonAtomicallyInternal. It validates BEFORE any I/O.
@@ -3510,42 +3718,15 @@ export function writeIndexStateAtomically(
   writeProjectJsonAtomicallyInternal(project, "index-state", state, options, ops, hook);
 }
 
-/**
- * R169A-FIX-R4 (DATA-R169A-R4-02): Internal testing-only namespace.
- *
- * R169A does NOT export a publication API. The manifest writer
- * (`writeGenerationManifestAtomically`) is internal — it is a low-level
- * file writer, not a publication authorization. R169B will own the first
- * public publication API: `publishPreparedGeneration(PreparedGeneration)`
- * which requires DB validation, hash, size, CAS before manifest write.
- *
- * This namespace exposes the internal manifest writer (and the
- * `prepare*ForWrite` helpers) for TEST FIXTURES ONLY. Production code
- * MUST NOT call it — there is no DB validation, no hash check, no size
- * check, no CAS. Tests use it to set up the "old" manifest that the
- * resolver reads back, and to exercise the writer's atomic guarantees.
- *
- * The naming `__test__` is intentionally ugly to discourage use. The
- * JSDoc on each member repeats the warning.
- */
-export const __test__ = {
-  /**
-   * INTERNAL — test fixtures only. NOT a publication API.
-   * See `writeGenerationManifestAtomically` docstring.
-   */
-  writeGenerationManifestAtomically,
-  /**
-   * INTERNAL — test fixtures only. Returns `{ value, payload }`.
-   * Exposed so tests can verify the canonical-payload guarantee
-   * (toJSON / getter / Proxy do not affect the written bytes).
-   */
-  prepareGenerationManifestForWrite,
-  /**
-   * INTERNAL — test fixtures only. Returns `{ value, payload }`.
-   * Exposed so tests can verify the canonical-payload guarantee.
-   */
-  prepareIndexStateForWrite,
-};
+// R169A-FIX-R5 (API-R169A-R5-01): The `__test__` export is REMOVED.
+// The manifest writer `writeGenerationManifestAtomically` and the
+// `prepare*ForWrite` helpers are no longer accessible to production
+// code. Tests that need a manifest on disk use the test helper
+// `v2/tests/helpers/r169-generation-fixtures.ts` (writeFileSync-based).
+// Atomic writer mechanic tests use `writeIndexStateAtomically` (the
+// only public writer) which exercises the same internal writer code.
+// A source inspection test verifies `__test__` and
+// `writeGenerationManifestAtomically` are NOT exported.
 
 // ─── Project listing (section 9.4, future; R169A-FIX OPS-R169A-01) ──────
 

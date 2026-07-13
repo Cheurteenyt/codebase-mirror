@@ -264,6 +264,41 @@ behavior in the resolver (section 8).
 }
 ```
 
+### 4.4 Index-state schema V1 (`index-state.json`)
+
+Stored as `<projectStore>/index-state.json`. The exact key set is
+enforced — **no extra keys are allowed** for V1. 11 keys:
+
+| Key | Type | Constraint |
+|---|---|---|
+| `formatVersion` | integer | Must be `1`. Any other value → `INDEX_STATE_UNSUPPORTED_VERSION`. |
+| `project` | string | Safe string (max 1024 chars, no C0 control chars); must match the expected project exactly. |
+| `activeGenerationId` | string \| null | Canonical UUID v4 of the currently active generation, or null if none. |
+| `candidateGenerationId` | string \| null | R169A-FIX-R4: UUID v4 of the generation being staged, or null. On SUCCESS+PUBLISHED, equals `activeGenerationId`. |
+| `lastAttemptId` | string | Canonical UUID v4 of the last indexing attempt. |
+| `lastAttemptAt` | string | ISO-8601 with timezone; calendar-validated. |
+| `lastAttemptOutcome` | enum | One of `SUCCESS`, `SUCCESS_WITH_WARNINGS`, `PARTIAL`, `FAILED`, `STALE`. |
+| `publicationState` | enum | R169A-FIX-R5 (STATE-R169A-R5-01): One of `PUBLISHED`, `NOT_NEEDED`, `NOT_PUBLISHED`, `DURABILITY_UNKNOWN`. Replaces the R4 `published: boolean` field. |
+| `failure` | object \| null | R169A-FIX-R4: Structured `{ code, phase, message }` or null. Replaces the R3 `lastAttemptError: string \| null`. |
+| `staleReason` | object \| null | R169A-FIX-R3: Structured `{ code, message, paths, totalPaths?, pathsTruncated? }` or null. |
+| `recovery` | enum | One of `none`, `retry_incremental`, `fix_filesystem`, `full_reindex`, `manifest_repair`, `legacy_migration`. |
+
+**Coherence rules (R169A-FIX-R5 STATE-R169A-R5-01/02):**
+
+- `SUCCESS` / `SUCCESS_WITH_WARNINGS`:
+  - `publicationState` MUST be `PUBLISHED` or `NOT_NEEDED`.
+  - `PUBLISHED`: `activeGenerationId` non-null, `candidateGenerationId == activeGenerationId`, `failure=null`, `staleReason=null`, `recovery="none"`.
+  - `NOT_NEEDED`: `candidateGenerationId=null`, `failure=null`, `staleReason=null`, `recovery="none"`.
+- `PARTIAL`: `publicationState="NOT_PUBLISHED"`, `failure` non-null.
+- `FAILED`: `publicationState="NOT_PUBLISHED"` or `"DURABILITY_UNKNOWN"`, `failure` non-null.
+- `STALE`: `publicationState="NOT_PUBLISHED"`, `staleReason` non-null, `recovery != "none"`.
+
+**`pathsTruncated` coherence (R169A-FIX-R5 STATE-R169A-R5-02):**
+
+- `pathsTruncated=true` → `totalPaths` MUST be present AND `totalPaths > paths.length`.
+- `pathsTruncated=false` → `totalPaths` absent OR `totalPaths == paths.length`.
+- `pathsTruncated` absent → `totalPaths` absent OR `totalPaths == paths.length`.
+
 ## 5. State machine overview
 
 Publication is a sequence of states. Each transition is durable before
@@ -426,6 +461,29 @@ This closes the bypass where `cacheRoot`, `cbmCacheDir`, or `projects`
 is itself a symlink. Implemented in `assertTrustedRootNoSymlinks` in
 `v2/src/storage/generation-store.ts`.
 
+R169A-FIX-R5 (SEC-R169A-R5-02): The trust root validation now ALSO
+checks permissions on EXISTING directories. This means the resolver
+and `listProjectStoreKeys` automatically get permission checks via
+the trust root validation — not just the writer (which already had
+them via `ensureGenerationStoreLayoutDurable`).
+
+The permission policy is two-tier (R169A-FIX-R4 COMPAT-R169A-R4-01):
+
+- **Compatibility roots** (`cacheRoot`, `codebase-memory-mcp`):
+  require `mode & 0o022 === 0` (no group/other WRITE bits). 0755,
+  0750, 0700 all accepted. This preserves existing legacy caches
+  that have 0755 on the cbm directory.
+- **Private R169 dirs** (`projects`, `<project-key>`, `generations`,
+  `tmp`): require `mode === 0o700` exactly. These are created fresh
+  by R169A and contain potentially sensitive information; they
+  should not be readable by other users on the host.
+
+On POSIX (where `process.getuid` is available), the directory's `uid`
+is best-effort checked against `process.getuid()`. On Windows this
+check is skipped.
+
+Violations raise `STORE_LAYOUT_PERMISSIONS_INSECURE`.
+
 ### 6.4 Layout durability (R169A-FIX-R2 DUR-R169A-R2-01)
 
 `mkdirSync(dir, { recursive: true })` + `fsync(dir)` does NOT guarantee
@@ -500,6 +558,64 @@ All errors are wrapped in `GenerationStoreError` with the project name
 and phase. The wrapper NEVER accepts an arbitrary target path — the path
 is always derived from `project` + `target`. This eliminates the entire
 class of "writer with arbitrary path" attacks.
+
+### 6.6 Public API surface (R169A-FIX-R5 API-R169A-R5-01/02)
+
+R169A-FIX-R5 tightened the public API surface of the generation store:
+
+- The `__test__` export is **REMOVED**. The manifest writer
+  `writeGenerationManifestAtomically` and the `prepare*ForWrite`
+  helpers are NOT accessible to production code. Tests that need a
+  manifest on disk use the test-only fixture
+  `v2/tests/helpers/r169-generation-fixtures.ts` (writeFileSync-based,
+  NOT the atomic writer). Atomic writer mechanic tests use
+  `writeIndexStateAtomically` (the only public writer) which exercises
+  the same internal writer code path.
+- The manifest writer is **internal** — R169A does NOT export a
+  publication API. R169B will own `publishPreparedGeneration`
+  (DB validation, hash, size, CAS before manifest write).
+- `writeIndexStateAtomically(project, state, options?)` is the ONLY
+  public writer. The `ops` and `hook` parameters exist on the
+  function signature for test fault/race injection ONLY; they are
+  marked `@internal` and are NOT part of the public API contract.
+  Production callers MUST omit them. A source-inspection test
+  verifies `__test__` and `writeGenerationManifestAtomically` are
+  NOT exported.
+
+### 6.7 Cleanup after directory swap (R169A-FIX-R5 SEC-R169A-R5-01)
+
+R169A-FIX-R4 (SEC-R169A-R4-01) introduced a pre-rename identity check:
+the writer `lstat`s the target directory and verifies `dev+ino` match
+the held `dirFd`. R169A-FIX-R5 closes the residual cleanup hazard:
+
+- When the pre-rename identity check detects a swap (dev/ino mismatch
+  OR the directory became a symlink), the writer sets
+  `directoryIdentityStillValid = false`.
+- In the catch block, the writer **does NOT** `unlinkSync(tmpPath)` if
+  the identity is invalid — `tmpPath` may now point to a different
+  directory (the replacement), and unlinking by path would operate on
+  the wrong directory.
+- The temp file is **orphaned** in the ORIGINAL directory. The error
+  message includes a `WARNING: ATOMIC_TEMP_ORPHANED` note so an
+  operator knows to manually remove the `.tmp-*.json` file from the
+  original directory.
+- The primary error code remains `PATH_TRAVERSAL_REJECTED` (the swap
+  was detected); the warning explains that the temp file is
+  intentionally NOT cleaned up.
+
+### 6.8 fd leak in openDirectoryNoFollow (R169A-FIX-R5 QUAL-R169A-R5-01)
+
+`openDirectoryNoFollow` opens a directory with
+`O_RDONLY | O_DIRECTORY | O_NOFOLLOW` (when available) and then
+`fstatSync`s the fd. If `fstatSync` fails after a successful
+`openSync`, the fd MUST be closed before re-throwing — otherwise the
+fd leaks.
+
+R169A-FIX-R5 wraps the `fstatSync` call in a try/catch that closes
+the fd on failure (best-effort) and re-throws the original error.
+The fallback path (no `O_NOFOLLOW` — Windows) does the same for its
+`fstatSync` call. A fault-injection test verifies `closeSync` is
+called exactly once when `fstatSync` fails.
 
 ## 7. Reader contract
 
@@ -675,7 +791,13 @@ type GenerationStoreErrorCode =
   | "STORE_LAYOUT_CREATE_FAILED"             // mkdir of a layout directory (cbm / projects / projectStore / generations / tmp) failed during ensureGenerationStoreLayoutDurable
   | "STORE_LAYOUT_DURABILITY_UNKNOWN"        // directory or PARENT fsync failed during layout setup; the directory entry MAY not be durable
   | "PATH_TRAVERSAL_REJECTED"                // path escapes store OR any component in the trust-root walk is a symlink / EACCES / EIO / ENOTDIR / ELOOP
-  | "PROJECT_KEY_INVALID";                   // project name was empty/non-string
+  | "PROJECT_KEY_INVALID"                    // project name was empty/non-string
+  | "PROJECT_STATE_SYMLINK_REJECTED"         // index-state.json is or contains a symlink (R169A-FIX-R3 QUAL-R169A-R3-01)
+  | "INDEX_STATE_SCHEMA_ERROR"               // index-state.json failed structural / type / coherence validation (R169A-FIX-R3 API-R169A-R3-02)
+  | "INDEX_STATE_PROJECT_MISMATCH"           // index-state.json `project` field != expected project (R169A-FIX-R3 API-R169A-R3-02)
+  | "INDEX_STATE_UNSUPPORTED_VERSION"        // index-state.json `formatVersion` is not 1 (R169A-FIX-R3 API-R169A-R3-02)
+  | "STORE_LAYOUT_PERMISSIONS_INSECURE"      // existing layout dir has insecure permissions (R169A-FIX-R3 SEC-R169A-R3-04, R169A-FIX-R4 COMPAT-R169A-R4-01 two-tier policy)
+  | "ATOMIC_TEMP_ORPHANED";                  // WARNING appended to error message when the writer detects the target directory was swapped between temp-create and rename (R169A-FIX-R5 SEC-R169A-R5-01); the temp file may be orphaned in the ORIGINAL directory and is NOT unlinked by path
 ```
 
 The five codes added in R169A pass 1 (after the first GPT 5.6 audit) are:
@@ -733,10 +855,44 @@ R169A-FIX-R2 (GPT 5.6 pass 2 audit) adds four more codes:
   writer-level errors).
 - `message` — human-readable detail.
 
+R169A-FIX-R3 (GPT 5.6 pass 3 audit) adds five more codes:
+
+- `STORE_LAYOUT_PERMISSIONS_INSECURE` — an existing layout directory
+  has group/other permissions that violate the two-tier policy.
+  Compatibility roots (cacheRoot, cbm) require `mode & 0o022 === 0`
+  (no group/other WRITE — 0755, 0750, 0700 all accepted). Private
+  R169 dirs (projects, projectStore, generations, tmp) require
+  `mode === 0o700` exactly. (R169A-FIX-R4 COMPAT-R169A-R4-01 split
+  the policy into two tiers; the R3 version rejected 0755 which
+  would have broken legacy caches.)
+- `PROJECT_STATE_SYMLINK_REJECTED` — `index-state.json` is or contains
+  a symlink. Distinct from `MANIFEST_SYMLINK_REJECTED` (for
+  `active-generation.json`) and `GENERATION_TARGET_SYMLINK_REJECTED`
+  (for the generation DB file).
+- `INDEX_STATE_SCHEMA_ERROR` — `index-state.json` failed structural,
+  type, or coherence validation.
+- `INDEX_STATE_PROJECT_MISMATCH` — `index-state.json` `project` field
+  does not match the expected project.
+- `INDEX_STATE_UNSUPPORTED_VERSION` — `index-state.json` `formatVersion`
+  is not 1.
+
+R169A-FIX-R5 (GPT 5.6 pass 5 audit) adds one more code:
+
+- `ATOMIC_TEMP_ORPHANED` — raised as a WARNING in the error message
+  (not as a separate thrown error) when the writer detects the target
+  directory was swapped between temp-create and rename. The temp file
+  may be orphaned in the ORIGINAL directory and MUST NOT be unlinked
+  by path (the path now points elsewhere). The primary error code
+  remains `PATH_TRAVERSAL_REJECTED` (the swap was detected); the
+  warning explains that the temp file is intentionally NOT cleaned
+  up. An operator must manually remove the orphaned `.tmp-*.json`
+  file from the original directory.
+
 This taxonomy is exhaustive on the foundation path. New failure modes
 that emerge during R169B–R169E will be added as new codes, never folded
-into existing ones. The R169A foundation exports 24 codes (15 original
-plus 5 from pass 1 plus 4 from pass 2).
+into existing ones. The R169A foundation exports 30 codes (15 original
+plus 5 from pass 1 plus 4 from pass 2 plus 5 from pass 3 plus 1 from
+pass 5).
 
 ## 10. GC policy
 
@@ -931,6 +1087,28 @@ with its own tests and audit. There is no "big bang" activation.
 `DATA-CARRY-01` (P1) remains OPEN until R169E has passed the crash
 matrix, concurrency analysis, performance verification, and activation
 gating.
+
+### 15.1 Platform support (R169A-FIX-R5 PORT-R169A-R5-01)
+
+The R169A foundation is **Linux certified** — every code path
+(O_NOFOLLOW + O_DIRECTORY opens, fsync of directories and parents,
+fchmod 0700, dev/ino identity checks, path-traversal rejection) is
+exercised by the test matrix on Linux.
+
+**macOS is planned — verification deferred to R169E.** The primitives
+used (`O_NOFOLLOW`, `O_DIRECTORY`, `fsync(fd)`, `fchmod`, lstat +
+dev/ino) are POSIX and available on macOS, but the R169A test matrix
+was run on Linux only. R169E will repeat the full matrix on macOS as
+part of the crash + performance + activation evidence. Until then,
+macOS is NOT certified and the foundation MUST NOT be activated on
+macOS production hosts.
+
+**Windows is legacy / inactive.** `O_NOFOLLOW` and `O_DIRECTORY` are
+not available on Windows; the code falls back to a lstat → open →
+fstat → dev/ino-compare path. This fallback is exercised by unit
+tests but is NOT certified for production use. Windows remains a
+legacy / inactive platform for the generation store; R169E will
+decide whether to certify Windows or to formally drop support.
 
 ## 16. References
 

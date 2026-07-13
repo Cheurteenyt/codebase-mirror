@@ -309,6 +309,196 @@ covering all 10 findings:
 
 Total tests: 1518 (+55 from pass 2's 1463).
 
+### R169A-FIX-R5 — GPT 5.6 pass 5 audit fixes (FINAL pass)
+
+The GPT 5.6 pass 5 audit identified eight findings against the pass 4
+fix. All eight are addressed in this FINAL re-fix; no production
+behavior changes (the generation store remains inert — no production
+code path calls it). Version remains `0.75.0`; semantics=8,
+discovery=2, manifest=1 unchanged. This is the FINAL pass — after
+this, the PR is opened.
+
+**API-R169A-R5-01 — Remove `__test__` export (P1).** The `__test__`
+export made the manifest writer accessible to production code. It is
+REMOVED entirely. The manifest writer
+`writeGenerationManifestAtomically` and the `prepare*ForWrite` helpers
+are NOT exported. A new test-only fixture file
+`v2/tests/helpers/r169-generation-fixtures.ts` exports:
+- `writeManifestFixture(cacheRoot, project, manifest)` — writes a
+  manifest via `node:fs.writeFileSync` directly (NOT the atomic
+  writer). Used by tests that need a manifest on disk for the
+  resolver to read.
+- `makeValidManifest(project, overrides?)` — builds a valid
+  `GenerationManifestV1` for tests.
+- `makeValidIndexState(project, overrides?)` — builds a valid
+  `IndexAttemptStateV1` for tests.
+- `writeIndexStateFixture`, `writeGenerationDbFixture`,
+  `writeLegacyDbFixture` — additional writeFileSync-based fixtures.
+These helpers are NOT compiled with the package (the `tests/`
+directory is excluded from the build). Atomic writer mechanic tests
+(fault injection, race injection) use `writeIndexStateAtomically`
+(the only public writer) which exercises the same internal writer
+code path. A source-inspection test verifies `__test__` and
+`writeGenerationManifestAtomically` are NOT exported.
+
+**STATE-R169A-R5-01 — `publicationState` enum (P1).** The R4
+`published: boolean` field could not represent no-op SUCCESS (nothing
+published but success) or DURABILITY_UNKNOWN (rename succeeded but
+dir fsync failed). It is REPLACED by a 4-value enum:
+```ts
+type IndexPublicationState =
+  | "PUBLISHED"          // manifest swap was durable
+  | "NOT_NEEDED"         // indexer no-op (no candidate to publish)
+  | "NOT_PUBLISHED"      // publication did not complete
+  | "DURABILITY_UNKNOWN"; // rename succeeded but dir fsync failed (FAILED only)
+```
+`INDEX_STATE_V1_KEYS` updated: `published` → `publicationState`
+(still 11 keys). Coherence rules tightened:
+- SUCCESS / SUCCESS_WITH_WARNINGS + PUBLISHED: `activeGenerationId`
+  non-null, `candidateGenerationId == activeGenerationId`,
+  `failure=null`, `staleReason=null`, `recovery="none"`.
+- SUCCESS / SUCCESS_WITH_WARNINGS + NOT_NEEDED:
+  `candidateGenerationId=null`, `failure=null`, `staleReason=null`,
+  `recovery="none"`.
+- PARTIAL: `publicationState="NOT_PUBLISHED"`, `failure` non-null.
+- FAILED: `publicationState="NOT_PUBLISHED"` or
+  `"DURABILITY_UNKNOWN"`, `failure` non-null.
+- STALE: `publicationState="NOT_PUBLISHED"`, `staleReason` non-null,
+  `recovery != "none"`.
+
+**STATE-R169A-R5-02 — Coherence completeness (P1/P2).**
+- SUCCESS_WITH_WARNINGS follows the same active/candidate rules as
+  SUCCESS (was previously under-checked).
+- `pathsTruncated` validation tightened:
+  - `pathsTruncated=true` → `totalPaths` MUST be present AND
+    `totalPaths > paths.length`.
+  - `pathsTruncated=false` → `totalPaths` absent OR
+    `totalPaths == paths.length`.
+  - `pathsTruncated` absent → `totalPaths` absent OR
+    `totalPaths == paths.length`.
+
+**SEC-R169A-R5-01 — Cleanup after directory swap (P1/P2).** After
+the pre-rename identity check detects a directory swap (dev/ino
+mismatch or symlink), the catch block previously called
+`unlinkSync(tmpPath)` which may target the wrong directory (the
+replacement, not the original). Fix:
+- Add `directoryIdentityStillValid = true` before the write.
+- Set `directoryIdentityStillValid = false` when dev/ino mismatch or
+  symlink detected.
+- In the catch block, only `unlinkSync(tmpPath)` if
+  `directoryIdentityStillValid` is true.
+- If not valid: don't unlink; append `WARNING: ATOMIC_TEMP_ORPHANED`
+  to the error message about the possible orphaned temp file.
+New error code `ATOMIC_TEMP_ORPHANED` added to the taxonomy (raised
+as a WARNING in the error message, not as a separate thrown error).
+Test: hook replaces directory after temp fsync → error mentions
+orphan, no file deleted in replacement directory.
+
+**SEC-R169A-R5-02 — Permission policy in resolver/listing (P1/P2).**
+Permission/ownership checks were only in
+`ensureGenerationStoreLayoutDurable`, not in the resolver or listing.
+Fix: `assertTrustedRootNoSymlinks` and
+`assertGenerationStoreRootTrusted` now check permissions on EXISTING
+directories using the same two-tier policy
+(R169A-FIX-R4 COMPAT-R169A-R4-01):
+- Compatibility roots (cacheRoot, codebase-memory-mcp): require
+  `mode & 0o022 === 0` (no group/other WRITE).
+- Private R169 dirs (projects, project-key): require
+  `mode === 0o700` exactly.
+- On POSIX: `stat.uid === process.getuid()` (best-effort, wrapped in
+  try/catch).
+The resolver and listing automatically get permission checks via the
+trust root validation. Tests: resolver with 0777 projects dir →
+`STORE_LAYOUT_PERMISSIONS_INSECURE`; resolver with 0755 cbm →
+accepted.
+
+**QUAL-R169A-R5-01 — fd leak in `openDirectoryNoFollow` (P2).** If
+`fstatSync(fd)` fails after a successful `openSync`, the fd leaked.
+Fix:
+```ts
+const fd = ops.openSync(path, flags);
+try {
+  const st = ops.fstatSync(fd);
+  return { fd, dev: st.dev, ino: st.ino };
+} catch (e) {
+  try { ops.closeSync(fd); } catch {}
+  throw e;
+}
+```
+Same pattern applied to the fallback path (no `O_NOFOLLOW`).
+Fault-injection test: open succeeds, fstat fails → fd closed exactly
+once.
+
+**API-R169A-R5-02 — `ops` / `hook` marked `@internal` (P2).**
+`writeIndexStateAtomically` exposes `ops` and `hook` parameters
+which are test mechanisms. They remain on the function signature
+(for test fault/race injection) but are marked `@internal` in JSDoc
+and are NOT part of the public API contract. Production callers MUST
+omit them. The simplest working approach was chosen over a separate
+internal module (which would require test-only build configuration).
+A source-inspection test verifies the public API surface does not
+include `__test__` or `writeGenerationManifestAtomically`.
+
+**PORT-R169A-R5-01 — macOS support (P2).** Documentation updated:
+"Linux certified. macOS planned — verification deferred to R169E.
+Windows legacy/inactive." The R169A foundation is Linux certified
+— every code path is exercised by the test matrix on Linux. macOS
+primitives (`O_NOFOLLOW`, `O_DIRECTORY`, `fsync(fd)`, `fchmod`,
+lstat + dev/ino) are POSIX and available, but the test matrix was
+run on Linux only. R169E will repeat the full matrix on macOS.
+Windows is legacy / inactive (`O_NOFOLLOW` / `O_DIRECTORY` not
+available; fallback path exercised by unit tests but NOT certified).
+
+**Test coverage.** +31 new R5-specific tests (240 total in the
+storage test file, was 209):
+- 8 tests verifying `__test__` and `writeGenerationManifestAtomically`
+  are NOT exported (API-R169A-R5-01).
+- 10 tests for `pathsTruncated` coherence (STATE-R169A-R5-02):
+  pathsTruncated=true + totalPaths present/absent/equal/less;
+  pathsTruncated=false + totalPaths absent/equal/greater;
+  pathsTruncated absent + totalPaths absent/equal/greater.
+- 5 tests for SUCCESS_WITH_WARNINGS coherence (STATE-R169A-R5-02).
+- 1 test for directory swap orphan case (SEC-R169A-R5-01).
+- 5 tests for permission checks in resolver/listing
+  (SEC-R169A-R5-02).
+- 2 tests for fd leak in `openDirectoryNoFollow` (QUAL-R169A-R5-01).
+- (Existing tests updated: PARTIAL with staleReason instead of
+  failure now expects INDEX_STATE_SCHEMA_ERROR per the tightened
+  R5 coherence rule.)
+
+**Files changed.**
+- `v2/src/storage/generation-types.ts` — `IndexPublicationState`
+  type added; `IndexAttemptStateV1.publicationState` field;
+  `INDEX_STATE_V1_KEYS` updated; `ATOMIC_TEMP_ORPHANED` error code
+  added to the taxonomy.
+- `v2/src/storage/generation-store.ts` — `__test__` export REMOVED;
+  `writeGenerationManifestAtomically` is internal (NOT exported);
+  `validateIndexAttemptState` updated for `publicationState` enum
+  and tightened coherence rules; `assertTrustedRootNoSymlinks` and
+  `assertGenerationStoreRootTrusted` now check permissions on
+  existing dirs; `openDirectoryNoFollow` closes fd on fstatSync
+  failure; `writeJsonAtomically` tracks
+  `directoryIdentityStillValid` and does NOT unlink by path if the
+  directory was swapped (appends ATOMIC_TEMP_ORPHANED warning);
+  `writeIndexStateAtomically` `ops`/`hook` marked `@internal`.
+- `v2/tests/storage/r169a-generation-store.test.ts` — updated to
+  use the test-only fixture helper; +31 R5-specific tests; existing
+  tests fixed to set mode 0o700 on layout dirs (R5 permission check
+  rejects the default 0o775 from umask 0o002 on shared CI runners).
+- `v2/tests/helpers/r169-generation-fixtures.ts` — NEW test-only
+  fixture file. Exports `writeManifestFixture`,
+  `makeValidManifest`, `makeValidIndexState`,
+  `writeIndexStateFixture`, `writeGenerationDbFixture`,
+  `writeLegacyDbFixture`. NOT compiled with the package.
+- `docs/ATOMIC_GENERATION_PUBLICATION.md` — §4.4 Index-state schema
+  V1 added; §6.3 trust root permission policy updated; §6.6 Public
+  API surface, §6.7 Cleanup after directory swap, §6.8 fd leak in
+  openDirectoryNoFollow added; §9 failure taxonomy updated with
+  R3 + R5 codes; §15.1 Platform support added (Linux certified,
+  macOS planned, Windows legacy/inactive).
+- `v2/CHANGELOG.md` — this entry.
+
+
 ### What R169A does NOT deliver
 
 - **R169B — Durable Staging Publisher + Validator + fsync + CAS + GC

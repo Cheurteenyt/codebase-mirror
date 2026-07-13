@@ -90,6 +90,25 @@
  *     `JSON.stringify`. This closes the canonical-payload gap where a
  *     `toJSON` getter / Proxy / prototype pollution could make the
  *     written bytes differ from the validated object.
+ *
+ * R169A-FIX-R5 (GPT 5.6 pass 5 audit) changes:
+ *   - STATE-R169A-R5-01 (publicationState enum): The free-form
+ *     `published: boolean` field is REPLACED by a structured
+ *     `publicationState: IndexPublicationState` enum with four values:
+ *       * "PUBLISHED"           - manifest swap was durable.
+ *       * "NOT_NEEDED"          - indexer no-op (no candidate to publish).
+ *       * "NOT_PUBLISHED"       - publication did not complete.
+ *       * "DURABILITY_UNKNOWN"  - rename succeeded but dir fsync failed
+ *                                 (residual TOCTOU window; FAILED only).
+ *     `boolean` could not represent no-op SUCCESS or DURABILITY_UNKNOWN.
+ *     `INDEX_STATE_V1_KEYS` updated: "published" -> "publicationState"
+ *     (still 11 keys).
+ *   - SEC-R169A-R5-01 (ATOMIC_TEMP_ORPHANED): New error code added to
+ *     the taxonomy. Raised as a WARNING in the error message (not as a
+ *     separate thrown error) when the writer detects the target
+ *     directory was swapped between temp-create and rename - the temp
+ *     file may be orphaned in the ORIGINAL directory and must NOT be
+ *     unlinked by path (the path now points elsewhere).
  */
 
 // ─── Manifest V1 ────────────────────────────────────────────────────────
@@ -240,6 +259,31 @@ export interface IndexAttemptFailureV1 {
 }
 
 /**
+ * R169A-FIX-R5 (STATE-R169A-R5-01): Publication state of an indexing
+ * attempt. Replaces the R4 `published: boolean` field.
+ *
+ * The boolean could not represent two important states:
+ *   - no-op SUCCESS (the indexer determined no work was needed; no
+ *     candidate was staged; nothing was published) - now "NOT_NEEDED".
+ *   - DURABILITY_UNKNOWN (the rename succeeded but the post-rename
+ *     directory fsync failed; the new manifest is in place but may not
+ *     survive a crash) - now "DURABILITY_UNKNOWN", allowed only for
+ *     FAILED.
+ *
+ * Coherence with `lastAttemptOutcome`:
+ *   - SUCCESS / SUCCESS_WITH_WARNINGS: "PUBLISHED" or "NOT_NEEDED".
+ *   - PARTIAL: "NOT_PUBLISHED".
+ *   - FAILED: "NOT_PUBLISHED" or "DURABILITY_UNKNOWN".
+ *   - STALE: "NOT_PUBLISHED".
+ *   - "PUBLISHED" is forbidden for PARTIAL / FAILED / STALE.
+ */
+export type IndexPublicationState =
+  | "PUBLISHED"
+  | "NOT_NEEDED"
+  | "NOT_PUBLISHED"
+  | "DURABILITY_UNKNOWN";
+
+/**
  * Operational state for the indexing process, stored as a sidecar
  * `index-state.json`. This file contains diagnostics, NOT graph data.
  * The generation DB and active-generation.json remain unchanged on
@@ -267,6 +311,12 @@ export interface IndexAttemptFailureV1 {
  *     from `activeGenerationId` (which is the LIVE generation). On
  *     SUCCESS the candidate becomes the active; on FAILED / STALE the
  *     candidate is GC'd.
+ *
+ * R169A-FIX-R5 (STATE-R169A-R5-01): `published: boolean` REPLACED by
+ *   `publicationState: IndexPublicationState` (4-value enum). The
+ *   boolean could not represent no-op SUCCESS ("NOT_NEEDED") or
+ *   DURABILITY_UNKNOWN (rename succeeded but dir fsync failed; FAILED
+ *   only). Coherence rules tightened per the four-value enum.
  */
 export interface IndexAttemptStateV1 {
   readonly formatVersion: 1;
@@ -287,12 +337,34 @@ export interface IndexAttemptStateV1 {
   /** Outcome of the last attempt. */
   readonly lastAttemptOutcome: IndexAttemptOutcome;
   /**
-   * R169A-FIX-R4: True iff the manifest swap was durable (post-rename
-   * directory fsync succeeded). On FAILED-before-publication this is
-   * false; on SUCCESS / SUCCESS_WITH_WARNINGS this is true; on PARTIAL
-   * this is false (partial = publication NOT completed).
+   * R169A-FIX-R5 (STATE-R169A-R5-01): Publication state of the last
+   * attempt. Replaces the R4 `published: boolean` field.
+   *
+   *   - "PUBLISHED": the manifest swap was durable (post-rename
+   *     directory fsync succeeded). Used for SUCCESS /
+   *     SUCCESS_WITH_WARNINGS when a generation was actually published.
+   *   - "NOT_NEEDED": the indexer was a no-op (no candidate to
+   *     publish). Used for SUCCESS / SUCCESS_WITH_WARNINGS when the
+   *     indexer determined no work was needed. `candidateGenerationId`
+   *     MUST be null.
+   *   - "NOT_PUBLISHED": publication did not complete. Used for
+   *     PARTIAL / FAILED / STALE.
+   *   - "DURABILITY_UNKNOWN": rename succeeded but the post-rename
+   *     directory fsync failed. Used for FAILED only (the residual
+   *     TOCTOU window where the new manifest is in place but may not
+   *     survive a crash).
+   *
+   * Coherence rules (enforced by `validateIndexAttemptState`):
+   *   - SUCCESS / SUCCESS_WITH_WARNINGS: PUBLISHED or NOT_NEEDED only.
+   *     PUBLISHED requires `activeGenerationId` non-null and
+   *     `candidateGenerationId == activeGenerationId`. NOT_NEEDED
+   *     requires `candidateGenerationId == null`.
+   *   - PARTIAL: NOT_PUBLISHED only. PUBLISHED is forbidden.
+   *   - FAILED: NOT_PUBLISHED or DURABILITY_UNKNOWN. PUBLISHED is
+   *     forbidden.
+   *   - STALE: NOT_PUBLISHED only. PUBLISHED is forbidden.
    */
-  readonly published: boolean;
+  readonly publicationState: IndexPublicationState;
   /**
    * R169A-FIX-R4: Structured failure record, or null on full success.
    * Replaces the previous `lastAttemptError: string | null` field.
@@ -331,12 +403,15 @@ export type IndexRecoveryAction =
  * R169A-FIX-R4 (STATE-R169A-R4-01): The exact set of keys allowed in a V1
  * index-state sidecar, exported as a frozen readonly tuple. 11 keys:
  *   formatVersion, project, activeGenerationId, candidateGenerationId,
- *   lastAttemptId, lastAttemptAt, lastAttemptOutcome, published,
+ *   lastAttemptId, lastAttemptAt, lastAttemptOutcome, publicationState,
  *   failure, staleReason, recovery.
  *
  * R3 had 9 keys (no `candidateGenerationId`, no `published`, and
  * `lastAttemptError` instead of `failure`). R4 replaces `lastAttemptError`
- * with the structured `failure` and adds the two new fields.
+ * with the structured `failure` and adds `candidateGenerationId` and
+ * `published`. R5 (STATE-R169A-R5-01) renames `published` to
+ * `publicationState` (an enum with four values instead of a boolean).
+ * Key count is unchanged at 11.
  */
 const INDEX_STATE_V1_KEYS_INTERNAL = [
   "formatVersion",
@@ -346,7 +421,7 @@ const INDEX_STATE_V1_KEYS_INTERNAL = [
   "lastAttemptId",
   "lastAttemptAt",
   "lastAttemptOutcome",
-  "published",
+  "publicationState",
   "failure",
   "staleReason",
   "recovery",
@@ -446,6 +521,16 @@ export interface ResolvedMissingDb {
  *     generations, tmp) require `mode === 0o700` exactly. The previous
  *     `mode & 0o077 !== 0` rule rejected 0755 (group read/execute) and
  *     would have broken existing legacy caches.
+ *
+ * R169A-FIX-R5 (GPT 5.6 audit, pass 5) changes:
+ *   - SEC-R169A-R5-01: Added `ATOMIC_TEMP_ORPHANED`. Raised as a WARNING
+ *     in the error message (not a separate thrown error) when the
+ *     writer detects the target directory was swapped between
+ *     temp-create and rename. The temp file may be orphaned in the
+ *     ORIGINAL directory and must NOT be unlinked by path (the path
+ *     now points elsewhere). The primary error code remains
+ *     PATH_TRAVERSAL_REJECTED (the swap was detected); the warning
+ *     explains that the temp file is intentionally NOT cleaned up.
  */
 export type GenerationStoreErrorCode =
   | "GENERATION_STORE_CONFIG_ERROR"
@@ -475,7 +560,8 @@ export type GenerationStoreErrorCode =
   | "INDEX_STATE_PROJECT_MISMATCH"
   | "INDEX_STATE_UNSUPPORTED_VERSION"
   | "PATH_TRAVERSAL_REJECTED"
-  | "PROJECT_KEY_INVALID";
+  | "PROJECT_KEY_INVALID"
+  | "ATOMIC_TEMP_ORPHANED";
 
 export class GenerationStoreError extends Error {
   readonly code: GenerationStoreErrorCode;
