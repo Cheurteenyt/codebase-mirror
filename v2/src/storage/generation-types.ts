@@ -713,3 +713,290 @@ export class GenerationStoreError extends Error {
     this.generationId = generationId;
   }
 }
+
+// ─── R169B-STEP2 — Publisher / CAS / GC public types (§7-18) ──────────────
+//
+// R169B-STEP2 introduces the publisher primitives that turn the R169A
+// generation-store foundation into a usable staging → validation →
+// promotion → GC pipeline. These types live in the types leaf module so
+// the publisher (public facade), the CAS store (internal), and the GC
+// module (public facade) can all import them without forming a cycle.
+//
+// STATUS: FOUNDATION / INACTIVE
+// The publisher primitives exist and are tested, but no production code
+// calls them yet — the indexer still writes to the legacy DB path. R169B
+// remains FOUNDATION / INACTIVE until a later step wires the publisher
+// into the indexer's success path.
+
+/**
+ * R169B-STEP2: Reservation returned by `reserveGenerationStaging`.
+ *
+ * The reservation is a thin record describing where the staging DB
+ * should be written and what generation UUID it will represent. The
+ * caller (typically the indexer) is responsible for opening the SQLite
+ * DB at `stagingPath`, initializing its schema, and writing graph data
+ * into it. After the staging DB is fully populated, the caller invokes
+ * `prepareGenerationForPublication` to validate + finalize + hash it.
+ *
+ * The reservation is NOT a publication act — no manifest is written,
+ * no CAS state is mutated, and the active generation is unchanged. The
+ * staging DB lives in `tmp/` and is invisible to readers until a
+ * successful `publishPreparedGeneration` promotion.
+ */
+export interface GenerationStagingReservation {
+  readonly project: string;
+  readonly generationId: string;
+  readonly stagingPath: string;
+  readonly cacheRoot: string;
+  readonly createdAt: string;
+}
+
+/**
+ * R169B-STEP2: Input for `prepareGenerationForPublication`.
+ *
+ * The publisher derives the manifest values from the staging DB itself
+ * (counts, versions, root fingerprint, sha256, sizeBytes). The caller
+ * only provides the expected `rootFingerprint` so the publisher can
+ * cross-check it against the value stored in the `projects` table.
+ */
+export interface PreparedGenerationInput {
+  readonly rootFingerprint?: string;
+}
+
+/**
+ * R169B-STEP2: Opaque, single-use prepared-generation handle.
+ *
+ * Returned by `prepareGenerationForPublication`. The handle is OPAQUE:
+ * callers MUST treat it as a black box and pass it unchanged to
+ * `publishPreparedGeneration` or `discardPreparedGeneration`. The
+ * handle is SINGLE-USE: `publishPreparedGeneration` consumes the
+ * underlying token, and a second call with the same handle raises
+ * `PUBLICATION_TOKEN_CONSUMED`.
+ *
+ * The handle is FORGE-RESISTANT: the token is held in a private
+ * module-scope WeakMap keyed by the actual object reference. A spread
+ * (`{ ...prepared }`), JSON clone, or cast from an arbitrary object
+ * produces a NEW reference that is NOT in the WeakMap —
+ * `publishPreparedGeneration` raises `PUBLICATION_TOKEN_INVALID`.
+ *
+ * The handle is FROZEN: `Object.isFrozen(prepared)` returns `true`.
+ */
+export interface PreparedGeneration {
+  readonly project: string;
+  readonly generationId: string;
+  readonly stagingPath: string;
+  readonly cacheRoot: string;
+  readonly manifest: GenerationManifestV1;
+  readonly preparedAt: string;
+  readonly warnings: readonly GenerationStoreWarning[];
+}
+
+/**
+ * R169B-STEP2: Options for `publishPreparedGeneration`.
+ *
+ *   - `expectedActiveGenerationId`: optimistic-locking guard. If
+ *     provided, the publisher verifies that the CAS-recorded active
+ *     generation ID (after reconciling from the active manifest)
+ *     equals this value. A mismatch raises `PUBLICATION_CAS_MISMATCH`.
+ *     Pass `null` to assert that no generation is currently active
+ *     (first publication). Omit the field to skip the check.
+ *   - `pin`: if true, mark the newly published generation as pinned
+ *     in the CAS catalog so it is never deleted by GC.
+ */
+export interface PublishPreparedGenerationOptions {
+  readonly expectedActiveGenerationId?: string | null;
+  readonly pin?: boolean;
+}
+
+/**
+ * R169B-STEP2: Result of a successful `publishPreparedGeneration`.
+ *
+ *   - `publicationState`: "PUBLISHED" if the post-promotion fsync of
+ *     the generations/ directory succeeded; "DURABILITY_UNKNOWN" if
+ *     the promotion (link + manifest swap) succeeded but the final
+ *     directory fsync failed. In the latter case the new manifest is
+ *     on disk and visible to readers but may not survive a crash —
+ *     the caller MUST surface this as a warning.
+ *   - `cas`: CAS-state snapshot after the COMMIT. `revision` is the
+ *     new CAS revision (incremented from the pre-publish value).
+ *     `deduped` is true if the publisher detected that an identical
+ *     generation (same sha256+size+fingerprint+versions) was already
+ *     in the catalog and reused it. `previousActiveGenerationId`
+ *     is the active ID before this publication (null if first).
+ */
+export interface PublicationResult {
+  readonly project: string;
+  readonly generationId: string;
+  readonly dbPath: string;
+  readonly manifestPath: string;
+  readonly metadataPath: string;
+  readonly manifest: GenerationManifestV1;
+  readonly publicationState: "PUBLISHED" | "DURABILITY_UNKNOWN";
+  readonly warnings: readonly GenerationStoreWarning[];
+  readonly cas: {
+    readonly revision: number;
+    readonly deduped: boolean;
+    readonly previousActiveGenerationId: string | null;
+  };
+}
+
+/**
+ * R169B-STEP2: Result of `discardPreparedGeneration`.
+ *
+ *   - `deleted`: true if the staging DB was successfully unlinked.
+ *     false if the publisher could not prove the directory identity
+ *     (the staging path was swapped between prepare and discard) —
+ *     in that case the staging artifact is LEFT IN PLACE and a
+ *     `STAGING_ALIAS_CLEANUP_DEFERRED` warning is surfaced so the
+ *     operator / next GC pass can clean it up safely.
+ */
+export interface DiscardResult {
+  readonly project: string;
+  readonly generationId: string;
+  readonly stagingPath: string;
+  readonly deleted: boolean;
+  readonly warnings: readonly GenerationStoreWarning[];
+}
+
+/**
+ * R169B-STEP2: Options for `planGenerationGc` and `applyGenerationGcPlan`.
+ *
+ *   - `retainCount`: number of previous distinct generations to
+ *     retain in addition to the active generation and pinned
+ *     generations. Defaults to 2.
+ *   - `tmpMaxAgeMs`: maximum age (in milliseconds) for canonical
+ *     staging artifacts in `tmp/`. Artifacts older than this are
+ *     swept by the GC (with directory-identity verification).
+ *     Defaults to 24 hours.
+ *   - `pin`: set of generation IDs to treat as pinned for this plan
+ *     (in addition to the CAS-recorded pinned set).
+ */
+export interface GenerationGcOptions {
+  readonly cacheRoot?: string;
+  readonly retainCount?: number;
+  readonly tmpMaxAgeMs?: number;
+  readonly pin?: readonly string[];
+}
+
+/**
+ * R169B-STEP2: A single entry in the GC plan's retain/delete list.
+ */
+export interface GenerationGcPlanEntry {
+  readonly generationId: string;
+  readonly dbPath: string;
+  readonly metadataPath: string | null;
+  readonly reason: string;
+  readonly pinned: boolean;
+}
+
+/**
+ * R169B-STEP2: A tmp/ artifact to sweep in the GC plan.
+ */
+export interface GenerationGcTmpEntry {
+  readonly path: string;
+  readonly reason: string;
+}
+
+/**
+ * R169B-STEP2: Plan returned by `planGenerationGc`.
+ *
+ * The plan is computed from the active manifest + CAS catalog +
+ * publication_history. It NEVER uses mtime or readdir order for the
+ * retain/delete decision — only the publication_history ordering
+ * (most-recent-first) is used.
+ */
+export interface GenerationGcPlan {
+  readonly project: string;
+  readonly cacheRoot: string;
+  readonly activeGenerationId: string | null;
+  readonly casRevision: number;
+  readonly retain: readonly GenerationGcPlanEntry[];
+  readonly delete: readonly GenerationGcPlanEntry[];
+  readonly sweepTmp: readonly GenerationGcTmpEntry[];
+  readonly reasons: Readonly<Record<string, string>>;
+}
+
+/**
+ * R169B-STEP2: Result of `applyGenerationGcPlan`.
+ *
+ *   - `applied`: true if the plan was applied (CAS revision
+ *     unchanged). false if the plan was stale (CAS revision changed
+ *     between plan and apply) — in that case `deletedGenerations` and
+ *     `deletedTmp` are both empty and `reason` is `"GC_PLAN_STALE"`.
+ *   - `deletedGenerations`: generation IDs that were actually
+ *     deleted (metadata + DB + CAS catalog entry).
+ *   - `deletedTmp`: tmp/ paths that were unlinked.
+ *   - `warnings`: non-fatal anomalies (e.g. GC_DELETE_FAILED for a
+ *     generation whose DB was busy — the next GC pass will retry).
+ */
+export interface GenerationGcResult {
+  readonly applied: boolean;
+  readonly reason: string | null;
+  readonly deletedGenerations: readonly string[];
+  readonly deletedTmp: readonly string[];
+  readonly warnings: readonly GenerationStoreWarning[];
+}
+
+// ─── R169B-STEP2 — CAS store types (internal) ────────────────────────────
+
+/**
+ * R169B-STEP2: A row in the CAS `generation_catalog` table.
+ */
+export interface CasGenerationCatalogEntry {
+  readonly generationId: string;
+  readonly project: string;
+  readonly sha256: string;
+  readonly sizeBytes: number;
+  readonly rootFingerprint: string;
+  readonly extractorSemanticsVersion: number;
+  readonly discoveryPolicyVersion: number;
+  readonly firstPublishedAt: string;
+  readonly lastSeenAt: string;
+  readonly pinned: boolean;
+  readonly status: "ACTIVE" | "DELETING" | "DELETED";
+}
+
+/**
+ * R169B-STEP2: A row in the CAS `publication_history` table.
+ *
+ * The history is an append-only log of publication acts. The GC uses
+ * it to determine the order of previous generations (most-recent-first)
+ * without relying on mtime or readdir order.
+ */
+export interface CasPublicationHistoryEntry {
+  readonly historyId: number;
+  readonly generationId: string;
+  readonly project: string;
+  readonly publishedAt: string;
+  readonly action: "PUBLISH" | "UNPUBLISH" | "DELETE" | "PIN" | "UNPIN" | "MARK_DELETING";
+  readonly previousActiveGenerationId: string | null;
+  readonly casRevision: number;
+}
+
+/**
+ * R169B-STEP2: CAS-state snapshot returned by
+ * `CasStore.reconcileFromManifest`.
+ */
+export interface CasReconcileResult {
+  readonly activeGenerationId: string | null;
+  readonly revision: number;
+  readonly reconciled: boolean;
+}
+
+/**
+ * R169B-STEP2: Dedup candidate returned by `CasStore.findDedupCandidate`.
+ *
+ * A dedup candidate is an existing catalog entry whose sha256 +
+ * sizeBytes + rootFingerprint + extractorSemanticsVersion +
+ * discoveryPolicyVersion all match the prepared generation. If found,
+ * the publisher can skip the link + metadata write and instead reuse
+ * the existing generation-<uuid>.db (the staging DB is unlinked).
+ */
+export interface CasDedupCandidate {
+  readonly generationId: string;
+  readonly sha256: string;
+  readonly sizeBytes: number;
+  readonly rootFingerprint: string;
+  readonly extractorSemanticsVersion: number;
+  readonly discoveryPolicyVersion: number;
+}

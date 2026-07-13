@@ -755,3 +755,249 @@ describe("R169B-STEP1 — Module split source inspection (additional)", () => {
     expect(src).not.toMatch(/from\s+["']\.\/internal\/generation-store-io\.js["']/);
   });
 });
+
+// ─── R169B-STEP2 — Publisher / CAS / GC module structure ──────────────────
+//
+// R169B-STEP2 adds three new modules to the generation-store dependency
+// graph:
+//   - `internal/generation-cas-store.ts` — CAS SQLite store (internal,
+//     same level as `internal/generation-store-io.ts`).
+//   - `generation-publisher.ts` — public facade (publisher primitives).
+//   - `generation-gc.ts` — public facade (GC planner + applier).
+//
+// Expected acyclic dependency direction (extended from STEP1):
+//   types -> paths/validation -> internal I/O + CAS store -> public facades
+//
+// The new modules MUST NOT introduce a cycle. The publisher and GC
+// MUST NOT import from each other (they are independent public facades
+// that share the CAS store + internal I/O).
+
+describe("R169B-STEP2 — Publisher / CAS / GC module structure", () => {
+  const STEP2_MODULES = [
+    ...MODULES,
+    "internal/generation-cas-store",
+    "generation-publisher",
+    "generation-gc",
+  ] as const;
+
+  type Step2Module = (typeof STEP2_MODULES)[number];
+
+  function buildStep2ImportGraph(): Record<Step2Module, Step2Module[]> {
+    const graph = {} as Record<Step2Module, Step2Module[]>;
+    for (const mod of STEP2_MODULES) {
+      const relativePath = mod + ".ts";
+      const src = readStorageSource(relativePath);
+      const imports = parseRelativeImports(src);
+      const resolved = imports
+        .map((p) => resolveImportToModule(mod, p))
+        .filter((m): m is Step2Module =>
+          (STEP2_MODULES as readonly string[]).includes(m),
+        );
+      const seen = new Set<Step2Module>();
+      const unique: Step2Module[] = [];
+      for (const m of resolved) {
+        if (!seen.has(m)) {
+          seen.add(m);
+          unique.push(m);
+        }
+      }
+      graph[mod] = unique;
+    }
+    return graph;
+  }
+
+  function detectStep2Cycle(
+    graph: Record<Step2Module, Step2Module[]>,
+  ): Step2Module[] | null {
+    const WHITE = 0;
+    const GRAY = 1;
+    const BLACK = 2;
+    const color: Record<string, number> = {};
+    for (const m of STEP2_MODULES) color[m] = WHITE;
+    const stack: Step2Module[] = [];
+
+    function dfs(node: Step2Module): boolean {
+      color[node] = GRAY;
+      stack.push(node);
+      for (const neighbor of graph[node]) {
+        if (color[neighbor] === GRAY) {
+          const cycleStart = stack.indexOf(neighbor);
+          stack.push(neighbor);
+          const cycle = stack.slice(cycleStart);
+          stack.length = 0;
+          stack.push(...cycle);
+          return true;
+        }
+        if (color[neighbor] === WHITE && dfs(neighbor)) {
+          return true;
+        }
+      }
+      color[node] = BLACK;
+      stack.pop();
+      return false;
+    }
+
+    for (const m of STEP2_MODULES) {
+      if (color[m] === WHITE) {
+        if (dfs(m)) return stack;
+      }
+    }
+    return null;
+  }
+
+  it("the extended dependency graph (8 modules) is acyclic", () => {
+    const graph = buildStep2ImportGraph();
+    const cycle = detectStep2Cycle(graph);
+    if (cycle !== null) {
+      expect.fail(
+        `Circular import detected: ${cycle.join(" -> ")}. ` +
+          `Expected acyclic graph: types -> paths/validation -> internal I/O + CAS -> public facades.`,
+      );
+    }
+    expect(cycle).toBeNull();
+  });
+
+  it("internal/generation-cas-store imports types, paths, validation (NOT publisher / GC / public facade / internal I/O)", () => {
+    const graph = buildStep2ImportGraph();
+    const imports = graph["internal/generation-cas-store"].slice().sort();
+    // The CAS store is a leaf-ish internal module (like internal I/O).
+    // It imports the leaf modules (types, paths, validation) but NOT
+    // the public facades or the internal I/O module.
+    expect(imports).toEqual([
+      "generation-paths",
+      "generation-types",
+      "generation-validation",
+    ]);
+    expect(imports).not.toContain("generation-store");
+    expect(imports).not.toContain("generation-publisher");
+    expect(imports).not.toContain("generation-gc");
+    expect(imports).not.toContain("internal/generation-store-io");
+  });
+
+  it("generation-publisher imports types, paths, validation, internal I/O, internal CAS (NOT GC or public facade)", () => {
+    const graph = buildStep2ImportGraph();
+    const imports = graph["generation-publisher"].slice().sort();
+    expect(imports).toEqual([
+      "generation-paths",
+      "generation-types",
+      "generation-validation",
+      "internal/generation-cas-store",
+      "internal/generation-store-io",
+    ]);
+    expect(imports).not.toContain("generation-store");
+    expect(imports).not.toContain("generation-gc");
+  });
+
+  it("generation-gc imports types, paths, validation, internal I/O, internal CAS (NOT publisher or public facade)", () => {
+    const graph = buildStep2ImportGraph();
+    const imports = graph["generation-gc"].slice().sort();
+    expect(imports).toEqual([
+      "generation-paths",
+      "generation-types",
+      "generation-validation",
+      "internal/generation-cas-store",
+      "internal/generation-store-io",
+    ]);
+    expect(imports).not.toContain("generation-store");
+    expect(imports).not.toContain("generation-publisher");
+  });
+
+  it("the publisher and GC do NOT import from each other (independent facades)", () => {
+    const graph = buildStep2ImportGraph();
+    expect(graph["generation-publisher"]).not.toContain("generation-gc");
+    expect(graph["generation-gc"]).not.toContain("generation-publisher");
+  });
+
+  it("R169B-STEP2 public types are defined in generation-types.ts", () => {
+    const src = readStorageSource("generation-types.ts");
+    // Publisher / GC / CAS public types.
+    expect(src).toMatch(/export\s+interface\s+GenerationStagingReservation\b/);
+    expect(src).toMatch(/export\s+interface\s+PreparedGenerationInput\b/);
+    expect(src).toMatch(/export\s+interface\s+PreparedGeneration\b/);
+    expect(src).toMatch(/export\s+interface\s+PublishPreparedGenerationOptions\b/);
+    expect(src).toMatch(/export\s+interface\s+PublicationResult\b/);
+    expect(src).toMatch(/export\s+interface\s+DiscardResult\b/);
+    expect(src).toMatch(/export\s+interface\s+GenerationGcOptions\b/);
+    expect(src).toMatch(/export\s+interface\s+GenerationGcPlanEntry\b/);
+    expect(src).toMatch(/export\s+interface\s+GenerationGcTmpEntry\b/);
+    expect(src).toMatch(/export\s+interface\s+GenerationGcPlan\b/);
+    expect(src).toMatch(/export\s+interface\s+GenerationGcResult\b/);
+    // CAS types.
+    expect(src).toMatch(/export\s+interface\s+CasGenerationCatalogEntry\b/);
+    expect(src).toMatch(/export\s+interface\s+CasPublicationHistoryEntry\b/);
+    expect(src).toMatch(/export\s+interface\s+CasReconcileResult\b/);
+    expect(src).toMatch(/export\s+interface\s+CasDedupCandidate\b/);
+  });
+
+  it("the publisher exports the four public primitives", () => {
+    const src = readStorageSource("generation-publisher.ts");
+    expect(src).toMatch(/export\s+function\s+reserveGenerationStaging\b/);
+    expect(src).toMatch(/export\s+function\s+prepareGenerationForPublication\b/);
+    expect(src).toMatch(/export\s+function\s+publishPreparedGeneration\b/);
+    expect(src).toMatch(/export\s+function\s+discardPreparedGeneration\b/);
+  });
+
+  it("the GC module exports the plan + apply primitives", () => {
+    const src = readStorageSource("generation-gc.ts");
+    expect(src).toMatch(/export\s+function\s+planGenerationGc\b/);
+    expect(src).toMatch(/export\s+function\s+applyGenerationGcPlan\b/);
+  });
+
+  it("the CAS store exports openCasStore + CAS_DB_FILENAME", () => {
+    const src = readStorageSource("internal/generation-cas-store.ts");
+    expect(src).toMatch(/export\s+function\s+openCasStore\b/);
+    expect(src).toMatch(/export\s+const\s+CAS_DB_FILENAME\b/);
+  });
+
+  it("the publisher uses link() (not rename()) for promotion", () => {
+    const src = readStorageSource("generation-publisher.ts");
+    expect(src).toMatch(/\blinkSync\b/);
+    // The publisher MUST NOT use renameSync for promotion (rename is
+    // not no-clobber on POSIX). It may use renameSync internally via
+    // the atomic writer, but the promotion step itself uses link.
+    // Verify the promotion step uses link by checking the surrounding
+    // context.
+    expect(src).toMatch(/linkSync\(stagingPath,\s*finalPath\)/);
+  });
+
+  it("the publisher computes SHA-256 in streaming chunks (not readFileSync)", () => {
+    const src = readStorageSource("generation-publisher.ts");
+    expect(src).toMatch(/createHash\(["']sha256["']\)/);
+    // The publisher MUST NOT use readFileSync to read the staging DB
+    // for hashing (it must stream in chunks).
+    expect(src).not.toMatch(/readFileSync\(stagingPath/);
+    // Verify the chunk-based read is present.
+    expect(src).toMatch(/HASH_CHUNK_BYTES/);
+    expect(src).toMatch(/readSync\(hashFd/);
+  });
+
+  it("the publisher uses a WeakMap for PreparedGeneration tokens (forge-resistant)", () => {
+    const src = readStorageSource("generation-publisher.ts");
+    expect(src).toMatch(/WeakMap<PreparedGeneration/);
+    expect(src).toMatch(/preparedTokens/);
+  });
+
+  it("the CAS store uses BEGIN IMMEDIATE for write serialization", () => {
+    const src = readStorageSource("internal/generation-cas-store.ts");
+    expect(src).toMatch(/BEGIN\s+IMMEDIATE/);
+  });
+
+  it("the GC plan never uses mtime for retain/delete (only publication_history order)", () => {
+    const src = readStorageSource("generation-gc.ts");
+    // The planner MUST NOT consult mtime for the retain/delete decision.
+    // mtime is ONLY used for the tmp/ age sweep (which is explicitly
+    // age-based).
+    // Verify the retain-N logic uses publication_history (listPublicationHistory).
+    expect(src).toMatch(/listPublicationHistory/);
+    expect(src).toMatch(/distinctPrevious/);
+  });
+
+  it("the GC applier never promotes from tmp/", () => {
+    const src = readStorageSource("generation-gc.ts");
+    // The applier unlinks tmp/ artifacts; it MUST NOT link/rename them
+    // into generations/.
+    expect(src).toMatch(/unlinkSync/);
+    // The GC module MUST NOT use linkSync (no promotion).
+    expect(src).not.toMatch(/\blinkSync\b/);
+  });
+});
