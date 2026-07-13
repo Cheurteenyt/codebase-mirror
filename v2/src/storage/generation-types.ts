@@ -64,6 +64,32 @@
  *   - Dead placeholder code in the manifest validator (the
  *     `missingKeys = actualKeys.filter((k) => !isManifestV1Key(k) ? false : false)`
  *     line that always returned `[]`) is removed.
+ *
+ * R169A-FIX-R4 (GPT 5.6 pass 4 audit) changes:
+ *   - STATE-R169A-R4-01: `IndexAttemptStateV1` schema completed. The free-
+ *     form `lastAttemptError: string | null` field is REPLACED by a
+ *     structured `failure: IndexAttemptFailureV1 | null` carrying
+ *     `{ code, phase, message }`. Two new fields are added:
+ *     `published: boolean` (was the manifest swap durable?) and
+ *     `candidateGenerationId: string | null` (the generation being
+ *     staged, distinct from `activeGenerationId` which is the live one).
+ *     Coherence rules are tightened per the indexer contract.
+ *   - STATE-R169A-R4-01: `MAX_STALE_PATHS` reduced from 1000 to 100 to
+ *     match the indexer's actual cap (R158 PERF-R158-01). Validator
+ *     enforces `paths.length <= 100`, `totalPaths >= paths.length`, and
+ *     the `pathsTruncated` <-> `totalPaths > paths.length` invariant.
+ *   - TEST-R169A-R4-01: `AtomicFileOps.statSync` renamed to
+ *     `AtomicFileOps.lstatSync` (it always should have been lstat -
+ *     `statSync` follows symlinks so `isSymbolicLink()` was always false
+ *     on the target). PROD_OPS now delegates to `node:fs.lstatSync`.
+ *   - DATA-R169A-R4-01: `AtomicFileOps.serializeJson` is REMOVED. The
+ *     typed writers now prepare a canonical payload Buffer BEFORE any
+ *     filesystem I/O (see `prepareGenerationManifestForWrite` and
+ *     `prepareIndexStateForWrite` in `generation-store.ts`). The
+ *     filesystem writer receives ONLY the Buffer - it never calls
+ *     `JSON.stringify`. This closes the canonical-payload gap where a
+ *     `toJSON` getter / Proxy / prototype pollution could make the
+ *     written bytes differ from the validated object.
  */
 
 // ─── Manifest V1 ────────────────────────────────────────────────────────
@@ -196,6 +222,24 @@ export interface IndexAttemptStaleReasonV1 {
 }
 
 /**
+ * R169A-FIX-R4 (STATE-R169A-R4-01): Structured failure object carried by
+ * the index-state sidecar when an indexing attempt did not fully succeed.
+ * Mirrors the structured shape already used by the indexer's
+ * `IndexResult.failure` so the two contracts stay aligned.
+ *
+ *   - `code`: a fixed enum string (e.g. `"EXTRACTOR_CRASH"`,
+ *     `"DISCOVERY_FAILED"`, `"SQLITE_LOCKED"`). Non-empty.
+ *   - `phase`: the indexer phase that produced the failure (e.g.
+ *     `"extract"`, `"resolve"`, `"finalize"`, `"publish"`). Non-empty.
+ *   - `message`: human-readable diagnostic. Non-empty.
+ */
+export interface IndexAttemptFailureV1 {
+  readonly code: string;
+  readonly phase: string;
+  readonly message: string;
+}
+
+/**
  * Operational state for the indexing process, stored as a sidecar
  * `index-state.json`. This file contains diagnostics, NOT graph data.
  * The generation DB and active-generation.json remain unchanged on
@@ -206,20 +250,54 @@ export interface IndexAttemptStaleReasonV1 {
  * `recovery` field enum is aligned with the indexer's
  * `IndexResult.recovery`: `retry_incremental`, `fix_filesystem`,
  * `full_reindex`, `manifest_repair`, `legacy_migration`, `none`.
+ *
+ * R169A-FIX-R4 (STATE-R169A-R4-01): Schema completed.
+ *   - `lastAttemptError: string | null` REMOVED. Replaced by the
+ *     structured `failure: IndexAttemptFailureV1 | null` so the
+ *     sidecar carries `code`, `phase`, and `message` for any non-
+ *     success outcome. The free-form string carried no machine-readable
+ *     signal; the structured object lets downstream tooling route
+ *     failures by `code` and `phase`.
+ *   - `published: boolean` ADDED. True iff the manifest swap was
+ *     durable (post-rename directory fsync succeeded). Distinguishes
+ *     "FAILED before publication" from "FAILED during / after
+ *     publication" - the latter is the residual TOCTOU window.
+ *   - `candidateGenerationId: string | null` ADDED. UUID of the
+ *     generation that was being staged during this attempt. Distinct
+ *     from `activeGenerationId` (which is the LIVE generation). On
+ *     SUCCESS the candidate becomes the active; on FAILED / STALE the
+ *     candidate is GC'd.
  */
 export interface IndexAttemptStateV1 {
   readonly formatVersion: 1;
   readonly project: string;
   /** UUID of the currently active generation, or null if none. */
   readonly activeGenerationId: string | null;
+  /**
+   * R169A-FIX-R4: UUID of the generation being staged during the last
+   * attempt, or null if no staging was attempted. On SUCCESS this
+   * equals `activeGenerationId`; on FAILED / STALE / PARTIAL it may
+   * differ (the candidate is GC'd).
+   */
+  readonly candidateGenerationId: string | null;
   /** UUID of the last indexing attempt. */
   readonly lastAttemptId: string;
   /** ISO-8601 timestamp of the last attempt. */
   readonly lastAttemptAt: string;
   /** Outcome of the last attempt. */
   readonly lastAttemptOutcome: IndexAttemptOutcome;
-  /** Error message if the attempt failed, null otherwise. */
-  readonly lastAttemptError: string | null;
+  /**
+   * R169A-FIX-R4: True iff the manifest swap was durable (post-rename
+   * directory fsync succeeded). On FAILED-before-publication this is
+   * false; on SUCCESS / SUCCESS_WITH_WARNINGS this is true; on PARTIAL
+   * this is false (partial = publication NOT completed).
+   */
+  readonly published: boolean;
+  /**
+   * R169A-FIX-R4: Structured failure record, or null on full success.
+   * Replaces the previous `lastAttemptError: string | null` field.
+   */
+  readonly failure: IndexAttemptFailureV1 | null;
   /** Why the active generation is stale, if applicable. */
   readonly staleReason: IndexAttemptStaleReasonV1 | null;
   /** Recovery action recommended. */
@@ -250,18 +328,26 @@ export type IndexRecoveryAction =
   | "legacy_migration";
 
 /**
- * R169A-FIX-R3 (API-R169A-R3-02): The exact set of keys allowed in a V1
- * index-state sidecar, exported as a frozen readonly tuple. Mirrors the
- * `MANIFEST_V1_KEYS` authority pattern (VALID-R169A-R2-01 §4.3).
+ * R169A-FIX-R4 (STATE-R169A-R4-01): The exact set of keys allowed in a V1
+ * index-state sidecar, exported as a frozen readonly tuple. 11 keys:
+ *   formatVersion, project, activeGenerationId, candidateGenerationId,
+ *   lastAttemptId, lastAttemptAt, lastAttemptOutcome, published,
+ *   failure, staleReason, recovery.
+ *
+ * R3 had 9 keys (no `candidateGenerationId`, no `published`, and
+ * `lastAttemptError` instead of `failure`). R4 replaces `lastAttemptError`
+ * with the structured `failure` and adds the two new fields.
  */
 const INDEX_STATE_V1_KEYS_INTERNAL = [
   "formatVersion",
   "project",
   "activeGenerationId",
+  "candidateGenerationId",
   "lastAttemptId",
   "lastAttemptAt",
   "lastAttemptOutcome",
-  "lastAttemptError",
+  "published",
+  "failure",
   "staleReason",
   "recovery",
 ] as const;
@@ -351,6 +437,15 @@ export interface ResolvedMissingDb {
  *     `project` field does not match expected project).
  *   - Added INDEX_STATE_UNSUPPORTED_VERSION (API-R169A-R3-02: index-state
  *     `formatVersion` is not 1).
+ *
+ * R169A-FIX-R4 (GPT 5.6 audit, pass 4) changes:
+ *   - COMPAT-R169A-R4-01: STORE_LAYOUT_PERMISSIONS_INSECURE now uses a
+ *     two-tier policy. Compatibility roots (cacheRoot, codebase-memory-mcp)
+ *     require `mode & 0o022 === 0` (no group/other WRITE) — 0755, 0750,
+ *     0700 all accepted. Private R169 dirs (projects, projectStore,
+ *     generations, tmp) require `mode === 0o700` exactly. The previous
+ *     `mode & 0o077 !== 0` rule rejected 0755 (group read/execute) and
+ *     would have broken existing legacy caches.
  */
 export type GenerationStoreErrorCode =
   | "GENERATION_STORE_CONFIG_ERROR"

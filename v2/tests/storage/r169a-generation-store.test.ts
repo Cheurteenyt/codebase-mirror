@@ -104,12 +104,12 @@ import {
   validateIndexAttemptState,
   parseGenerationManifest,
   resolveActiveCodeDb,
-  writeGenerationManifestAtomically,
   writeIndexStateAtomically,
   ensureGenerationStoreLayoutDurable,
   listProjectStoreKeys,
   MAX_GENERATION_MANIFEST_BYTES,
   GenerationStoreError,
+  __test__,
   type AtomicFileOps,
   type GenerationStoreOptions,
   type WriterTestHook,
@@ -122,9 +122,20 @@ import {
   type GenerationManifestV1,
   type IndexAttemptStateV1,
   type IndexAttemptStaleReasonV1,
+  type IndexAttemptFailureV1,
   type IndexAttemptOutcome,
   type IndexRecoveryAction,
 } from "../../src/storage/generation-types.js";
+
+// R169A-FIX-R4 (DATA-R169A-R4-02): `writeGenerationManifestAtomically` is
+// internal (NOT a publication API). It is exposed via the `__test__`
+// namespace for test fixtures ONLY. Assign it to a local constant so the
+// existing test callsites read naturally.
+const {
+  writeGenerationManifestAtomically,
+  prepareGenerationManifestForWrite,
+  prepareIndexStateForWrite,
+} = __test__;
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -159,9 +170,13 @@ function makeValidManifest(
 }
 
 /**
- * R169A-FIX-R3 (API-R169A-R3-02): Build a valid IndexAttemptStateV1 for
+ * R169A-FIX-R4 (STATE-R169A-R4-01): Build a valid IndexAttemptStateV1 for
  * tests. The `overrides` parameter lets each test customize the outcome,
- * recovery, staleReason, etc.
+ * recovery, staleReason, failure, published, candidateGenerationId, etc.
+ *
+ * The default is a SUCCESS state: published=true, failure=null,
+ * staleReason=null, recovery="none", activeGenerationId non-null,
+ * candidateGenerationId non-null (equals activeGenerationId on SUCCESS).
  */
 function makeValidIndexState(
   project: string = "test-project",
@@ -171,12 +186,29 @@ function makeValidIndexState(
     formatVersion: 1,
     project,
     activeGenerationId: VALID_UUID,
+    candidateGenerationId: VALID_UUID,
     lastAttemptId: OTHER_UUID,
     lastAttemptAt: VALID_TIMESTAMP,
     lastAttemptOutcome: "SUCCESS",
-    lastAttemptError: null,
+    published: true,
+    failure: null,
     staleReason: null,
     recovery: "none",
+    ...overrides,
+  };
+}
+
+/**
+ * R169A-FIX-R4 (STATE-R169A-R4-01): Build a valid IndexAttemptFailureV1
+ * for tests. Used by coherence tests that need a non-null failure record.
+ */
+function makeValidFailure(
+  overrides: Partial<IndexAttemptFailureV1> = {},
+): IndexAttemptFailureV1 {
+  return {
+    code: "INDEXER_CRASH",
+    phase: "extract",
+    message: "indexer crashed mid-extraction",
     ...overrides,
   };
 }
@@ -222,20 +254,39 @@ function writeLegacyDb(cacheRoot: string, project: string): string {
  * every other call.
  *
  * R169A-FIX-R3 additions:
- *   - `failAtSerialize`: injects a failure in `serializeJson`.
+ *   - `failAtSerialize`: injected a failure in `serializeJson`. REMOVED
+ *     in R4 — see below.
  *   - `fstatSync`: delegates to real fs.fstatSync.
- *   - `serializeJson`: delegates to JSON.stringify with the same
- *     non-string check as PROD_OPS.
- *   - `statOverrideOnce`: Map<path, Error>. The FIRST statSync call for
- *     a path in this map throws the configured error (then the entry is
- *     removed). Used to simulate EEXIST races (lstat says ENOENT, then
- *     mkdir returns EEXIST because the dir was created concurrently).
+ *   - `serializeJson`: delegated to JSON.stringify. REMOVED in R4.
+ *   - `statOverrideOnce`: Map<path, Error>. The FIRST lstatSync call
+ *     for a path in this map throws the configured error (then the
+ *     entry is removed). Used to simulate EEXIST races.
  *   - `openSync` accepts numeric flags (needed for O_NOFOLLOW / O_DIRECTORY).
+ *
+ * R169A-FIX-R4 changes:
+ *   - TEST-R169A-R4-01: `statSync` renamed to `lstatSync` (delegates to
+ *     `node:fs.lstatSync`). The return shape now includes `dev` and
+ *     `ino` (needed by openDirectoryNoFollow's identity verification
+ *     and the writer's pre-rename identity check).
+ *   - DATA-R169A-R4-01: `serializeJson` and `failAtSerialize` REMOVED.
+ *     The typed writers now prepare the canonical payload BEFORE any
+ *     filesystem I/O via `prepareGenerationManifestForWrite` /
+ *     `prepareIndexStateForWrite` (exposed via `__test__`). Tests that
+ *     need to inject a serialization failure call
+ *     `prepareGenerationManifestForWrite` directly with a failing
+ *     `serializeJson` argument.
+ *   - SEC-R169A-R4-01: `dirOpen` failure point removed (the writer now
+ *     opens the dir ONCE at the start via `openDirectoryNoFollow`,
+ *     not post-rename). The `dirOpen` failAt selector is repurposed:
+ *     it now injects failure on the FIRST `openDirectoryNoFollow` call
+ *     in the write phase (the dir open at the start of `writeJsonAtomically`).
+ *   - SEC-R169A-R4-02: `openSync` now recognizes numeric flags
+ *     `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` as a directory open (used
+ *     by `openDirectoryNoFollow`). The `dirOpen` failAt triggers on
+ *     this combination.
  */
 class TestOps implements AtomicFileOps {
   failAt: string | null = null;
-  /** If true, serializeJson throws (inject ATOMIC_SERIALIZATION_FAILED). */
-  failAtSerialize: boolean = false;
   /** If true, the first writeSync call writes only 1 byte then succeeds. */
   shortFirstWrite: boolean = false;
   /** If true, the second writeSync call (mid-payload) throws. */
@@ -252,22 +303,25 @@ class TestOps implements AtomicFileOps {
 
   /**
    * R169A-FIX-R3 (SEC-R169A-R3-02): stat override for EEXIST tests.
-   * The FIRST statSync call for a path in this map throws the
+   * The FIRST lstatSync call for a path in this map throws the
    * configured error; subsequent calls use real fs.
    */
-  statOverrideOnce: Map<string, NodeJS.ErrnoException> = new Map();
+  lstatOverrideOnce: Map<string, NodeJS.ErrnoException> = new Map();
 
   private writeCallCount: number = 0;
   private layoutDirFsyncCount: number = 0;
   private layoutParentFsyncCount: number = 0;
   /** Set to true once a "wx" open happens — distinguishes layout phase from write phase. */
   private inWritePhase: boolean = false;
+  /** Number of openDirectoryNoFollow-style opens (numeric O_NOFOLLOW|O_DIRECTORY flags). */
+  private dirOpenCount: number = 0;
 
   // Track which ops were called — useful for assertions.
   calls: string[] = [];
 
   openSync(path: string, flags: string | number, mode?: number): number {
     const flagsStr = typeof flags === "string" ? flags : "";
+    const isNumericDirOpen = typeof flags === "number";
     // Track write-phase entry: the temp file open uses "wx".
     if (flagsStr === "wx") this.inWritePhase = true;
     // Write-phase temp-file open failure.
@@ -275,12 +329,25 @@ class TestOps implements AtomicFileOps {
       this.calls.push("open:fail");
       throw new Error("injected open failure");
     }
-    // Post-rename directory open failure (write phase, after rename).
-    if (this.failAt === "dirOpen" && flagsStr === "r" && this.calls.includes("rename")) {
-      this.calls.push("dirOpen:fail");
-      throw new Error("injected directory open failure");
+    // R169A-FIX-R4: dirOpen failure now triggers on the FIRST
+    // openDirectoryNoFollow call in the write phase (the dir open at
+    // the start of writeJsonAtomically). This is a numeric flags open
+    // with O_NOFOLLOW|O_DIRECTORY.
+    if (this.failAt === "dirOpen" && isNumericDirOpen && this.inWritePhase) {
+      this.dirOpenCount++;
+      // Only fail the FIRST write-phase dir open (the writer's own dir
+      // open at the start). Layout phase dir opens should not trigger
+      // this (they're caught by failAtLayoutDirFsync etc.).
+      if (this.dirOpenCount === 1) {
+        this.calls.push("dirOpen:fail");
+        throw new Error("injected directory open failure");
+      }
     }
-    this.calls.push(flagsStr === "wx" ? "open:wx" : "open:r");
+    this.calls.push(
+      flagsStr === "wx" ? "open:wx"
+        : isNumericDirOpen ? "open:dirNoFollow"
+        : "open:r",
+    );
     return require("node:fs").openSync(path, flags, mode);
   }
 
@@ -353,20 +420,22 @@ class TestOps implements AtomicFileOps {
     return fs.closeSync(fd);
   }
 
-  statSync(path: string): { size: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; mode: number; uid?: number } {
+  lstatSync(path: string): { size: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; mode: number; dev: number; ino: number; uid?: number } {
     // R169A-FIX-R3 (SEC-R169A-R3-02): stat override for EEXIST tests.
-    const override = this.statOverrideOnce.get(path);
+    const override = this.lstatOverrideOnce.get(path);
     if (override) {
-      this.statOverrideOnce.delete(path);
+      this.lstatOverrideOnce.delete(path);
       throw override;
     }
-    const s = require("node:fs").statSync(path);
+    const s = require("node:fs").lstatSync(path);
     return {
       size: s.size,
       isDirectory: () => s.isDirectory(),
       isFile: () => s.isFile(),
       isSymbolicLink: () => s.isSymbolicLink(),
       mode: s.mode,
+      dev: s.dev,
+      ino: s.ino,
       uid: s.uid,
     };
   }
@@ -412,18 +481,6 @@ class TestOps implements AtomicFileOps {
       return fs.mkdirSync(path, { recursive: opts.recursive ?? false, mode: opts.mode });
     }
     return fs.mkdirSync(path, opts);
-  }
-
-  serializeJson(value: unknown): string {
-    if (this.failAtSerialize) {
-      this.calls.push("serialize:fail");
-      throw new Error("injected serialize failure");
-    }
-    const r = JSON.stringify(value, null, 2);
-    if (typeof r !== "string") {
-      throw new Error(`JSON.stringify returned non-string (typeof=${typeof r})`);
-    }
-    return r;
   }
 }
 
@@ -801,25 +858,55 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
     expect(result.project).toBe("test-project");
   });
 
-  it("null activeGenerationId is valid", () => {
-    const state = makeValidIndexState("test-project", { activeGenerationId: null, lastAttemptOutcome: "FAILED", lastAttemptError: "boom", recovery: "retry_incremental" });
+  it("null activeGenerationId is valid (with FAILED outcome)", () => {
+    // R169A-FIX-R4: SUCCESS requires activeGenerationId non-null, so we
+    // use FAILED here. FAILED requires published=false + failure non-null.
+    const state = makeValidIndexState("test-project", {
+      activeGenerationId: null,
+      candidateGenerationId: VALID_UUID,
+      lastAttemptOutcome: "FAILED",
+      published: false,
+      failure: makeValidFailure(),
+      recovery: "retry_incremental",
+    });
     expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
   });
 
-  it("SUCCESS_WITH_WARNINGS outcome is valid (no error)", () => {
+  it("SUCCESS_WITH_WARNINGS outcome is valid (no failure, no staleReason)", () => {
+    // R169A-FIX-R4: SUCCESS_WITH_WARNINGS requires published=true,
+    // failure=null, staleReason=null, recovery="none".
     const state = makeValidIndexState("test-project", { lastAttemptOutcome: "SUCCESS_WITH_WARNINGS" });
     expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
   });
 
-  it("PARTIAL outcome is valid", () => {
-    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "PARTIAL" });
+  it("PARTIAL outcome is valid (with failure)", () => {
+    // R169A-FIX-R4: PARTIAL requires published=false AND at least one
+    // of failure/staleReason non-null.
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "PARTIAL",
+      published: false,
+      failure: makeValidFailure(),
+      recovery: "retry_incremental",
+    });
     expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
   });
 
-  it("FAILED outcome with error is valid", () => {
+  it("PARTIAL outcome is valid (with staleReason instead of failure)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "PARTIAL",
+      published: false,
+      failure: null,
+      staleReason: { code: "ROOT_CHANGED", message: "root moved", paths: [] },
+      recovery: "full_reindex",
+    });
+    expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
+  });
+
+  it("FAILED outcome with failure is valid", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "FAILED",
-      lastAttemptError: "indexer crashed",
+      published: false,
+      failure: makeValidFailure({ message: "indexer crashed" }),
       recovery: "retry_incremental",
     });
     expect(() => validateIndexAttemptState(state, "test-project")).not.toThrow();
@@ -835,6 +922,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
     };
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
+      published: false,
       staleReason,
       recovery: "full_reindex",
     });
@@ -846,6 +934,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
     for (const recovery of recoveries) {
       const state = makeValidIndexState("test-project", {
         lastAttemptOutcome: "STALE",
+        published: false,
         staleReason: { code: "X", message: "msg", paths: [] },
         recovery,
       });
@@ -856,6 +945,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
   it("staleReason with empty paths array is valid", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
+      published: false,
       staleReason: { code: "PERSIST_FAILURE", message: "no-op commit", paths: [] },
       recovery: "retry_incremental",
     });
@@ -865,6 +955,7 @@ describe("R169A-FIX-R3 — Index-state valid (API-R169A-R3-02)", () => {
   it("staleReason without optional fields is valid", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
+      published: false,
       staleReason: { code: "X", message: "msg", paths: [] },
       recovery: "full_reindex",
     });
@@ -987,8 +1078,11 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: SUCCESS + non-null error → INDEX_STATE_SCHEMA_ERROR", () => {
-    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "SUCCESS", lastAttemptError: "should be null" });
+  it("Coherence: SUCCESS + non-null failure → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS",
+      failure: makeValidFailure({ message: "should be null" }),
+    });
     let err: unknown;
     try {
       validateIndexAttemptState(state, "test-project");
@@ -1020,8 +1114,8 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: SUCCESS_WITH_WARNINGS + non-null error → INDEX_STATE_SCHEMA_ERROR", () => {
-    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "SUCCESS_WITH_WARNINGS", lastAttemptError: "should be null" });
+  it("Coherence: SUCCESS + published=false → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "SUCCESS", published: false });
     let err: unknown;
     try {
       validateIndexAttemptState(state, "test-project");
@@ -1030,8 +1124,11 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: FAILED + null error → INDEX_STATE_SCHEMA_ERROR", () => {
-    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "FAILED", lastAttemptError: null, recovery: "retry_incremental" });
+  it("Coherence: SUCCESS + activeGenerationId=null → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS",
+      activeGenerationId: null,
+    });
     let err: unknown;
     try {
       validateIndexAttemptState(state, "test-project");
@@ -1040,8 +1137,111 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("Coherence: FAILED + empty error string → INDEX_STATE_SCHEMA_ERROR", () => {
-    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "FAILED", lastAttemptError: "", recovery: "retry_incremental" });
+  it("Coherence: SUCCESS_WITH_WARNINGS + non-null failure → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      failure: makeValidFailure({ message: "should be null" }),
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("Coherence: SUCCESS_WITH_WARNINGS + non-null staleReason → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      staleReason: { code: "X", message: "msg", paths: [] },
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("Coherence: SUCCESS_WITH_WARNINGS + recovery != none → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      recovery: "full_reindex",
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("Coherence: SUCCESS_WITH_WARNINGS + published=false → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "SUCCESS_WITH_WARNINGS",
+      published: false,
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("Coherence: FAILED + null failure → INDEX_STATE_SCHEMA_ERROR", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "FAILED",
+      published: false,
+      failure: null,
+      recovery: "retry_incremental",
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("Coherence: FAILED + published=true → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "FAILED",
+      published: true, // coherence violation: FAILED requires published=false
+      failure: makeValidFailure(),
+      recovery: "retry_incremental",
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("Coherence: PARTIAL + published=true → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "PARTIAL",
+      published: true, // coherence violation: PARTIAL requires published=false
+      failure: makeValidFailure(),
+      recovery: "retry_incremental",
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("Coherence: PARTIAL + failure=null + staleReason=null → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "PARTIAL",
+      published: false,
+      failure: null,
+      staleReason: null,
+      recovery: "retry_incremental",
+    });
     let err: unknown;
     try {
       validateIndexAttemptState(state, "test-project");
@@ -1051,7 +1251,12 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
   });
 
   it("Coherence: STALE + null staleReason → INDEX_STATE_SCHEMA_ERROR", () => {
-    const state = makeValidIndexState("test-project", { lastAttemptOutcome: "STALE", staleReason: null, recovery: "full_reindex" });
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "STALE",
+      published: false,
+      staleReason: null,
+      recovery: "full_reindex",
+    });
     let err: unknown;
     try {
       validateIndexAttemptState(state, "test-project");
@@ -1063,8 +1268,24 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
   it("Coherence: STALE + recovery=none → INDEX_STATE_SCHEMA_ERROR", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "STALE",
+      published: false,
       staleReason: { code: "X", message: "msg", paths: [] },
       recovery: "none",
+    });
+    let err: unknown;
+    try {
+      validateIndexAttemptState(state, "test-project");
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(GenerationStoreError);
+    expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
+  });
+
+  it("Coherence: STALE + published=true → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
+    const state = makeValidIndexState("test-project", {
+      lastAttemptOutcome: "STALE",
+      published: true, // coherence violation: STALE requires published=false
+      staleReason: { code: "X", message: "msg", paths: [] },
+      recovery: "full_reindex",
     });
     let err: unknown;
     try {
@@ -1130,10 +1351,11 @@ describe("R169A-FIX-R3 — Index-state invalid (API-R169A-R3-02)", () => {
     expect((err as GenerationStoreError).code).toBe("INDEX_STATE_SCHEMA_ERROR");
   });
 
-  it("lastAttemptError with C0 control char → INDEX_STATE_SCHEMA_ERROR", () => {
+  it("failure.message with C0 control char → INDEX_STATE_SCHEMA_ERROR (R169A-FIX-R4)", () => {
     const state = makeValidIndexState("test-project", {
       lastAttemptOutcome: "FAILED",
-      lastAttemptError: "err\0or",
+      published: false,
+      failure: makeValidFailure({ message: "err\0or" }),
       recovery: "retry_incremental",
     });
     let err: unknown;
@@ -1441,30 +1663,34 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     return listProjectStore().filter((n) => n.startsWith(".tmp-")).length;
   }
 
-  it("serialize fail (injected) → no temp, old intact", () => {
+  it("R169A-FIX-R4: serialize fail (injected via prepareGenerationManifestForWrite) → ATOMIC_SERIALIZATION_FAILED, no I/O", () => {
     // Write the "old" manifest first.
     const oldManifest = makeValidManifest(project);
     writeGenerationManifestAtomically(project, oldManifest, { cacheRoot });
     const oldContent = readFileSync(targetPath(), "utf-8");
 
-    // R169A-FIX-R3: The typed wrapper validates BEFORE I/O, so `undefined`
-    // can no longer reach the serializer. We inject the serialize failure
-    // via TestOps.failAtSerialize. The manifest passed in IS valid, so
-    // validation passes; then ops.serializeJson throws.
-    const ops = new TestOps();
-    ops.failAtSerialize = true;
+    // R169A-FIX-R4 (DATA-R169A-R4-01): Serialization happens in
+    // `prepareGenerationManifestForWrite`, BEFORE any filesystem I/O.
+    // The writer no longer calls JSON.stringify — it receives a
+    // pre-serialized Buffer. To inject a serialization failure, we
+    // call `prepareGenerationManifestForWrite` directly with a failing
+    // `serializeJson` argument. The manifest passed in IS valid, so
+    // validation passes; then the injected serializeJson throws.
     const newManifest = makeValidManifest(project, { generationId: OTHER_UUID });
+    const failingSerialize = (): string => {
+      throw new Error("injected serialize failure");
+    };
     let err: unknown;
     try {
-      writeGenerationManifestAtomically(project, newManifest, { cacheRoot }, ops);
+      prepareGenerationManifestForWrite(newManifest, project, failingSerialize);
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
     expect((err as GenerationStoreError).code).toBe("ATOMIC_SERIALIZATION_FAILED");
 
-    // Old file intact.
+    // Old file intact (no I/O happened).
     expect(readFileSync(targetPath(), "utf-8")).toBe(oldContent);
 
-    // No temp file left behind.
+    // No temp file left behind (no I/O happened).
     expect(countTempFiles()).toBe(0);
   });
 
@@ -1595,9 +1821,12 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
     expect(countTempFiles()).toBe(0);
   });
 
-  it("directory open fail post-rename → durability unknown", () => {
+  it("directory fsync fail post-rename → durability unknown (SEC-R169A-R4-01)", () => {
+    // R169A-FIX-R4: The writer now holds the directory fd and fsyncs it
+    // after rename (no path-based reopen). Test by failing the dirFsync
+    // on the held fd — produces ATOMIC_DURABILITY_UNKNOWN.
     const ops = new TestOps();
-    ops.failAt = "dirOpen";
+    ops.failAt = "dirFsync";
     const newManifest = makeValidManifest(project);
 
     let err: unknown;
@@ -1663,13 +1892,10 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("R169A-FIX-R3: index-state target writes to index-state.json (API-R169A-R3-01)", () => {
-    const state = makeValidIndexState(project, {
-      activeGenerationId: null,
-      lastAttemptOutcome: "SUCCESS",
-      lastAttemptError: null,
-      staleReason: null,
-      recovery: "none",
-    });
+    // R169A-FIX-R4: SUCCESS requires activeGenerationId non-null, so we
+    // keep the default SUCCESS state (no overrides that would violate
+    // the new coherence rules).
+    const state = makeValidIndexState(project);
     writeIndexStateAtomically(project, state, { cacheRoot });
 
     const statePath = indexStatePath(project, cacheRoot);
@@ -1680,15 +1906,17 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   });
 
   it("R169A-FIX-R3: invalid manifest is rejected BEFORE any I/O (API-R169A-R3-01)", () => {
-    // Pass an invalid manifest (extra key). Validation must fail before
-    // any filesystem I/O — no layout, no temp, no target.
-    const badManifest = { ...makeValidManifest(project), extra: "no" } as any;
+    // R169A-FIX-R4 (DATA-R169A-R4-01): Extra keys are stripped by the
+    // canonical-payload preparation. Use an invalid VALUE (wrong
+    // formatVersion) which survives the plain-object copy and is rejected
+    // by validation BEFORE any filesystem I/O.
+    const badManifest = { ...makeValidManifest(project), formatVersion: 99 as any };
     let err: unknown;
     try {
       writeGenerationManifestAtomically(project, badManifest, { cacheRoot });
     } catch (e) { err = e; }
     expect(err).toBeInstanceOf(GenerationStoreError);
-    expect((err as GenerationStoreError).code).toBe("MANIFEST_SCHEMA_ERROR");
+    expect((err as GenerationStoreError).code).toBe("MANIFEST_UNSUPPORTED_VERSION");
 
     // No layout should have been created.
     expect(existsSync(projectStoreDir(project, cacheRoot))).toBe(false);
@@ -1699,9 +1927,12 @@ describe("R169A-FIX — Atomic JSON writer (DUR-R169A-01/02)", () => {
   it("R169A-FIX-R3: invalid index-state is rejected BEFORE any I/O (API-R169A-R3-01)", () => {
     // Pass an invalid index-state (coherence violation). Validation must
     // fail before any filesystem I/O.
+    // R169A-FIX-R4: FAILED requires failure non-null. Pass failure=null
+    // to trigger the coherence violation.
     const badState = makeValidIndexState(project, {
       lastAttemptOutcome: "FAILED",
-      lastAttemptError: null, // coherence violation: FAILED requires non-empty error
+      published: false,
+      failure: null, // coherence violation: FAILED requires failure non-null
       recovery: "retry_incremental",
     });
     let err: unknown;
@@ -2699,8 +2930,8 @@ describe("R169A-FIX-R2 — Immutable key authority (VALID-R169A-R2-01 §4.3, R16
     expect(Object.isFrozen(INDEX_STATE_V1_KEYS)).toBe(true);
   });
 
-  it("R169A-FIX-R3: INDEX_STATE_V1_KEYS has exactly 9 keys", () => {
-    expect(INDEX_STATE_V1_KEYS.length).toBe(9);
+  it("R169A-FIX-R4: INDEX_STATE_V1_KEYS has exactly 11 keys (was 9 in R3)", () => {
+    expect(INDEX_STATE_V1_KEYS.length).toBe(11);
   });
 
   it("isManifestV1Key returns true for known keys, false for unknown", () => {
@@ -3103,11 +3334,14 @@ describe("R169A-FIX-R3 — Existing directory revalidation (SEC-R169A-R3-02 + SE
     expect((err as GenerationStoreError).code).toBe("STORE_LAYOUT_PERMISSIONS_INSECURE");
   });
 
-  it("existing dir with mode 0750 (group-readable) → STORE_LAYOUT_PERMISSIONS_INSECURE", () => {
-    // Pre-create the cbm dir with mode 0750 (group read/execute).
+  it("existing cbm dir with mode 0770 (group-writable) → STORE_LAYOUT_PERMISSIONS_INSECURE (COMPAT-R169A-R4-01)", () => {
+    // R169A-FIX-R4 (COMPAT-R169A-R4-01): Two-tier permission policy.
+    // Compatibility roots (cacheRoot, cbm) require mode & 0o022 === 0
+    // (no group/other WRITE). 0770 has group-write → rejected.
+    // 0750 (group read/execute only) is now ACCEPTED.
     const cbm = cbmCacheDir(cacheRoot);
     mkdirSync(resolve(cbm, ".."), { recursive: true });
-    mkdirSync(cbm, { mode: 0o750 });
+    mkdirSync(cbm, { mode: 0o770 });
 
     let err: unknown;
     try {
@@ -3157,7 +3391,7 @@ describe("R169A-FIX-R3 — Existing directory revalidation (SEC-R169A-R3-02 + SE
 
     const ops = new TestOps();
     const enoentErr = Object.assign(new Error("ENOENT (injected)"), { code: "ENOENT" });
-    ops.statOverrideOnce.set(projectStore, enoentErr as NodeJS.ErrnoException);
+    ops.lstatOverrideOnce.set(projectStore, enoentErr as NodeJS.ErrnoException);
 
     let err: unknown;
     try {
