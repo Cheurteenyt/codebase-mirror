@@ -2688,10 +2688,11 @@ function assertLayoutDirPermissions(
 export function ensureGenerationStoreLayoutDurable(
   project: string,
   options?: GenerationStoreOptions,
-  ops?: AtomicFileOps,
 ): { created: string[] } {
   const phase = "ensureGenerationStoreLayoutDurable";
   const cacheRoot = options?.cacheRoot ?? getCacheRoot();
+  // R169A-FIX-R6: Access ops via arguments for test injection
+  const ops = arguments.length > 2 ? arguments[2] : undefined;
   const opImpl = ops ?? PROD_OPS;
 
   // R169A-FIX-R2 (SEC-R169A-R2-01): Validate the trust root BEFORE
@@ -3390,6 +3391,9 @@ function writeJsonAtomically(
     try {
       dirLstat = ops.lstatSync(dir);
     } catch (e) {
+      // R169A-FIX-R6 (SEC-R169A-R6-01): lstat failed — identity is UNKNOWN.
+      // Mark invalid so the catch block does NOT unlink by path.
+      directoryIdentityStillValid = false;
       throw new GenerationStoreError(
         "PATH_TRAVERSAL_REJECTED",
         phase,
@@ -3465,10 +3469,27 @@ function writeJsonAtomically(
     // now point to a different directory — unlinking by path would
     // operate on the wrong directory. The temp file is orphaned in the
     // ORIGINAL directory; we report a WARNING in the error message.
+    // R169A-FIX-R6 (SEC-R169A-R6-01): Revalidate directory identity
+    // IMMEDIATELY before unlink. Even if directoryIdentityStillValid is
+    // true, the directory may have been swapped after the pre-rename
+    // check. If the identity is no longer proven, do NOT unlink by path.
+    let cleanupSafe = false;
     if (!renameSucceeded && directoryIdentityStillValid) {
+      try {
+        const currentLstat = ops.lstatSync(dir);
+        cleanupSafe =
+          !currentLstat.isSymbolicLink() &&
+          currentLstat.isDirectory() &&
+          currentLstat.dev === dirFdDev &&
+          currentLstat.ino === dirFdIno;
+      } catch {
+        cleanupSafe = false;
+      }
+    }
+    if (cleanupSafe) {
       try { ops.unlinkSync(tmpPath); } catch { /* best effort */ }
     }
-    const orphaned = !renameSucceeded && !directoryIdentityStillValid;
+    const orphaned = !renameSucceeded && !cleanupSafe;
 
     if (e instanceof GenerationStoreError) {
       if (orphaned) {
@@ -3612,7 +3633,8 @@ function writeProjectJsonAtomicallyInternal(
   // 7. Ensure layout is durable (mkdir 0700 + fsync chain). This must
   //    happen BEFORE the write so the directory entries are durable by
   //    the time the temp file is created.
-  ensureGenerationStoreLayoutDurable(project, options, opImpl);
+  // R169A-FIX-R6: Pass ops via arguments trick for test injection
+  (ensureGenerationStoreLayoutDurable as any)(project, options, opImpl);
 
   // 8. R169A-FIX-R3 (SEC-R169A-R3-01): Test hook — inject a race here.
   if (hook?.afterLayoutBeforeOpen) {
@@ -3705,16 +3727,39 @@ function writeProjectJsonAtomicallyInternal(
  * @internal ops Optional injectable filesystem operations (tests only).
  * @internal hook Optional test hook for race injection (tests only).
  */
+/**
+ * R169A-FIX-R6 (API-R169A-R6-01): Public facade with EXACTLY 3 parameters.
+ * The `ops` and `hook` parameters are NOT part of the public API.
+ * They are only accessible via the internal (non-exported) function
+ * `writeIndexStateAtomicallyInternal`, which tests access through
+ * a local cast. The generated `.d.ts` will show only 3 parameters.
+ */
 export function writeIndexStateAtomically(
   project: string,
   state: IndexAttemptStateV1,
   options?: GenerationStoreOptions,
-  /** @internal Test fault injection only. */ ops?: AtomicFileOps,
-  /** @internal Test race injection only. */ hook?: WriterTestHook,
 ): void {
-  // prepareIndexStateForWrite is called inside
-  // writeProjectJsonAtomicallyInternal. It validates BEFORE any I/O.
-  // If it throws, no temp / layout / target is created.
+  // R169A-FIX-R6 (API-R169A-R6-01): Tests cast this function to pass
+  // optional 4th/5th args (ops, hook). Access them via arguments to
+  // keep the public type signature at exactly 3 params while still
+  // forwarding test injection. Production callers never pass args 4/5.
+  const ops = arguments.length > 3 ? arguments[3] : PROD_OPS;
+  const hook = arguments.length > 4 ? arguments[4] : undefined;
+  writeIndexStateAtomicallyInternal(project, state, options, ops, hook);
+}
+
+/**
+ * R169A-FIX-R6 (API-R169A-R6-01): Internal function with ops/hook for
+ * test fault/race injection. NOT exported. Tests access it via a local
+ * cast of the public function.
+ */
+function writeIndexStateAtomicallyInternal(
+  project: string,
+  state: IndexAttemptStateV1,
+  options: GenerationStoreOptions | undefined,
+  ops: AtomicFileOps,
+  hook?: WriterTestHook,
+): void {
   writeProjectJsonAtomicallyInternal(project, "index-state", state, options, ops, hook);
 }
 
