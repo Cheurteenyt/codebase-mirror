@@ -77,11 +77,24 @@ import {
   mkdirSync,
   symlinkSync,
   readdirSync,
+  chmodSync,
 } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+
+/**
+ * TEST-R169A-CI-01:
+ * mkdir(mode) is filtered by the process umask on POSIX systems.
+ * Permission-policy fixtures therefore chmod the directory after creation
+ * and assert the effective mode before invoking the code under test.
+ */
+function forceExactMode(path: string, mode: number): void {
+  chmodSync(path, mode);
+  const actualMode = lstatSync(path).mode & 0o777;
+  expect(actualMode).toBe(mode);
+}
 
 import {
   projectStorageKey,
@@ -3420,7 +3433,8 @@ describe("R169A-FIX-R3 — Existing directory revalidation (SEC-R169A-R3-02 + SE
     // Pre-create the cbm dir with mode 0777.
     const cbm = cbmCacheDir(cacheRoot);
     mkdirSync(resolve(cbm, ".."), { recursive: true });
-    mkdirSync(cbm, { mode: 0o777 });
+    mkdirSync(cbm, { mode: 0o700 });
+    forceExactMode(cbm, 0o777);
 
     let err: unknown;
     try {
@@ -3437,7 +3451,8 @@ describe("R169A-FIX-R3 — Existing directory revalidation (SEC-R169A-R3-02 + SE
     // 0750 (group read/execute only) is now ACCEPTED.
     const cbm = cbmCacheDir(cacheRoot);
     mkdirSync(resolve(cbm, ".."), { recursive: true });
-    mkdirSync(cbm, { mode: 0o770 });
+    mkdirSync(cbm, { mode: 0o700 });
+    forceExactMode(cbm, 0o770);
 
     let err: unknown;
     try {
@@ -3483,7 +3498,8 @@ describe("R169A-FIX-R3 — Existing directory revalidation (SEC-R169A-R3-02 + SE
     mkdirSync(cbmCacheDir(cacheRoot), { mode: 0o700 });
     mkdirSync(generationStoreRoot(cacheRoot), { mode: 0o700 });
     // Pre-create the projectStore dir with 0777.
-    mkdirSync(projectStore, { mode: 0o777 });
+    mkdirSync(projectStore, { mode: 0o700 });
+    forceExactMode(projectStore, 0o777);
 
     const ops = new TestOps();
     const enoentErr = Object.assign(new Error("ENOENT (injected)"), { code: "ENOENT" });
@@ -4064,7 +4080,8 @@ describe("R169A-FIX-R5 — Permission policy in resolver/listing (SEC-R169A-R5-0
     // Create projects dir with mode 0777 (fails the private R169 dir check
     // — private dirs require mode === 0o700 exactly).
     const projects = generationStoreRoot(cacheRoot);
-    mkdirSync(projects, { mode: 0o777 });
+    mkdirSync(projects, { mode: 0o700 });
+    forceExactMode(projects, 0o777);
     // The chmod is needed because mkdirSync mode is masked by umask.
     const fs = require("node:fs");
     fs.chmodSync(projects, 0o777);
@@ -4105,7 +4122,8 @@ describe("R169A-FIX-R5 — Permission policy in resolver/listing (SEC-R169A-R5-0
     ensureDirMode0700(cbmCacheDir(cacheRoot));
     // Create projects dir with mode 0777.
     const projects = generationStoreRoot(cacheRoot);
-    mkdirSync(projects, { mode: 0o777 });
+    mkdirSync(projects, { mode: 0o700 });
+    forceExactMode(projects, 0o777);
     const fs = require("node:fs");
     fs.chmodSync(projects, 0o777);
 
@@ -4135,7 +4153,8 @@ describe("R169A-FIX-R5 — Permission policy in resolver/listing (SEC-R169A-R5-0
     ensureDirMode0700(generationStoreRoot(cacheRoot));
     // project-key dir with mode 0777.
     const projectKey = projectStoreDir(project, cacheRoot);
-    mkdirSync(projectKey, { mode: 0o777 });
+    mkdirSync(projectKey, { mode: 0o700 });
+    forceExactMode(projectKey, 0o777);
     const fs = require("node:fs");
     fs.chmodSync(projectKey, 0o777);
 

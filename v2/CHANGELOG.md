@@ -5,6 +5,21 @@
 **Generation store foundation: path helpers, manifest V1 types, resolver,
 atomic JSON writer. Feature inactive — no production behavior change.**
 
+### TEST-R169A-CI-01 — Umask-independent permission fixtures
+
+The first GitHub PR CI run exposed two permission tests whose fixtures
+assumed that `mkdirSync(..., { mode })` applied the requested mode
+unchanged. On POSIX systems, creation modes are filtered by the process
+umask, so requested `0777` and `0770` could become accepted compatibility
+modes such as `0755` and `0750`.
+
+The fixtures now create the directory, apply the exact intended mode with
+`chmodSync`, and assert the effective mode before invoking the generation
+store validation.
+
+No production permission policy, runtime behavior, schema, package
+version, semantics version, discovery policy, or manifest format changed.
+
 R169A lands the **non-active foundation** for atomic generation
 publication. The foundation is an implemented candidate — inactive,
 pending review — and tested, but no production code path calls it. The
