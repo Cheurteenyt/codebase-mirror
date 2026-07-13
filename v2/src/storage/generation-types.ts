@@ -577,7 +577,12 @@ export interface ResolvedMissingDb {
 export type GenerationStoreWarningCode =
   | "ATOMIC_TEMP_ORPHANED"
   | "STAGING_ALIAS_CLEANUP_DEFERRED"
-  | "GC_DELETE_FAILED";
+  | "GC_DELETE_FAILED"
+  // R169B-STEP3: GC safety-refusal (missing/corrupt metadata, etc.).
+  | "GC_SAFETY_REFUSAL"
+  // R169B-STEP3: GC deletion incomplete (DB/metadata/fsync/commit
+  // failure mid-deletion). Status stays DELETING; next GC re-attempts.
+  | "GC_DELETE_INCOMPLETE";
 
 /**
  * R169B-STEP1: A structured warning record. Carried alongside a
@@ -676,7 +681,35 @@ export type GenerationStoreErrorCode =
   | "PUBLICATION_VERIFY_FAILED"
   // R169B-STEP1 (§10): GC plan + safety codes.
   | "GC_PLAN_STALE"
-  | "GC_SAFETY_REFUSAL";
+  | "GC_SAFETY_REFUSAL"
+  // R169B-STEP3 (GPT 5.6 Pass 1 audit): correctness closure codes.
+  // MANIFEST_NOT_FOUND is distinct from MANIFEST_PARSE_ERROR: only a
+  // real ENOENT on the manifest path returns null from
+  // readOptionalGenerationManifest. Any other read/parse/validation
+  // failure raises MANIFEST_PARSE_ERROR (fail-closed).
+  | "MANIFEST_NOT_FOUND"
+  // GC_DELETE_INCOMPLETE: the GC marked a generation DELETING but
+  // could not certify the full delete (metadata unlink, DB unlink,
+  // fsync, CAS commit). The status stays DELETING; the next GC pass
+  // re-attempts. Never marked DELETED on incomplete deletion.
+  | "GC_DELETE_INCOMPLETE"
+  // PUBLICATION_STAGING_MUTATED: re-validation at publish time
+  // detected that the staging file's content/identity changed between
+  // prepare and publish (re-hash mismatch or dev/ino/size mismatch).
+  | "PUBLICATION_STAGING_MUTATED"
+  // PUBLICATION_CACHE_ROOT_MISMATCH: the cacheRoot passed to publish
+  // via storeOptions differs from the cacheRoot baked into the
+  // PreparedGeneration handle. The cacheRoot is part of the
+  // generation's identity and cannot be overridden.
+  | "PUBLICATION_CACHE_ROOT_MISMATCH"
+  // PUBLICATION_RESERVATION_INVALID: the reservation token is not
+  // authentic (not in the private WeakMap) or its derived path does
+  // not match the canonical tmp/generation-<uuid>.db path.
+  | "PUBLICATION_RESERVATION_INVALID"
+  // GC_PLAN_UNAUTHENTICATED: the plan passed to applyGenerationGcPlan
+  // is not authentic (not in the private WeakMap). Plans must be
+  // produced by planGenerationGc in the same process.
+  | "GC_PLAN_UNAUTHENTICATED";
 
 export class GenerationStoreError extends Error {
   readonly code: GenerationStoreErrorCode;
@@ -794,17 +827,26 @@ export interface PreparedGeneration {
 /**
  * R169B-STEP2: Options for `publishPreparedGeneration`.
  *
- *   - `expectedActiveGenerationId`: optimistic-locking guard. If
- *     provided, the publisher verifies that the CAS-recorded active
- *     generation ID (after reconciling from the active manifest)
- *     equals this value. A mismatch raises `PUBLICATION_CAS_MISMATCH`.
- *     Pass `null` to assert that no generation is currently active
- *     (first publication). Omit the field to skip the check.
+ * R169B-STEP3 (GPT 5.6 Pass 1 audit, CAS-R169B-A1-09): the
+ * `expectedActiveGenerationId` field is REQUIRED. There is no
+ * overload without it. `BEGIN IMMEDIATE` serializes concurrent
+ * writers but does NOT replace the optimistic-locking contract —
+ * two writers can publish sequentially and the last one wins
+ * without ever knowing its expected active was stale. Forcing the
+ * caller to pass `null` (first publication) or a generation ID
+ * makes every publication explicit about its precondition.
+ *
+ *   - `expectedActiveGenerationId`: optimistic-locking guard. The
+ *     publisher verifies that the CAS-recorded active generation ID
+ *     (after reconciling from the active manifest) equals this value.
+ *     A mismatch raises `PUBLICATION_CAS_MISMATCH`. Pass `null` to
+ *     assert that no generation is currently active (first
+ *     publication).
  *   - `pin`: if true, mark the newly published generation as pinned
  *     in the CAS catalog so it is never deleted by GC.
  */
 export interface PublishPreparedGenerationOptions {
-  readonly expectedActiveGenerationId?: string | null;
+  readonly expectedActiveGenerationId: string | null;
   readonly pin?: boolean;
 }
 
@@ -1000,3 +1042,128 @@ export interface CasDedupCandidate {
   readonly extractorSemanticsVersion: number;
   readonly discoveryPolicyVersion: number;
 }
+
+// ─── R169B-STEP3 — Metadata V1 schema (META-R169B-A1-17) ────────────────
+
+/**
+ * R169B-STEP3: The metadata sidecar schema (V1).
+ *
+ * The sidecar is the immutable publication record. It is written
+ * ONCE per generation UUID and is NEVER overwritten. The schema is
+ * strict: every field is required, no extra fields are allowed, and
+ * the nested `manifest` is a fully validated `GenerationManifestV1`.
+ *
+ * The exact key set is exported as `GENERATION_METADATA_V1_KEYS` so
+ * the validator can enforce "no extra keys, no missing keys".
+ */
+export interface GenerationMetadataV1 {
+  readonly formatVersion: 1;
+  readonly manifest: GenerationManifestV1;
+  readonly publishedAt: string;
+  readonly deduped: boolean;
+  readonly dedupSourceGenerationId: string | null;
+  readonly previousActiveGenerationId: string | null;
+  readonly pinned: boolean;
+}
+
+export const GENERATION_METADATA_V1_KEYS = Object.freeze([
+  "formatVersion",
+  "manifest",
+  "publishedAt",
+  "deduped",
+  "dedupSourceGenerationId",
+  "previousActiveGenerationId",
+  "pinned",
+] as const);
+
+export type GenerationMetadataV1Key = (typeof GENERATION_METADATA_V1_KEYS)[number];
+
+export function isGenerationMetadataV1Key(k: string): k is GenerationMetadataV1Key {
+  return (GENERATION_METADATA_V1_KEYS as readonly string[]).indexOf(k) !== -1;
+}
+
+// ─── R169B-STEP3 — PublisherOps interface (fault injection harness) ──────
+
+/**
+ * R169B-STEP3 (GPT 5.6 Pass 1 audit, §5): The publisher ops harness.
+ *
+ * The publisher originally called `linkSync`, `unlinkSync`,
+ * `fsyncSync`, `openSync`, `lstatSync`, `existsSync`, and
+ * `new Database()` directly, which made precise fault injection
+ * (crash at exact point, fsync failure, link EEXIST) impossible.
+ *
+ * This interface wraps every external side-effect the publisher
+ * performs. The public `publishPreparedGeneration` uses
+ * `PROD_PUBLISHER_OPS`. Tests import an internal fault-injection
+ * factory that returns ops wrapping these primitives and injecting
+ * failures at configurable points.
+ *
+ * The interface is INTERNAL — it is exported from
+ * `internal/generation-publisher-ops.ts`, NOT from the public
+ * facade. A `.d.ts` test asserts it does not appear in the public
+ * surface.
+ */
+export interface PublisherOps {
+  openSync(path: string, flags: number, mode?: number): number;
+  openSync(path: string, flags: number): number;
+  fstatSync(fd: number): import("node:fs").Stats;
+  readSync(fd: number, buffer: Buffer, offset: number, length: number, position: number | null): number;
+  fsyncSync(fd: number): void;
+  closeSync(fd: number): void;
+  linkSync(src: string, dst: string): void;
+  unlinkSync(path: string): void;
+  lstatSync(path: string): import("node:fs").Stats;
+  existsSync(path: string): boolean;
+  openDatabase(path: string, options: { readonly?: boolean; fileMustExist?: boolean }): import("better-sqlite3").Database;
+  now(): string;
+  randomUUID(): string;
+}
+
+/**
+ * R169B-STEP3: Hooks the publisher invokes at well-defined points.
+ *
+ * Used by crash-matrix tests to terminate the process at exact
+ * points (after reserve, after WAL, after checkpoint, after hash,
+ * after link, after fsync, after metadata, after manifest, before
+ * CAS commit, after CAS commit, ...). Each hook receives enough
+ * context to identify the crash point.
+ *
+ * The hooks are INTERNAL — they are not part of the public API.
+ */
+export interface PublisherHooks {
+  readonly onAfterReserve?: (ctx: PublisherHookContext) => void;
+  readonly onAfterWalCheckpoint?: (ctx: PublisherHookContext) => void;
+  readonly onAfterHash?: (ctx: PublisherHookContext) => void;
+  readonly onAfterLink?: (ctx: PublisherHookContext) => void;
+  readonly onAfterFsyncGenerations?: (ctx: PublisherHookContext) => void;
+  readonly onAfterMetadata?: (ctx: PublisherHookContext) => void;
+  readonly onAfterManifest?: (ctx: PublisherHookContext) => void;
+  readonly onBeforeCasCommit?: (ctx: PublisherHookContext) => void;
+  readonly onAfterCasCommit?: (ctx: PublisherHookContext) => void;
+}
+
+export interface PublisherHookContext {
+  readonly phase: string;
+  readonly project: string;
+  readonly generationId: string;
+  readonly stagingPath: string;
+  readonly finalPath?: string;
+  readonly metadataPath?: string;
+  readonly manifestPath?: string;
+}
+
+/**
+ * R169B-STEP3: The result of a publication attempt that failed
+ * BEFORE any visible mutation (CAS mismatch, CAS busy, staging
+ * mutated, trust-root error). The token remains usable: the caller
+ * can retry or discard.
+ *
+ * If the publication failed AFTER a visible mutation (link
+ * succeeded, manifest written, etc.), the publisher raises a
+ * `GenerationStoreError` instead — the token is consumed and the
+ * caller must run recovery.
+ */
+export type PublicationPreFailure =
+  | { readonly kind: "CAS_MISMATCH"; readonly expected: string | null; readonly actual: string | null }
+  | { readonly kind: "CAS_BUSY" }
+  | { readonly kind: "STAGING_MUTATED"; readonly reason: string };

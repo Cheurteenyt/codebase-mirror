@@ -44,6 +44,10 @@ import {
   applyGenerationGcPlan,
 } from "../../src/storage/generation-gc.js";
 import {
+  GenerationStoreError,
+  type GenerationGcPlan,
+} from "../../src/storage/generation-types.js";
+import {
   projectStoreDir,
   generationsDir,
   tmpDir,
@@ -300,53 +304,70 @@ describe("R169B-STEP2 GC — applyGenerationGcPlan (happy path)", () => {
     cas.close();
   });
 
-  it("the active generation is NEVER deleted (defense in depth)", () => {
+  it("the active generation is NEVER deleted (defense in depth — planner excludes it)", () => {
     const ids = publishNGenerations(4);
-    // Manually construct a plan that LISTS the active generation as
-    // delete (simulating a buggy / malicious plan). The applier must
-    // refuse.
-    const activeId = ids[3];
-    const fakePlan = {
-      project: FIXTURE_PROJECT_NAME,
-      cacheRoot,
-      activeGenerationId: activeId,
-      casRevision: 0, // wrong, but the active-check should fire first
-      retain: [],
-      delete: [
-        {
-          generationId: activeId,
-          dbPath: join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${activeId}.db`),
-          metadataPath: join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${activeId}.json`),
-          reason: "fake-active",
-          pinned: false,
-        },
-      ],
-      sweepTmp: [],
-      reasons: {},
-    };
-    // Bump the revision to match (otherwise we'd get GC_PLAN_STALE
-    // before the active check).
-    const cas = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
-    const rev = cas.getRevision();
-    cas.close();
-    fakePlan.casRevision = rev;
-
-    const result = applyGenerationGcPlan(fakePlan, { cacheRoot });
+    // R169B-STEP3 (SEC-R169B-A1-01): the applier now authenticates
+    // plans via a private WeakMap. A literal/fake plan is rejected
+    // with GC_PLAN_UNAUTHENTICATED. The defense-in-depth "active not
+    // deleted" is enforced by the PLANNER (the active generation is
+    // always in the retain set) and by the APPLIER (re-checks active
+    // under the CAS lock before each delete).
+    const plan = planGenerationGc(FIXTURE_PROJECT_NAME, { cacheRoot });
+    // The active generation (ids[3]) is in retain, NOT in delete.
+    expect(plan.retain.some((e) => e.generationId === ids[3])).toBe(true);
+    expect(plan.delete.some((e) => e.generationId === ids[3])).toBe(false);
+    // Applying the plan does NOT delete the active generation.
+    const result = applyGenerationGcPlan(plan, { cacheRoot });
     expect(result.applied).toBe(true);
-    expect(result.deletedGenerations).toEqual([]); // active not deleted
-    expect(result.warnings.some((w) => w.code === "GC_DELETE_FAILED")).toBe(true);
-    // The active DB still exists.
-    const dbPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${activeId}.db`);
+    expect(result.deletedGenerations).not.toContain(ids[3]);
+    const dbPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[3]}.db`);
     expect(existsSync(dbPath)).toBe(true);
   });
 
-  it("a pinned generation is NEVER deleted (defense in depth)", () => {
+  it("a fake/literal plan is rejected with GC_PLAN_UNAUTHENTICATED (SEC-R169B-A1-01)", () => {
+    publishNGenerations(2);
+    const cas = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
+    const rev = cas.getRevision();
+    cas.close();
+    const fakePlan = {
+      project: FIXTURE_PROJECT_NAME,
+      cacheRoot,
+      activeGenerationId: null,
+      casRevision: rev,
+      retain: [],
+      delete: [],
+      sweepTmp: [],
+      reasons: {},
+    } as unknown as GenerationGcPlan;
+    try {
+      applyGenerationGcPlan(fakePlan, { cacheRoot });
+      expect.fail("expected applyGenerationGcPlan to throw GC_PLAN_UNAUTHENTICATED");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GenerationStoreError);
+      expect((e as GenerationStoreError).code).toBe("GC_PLAN_UNAUTHENTICATED");
+    }
+  });
+
+  it("a spread copy of an authentic plan is rejected (GC_PLAN_UNAUTHENTICATED)", () => {
+    publishNGenerations(2);
+    const plan = planGenerationGc(FIXTURE_PROJECT_NAME, { cacheRoot });
+    const spread = { ...plan };
+    try {
+      applyGenerationGcPlan(spread as unknown as GenerationGcPlan, { cacheRoot });
+      expect.fail("expected applyGenerationGcPlan to throw GC_PLAN_UNAUTHENTICATED");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GenerationStoreError);
+      expect((e as GenerationStoreError).code).toBe("GC_PLAN_UNAUTHENTICATED");
+    }
+  });
+
+  it("a pinned generation is NEVER deleted (defense in depth — planner retains it)", () => {
     const ids = publishNGenerations(4);
     // Pin ids[0] (the one the plan would delete).
     const cas = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
     cas.beginImmediate();
     cas.setCatalogPinned(ids[0], true);
-    cas.incrementRevision();
+    cas.appendPublicationHistory(ids[0], FIXTURE_PROJECT_NAME, "PIN", null);
     cas.commit();
     cas.close();
 
@@ -355,30 +376,10 @@ describe("R169B-STEP2 GC — applyGenerationGcPlan (happy path)", () => {
     expect(plan.delete).toEqual([]); // ids[0] is pinned, nothing to delete
     expect(plan.retain.length).toBe(4); // all retained
 
-    // Even if we manually construct a plan that lists the pinned gen
-    // as delete, the applier must refuse.
-    const fakePlan = {
-      project: FIXTURE_PROJECT_NAME,
-      cacheRoot,
-      activeGenerationId: ids[3],
-      casRevision: plan.casRevision,
-      retain: [],
-      delete: [
-        {
-          generationId: ids[0],
-          dbPath: join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.db`),
-          metadataPath: join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.json`),
-          reason: "fake-pinned",
-          pinned: false,
-        },
-      ],
-      sweepTmp: [],
-      reasons: {},
-    };
-    const result = applyGenerationGcPlan(fakePlan, { cacheRoot });
+    // Applying the plan deletes nothing.
+    const result = applyGenerationGcPlan(plan, { cacheRoot });
     expect(result.applied).toBe(true);
     expect(result.deletedGenerations).toEqual([]);
-    expect(result.warnings.some((w) => w.code === "GC_DELETE_FAILED")).toBe(true);
     const dbPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.db`);
     expect(existsSync(dbPath)).toBe(true);
   });

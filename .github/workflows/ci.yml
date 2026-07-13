@@ -104,6 +104,13 @@ jobs:
       - name: Incremental benchmark invariants
         run: npm run bench:incremental:smoke
 
+      # R169B-STEP3: Publication benchmark invariants (GPT 5.6 Pass 1
+      # audit, PERF-R169B-A1-22). Runs the publication benchmark smoke
+      # variant to verify the publisher primitives remain fast and
+      # correct on every PR.
+      - name: Publication benchmark invariants
+        run: npm run bench:publication:smoke
+
   # ── Frontend (graph-ui): typecheck + build + test ──────────────
   frontend:
     name: Frontend (graph-ui)

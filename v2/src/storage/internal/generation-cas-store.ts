@@ -53,7 +53,7 @@
 
 import Database from "better-sqlite3";
 import type { Database as DatabaseType } from "better-sqlite3";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, lstatSync, chmodSync, openSync, closeSync, fsyncSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 
 import {
@@ -295,6 +295,8 @@ export function openCasStore(
   if (!existsSync(projectStore)) {
     try {
       mkdirSync(projectStore, { recursive: true, mode: 0o700 });
+      // mkdirSync mode is filtered by umask — force the exact mode.
+      chmodSync(projectStore, 0o700);
     } catch (e) {
       throw new GenerationStoreError(
         "PUBLICATION_CAS_STATE_CORRUPT",
@@ -306,6 +308,94 @@ export function openCasStore(
   }
 
   const dbPath = join(projectStore, CAS_DB_FILENAME);
+
+  // R169B-STEP3 (CAS-R169B-A1-08): Harden the CAS DB path BEFORE
+  // opening it. If the file already exists, it MUST be a regular
+  // file (not a symlink, not a directory, not a FIFO). If it does
+  // not exist, we open it with O_CREAT|O_EXCL|O_WRONLY mode 0600
+  // so it is created with the right permissions and we fsync the
+  // parent directory so the new directory entry is durable.
+  try {
+    const st = lstatSync(dbPath);
+    if (st.isSymbolicLink()) {
+      throw new GenerationStoreError(
+        "PUBLICATION_CAS_STATE_CORRUPT",
+        phase,
+        project,
+        `CAS DB is a symlink (rejected): ${dbPath}`,
+      );
+    }
+    if (!st.isFile()) {
+      throw new GenerationStoreError(
+        "PUBLICATION_CAS_STATE_CORRUPT",
+        phase,
+        project,
+        `CAS DB path is not a regular file: ${dbPath} (mode=0o${st.mode.toString(8)})`,
+      );
+    }
+    // Force the mode to 0600 (owner read/write only). If the file
+    // was created by an older version with 0644, fix it.
+    if ((st.mode & 0o777) !== 0o600) {
+      try {
+        chmodSync(dbPath, 0o600);
+      } catch (e) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `CAS DB has insecure mode 0o${(st.mode & 0o777).toString(8)} and chmod to 0600 failed: ${(e as Error).message}`,
+        );
+      }
+    }
+  } catch (e) {
+    if (e instanceof GenerationStoreError) throw e;
+    const errCode = (e as NodeJS.ErrnoException).code;
+    if (errCode !== "ENOENT") {
+      throw new GenerationStoreError(
+        "PUBLICATION_CAS_STATE_CORRUPT",
+        phase,
+        project,
+        `Failed to lstat CAS DB at "${dbPath}": ${(e as Error).message}`,
+      );
+    }
+    // ENOENT — the file does not exist yet. Create it exclusively
+    // with mode 0600 so better-sqlite3 inherits the right mode.
+    let fd: number | null = null;
+    try {
+      fd = openSync(dbPath, "wx", 0o600);
+    } catch (e2) {
+      // Race: another process created it. That's fine — re-lstat
+      // will pick up the existing file. If the open failed for
+      // another reason, raise.
+      const errCode2 = (e2 as NodeJS.ErrnoException).code;
+      if (errCode2 !== "EEXIST") {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Failed to exclusively create CAS DB at "${dbPath}": ${(e2 as Error).message}`,
+        );
+      }
+    }
+    if (fd !== null) {
+      try { fsyncSync(fd); } catch { /* best effort */ }
+      try { closeSync(fd); } catch { /* best effort */ }
+      // fsync the parent directory so the new directory entry is durable.
+      let parentFd: number | null = null;
+      try {
+        parentFd = openSync(projectStore, "r");
+        fsyncSync(parentFd);
+      } catch {
+        // Best-effort — the parent fsync is not strictly required
+        // for correctness (the next publication / GC will retry),
+        // but it is recommended.
+      } finally {
+        if (parentFd !== null) {
+          try { closeSync(parentFd); } catch { /* best effort */ }
+        }
+      }
+    }
+  }
 
   let db: DatabaseType;
   try {
@@ -322,7 +412,13 @@ export function openCasStore(
   try {
     db.pragma("busy_timeout = 5000");
     db.pragma("foreign_keys = ON");
-    db.pragma("journal_mode = WAL");
+    // R169B-STEP3 (SQLITE-R169B-A1-06): CAS DB uses DELETE journal
+    // mode (was WAL). The CAS is small, mono-project, and serialized
+    // by BEGIN IMMEDIATE. DELETE simplifies the durability contract:
+    // there are no -wal/-shm sidecars to leak / chmod / fsync. The
+    // previous WAL choice contradicted the commit message and
+    // complicated crash-recovery reasoning.
+    db.pragma("journal_mode = DELETE");
     db.pragma("synchronous = FULL");
     db.exec(CAS_SCHEMA_SQL);
 
@@ -450,34 +546,103 @@ function createCasStoreHandle(
 
     upsertGenerationCatalog(entry: CasGenerationCatalogEntry): void {
       ensureTxn("upsertGenerationCatalog");
+      // R169B-STEP3 (CAS-R169B-A1-18): An existing UUID is IMMUTABLE.
+      // sha256, size_bytes, root_fingerprint, extractor_semantics_version,
+      // discovery_policy_version, project, first_published_at cannot
+      // change. Only last_seen_at, pinned, status can transition
+      // (according to a valid state machine). A content mismatch on an
+      // existing UUID is corruption — we raise instead of overwriting.
+      const existing = db.prepare(`
+        SELECT generation_id, project, sha256, size_bytes, root_fingerprint,
+               extractor_semantics_version, discovery_policy_version,
+               first_published_at
+        FROM generation_catalog WHERE generation_id = ?
+      `).get(entry.generationId) as
+        | {
+            generation_id: string;
+            project: string;
+            sha256: string;
+            size_bytes: number;
+            root_fingerprint: string;
+            extractor_semantics_version: number;
+            discovery_policy_version: number;
+            first_published_at: string;
+          }
+        | undefined;
+      if (existing === undefined) {
+        // New entry — INSERT as-is.
+        db.prepare(`
+          INSERT INTO generation_catalog (
+            generation_id, project, sha256, size_bytes, root_fingerprint,
+            extractor_semantics_version, discovery_policy_version,
+            first_published_at, last_seen_at, pinned, status
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          entry.generationId,
+          entry.project,
+          entry.sha256,
+          entry.sizeBytes,
+          entry.rootFingerprint,
+          entry.extractorSemanticsVersion,
+          entry.discoveryPolicyVersion,
+          entry.firstPublishedAt,
+          entry.lastSeenAt,
+          entry.pinned ? 1 : 0,
+          entry.status,
+        );
+        return;
+      }
+      // Existing entry — verify content is byte-identical.
+      if (
+        existing.project !== entry.project ||
+        existing.sha256 !== entry.sha256 ||
+        existing.size_bytes !== entry.sizeBytes ||
+        existing.root_fingerprint !== entry.rootFingerprint ||
+        existing.extractor_semantics_version !== entry.extractorSemanticsVersion ||
+        existing.discovery_policy_version !== entry.discoveryPolicyVersion ||
+        existing.first_published_at !== entry.firstPublishedAt
+      ) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          entry.project,
+          `Refused to mutate immutable content fields of existing catalog entry ${entry.generationId} (sha256/size/fingerprint/versions/project/firstPublishedAt mismatch)`,
+          entry.generationId,
+        );
+      }
+      // Update only the mutable fields: last_seen_at, pinned, status.
+      // Status transitions are validated: ACTIVE -> DELETING -> DELETED
+      // is the only allowed path (DELETED is terminal).
+      const allowedTransitions: Record<string, Set<string>> = {
+        ACTIVE: new Set(["ACTIVE", "DELETING"]),
+        DELETING: new Set(["DELETING", "DELETED"]),
+        DELETED: new Set(["DELETED"]),
+      };
+      const currentStatusRow = db.prepare(
+        "SELECT status AS s FROM generation_catalog WHERE generation_id = ?",
+      ).get(entry.generationId) as { s: string };
+      const currentStatus = currentStatusRow.s;
+      const allowed = allowedTransitions[currentStatus] ?? new Set<string>();
+      if (!allowed.has(entry.status)) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          entry.project,
+          `Refused invalid catalog status transition for ${entry.generationId}: ${currentStatus} -> ${entry.status}`,
+          entry.generationId,
+        );
+      }
       db.prepare(`
-        INSERT INTO generation_catalog (
-          generation_id, project, sha256, size_bytes, root_fingerprint,
-          extractor_semantics_version, discovery_policy_version,
-          first_published_at, last_seen_at, pinned, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(generation_id) DO UPDATE SET
-          project = excluded.project,
-          sha256 = excluded.sha256,
-          size_bytes = excluded.size_bytes,
-          root_fingerprint = excluded.root_fingerprint,
-          extractor_semantics_version = excluded.extractor_semantics_version,
-          discovery_policy_version = excluded.discovery_policy_version,
-          last_seen_at = excluded.last_seen_at,
-          pinned = excluded.pinned,
-          status = excluded.status
+        UPDATE generation_catalog SET
+          last_seen_at = ?,
+          pinned = ?,
+          status = ?
+        WHERE generation_id = ?
       `).run(
-        entry.generationId,
-        entry.project,
-        entry.sha256,
-        entry.sizeBytes,
-        entry.rootFingerprint,
-        entry.extractorSemanticsVersion,
-        entry.discoveryPolicyVersion,
-        entry.firstPublishedAt,
         entry.lastSeenAt,
         entry.pinned ? 1 : 0,
         entry.status,
+        entry.generationId,
       );
     },
 
@@ -600,22 +765,49 @@ function createCasStoreHandle(
       previousActiveGenerationId: string | null,
     ): void {
       ensureTxn("appendPublicationHistory");
+      // R169B-STEP3 (CAS-R169B-A1-18): incrementRevision MUST be called
+      // BEFORE appending the history row, so cas_revision in the row
+      // is the NEW revision (not the old one). The previous code read
+      // the revision before incrementing, so the history row was off
+      // by one.
+      // Also: do NOT write an empty generation_id (was the bug when
+      // reconcileFromManifest(null) wrote action=UNPUBLISH with
+      // generation_id=""). The history row's generation_id is the
+      // generation the action is ABOUT — for UNPUBLISH it is the
+      // generation that WAS active (i.e. previousActiveGenerationId).
+      // For PUBLISH/PIN/UNPIN/MARK_DELETING/DELETE it is the
+      // generation the action targets.
+      const effectiveGenerationId = generationId === "" ? (previousActiveGenerationId ?? "") : generationId;
+      if (effectiveGenerationId === "") {
+        // Refuse to write a history row with no generation_id and no
+        // previousActiveGenerationId — that would be a meaningless row.
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          projectArg,
+          `appendPublicationHistory: refusing to write history row with empty generation_id and empty previousActiveGenerationId (action=${action})`,
+        );
+      }
       const now = new Date().toISOString();
-      const revisionRow = db
+      // Increment revision FIRST.
+      db.prepare(
+        "UPDATE publication_state SET revision = revision + 1, last_updated_at = ? WHERE id = 1",
+      ).run(now);
+      const newRev = (db
         .prepare("SELECT revision AS r FROM publication_state WHERE id = 1")
-        .get() as { r: number };
+        .get() as { r: number }).r;
       db.prepare(`
         INSERT INTO publication_history (
           generation_id, project, published_at, action,
           previous_active_generation_id, cas_revision
         ) VALUES (?, ?, ?, ?, ?, ?)
       `).run(
-        generationId,
+        effectiveGenerationId,
         projectArg,
         now,
         action,
         previousActiveGenerationId,
-        revisionRow.r,
+        newRev,
       );
     },
 
@@ -648,9 +840,52 @@ function createCasStoreHandle(
 
     setCatalogStatus(generationId: string, status: "ACTIVE" | "DELETING" | "DELETED"): void {
       ensureTxn("setCatalogStatus");
-      db.prepare(
+      // R169B-STEP3 (CAS-R169B-A1-18): setCatalogStatus MUST verify
+      // exactly one row was affected. Zero rows means the generation
+      // is unknown to the catalog — the caller is operating on a
+      // stale plan. Two or more rows is impossible (generation_id is
+      // PRIMARY KEY) but we assert defensively.
+      // Validate the status transition: ACTIVE -> DELETING -> DELETED
+      // is the only allowed path.
+      const currentRow = db.prepare(
+        "SELECT status AS s FROM generation_catalog WHERE generation_id = ?",
+      ).get(generationId) as { s: string } | undefined;
+      if (currentRow === undefined) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `setCatalogStatus: generation ${generationId} not in catalog`,
+          generationId,
+        );
+      }
+      const allowedTransitions: Record<string, Set<string>> = {
+        ACTIVE: new Set(["DELETING"]),
+        DELETING: new Set(["DELETED"]),
+        DELETED: new Set<string>(),
+      };
+      const allowed = allowedTransitions[currentRow.s] ?? new Set<string>();
+      if (!allowed.has(status)) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `setCatalogStatus: invalid transition ${currentRow.s} -> ${status} for ${generationId}`,
+          generationId,
+        );
+      }
+      const info = db.prepare(
         "UPDATE generation_catalog SET status = ? WHERE generation_id = ?",
       ).run(status, generationId);
+      if (info.changes !== 1) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `setCatalogStatus: expected exactly 1 row affected, got ${info.changes} (generationId=${generationId})`,
+          generationId,
+        );
+      }
     },
 
     setCatalogPinned(generationId: string, pinned: boolean): void {
@@ -702,20 +937,29 @@ function createCasStoreHandle(
         const newRev = (db
           .prepare("SELECT revision AS r FROM publication_state WHERE id = 1")
           .get() as { r: number }).r;
+        // R169B-STEP3 (CAS-R169B-A1-18): do NOT write an empty
+        // generation_id. For UNPUBLISH (manifest is null), the
+        // history row's generation_id is the generation that WAS
+        // active (casActive). If casActive is also null, we don't
+        // write a history row at all (there's nothing to reconcile
+        // from).
         const action = manifestActive === null ? "UNPUBLISH" : "PUBLISH";
-        db.prepare(`
-          INSERT INTO publication_history (
-            generation_id, project, published_at, action,
-            previous_active_generation_id, cas_revision
-          ) VALUES (?, ?, ?, ?, ?, ?)
-        `).run(
-          manifestActive ?? "",
-          project,
-          now,
-          action,
-          casActive,
-          newRev,
-        );
+        const historyGenerationId = manifestActive ?? casActive;
+        if (historyGenerationId !== null) {
+          db.prepare(`
+            INSERT INTO publication_history (
+              generation_id, project, published_at, action,
+              previous_active_generation_id, cas_revision
+            ) VALUES (?, ?, ?, ?, ?, ?)
+          `).run(
+            historyGenerationId,
+            project,
+            now,
+            action,
+            casActive,
+            newRev,
+          );
+        }
 
         if (ownsTxn) {
           try { db.exec("COMMIT"); } catch (e) {

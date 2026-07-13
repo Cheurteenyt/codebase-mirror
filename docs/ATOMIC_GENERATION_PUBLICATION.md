@@ -1,11 +1,14 @@
-# Atomic Generation Publication — R169A Target Architecture
+# Atomic Generation Publication — R169 Target Architecture
 
-> **Status: FOUNDATION / INACTIVE — R169A is merged and remains FOUNDATION / INACTIVE. No production path uses the generation store.**
+> **Status: FOUNDATION / INACTIVE — R169A is merged and remains FOUNDATION / INACTIVE. R169B-STEP3 (correctness closure) is implemented but NOT merged; no production path uses the generation store.**
 >
 > This document describes the **target architecture** for atomic generation
 > publication in Codebase Memory V2. As of R169A the foundational pieces are
 > merged and remain FOUNDATION / INACTIVE — no production path uses the
-> generation store
+> generation store. R169B-STEP2 added the publisher / CAS / GC primitives
+> (still FOUNDATION / INACTIVE). R169B-STEP3 (this revision) closes the 22
+> findings from the GPT 5.6 Pass 1 audit. R169C will wire the publisher
+> into the indexer's success path
 > (`v2/src/storage/generation-store.ts`,
 > `v2/src/storage/generation-types.ts`,
 > `v2/tests/storage/r169a-generation-store.test.ts`). The indexer still
@@ -1026,55 +1029,148 @@ publication.** The reader either sees the previous complete snapshot or
 the new complete snapshot, depending on whether the manifest rename
 (C12) survived.
 
-## 12.1. Cross-directory promotion durability (R169B-STEP1 doc fix)
+## 12.1. Cross-directory promotion durability (R169B-STEP3 doc fix)
 
-When the staging DB is promoted from `tmp/` to `generations/` (a
-cross-directory rename), the durability contract is:
+**R169B-STEP3 correction**: the staging DB is promoted from `tmp/` to
+`generations/` via `link()` + `unlink()` (NOT `rename()`). `link()`
+creates a new directory entry pointing at the same inode; `unlink()`
+removes the old directory entry. The durability contract is:
 
-1. **fsync the destination directory (`generations/`)** — after the
-   rename. If this fsync fails, the directory entry for the new file
-   in `generations/` may not survive a crash; the manifest swap (a
-   later step) MUST NOT proceed. The publisher raises
-   `GENERATION_PROMOTION_DURABILITY_UNKNOWN` (R169B-STEP1 error code)
-   and the staging DB is left in place for diagnosis (GC may later
-   remove it). The active manifest is unchanged — readers continue to
-   see the previous generation.
+1. **`link(stagingPath, finalPath)`** — no-clobber on POSIX (EEXIST if
+   the target already exists). If `link()` fails with EEXIST, the
+   publisher raises `GENERATION_PROMOTION_CONFLICT` (the generation UUID
+   was previously published and not GC'd). If `link()` fails for another
+   reason, the publisher raises `GENERATION_PROMOTION_FAILED`.
 
-2. **fsync the source directory (`tmp/`)** — after the rename. If this
-   fsync fails, the directory entry REMOVAL of the old name in `tmp/`
-   may not survive a crash; on reboot the staging DB may reappear in
-   `tmp/` (the rename is atomic, but the parent's removal of the old
-   entry is not without fsync). This is benign — the staging DB is
-   now also in `generations/`, so a duplicate in `tmp/` is just a
-   stale artifact that GC will sweep. The publisher surfaces a
-   warning (`ATOMIC_TEMP_ORPHANED` from R169A-FIX-R5) and continues.
-   The promotion itself succeeded; only the cleanup is uncertain.
+2. **fsync the destination directory (`generations/`)** — after the
+   `link()`. **R169B-STEP3 (DUR-R169B-A1-02)**: if this fsync fails, the
+   manifest swap MUST NOT proceed. The publisher raises
+   `GENERATION_PROMOTION_DURABILITY_UNKNOWN`, rolls back the CAS
+   transaction, and leaves the orphan DB in `generations/` (no manifest
+   points at it). The next GC pass sweeps it. The active manifest is
+   unchanged — readers continue to see the previous generation. The
+   previous code surfaced this as a warning and continued — that
+   violated the documented contract and is now fixed.
 
-3. **If either fsync fails AND the rename itself failed** — the
-   staging DB is still in `tmp/` (the rename did not happen). The
-   publisher raises `GENERATION_PROMOTION_FAILED` (R169B-STEP1 error
-   code) and the active manifest is unchanged. The staging DB is left
-   in `tmp/` for diagnosis; GC may later remove it. This is the
-   "promote failed before any visible mutation" case — readers
-   continue to see the previous generation, no orphan exists, and the
-   operator can retry the publication.
+3. **`unlink(stagingPath)`** — best-effort cleanup of the staging alias.
+   If this fails, the publisher surfaces a
+   `STAGING_ALIAS_CLEANUP_DEFERRED` warning and continues. The staging
+   alias is a duplicate of the final DB (same inode); GC sweeps it
+   later.
 
-4. **If the rename succeeded but the destination fsync failed AND the
-   source fsync also failed** — the worst case. The new generation is
-   in `generations/` (rename was atomic), but the directory entries
-   on both sides may be uncertain. The publisher raises
-   `GENERATION_PROMOTION_DURABILITY_UNKNOWN` and surfaces both
-   `ATOMIC_TEMP_ORPHANED` warnings. The manifest swap MUST NOT
-   proceed. The operator must run a consistency check before
-   retrying. The active manifest is unchanged — readers continue to
-   see the previous generation.
+4. **fsync the source directory (`tmp/`)** — R169B-STEP3: the GC
+   performs this fsync after sweeping tmp/ artifacts. The publisher
+   does NOT fsync tmp/ after the unlink (the staging alias cleanup is
+   best-effort; a crash leaving the alias in tmp/ is benign — GC sweeps
+   it on the next pass).
 
 The contract: **a crash never leaves the reader seeing a partial
 publication.** The reader either sees the previous complete snapshot
 or the new complete snapshot, depending on whether the manifest
-rename (the final step) survived. Cross-directory promotion failures
-are surfaced as `GENERATION_PROMOTION_*` errors (R169B-STEP1) so the
-operator can diagnose without re-running the publication blindly.
+swap (the final step) survived. Cross-directory promotion failures
+are surfaced as `GENERATION_PROMOTION_*` errors so the operator can
+diagnose without re-running the publication blindly.
+
+## 12.2. R169B-STEP3 — Correctness closure (GPT 5.6 Pass 1 audit)
+
+R169B-STEP3 closes the 22 findings raised by the GPT 5.6 Pass 1 audit
+of R169B-STEP2. The full pipeline is now:
+
+```
+RESERVE              reserveGenerationStaging
+                     → tmp/generation-<uuid>.db (0600, O_CREAT|O_EXCL)
+
+POPULATE             (by future R169C caller — the indexer)
+
+FINALIZE WAL         prepareGenerationForPublication
+                     → wal_checkpoint(TRUNCATE)
+                     → journal_mode = DELETE
+                     → synchronous = FULL
+                     → close
+                     → verify no -wal/-shm/-journal sidecars
+
+VALIDATE DB          → quick_check = ok
+                     → foreign_key_check = 0 rows
+                     → required tables exist
+                     → projects row coherent
+                     → versions 8 / 2
+                     → cross_file_calls_stale = 0
+                     → last_index_error IS NULL
+                     → last_successful_index_at IS NOT NULL
+                     → COUNT(nodes/edges/file_hashes) matches projects row
+                     → no dangling edges
+
+HASH / SEAL          → lstat (reject symlink, require regular)
+                     → open(O_RDONLY | O_NOFOLLOW)
+                     → fstat fd, compare dev/ino vs lstat (TOCTOU)
+                     → streaming SHA-256 in 64 KiB chunks
+                     → fstat fd, compare size/dev/ino (mid-hash swap)
+                     → close
+                     → build manifest from DB-derived values
+                     → validateGenerationManifest
+                     → register PreparedGeneration token (WeakMap)
+
+PUBLISH              publishPreparedGeneration (REQUIRED: expectedActiveGenerationId)
+                     → token state PREPARED → PUBLISHING
+                     → re-validate staging content (re-stat + re-hash)
+                     → open CAS DB (hardened: lstat regular, chmod 0600,
+                       fsync parent, DELETE journal)
+                     → BEGIN IMMEDIATE
+                     → readOptionalGenerationManifest (null only on ENOENT;
+                       fail-closed on corrupt)
+                     → reconcileFromManifest
+                     → verify expectedActiveGenerationId matches
+                     → findDedupCandidate
+                     → IF dedup:
+                         validate dedup DB (lstat, re-hash, size)
+                         validate dedup metadata (parse, validate V1,
+                           project/UUID/hash/size coherent)
+                         effective paths = dedup's paths
+                         unlink staging (best-effort)
+                     → ELSE:
+                         link(staging, final) — no-clobber
+                         fsync(generations/) — BLOCKS on failure
+                         unlink staging (best-effort)
+                     → IF NOT dedup:
+                         write metadata sidecar (atomic, V1 schema)
+                     → write active manifest (atomic)
+                     → re-read + verify manifest, DB, metadata
+                     → upsertGenerationCatalog (immutable for existing UUID)
+                     → setActiveGenerationId
+                     → appendPublicationHistory(PUBLISH) — increments revision
+                     → optional: setCatalogPinned + appendPublicationHistory(PIN)
+                     → COMMIT
+                     → token state → CONSUMED
+```
+
+### Durability guarantees (R169B-STEP3)
+
+The manifest can be written ONLY if:
+- the final DB is complete (WAL finalized, no sidecars);
+- the final DB hash is verified (re-computed at publish, matches manifest);
+- the staging content was not mutated between prepare and publish;
+- the `generations/` directory fsync succeeded after `link()`;
+- the metadata sidecar is durable (atomic write with fsync);
+- the expected active generation ID was validated (optimistic lock).
+
+If any of these fails BEFORE the manifest write, the publication is
+aborted and the token reverts to PREPARED (caller can retry or discard).
+If any fails AFTER the manifest write, the publication is in an
+indeterminate state and the caller must run recovery.
+
+### Honest limitations (R169B-STEP3)
+
+- R169B is FOUNDATION / INACTIVE — no production code calls the publisher.
+- Linux-only certified at this stage.
+- Multi-host coordination is NOT safe (R170 fencing is absent).
+- R169C indexer integration is absent.
+- R169E crash matrix integration is not certified.
+- The `PublisherOps` fault-injection harness is wired into the public
+  API via `PROD_PUBLISHER_OPS`, but the `publishPreparedGeneration`
+  function does not yet accept a custom `ops` argument (the fault
+  injection tests use child processes and filesystem-level injection
+  instead). A future step may expose `publishPreparedGenerationInternal`
+  for in-process fault injection.
 
 ## 13. Performance contract
 

@@ -449,7 +449,7 @@ describe("R169B-STEP2 publisher — PreparedGeneration opacity + forge-resistanc
     const prepared = prepareGenerationForPublication(reservation);
     const spreadCopy = { ...prepared };
         try {
-      publishPreparedGeneration(spreadCopy as PreparedGeneration, {}, { cacheRoot });
+      publishPreparedGeneration(spreadCopy as PreparedGeneration, { expectedActiveGenerationId: null }, { cacheRoot });
       expect.fail("expected call to throw GenerationStoreError with code PUBLICATION_TOKEN_INVALID");
     } catch (e) {
       expect(e).toBeInstanceOf(GenerationStoreError);
@@ -462,7 +462,7 @@ describe("R169B-STEP2 publisher — PreparedGeneration opacity + forge-resistanc
     const prepared = prepareGenerationForPublication(reservation);
     const jsonClone = JSON.parse(JSON.stringify(prepared)) as PreparedGeneration;
         try {
-      publishPreparedGeneration(jsonClone, {}, { cacheRoot });
+      publishPreparedGeneration(jsonClone, { expectedActiveGenerationId: null }, { cacheRoot });
       expect.fail("expected call to throw GenerationStoreError with code PUBLICATION_TOKEN_INVALID");
     } catch (e) {
       expect(e).toBeInstanceOf(GenerationStoreError);
@@ -481,7 +481,7 @@ describe("R169B-STEP2 publisher — PreparedGeneration opacity + forge-resistanc
       warnings: [],
     } as unknown as PreparedGeneration;
         try {
-      publishPreparedGeneration(fake, {}, { cacheRoot });
+      publishPreparedGeneration(fake, { expectedActiveGenerationId: null }, { cacheRoot });
       expect.fail("expected call to throw GenerationStoreError with code PUBLICATION_TOKEN_INVALID");
     } catch (e) {
       expect(e).toBeInstanceOf(GenerationStoreError);
@@ -492,9 +492,9 @@ describe("R169B-STEP2 publisher — PreparedGeneration opacity + forge-resistanc
   it("publishing a PreparedGeneration twice raises PUBLICATION_TOKEN_CONSUMED on the second call", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    publishPreparedGeneration(prepared, {}, { cacheRoot });
+    publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
         try {
-      publishPreparedGeneration(prepared, {}, { cacheRoot });
+      publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
       expect.fail("expected call to throw GenerationStoreError with code PUBLICATION_TOKEN_CONSUMED");
     } catch (e) {
       expect(e).toBeInstanceOf(GenerationStoreError);
@@ -505,7 +505,7 @@ describe("R169B-STEP2 publisher — PreparedGeneration opacity + forge-resistanc
   it("discarding a PreparedGeneration after publish raises PUBLICATION_TOKEN_CONSUMED", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    publishPreparedGeneration(prepared, {}, { cacheRoot });
+    publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
         try {
       discardPreparedGeneration(prepared);
       expect.fail("expected call to throw GenerationStoreError with code PUBLICATION_TOKEN_CONSUMED");
@@ -522,7 +522,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (promotion)", () =
   it("promotes the staging DB to generations/generation-<uuid>.db via link (no rename)", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    const result = publishPreparedGeneration(prepared, {}, { cacheRoot });
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
     // The final DB path exists.
     expect(existsSync(result.dbPath)).toBe(true);
     expect(result.dbPath).toBe(join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${prepared.generationId}.db`));
@@ -539,7 +539,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (promotion)", () =
     const finalPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${prepared.generationId}.db`);
     writeFileSync(finalPath, "pre-existing", "utf-8");
         try {
-      publishPreparedGeneration(prepared, {}, { cacheRoot });
+      publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
       expect.fail("expected call to throw GenerationStoreError with code GENERATION_PROMOTION_CONFLICT");
     } catch (e) {
       expect(e).toBeInstanceOf(GenerationStoreError);
@@ -554,7 +554,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (metadata + manife
   it("writes the metadata sidecar generation-<uuid>.json atomically", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    const result = publishPreparedGeneration(prepared, {}, { cacheRoot });
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
     expect(existsSync(result.metadataPath)).toBe(true);
     const metadata = JSON.parse(require("node:fs").readFileSync(result.metadataPath, "utf-8"));
     expect(metadata.formatVersion).toBe(1);
@@ -568,7 +568,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (metadata + manife
   it("writes the active manifest active-generation.json atomically (canonical payload)", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    const result = publishPreparedGeneration(prepared, {}, { cacheRoot });
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
     expect(existsSync(result.manifestPath)).toBe(true);
     const manifest = JSON.parse(require("node:fs").readFileSync(result.manifestPath, "utf-8"));
     expect(manifest.formatVersion).toBe(1);
@@ -581,7 +581,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (metadata + manife
   it("the metadata sidecar is NOT a symlink", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    const result = publishPreparedGeneration(prepared, {}, { cacheRoot });
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
     const st = lstatSync(result.metadataPath);
     expect(st.isSymbolicLink()).toBe(false);
     expect(st.isFile()).toBe(true);
@@ -590,7 +590,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (metadata + manife
   it("the active manifest is NOT a symlink", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    const result = publishPreparedGeneration(prepared, {}, { cacheRoot });
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
     const st = lstatSync(result.manifestPath);
     expect(st.isSymbolicLink()).toBe(false);
     expect(st.isFile()).toBe(true);
@@ -603,7 +603,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (CAS + dedup)", ()
   it("creates the CAS DB at publication-cas.sqlite on first publish", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    publishPreparedGeneration(prepared, {}, { cacheRoot });
+    publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
     const casPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), CAS_DB_FILENAME);
     expect(existsSync(casPath)).toBe(true);
   });
@@ -611,7 +611,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (CAS + dedup)", ()
   it("the CAS active_generation_id matches the published generation after publish", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    const result = publishPreparedGeneration(prepared, {}, { cacheRoot });
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
     // Re-open the CAS and verify.
     const casPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), CAS_DB_FILENAME);
     const db = new Database(casPath, { readonly: true });
@@ -627,7 +627,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (CAS + dedup)", ()
   it("a second publication of a DIFFERENT generation updates the CAS active ID and records the previous", () => {
     const { reservation: r1 } = reserveAndPopulateValid();
     const p1 = prepareGenerationForPublication(r1);
-    const result1 = publishPreparedGeneration(p1, {}, { cacheRoot });
+    const result1 = publishPreparedGeneration(p1, { expectedActiveGenerationId: null }, { cacheRoot });
 
     const { reservation: r2 } = reserveAndPopulateValid();
     const p2 = prepareGenerationForPublication(r2);
@@ -661,7 +661,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (CAS + dedup)", ()
     // First publication.
     const { reservation: r1 } = reserveAndPopulateValid();
     const p1 = prepareGenerationForPublication(r1);
-    const result1 = publishPreparedGeneration(p1, {}, { cacheRoot });
+    const result1 = publishPreparedGeneration(p1, { expectedActiveGenerationId: null }, { cacheRoot });
 
     // Second publication: same contents (same staging DB bytes).
     // We copy the staging DB from r1 to a new reservation to get the
@@ -680,7 +680,7 @@ describe("R169B-STEP2 publisher — publishPreparedGeneration (CAS + dedup)", ()
   it("the CAS publication_history records a PUBLISH entry on each publication", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    publishPreparedGeneration(prepared, {}, { cacheRoot });
+    publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
 
     const casPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), CAS_DB_FILENAME);
     const db = new Database(casPath, { readonly: true });
@@ -770,7 +770,7 @@ describe("R169B-STEP2 publisher — end-to-end pipeline (reserve → prepare →
     const { close } = createValidStagingDb(reservation.stagingPath);
     close();
     const prepared = prepareGenerationForPublication(reservation);
-    const result = publishPreparedGeneration(prepared, {}, { cacheRoot });
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
 
     // The DB is readable at the final path.
     const db = new Database(result.dbPath, { readonly: true });
@@ -788,7 +788,7 @@ describe("R169B-STEP2 publisher — end-to-end pipeline (reserve → prepare →
   it("the published DB has journal_mode=DELETE (durable, no WAL sidecars)", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
-    const result = publishPreparedGeneration(prepared, {}, { cacheRoot });
+    const result = publishPreparedGeneration(prepared, { expectedActiveGenerationId: null }, { cacheRoot });
     expect(existsSync(`${result.dbPath}-wal`)).toBe(false);
     expect(existsSync(`${result.dbPath}-shm`)).toBe(false);
     const db = new Database(result.dbPath, { readonly: true });

@@ -82,6 +82,7 @@ import {
   closeSync,
   fsyncSync,
   lstatSync,
+  fstatSync,
   unlinkSync,
   linkSync,
   existsSync,
@@ -121,6 +122,8 @@ import {
   assertPathInsideNoSymlinks,
   validateGenerationManifest,
   parseGenerationManifest,
+  readOptionalGenerationManifest,
+  validateGenerationMetadata,
 } from "./generation-validation.js";
 import {
   PROD_OPS,
@@ -178,18 +181,32 @@ function finalDbPath(projectStore: string, generationId: string): string {
 /**
  * R169B-STEP2: The private token held in the module-scope WeakMap.
  *
- * `consumed` is set to true by `publishPreparedGeneration` (or
- * `discardPreparedGeneration`) so a second call raises
- * `PUBLICATION_TOKEN_CONSUMED`.
+ * `state` is the token state machine:
+ *   - PREPARED: just prepared, no publish/discard started.
+ *   - PUBLISHING: publish in progress (only one in-process call at a time).
+ *   - CONSUMED: publish or discard completed (terminal).
+ *   - DISCARDED: discard completed (terminal).
  *
- * `preStat` records the staging file's dev/ino/size at prepare time
- * so `discardPreparedGeneration` can verify directory identity before
- * unlinking (defense against a TOCTOU swap of the staging file between
- * prepare and discard).
+ * R169B-STEP3 (TOKEN-R169B-A1-10): the token is NOT consumed before
+ * I/O. The state transitions PREPARED → PUBLISHING happen atomically
+ * (single-threaded JS event loop). If the publish fails BEFORE any
+ * visible mutation (CAS mismatch, CAS busy, staging mutated, trust
+ * root error), the state reverts to PREPARED so the caller can retry
+ * or discard. If the publish fails AFTER a visible mutation (link
+ * succeeded, manifest written), the state goes to CONSUMED and the
+ * caller must run recovery — the publisher raises a structured
+ * `GenerationStoreError`.
+ *
+ * `preStat` records the staging file's dev/ino/size at prepare time.
+ * `sha256` records the hash computed at prepare time. Both are used
+ * at publish time to re-validate the staging content (DATA-R169B-A1-03).
  */
+type PreparedTokenState = "PREPARED" | "PUBLISHING" | "CONSUMED" | "DISCARDED";
+
 interface PreparedToken {
-  consumed: boolean;
+  state: PreparedTokenState;
   preStat: { dev: number; ino: number; size: number };
+  sha256: string;
 }
 
 /**
@@ -952,8 +969,9 @@ export function prepareGenerationForPublication(
   Object.freeze(prepared);
   Object.freeze(prepared.manifest);
   preparedTokens.set(prepared, {
-    consumed: false,
+    state: "PREPARED",
     preStat: { dev: preDev, ino: preIno, size: preSize },
+    sha256,
   });
 
   return prepared;
@@ -1018,15 +1036,42 @@ export function prepareGenerationForPublication(
  */
 export function publishPreparedGeneration(
   prepared: PreparedGeneration,
-  options?: PublishPreparedGenerationOptions,
+  options: PublishPreparedGenerationOptions,
   storeOptions?: GenerationStoreOptions,
 ): PublicationResult {
   const phase = "publishPreparedGeneration";
   const project = prepared.project;
   const generationId = prepared.generationId;
   const stagingPath = prepared.stagingPath;
-  const cacheRoot = storeOptions?.cacheRoot ?? prepared.cacheRoot ?? getCacheRoot();
   const manifest = prepared.manifest;
+
+  // R169B-STEP3 (ROOT-R169B-A1-16): cacheRoot is part of the
+  // PreparedGeneration's identity. The storeOptions.cacheRoot MUST
+  // match (or be absent). No override.
+  const cacheRoot = prepared.cacheRoot;
+  if (storeOptions?.cacheRoot !== undefined && storeOptions.cacheRoot !== cacheRoot) {
+    throw new GenerationStoreError(
+      "PUBLICATION_CACHE_ROOT_MISMATCH",
+      phase,
+      project,
+      `storeOptions.cacheRoot="${storeOptions.cacheRoot}" does not match prepared.cacheRoot="${cacheRoot}" (the cacheRoot is part of the generation's identity and cannot be overridden)`,
+      generationId,
+    );
+  }
+
+  // R169B-STEP3 (CAS-R169B-A1-09): expectedActiveGenerationId is REQUIRED.
+  // The types enforce this, but we also assert at runtime in case the
+  // caller is JS (not TS) and omitted the field.
+  if (options === null || options === undefined || options.expectedActiveGenerationId === undefined) {
+    throw new GenerationStoreError(
+      "PUBLICATION_TOKEN_INVALID",
+      phase,
+      project,
+      `options.expectedActiveGenerationId is REQUIRED (pass null for first publication, or the current active generation ID for an optimistic-lock guard)`,
+      generationId,
+    );
+  }
+  const expectedActive = options.expectedActiveGenerationId;
 
   // 1. Validate token.
   const token = peekToken(prepared);
@@ -1039,21 +1084,40 @@ export function publishPreparedGeneration(
       generationId,
     );
   }
-  // 2. Check consumed.
-  if (token.consumed) {
+  // 2. Check state machine.
+  if (token.state === "CONSUMED" || token.state === "DISCARDED") {
     throw new GenerationStoreError(
       "PUBLICATION_TOKEN_CONSUMED",
       phase,
       project,
-      `PreparedGeneration handle has already been published or discarded`,
+      `PreparedGeneration handle has already been published or discarded (state=${token.state})`,
       generationId,
     );
   }
-  // 3. Mark as consumed BEFORE any I/O.
-  token.consumed = true;
+  if (token.state === "PUBLISHING") {
+    throw new GenerationStoreError(
+      "PUBLICATION_TOKEN_CONSUMED",
+      phase,
+      project,
+      `PreparedGeneration handle is currently being published (concurrent call?)`,
+      generationId,
+    );
+  }
+  // 3. Transition PREPARED → PUBLISHING.
+  // R169B-STEP3 (TOKEN-R169B-A1-10): NOT consumed before I/O. If the
+  // publish fails BEFORE any visible mutation (CAS mismatch, CAS busy,
+  // staging mutated, trust root error), the state reverts to PREPARED
+  // so the caller can retry or discard.
+  token.state = "PUBLISHING";
 
   // 4. Re-validate the trust root.
-  assertTrustedRootNoSymlinks(cacheRoot, project, phase);
+  try {
+    assertTrustedRootNoSymlinks(cacheRoot, project, phase);
+  } catch (e) {
+    // Pre-mutation failure — revert token state.
+    token.state = "PREPARED";
+    throw e;
+  }
 
   const projectStore = projectStoreDir(project, cacheRoot);
   const generations = generationsDir(project, cacheRoot);
@@ -1063,63 +1127,85 @@ export function publishPreparedGeneration(
 
   // Re-validate containment on the final DB path (it must be inside
   // generations/).
-  assertPathInsideNoSymlinks(
-    generations,
-    finalPath,
-    project,
-    phase,
-    "GENERATION_TARGET_SYMLINK_REJECTED",
-  );
-  assertPathInsideNoSymlinks(
-    generations,
-    metadataPath,
-    project,
-    phase,
-    "GENERATION_TARGET_SYMLINK_REJECTED",
-  );
+  try {
+    assertPathInsideNoSymlinks(
+      generations,
+      finalPath,
+      project,
+      phase,
+      "GENERATION_TARGET_SYMLINK_REJECTED",
+    );
+    assertPathInsideNoSymlinks(
+      generations,
+      metadataPath,
+      project,
+      phase,
+      "GENERATION_TARGET_SYMLINK_REJECTED",
+    );
+  } catch (e) {
+    token.state = "PREPARED";
+    throw e;
+  }
+
+  // R169B-STEP3 (DATA-R169B-A1-03): Re-validate the staging content
+  // BEFORE any publication I/O. The prepare function computed the
+  // SHA-256 and recorded dev/ino/size in the token. We re-stat the
+  // staging file; if dev/ino/size changed, the file was swapped
+  // between prepare and publish — raise PUBLICATION_STAGING_MUTATED.
+  // We also re-hash the staging file and compare against the
+  // manifest's sha256. This catches the case where the file content
+  // was mutated but dev/ino/size stayed the same (write-through
+  // caching, in-place mutation).
+  //
+  // This is a Pre-mutation check: failure reverts the token to PREPARED.
+  try {
+    revalidateStagingContent(stagingPath, token, manifest.sha256, project, phase, generationId);
+  } catch (e) {
+    token.state = "PREPARED";
+    throw e;
+  }
 
   const warnings: GenerationStoreWarning[] = [];
-  let promotionState: "PUBLISHED" | "DURABILITY_UNKNOWN" = "PUBLISHED";
 
   // 5. Open the CAS DB. BEGIN IMMEDIATE.
-  const cas = openCasStore(project, cacheRoot);
+  let cas: ReturnType<typeof openCasStore> | null = null;
   let casCommitted = false;
+  let visibleMutation = false; // set true after link() succeeds
   try {
+    cas = openCasStore(project, cacheRoot);
     cas.beginImmediate();
 
     // 6. Reconcile CAS from the active manifest.
-    let activeManifest: GenerationManifestV1 | null = null;
+    // R169B-STEP3 (MANIFEST-R169B-A1-04): use readOptionalGenerationManifest
+    // (returns null ONLY on real ENOENT; raises on any other failure).
+    let activeManifest: GenerationManifestV1 | null;
     try {
-      activeManifest = parseGenerationManifest(manifestPath, project);
+      activeManifest = readOptionalGenerationManifest(manifestPath, project);
     } catch (e) {
+      // Manifest is present but corrupt/unreadable — fail-closed.
       if (e instanceof GenerationStoreError) {
-        // Manifest missing or invalid → treat as no active generation.
-        // (parseGenerationManifest throws MANIFEST_PARSE_ERROR on
-        // ENOENT; we treat that as "no manifest".)
-        if (e.code !== "MANIFEST_PARSE_ERROR") {
-          // Rethrow unexpected errors (e.g. MANIFEST_SYMLINK_REJECTED).
-          throw e;
-        }
-        activeManifest = null;
-      } else {
-        throw e;
+        throw new GenerationStoreError(
+          "PUBLICATION_VERIFY_FAILED",
+          phase,
+          project,
+          `Active manifest is corrupt/unreadable (fail-closed): [${e.code}] ${e.message}`,
+          generationId,
+        );
       }
+      throw e;
     }
     const reconcile = cas.reconcileFromManifest(activeManifest);
     const previousActiveId = reconcile.activeGenerationId;
 
-    // 7. Compare expectedActiveGenerationId.
-    if (options?.expectedActiveGenerationId !== undefined) {
-      const expected = options.expectedActiveGenerationId;
-      if (expected !== previousActiveId) {
-        throw new GenerationStoreError(
-          "PUBLICATION_CAS_MISMATCH",
-          phase,
-          project,
-          `expectedActiveGenerationId=${JSON.stringify(expected)} does not match CAS active=${JSON.stringify(previousActiveId)}`,
-          generationId,
-        );
-      }
+    // 7. Compare expectedActiveGenerationId (REQUIRED — see above).
+    if (expectedActive !== previousActiveId) {
+      throw new GenerationStoreError(
+        "PUBLICATION_CAS_MISMATCH",
+        phase,
+        project,
+        `expectedActiveGenerationId=${JSON.stringify(expectedActive)} does not match CAS active=${JSON.stringify(previousActiveId)}`,
+        generationId,
+      );
     }
 
     // 8. Check dedup candidate.
@@ -1131,10 +1217,153 @@ export function publishPreparedGeneration(
       manifest.discoveryPolicyVersion,
     );
     const deduped = !!dedup;
+    const dedupSourceGenerationId: string | null = dedup?.generationId ?? null;
 
-    // 9. Promote the DB (link) unless deduped.
-    if (!deduped) {
-      // link() — no-clobber on POSIX.
+    // R169B-STEP3 (DEDUP-R169B-A1-05): For dedup, derive effective
+    // paths from dedup.generationId. Validate the dedup candidate's
+    // DB and metadata on disk (existence, regular non-symlink, hash
+    // match, size match, metadata valid, manifest project/UUID match).
+    let effectiveGenerationId: string;
+    let effectiveMetadataPath: string;
+    let effectiveManifest: GenerationManifestV1;
+    if (deduped && dedup) {
+      const dedupGenId = dedup.generationId;
+      // Validate the dedup candidate's DB and metadata.
+      const dedupDbPath = finalDbPath(projectStore, dedupGenId);
+      const dedupMetadataPath = metadataSidecarPath(projectStore, dedupGenId);
+      // Containment.
+      assertPathInsideNoSymlinks(generations, dedupDbPath, project, phase, "GENERATION_TARGET_SYMLINK_REJECTED");
+      assertPathInsideNoSymlinks(generations, dedupMetadataPath, project, phase, "GENERATION_TARGET_SYMLINK_REJECTED");
+      // DB exists, regular, non-symlink, hash matches.
+      const dbStat = lstatSync(dedupDbPath);
+      if (dbStat.isSymbolicLink() || !dbStat.isFile()) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Dedup candidate DB is not a regular file: ${dedupDbPath}`,
+          generationId,
+        );
+      }
+      if (dbStat.size !== manifest.sizeBytes) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Dedup candidate DB size ${dbStat.size} does not match manifest sizeBytes ${manifest.sizeBytes}`,
+          generationId,
+        );
+      }
+      // Re-hash the dedup DB and verify it matches the manifest.
+      const dedupHash = computeSha256(dedupDbPath, project, phase, generationId);
+      if (dedupHash !== manifest.sha256) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Dedup candidate DB sha256 ${dedupHash} does not match manifest sha256 ${manifest.sha256}`,
+          generationId,
+        );
+      }
+      // Metadata exists, regular, non-symlink, valid.
+      if (!existsSync(dedupMetadataPath)) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Dedup candidate metadata sidecar missing: ${dedupMetadataPath}`,
+          generationId,
+        );
+      }
+      const metaStat = lstatSync(dedupMetadataPath);
+      if (metaStat.isSymbolicLink() || !metaStat.isFile()) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Dedup candidate metadata is not a regular file: ${dedupMetadataPath}`,
+          generationId,
+        );
+      }
+      // Read + parse + validate metadata sidecar (strict V1 schema).
+      let metadataRaw: string;
+      try {
+        metadataRaw = readFileSyncText(dedupMetadataPath, MAX_METADATA_SIDECAR_BYTES);
+      } catch (e) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Failed to read dedup candidate metadata: ${(e as Error).message}`,
+          generationId,
+        );
+      }
+      let metadataParsed: unknown;
+      try {
+        metadataParsed = JSON.parse(metadataRaw);
+      } catch (e) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Dedup candidate metadata is not valid JSON: ${(e as Error).message}`,
+          generationId,
+        );
+      }
+      const metadataValidated = validateGenerationMetadata(metadataParsed, project);
+      // Verify the metadata's manifest matches our prepared manifest
+      // (project, sha256, sizeBytes, rootFingerprint, versions).
+      const dm = metadataValidated.manifest;
+      if (
+        dm.project !== manifest.project ||
+        dm.sha256 !== manifest.sha256 ||
+        dm.sizeBytes !== manifest.sizeBytes ||
+        dm.rootFingerprint !== manifest.rootFingerprint ||
+        dm.extractorSemanticsVersion !== manifest.extractorSemanticsVersion ||
+        dm.discoveryPolicyVersion !== manifest.discoveryPolicyVersion
+      ) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Dedup candidate metadata manifest does not match prepared manifest`,
+          generationId,
+        );
+      }
+      // Verify the metadata's manifest generationId == dedup.generationId.
+      if (dm.generationId !== dedupGenId) {
+        throw new GenerationStoreError(
+          "PUBLICATION_CAS_STATE_CORRUPT",
+          phase,
+          project,
+          `Dedup candidate metadata manifest generationId=${dm.generationId} does not match dedup generationId=${dedupGenId}`,
+          generationId,
+        );
+      }
+      // All checks passed — use the dedup candidate's identity.
+      effectiveGenerationId = dedupGenId;
+      effectiveMetadataPath = dedupMetadataPath;
+      effectiveManifest = {
+        ...manifest,
+        generationId: dedupGenId,
+        dbFile: `${GENERATIONS_SUBDIR}/generation-${dedupGenId}.db`,
+      };
+      // Unlink the staging file (best-effort).
+      try {
+        unlinkSync(stagingPath);
+      } catch (e) {
+        warnings.push({
+          code: "STAGING_ALIAS_CLEANUP_DEFERRED",
+          message: `Failed to unlink staging alias after dedup: ${(e as Error).message}`,
+        });
+      }
+    } else {
+      // Not deduped: promote the staging DB via link().
+      effectiveGenerationId = generationId;
+      effectiveMetadataPath = metadataPath;
+      effectiveManifest = manifest;
+
+      // 9. link(staging, final) — no-clobber.
       try {
         linkSync(stagingPath, finalPath);
       } catch (e) {
@@ -1156,8 +1385,16 @@ export function publishPreparedGeneration(
           generationId,
         );
       }
+      visibleMutation = true;
 
-      // fsync the generations/ directory.
+      // R169B-STEP3 (DUR-R169B-A1-02): fsync(generations/) failure
+      // BLOCKS the manifest write. The previous code surfaced this
+      // as a warning and continued — that violated the documented
+      // contract "si fsync destination échoue, le manifest swap MUST
+      // NOT proceed". The link succeeded but the directory entry may
+      // not survive a crash; writing the manifest would create a
+      // durable manifest pointing at a non-durable target — exactly
+      // the bug R169 was created to eliminate.
       let dirFd: number | null = null;
       try {
         const opened = openDirectoryNoFollow(generations, PROD_OPS);
@@ -1169,76 +1406,50 @@ export function publishPreparedGeneration(
         if (dirFd !== null) {
           try { PROD_OPS.closeSync(dirFd); } catch { /* best effort */ }
         }
-        // The link succeeded but the dir fsync failed. The new
-        // directory entry may not be durable. We continue with the
-        // publication (the manifest writer will fsync the dir again
-        // and may succeed; if THAT fails too, the atomic writer
-        // raises ATOMIC_DURABILITY_UNKNOWN). Surface as a warning.
-        promotionState = "DURABILITY_UNKNOWN";
-        warnings.push({
-          code: "ATOMIC_TEMP_ORPHANED",
-          message: `fsync of generations/ directory failed after link (promotion durability unknown): ${(e as Error).message}`,
-        });
+        // BLOCK: do NOT write the metadata, do NOT write the manifest,
+        // do NOT advance the CAS. Roll back the CAS transaction. The
+        // link is on disk but unreferenced by any manifest; the next
+        // GC pass will sweep it (it's in generations/ but no manifest
+        // points at it — GC treats it as an orphan).
+        throw new GenerationStoreError(
+          "GENERATION_PROMOTION_DURABILITY_UNKNOWN",
+          phase,
+          project,
+          `fsync of generations/ directory failed after link — manifest publication BLOCKED (the link is on disk but unreferenced; the next GC pass will sweep the orphan): ${(e as Error).message}`,
+          generationId,
+        );
       }
 
       // Unlink the staging alias (best-effort).
       try {
         unlinkSync(stagingPath);
       } catch (e) {
-        // The staging file is still on disk under tmp/. The
-        // publication succeeded (the final path is canonical), but
-        // the staging alias is leftover. Surface as a warning — the
-        // next GC pass will sweep it.
         warnings.push({
           code: "STAGING_ALIAS_CLEANUP_DEFERRED",
           message: `Failed to unlink staging alias "${stagingPath}" after promotion: ${(e as Error).message}`,
         });
       }
-    } else {
-      // Deduped: the existing generation-<dedup.generationId>.db is
-      // already canonical. Unlink the staging file (best-effort).
-      try {
-        unlinkSync(stagingPath);
-      } catch (e) {
-        warnings.push({
-          code: "STAGING_ALIAS_CLEANUP_DEFERRED",
-          message: `Failed to unlink staging alias after dedup: ${(e as Error).message}`,
-        });
-      }
     }
 
-    // 10. Write the metadata sidecar (generation-<uuid>.json).
-    //     The sidecar is the immutable publication record. It contains
-    //     the canonical manifest + CAS publication metadata.
-    const metadataPayload = buildMetadataPayload(manifest, {
-      publishedAt: new Date().toISOString(),
-      deduped,
-      dedupSourceGenerationId: dedup?.generationId ?? null,
-      previousActiveGenerationId: previousActiveId,
-      pinned: !!options?.pin,
-    });
-    writeMetadataSidecarAtomically(metadataPath, metadataPayload, project, phase, generationId);
+    // 10. Write the metadata sidecar (generation-<effectiveUuid>.json).
+    //     R169B-STEP3 (DEDUP-R169B-A1-05 B + META-R169B-A1-17): for
+    //     dedup, do NOT write a new sidecar — the existing one is
+    //     immutable and we validated it above. For non-dedup, write
+    //     the sidecar atomically with strict V1 schema.
+    if (!deduped) {
+      const metadataPayload = buildMetadataPayload(effectiveManifest, {
+        publishedAt: new Date().toISOString(),
+        deduped,
+        dedupSourceGenerationId,
+        previousActiveGenerationId: previousActiveId,
+        pinned: !!options?.pin,
+      });
+      writeMetadataSidecarAtomically(effectiveMetadataPath, metadataPayload, project, phase, effectiveGenerationId);
+    }
 
     // 11. Write active-generation.json atomically (canonical payload).
-    //     Uses the R169A internal writer (prepareGenerationManifestForWrite
-    //     + writeJsonAtomically) so the manifest is validated and
-    //     written via temp-rename-fsync with O_NOFOLLOW + dir-fsync.
-    const preparedPayload = prepareGenerationManifestForWrite(manifest, project);
-    // For the dedup case, the active manifest must point at the
-    // DEDUP source's generation ID (not the staging UUID), because
-    // the DB file is generation-<dedupSource>.db. We rewrite the
-    // manifest to point at the dedup source.
-    if (deduped && dedup) {
-      const dedupManifest: GenerationManifestV1 = {
-        ...manifest,
-        generationId: dedup.generationId,
-        dbFile: `${GENERATIONS_SUBDIR}/generation-${dedup.generationId}.db`,
-      };
-      const dedupPayload = prepareGenerationManifestForWrite(dedupManifest, project);
-      writeJsonAtomically(manifestPath, dedupPayload.payload, project, phase, PROD_OPS);
-    } else {
-      writeJsonAtomically(manifestPath, preparedPayload.payload, project, phase, PROD_OPS);
-    }
+    const preparedPayload = prepareGenerationManifestForWrite(effectiveManifest, project);
+    writeJsonAtomically(manifestPath, preparedPayload.payload, project, phase, PROD_OPS);
 
     // 12. Re-read and verify the active manifest + DB exists + metadata exists.
     let verifiedManifest: GenerationManifestV1;
@@ -1253,13 +1464,12 @@ export function publishPreparedGeneration(
         generationId,
       );
     }
-    const verifiedGenerationId = deduped && dedup ? dedup.generationId : generationId;
-    if (verifiedManifest.generationId !== verifiedGenerationId) {
+    if (verifiedManifest.generationId !== effectiveGenerationId) {
       throw new GenerationStoreError(
         "PUBLICATION_VERIFY_FAILED",
         phase,
         project,
-        `Re-read manifest generationId="${verifiedManifest.generationId}" does not match expected="${verifiedGenerationId}"`,
+        `Re-read manifest generationId="${verifiedManifest.generationId}" does not match expected="${effectiveGenerationId}"`,
         generationId,
       );
     }
@@ -1273,18 +1483,17 @@ export function publishPreparedGeneration(
         generationId,
       );
     }
-    if (!existsSync(metadataPath)) {
+    if (!existsSync(effectiveMetadataPath)) {
       throw new GenerationStoreError(
         "PUBLICATION_VERIFY_FAILED",
         phase,
         project,
-        `Metadata sidecar missing after publication: ${metadataPath}`,
+        `Metadata sidecar missing after publication: ${effectiveMetadataPath}`,
         generationId,
       );
     }
 
     // 13. Update CAS.
-    const effectiveGenerationId = verifiedGenerationId;
     const now = new Date().toISOString();
     const existingEntry = cas.getGenerationCatalogEntry(effectiveGenerationId);
     const catalogEntry: CasGenerationCatalogEntry = {
@@ -1302,6 +1511,9 @@ export function publishPreparedGeneration(
     };
     cas.upsertGenerationCatalog(catalogEntry);
     cas.setActiveGenerationId(effectiveGenerationId);
+    // R169B-STEP3 (CAS-R169B-A1-18): appendPublicationHistory now
+    // increments the revision internally. Do NOT call
+    // incrementRevision separately.
     cas.appendPublicationHistory(
       effectiveGenerationId,
       project,
@@ -1312,20 +1524,23 @@ export function publishPreparedGeneration(
       cas.setCatalogPinned(effectiveGenerationId, true);
       cas.appendPublicationHistory(effectiveGenerationId, project, "PIN", null);
     }
-    const newRevision = cas.incrementRevision();
+    const newRevision = cas.getRevision();
 
     // 14. COMMIT.
     cas.commit();
     casCommitted = true;
+
+    // 15. Transition token → CONSUMED.
+    token.state = "CONSUMED";
 
     return {
       project,
       generationId: effectiveGenerationId,
       dbPath: verifiedDbPath,
       manifestPath,
-      metadataPath,
+      metadataPath: effectiveMetadataPath,
       manifest: verifiedManifest,
-      publicationState: promotionState,
+      publicationState: "PUBLISHED",
       warnings,
       cas: {
         revision: newRevision,
@@ -1335,8 +1550,18 @@ export function publishPreparedGeneration(
     };
   } catch (e) {
     // Rollback the CAS transaction if it is still open.
-    if (!casCommitted) {
+    if (cas !== null && !casCommitted) {
       try { cas.rollback(); } catch { /* best effort */ }
+    }
+    // R169B-STEP3 (TOKEN-R169B-A1-10): if the failure happened BEFORE
+    // any visible mutation, revert the token to PREPARED so the
+    // caller can retry or discard. If the failure happened AFTER a
+    // visible mutation (link succeeded, manifest written), the token
+    // is consumed and the caller must run recovery.
+    if (!visibleMutation) {
+      token.state = "PREPARED";
+    } else {
+      token.state = "CONSUMED";
     }
     if (e instanceof GenerationStoreError) throw e;
     throw new GenerationStoreError(
@@ -1347,7 +1572,9 @@ export function publishPreparedGeneration(
       generationId,
     );
   } finally {
-    cas.close();
+    if (cas !== null) {
+      cas.close();
+    }
   }
 }
 
@@ -1397,17 +1624,27 @@ export function discardPreparedGeneration(
       generationId,
     );
   }
-  // 2. Mark as consumed.
-  if (token.consumed) {
+  // 2. Check state machine.
+  if (token.state === "CONSUMED" || token.state === "DISCARDED") {
     throw new GenerationStoreError(
       "PUBLICATION_TOKEN_CONSUMED",
       phase,
       project,
-      `PreparedGeneration handle has already been published or discarded`,
+      `PreparedGeneration handle has already been published or discarded (state=${token.state})`,
       generationId,
     );
   }
-  token.consumed = true;
+  if (token.state === "PUBLISHING") {
+    throw new GenerationStoreError(
+      "PUBLICATION_TOKEN_CONSUMED",
+      phase,
+      project,
+      `PreparedGeneration handle is currently being published (concurrent call?)`,
+      generationId,
+    );
+  }
+  // Transition PREPARED → DISCARDED.
+  token.state = "DISCARDED";
 
   const warnings: GenerationStoreWarning[] = [];
   let deleted = false;
@@ -1568,5 +1805,278 @@ function writeMetadataSidecarAtomically(
       `Failed to write metadata sidecar atomically: ${(e as Error).message}`,
       generationId,
     );
+  }
+}
+
+// ─── R169B-STEP3 — Internal helpers (re-validation, hashing, IO) ─────────
+
+/**
+ * R169B-STEP3: Maximum size, in bytes, of a metadata sidecar file.
+ * 256 KiB is generous for the V1 schema (which serializes to <4 KiB)
+ * but bounded enough to prevent a malicious / corrupted sidecar from
+ * exhausting memory.
+ */
+const MAX_METADATA_SIDECAR_BYTES = 256 * 1024;
+
+/**
+ * R169B-STEP3 (DATA-R169B-A1-03): Re-validate the staging content
+ * before publication. The prepare function computed the SHA-256 and
+ * recorded dev/ino/size in the token. We:
+ *   1. lstat the staging file (reject symlink, require regular file).
+ *   2. Compare dev/ino/size against the token's preStat.
+ *   3. Open the file with O_RDONLY | O_NOFOLLOW (SEC-R169B-A1-07).
+ *   4. fstat the fd and compare dev/ino against the lstat (TOCTOU).
+ *   5. Compute the SHA-256 in streaming 64 KiB chunks.
+ *   6. fstat the fd again and compare size/dev/ino against the
+ *      pre-hash fstat (mid-hash swap detection).
+ *   7. Compare the recomputed hash against the manifest's sha256.
+ *
+ * If any check fails, raise PUBLICATION_STAGING_MUTATED.
+ */
+function revalidateStagingContent(
+  stagingPath: string,
+  token: PreparedToken,
+  expectedSha256: string,
+  project: string,
+  phase: string,
+  generationId: string,
+): void {
+  // 1. lstat.
+  let preStat: Stats;
+  try {
+    preStat = lstatSync(stagingPath);
+  } catch (e) {
+    throw new GenerationStoreError(
+      "PUBLICATION_STAGING_MUTATED",
+      phase,
+      project,
+      `Re-validation: cannot stat staging file "${stagingPath}": ${(e as Error).message}`,
+      generationId,
+    );
+  }
+  if (preStat.isSymbolicLink() || !preStat.isFile()) {
+    throw new GenerationStoreError(
+      "PUBLICATION_STAGING_MUTATED",
+      phase,
+      project,
+      `Re-validation: staging file is not a regular file: ${stagingPath}`,
+      generationId,
+    );
+  }
+  // 2. Compare dev/ino/size against the token's preStat.
+  if (
+    preStat.dev !== token.preStat.dev ||
+    preStat.ino !== token.preStat.ino ||
+    preStat.size !== token.preStat.size
+  ) {
+    throw new GenerationStoreError(
+      "PUBLICATION_STAGING_MUTATED",
+      phase,
+      project,
+      `Re-validation: staging file identity changed between prepare and publish (dev/ino/size: prepare=${token.preStat.dev}/${token.preStat.ino}/${token.preStat.size}, publish=${preStat.dev}/${preStat.ino}/${preStat.size})`,
+      generationId,
+    );
+  }
+  // 3-7. Re-hash with O_NOFOLLOW + fstat identity checks.
+  const recomputedHash = computeSha256WithIdentityChecks(stagingPath, project, phase, generationId);
+  if (recomputedHash !== expectedSha256) {
+    throw new GenerationStoreError(
+      "PUBLICATION_STAGING_MUTATED",
+      phase,
+      project,
+      `Re-validation: staging file sha256 changed between prepare and publish (prepare=${expectedSha256}, publish=${recomputedHash})`,
+      generationId,
+    );
+  }
+}
+
+/**
+ * R169B-STEP3 (SEC-R169B-A1-07): Compute the SHA-256 of a file with
+ * O_NOFOLLOW + fstat identity checks. Used by both the prepare
+ * function (initial hash) and the publish function (re-validation),
+ * and by the dedup candidate validation.
+ *
+ * Steps:
+ *   1. lstat the path (reject symlink, require regular file).
+ *   2. open with O_RDONLY | O_NOFOLLOW (Linux).
+ *   3. fstat the fd and compare dev/ino against the lstat (TOCTOU).
+ *   4. Read in 64 KiB chunks, updating the hasher.
+ *   5. fstat the fd again and compare size/dev/ino against the
+ *      pre-hash fstat (mid-read swap detection).
+ *   6. Close the fd.
+ *   7. Return the hex digest.
+ */
+function computeSha256WithIdentityChecks(
+  path: string,
+  project: string,
+  phase: string,
+  generationId: string,
+): string {
+  // 1. lstat.
+  let preStat: Stats;
+  try {
+    preStat = lstatSync(path);
+  } catch (e) {
+    throw new GenerationStoreError(
+      "GENERATION_HASH_FAILED",
+      phase,
+      project,
+      `Cannot lstat file for hashing "${path}": ${(e as Error).message}`,
+      generationId,
+    );
+  }
+  if (preStat.isSymbolicLink() || !preStat.isFile()) {
+    throw new GenerationStoreError(
+      "GENERATION_HASH_FAILED",
+      phase,
+      project,
+      `File is not a regular file (symlink or other): ${path}`,
+      generationId,
+    );
+  }
+  // 2. open with O_NOFOLLOW.
+  let fd: number | null = null;
+  try {
+    const flags = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+    fd = openSync(path, flags);
+  } catch (e) {
+    const errCode = (e as NodeJS.ErrnoException).code;
+    if (errCode === "ELOOP") {
+      throw new GenerationStoreError(
+        "GENERATION_HASH_FAILED",
+        phase,
+        project,
+        `File is a symlink (rejected by O_NOFOLLOW): ${path}`,
+        generationId,
+      );
+    }
+    throw new GenerationStoreError(
+      "GENERATION_HASH_FAILED",
+      phase,
+      project,
+      `Failed to open file for hashing "${path}" with O_NOFOLLOW: ${(e as Error).message}`,
+      generationId,
+    );
+  }
+  try {
+    // 3. fstat the fd and compare against lstat.
+    let fdStat: Stats;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      fdStat = fstatSync(fd);
+    } catch (e) {
+      throw new GenerationStoreError(
+        "GENERATION_HASH_FAILED",
+        phase,
+        project,
+        `fstat of fd failed for "${path}": ${(e as Error).message}`,
+        generationId,
+      );
+    }
+    if (fdStat.dev !== preStat.dev || fdStat.ino !== preStat.ino) {
+      throw new GenerationStoreError(
+        "GENERATION_HASH_FAILED",
+        phase,
+        project,
+        `File was swapped between lstat and open (dev/ino mismatch): ${path}`,
+        generationId,
+      );
+    }
+    // 4. Read + hash.
+    const hasher = createHash("sha256");
+    const chunk = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
+    let totalRead = 0;
+    while (true) {
+      let bytesRead: number;
+      try {
+        bytesRead = readSync(fd, chunk, 0, HASH_CHUNK_BYTES, null);
+      } catch (e) {
+        throw new GenerationStoreError(
+          "GENERATION_HASH_FAILED",
+          phase,
+          project,
+          `readSync failed at offset ${totalRead} for "${path}": ${(e as Error).message}`,
+          generationId,
+        );
+      }
+      if (bytesRead === 0) break;
+      hasher.update(chunk.subarray(0, bytesRead));
+      totalRead += bytesRead;
+    }
+    // 5. fstat again and compare.
+    let postStat: Stats;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      postStat = fstatSync(fd);
+    } catch (e) {
+      throw new GenerationStoreError(
+        "GENERATION_HASH_FAILED",
+        phase,
+        project,
+        `post-read fstat failed for "${path}": ${(e as Error).message}`,
+        generationId,
+      );
+    }
+    if (postStat.dev !== fdStat.dev || postStat.ino !== fdStat.ino || postStat.size !== fdStat.size) {
+      throw new GenerationStoreError(
+        "GENERATION_HASH_FAILED",
+        phase,
+        project,
+        `File was mutated during hashing (dev/ino/size mismatch): ${path}`,
+        generationId,
+      );
+    }
+    return hasher.digest("hex");
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
+  }
+}
+
+/**
+ * R169B-STEP3: Compute the SHA-256 of a file (without the identity
+ * checks). Used by the dedup candidate validation where the file is
+ * already opened/validated separately. Delegates to
+ * `computeSha256WithIdentityChecks` for safety.
+ */
+function computeSha256(
+  path: string,
+  project: string,
+  phase: string,
+  generationId: string,
+): string {
+  return computeSha256WithIdentityChecks(path, project, phase, generationId);
+}
+
+/**
+ * R169B-STEP3: Read a file as UTF-8 text with a size bound. Used to
+ * read the metadata sidecar for dedup validation. Rejects files
+ * larger than `maxBytes`.
+ */
+function readFileSyncText(path: string, maxBytes: number): string {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const st = fstatSync(fd);
+    if (st.size > maxBytes) {
+      throw new Error(`file size ${st.size} exceeds max ${maxBytes}`);
+    }
+    const buf = Buffer.alloc(st.size);
+    let offset = 0;
+    while (offset < buf.length) {
+      const n = readSync(fd, buf, offset, buf.length - offset, null);
+      if (n <= 0) break;
+      offset += n;
+    }
+    if (offset !== buf.length) {
+      throw new Error(`short read: expected ${buf.length} bytes, got ${offset}`);
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
   }
 }

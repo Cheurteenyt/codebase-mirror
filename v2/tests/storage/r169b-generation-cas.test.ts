@@ -437,7 +437,10 @@ describe("R169B-STEP2 CAS — publication_history", () => {
   it("listPublicationHistory records the cas_revision at the time of the action", () => {
     const cas = openCasStore(PROJECT, cacheRoot);
     cas.beginImmediate();
-    cas.incrementRevision(); // rev=1
+    // R169B-STEP3 (CAS-R169B-A1-18): appendPublicationHistory now
+    // increments the revision internally and records the NEW revision.
+    // So: initial rev=0, appendPublicationHistory increments to 1 and
+    // records 1.
     cas.appendPublicationHistory("gen-1", PROJECT, "PUBLISH", null);
     cas.commit();
     const history = cas.listPublicationHistory(PROJECT);

@@ -1,7 +1,10 @@
 /**
- * R169B-STEP2 — Generation GC planner and executor (§13, §17).
+ * R169B-STEP3 — Generation GC planner and executor (correctness closure).
  *
  * STATUS: FOUNDATION / INACTIVE
+ *
+ * (GPT 5.6 Pass 1 audit findings SEC-R169B-A1-01, GC-R169B-A1-11,
+ * GC-R169B-A1-12, GC-R169B-A1-13, TMP-R169B-A1-19, MANIFEST-R169B-A1-04)
  *
  * This module owns the garbage-collection pipeline for the R169B
  * generation store. It is split into a PLANNER (read-only) and an
@@ -9,54 +12,64 @@
  * against another plan before any deletion happens.
  *
  * PLANNER (planGenerationGc):
- *   - Reads the active manifest.
+ *   - Reads the active manifest via readOptionalGenerationManifest
+ *     (returns null ONLY on real ENOENT; raises on corrupt manifest).
  *   - Reads the CAS revision and the catalog / publication_history.
  *   - Computes the retain set: active + N previous DISTINCT
  *     generations (ordered by publication_history DESC) + pinned.
  *   - Computes the delete set: every ACTIVE catalog entry not in the
  *     retain set.
  *   - Computes the sweep-tmp set: canonical staging artifacts in
- *     tmp/ older than tmpMaxAgeMs.
+ *     tmp/ older than tmpMaxAgeMs (including -wal, -shm, -journal
+ *     sidecars, .json temp metadata, atomic temp JSON).
  *   - NEVER uses mtime or readdir order for the retain/delete
- *     decision. mtime is only used for the tmp/ age sweep (which is
- *     explicitly age-based).
+ *     decision. mtime is only used for the tmp/ age sweep.
  *   - NEVER promotes anything from tmp/ — promotion is a separate
  *     publication act.
+ *   - Returns a plan AUTHENTICATED by a private WeakMap token. The
+ *     applier rejects plans not in the WeakMap
+ *     (GC_PLAN_UNAUTHENTICATED).
  *
  * APPLIER (applyGenerationGcPlan):
- *   - Re-reads the active manifest and CAS revision.
- *   - If the CAS revision changed since the plan was made → GC_PLAN_STALE,
- *     zero deletions.
+ *   - Verifies the plan's authenticity token (WeakMap).
+ *   - Re-reads the active manifest (fail-closed).
+ *   - Re-reads the CAS revision.
+ *   - If the CAS revision changed since the plan was made →
+ *     GC_PLAN_STALE, zero deletions.
  *   - For each delete entry:
- *       1. Re-check the entry is not the active generation (defense
- *          in depth — the planner already excluded it).
- *       2. Re-check the entry is not pinned.
- *       3. Open CAS, BEGIN IMMEDIATE, mark DELETING, COMMIT.
- *       4. Delete the metadata sidecar.
- *       5. Delete the DB file (final path).
- *       6. fsync the generations/ directory.
- *       7. Open CAS, BEGIN IMMEDIATE, mark DELETED, COMMIT.
- *       8. On any failure → GC_DELETE_FAILED warning, continue.
+ *       1. R169B-STEP3 (SEC-R169B-A1-01): DERIVE dbPath and
+ *          metadataPath from the generationId — NEVER use the
+ *          plan's paths as authority. The plan's paths are display-
+ *          only.
+ *       2. R169B-STEP3 (GC-R169B-A1-13): Validate the metadata
+ *          sidecar is present, regular, non-symlink, parses to a
+ *          valid V1 manifest, project/UUID/hash/size all coherent
+ *          with the catalog. If any check fails → retain (safety-
+ *          refusal), do NOT delete.
+ *       3. Re-check the entry is not the active generation.
+ *       4. Re-check the entry is not pinned.
+ *       5. BEGIN IMMEDIATE; re-read catalog state; verify status is
+ *          ACTIVE (not already DELETING/DELETED); mark DELETING;
+ *          appendPublicationHistory(MARK_DELETING); COMMIT.
+ *       6. Delete the metadata sidecar.
+ *       7. Delete the DB file.
+ *       8. fsync the generations/ directory.
+ *       9. R169B-STEP3 (GC-R169B-A1-11): re-read to confirm both
+ *          files are absent. If any deletion or fsync failed →
+ *          GC_DELETE_INCOMPLETE warning; status STAYS DELETING
+ *          (NOT marked DELETED); the next GC pass re-attempts.
+ *      10. Only if metadata absent AND DB absent AND fsync ok AND
+ *          re-read confirms absence: BEGIN IMMEDIATE; mark DELETED;
+ *          appendPublicationHistory(DELETE); COMMIT.
  *   - For each sweep-tmp entry:
- *       1. Stat the path; verify it is a regular file (not symlink).
- *       2. Verify the path is inside tmp/ (containment).
- *       3. unlink.
- *       4. On any failure → GC_DELETE_FAILED warning, continue.
+ *       a. Re-verify the path is inside tmp/ (containment).
+ *       b. Re-verify the file is not a symlink.
+ *       c. unlink.
+ *       d. On any failure → GC_DELETE_FAILED warning, continue.
+ *   - fsync tmp/ after the sweep.
  *
- * DEPENDENCY DIRECTION (R169B-STEP2):
+ * DEPENDENCY DIRECTION (R169B-STEP3):
  *   types -> paths/validation -> internal I/O + CAS store -> public facades
- *
- *   - This module imports types from `./generation-types.js`.
- *   - This module imports path helpers from `./generation-paths.js`.
- *   - This module imports validators / trust-root checks from
- *     `./generation-validation.js`.
- *   - This module imports the CAS store (openCasStore) from
- *     `./internal/generation-cas-store.js`.
- *   - This module imports the internal I/O harness (PROD_OPS,
- *     openDirectoryNoFollow) from `./internal/generation-store-io.js`.
- *   - This module does NOT import from the publisher — the GC operates
- *     purely on the CAS + on-disk state, not on PreparedGeneration
- *     handles.
  *
  * R169B remains FOUNDATION / INACTIVE.
  */
@@ -66,6 +79,11 @@ import {
   unlinkSync,
   existsSync,
   readdirSync,
+  openSync,
+  readSync,
+  closeSync,
+  fstatSync,
+  constants as fsConstants,
   type Stats,
 } from "node:fs";
 import { join } from "node:path";
@@ -91,50 +109,57 @@ import {
 import {
   assertTrustedRootNoSymlinks,
   assertPathInsideNoSymlinks,
-  parseGenerationManifest,
+  readOptionalGenerationManifest,
+  validateGenerationMetadata,
 } from "./generation-validation.js";
 import { PROD_OPS, openDirectoryNoFollow } from "./internal/generation-store-io.js";
 import { openCasStore } from "./internal/generation-cas-store.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
-/**
- * R169B-STEP2: Default retain count. The active generation + 2
- * previous distinct generations are retained. Anything older (and not
- * pinned) is eligible for deletion.
- */
 const DEFAULT_RETAIN_COUNT = 2;
+const DEFAULT_TMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// ─── Plan authenticity token (private WeakMap) ──────────────────────────
 
 /**
- * R169B-STEP2: Default max age for tmp/ artifacts (24 hours). Older
- * canonical staging DBs are swept by the GC (with identity
- * verification). The age is mtime-based — this is the ONLY place
- * where mtime is consulted, and it is explicitly age-based (not
- * ordering-based).
+ * R169B-STEP3 (SEC-R169B-A1-01): A private WeakMap that authenticates
+ * plans produced by `planGenerationGc`. The applier rejects plans not
+ * in this WeakMap (GC_PLAN_UNAUTHENTICATED). A literal object, spread,
+ * or JSON clone produces a new reference that is NOT in the WeakMap.
  */
-const DEFAULT_TMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const planTokens: WeakMap<GenerationGcPlan, true> = new WeakMap();
+
+// ─── Helpers ────────────────────────────────────────────────────────────
+
+/**
+ * R169B-STEP3 (SEC-R169B-A1-01): Derive the canonical DB path for a
+ * generation from its UUID. The applier NEVER uses the plan's
+ * `dbPath` field as authority — it always re-derives from the
+ * generationId.
+ */
+function deriveDbPath(projectStore: string, generationId: string): string {
+  return join(projectStore, GENERATIONS_SUBDIR, `generation-${generationId}.db`);
+}
+
+/**
+ * R169B-STEP3 (SEC-R169B-A1-01): Derive the canonical metadata
+ * sidecar path for a generation from its UUID.
+ */
+function deriveMetadataPath(projectStore: string, generationId: string): string {
+  return join(projectStore, GENERATIONS_SUBDIR, `generation-${generationId}.json`);
+}
+
+/**
+ * R169B-STEP3: Validate a UUID v4 string format.
+ */
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function isValidUuidV4(s: string): boolean {
+  return UUID_V4_RE.test(s);
+}
 
 // ─── PLANNER: planGenerationGc ───────────────────────────────────────────
 
-/**
- * R169B-STEP2 §13: Plan a generation GC pass.
- *
- * The plan is computed from the active manifest + CAS catalog +
- * publication_history. It NEVER uses mtime or readdir order for the
- * retain/delete decision — only the publication_history ordering
- * (most-recent-first) is used.
- *
- * Returns a `GenerationGcPlan` with:
- *   - `retain`: active + retainCount previous DISTINCT + pinned.
- *   - `delete`: every ACTIVE catalog entry not in retain.
- *   - `sweepTmp`: canonical staging artifacts in tmp/ older than
- *     `tmpMaxAgeMs`.
- *   - `reasons`: per-generation-ID reason string.
- *
- * Throws:
- *   - PATH_TRAVERSAL_REJECTED — trust-root validation failed.
- *   - PUBLICATION_CAS_STATE_CORRUPT — CAS could not be opened.
- */
 export function planGenerationGc(
   project: string,
   options?: GenerationGcOptions,
@@ -160,19 +185,22 @@ export function planGenerationGc(
   const tmp = tmpDir(project, cacheRoot);
   const manifestPath = activeManifestPath(project, cacheRoot);
 
-  // 2. Read the active manifest (ground truth for "what is active").
-  let activeManifest: GenerationManifestV1 | null = null;
+  // 2. R169B-STEP3 (MANIFEST-R169B-A1-04): Read the active manifest
+  // via readOptionalGenerationManifest. null ONLY on real ENOENT.
+  // Corrupt manifest → raise (fail-closed).
+  let activeManifest: GenerationManifestV1 | null;
   try {
-    activeManifest = parseGenerationManifest(manifestPath, project);
+    activeManifest = readOptionalGenerationManifest(manifestPath, project);
   } catch (e) {
     if (e instanceof GenerationStoreError) {
-      if (e.code !== "MANIFEST_PARSE_ERROR") {
-        throw e;
-      }
-      activeManifest = null;
-    } else {
-      throw e;
+      throw new GenerationStoreError(
+        "GC_SAFETY_REFUSAL",
+        phase,
+        project,
+        `Active manifest is corrupt/unreadable (fail-closed, refusing to plan GC): [${e.code}] ${e.message}`,
+      );
     }
+    throw e;
   }
   const activeGenerationId = activeManifest?.generationId ?? null;
 
@@ -189,12 +217,7 @@ export function planGenerationGc(
     cas.close();
   }
 
-  // 4. Build the retain set:
-  //    a. Active generation.
-  //    b. retainCount previous DISTINCT generations (ordered by
-  //       publication_history DESC). "Distinct" means we skip
-  //       duplicates of the active generation.
-  //    c. Pinned generations (catalog.pinned=true OR in options.pin).
+  // 4. Build the retain set.
   const retainIds: Set<string> = new Set();
   const reasons: Record<string, string> = {};
 
@@ -203,19 +226,13 @@ export function planGenerationGc(
     reasons[activeGenerationId] = "active";
   }
 
-  // Walk publication_history (already most-recent-first) and collect
-  // distinct generation IDs that are NOT the active generation, until
-  // we have retainCount of them.
   const distinctPrevious: string[] = [];
   const seen = new Set<string>(activeGenerationId ? [activeGenerationId] : []);
   for (const entry of history) {
     if (distinctPrevious.length >= retainCount) break;
-    // Only PUBLISH actions count as a "previous generation" publication.
-    // PIN / UNPIN / MARK_DELETING / DELETE / UNPUBLISH actions are
-    // bookkeeping and do NOT advance the retain-N cursor.
     if (entry.action !== "PUBLISH") continue;
     if (entry.generationId === activeGenerationId) continue;
-    if (entry.generationId === "") continue; // skip UNPUBLISH placeholders
+    if (entry.generationId === "") continue;
     if (seen.has(entry.generationId)) continue;
     seen.add(entry.generationId);
     distinctPrevious.push(entry.generationId);
@@ -225,20 +242,14 @@ export function planGenerationGc(
     reasons[gid] = `retain-${idx + 1}`;
   });
 
-  // Pinned (from CAS catalog).
   for (const entry of activeEntries) {
     if (entry.pinned) {
       if (!retainIds.has(entry.generationId)) {
         retainIds.add(entry.generationId);
         reasons[entry.generationId] = "pinned";
-      } else if (reasons[entry.generationId] === "active") {
-        // Active + pinned — keep "active" reason.
-      } else if (reasons[entry.generationId]?.startsWith("retain-")) {
-        // Retain + pinned — keep retain reason.
       }
     }
   }
-  // Pinned (from options.pin).
   for (const gid of extraPinned) {
     if (!retainIds.has(gid)) {
       retainIds.add(gid);
@@ -247,12 +258,15 @@ export function planGenerationGc(
   }
 
   // 5. Build the retain / delete lists.
+  // R169B-STEP3 (SEC-R169B-A1-01): The plan's dbPath/metadataPath
+  // fields are DISPLAY-ONLY — derived from the generationId. The
+  // applier re-derives them and never trusts these fields.
   const retainEntries: GenerationGcPlanEntry[] = [];
   const deleteEntries: GenerationGcPlanEntry[] = [];
 
   for (const entry of activeEntries) {
-    const dbPath = join(projectStore, GENERATIONS_SUBDIR, `generation-${entry.generationId}.db`);
-    const metadataPath = join(projectStore, GENERATIONS_SUBDIR, `generation-${entry.generationId}.json`);
+    const dbPath = deriveDbPath(projectStore, entry.generationId);
+    const metadataPath = deriveMetadataPath(projectStore, entry.generationId);
     const metadataExists = existsSync(metadataPath);
     const planEntry: GenerationGcPlanEntry = {
       generationId: entry.generationId,
@@ -271,23 +285,30 @@ export function planGenerationGc(
     }
   }
 
-  // 6. Compute the sweep-tmp list.
+  // 6. R169B-STEP3 (TMP-R169B-A1-19): Compute the sweep-tmp list.
+  // Include -wal, -shm, -journal sidecars, .json temp metadata, and
+  // atomic temp JSON (.*.tmp.<rand>).
   const sweepTmp: GenerationGcTmpEntry[] = [];
   if (existsSync(tmp)) {
     let tmpEntries: import("node:fs").Dirent[];
     try {
       tmpEntries = readdirSync(tmp, { withFileTypes: true }) as unknown as import("node:fs").Dirent[];
     } catch {
-      // Best-effort — if we can't read tmp/, skip the sweep.
       tmpEntries = [];
     }
     const now = Date.now();
     for (const ent of tmpEntries) {
       if (!ent.isFile()) continue;
-      // Only consider canonical staging artifacts: generation-<uuid>.db.
-      if (!/^generation-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.db$/.test(ent.name)) {
-        continue;
-      }
+      // Canonical staging artifacts: generation-<uuid>.db plus
+      // sidecars (-wal, -shm, -journal) and temp metadata (.json).
+      // Also match atomic-writer temp files (.*.tmp.<rand>).
+      const isCanonical =
+        /^generation-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.db$/.test(ent.name) ||
+        /^generation-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.db-(wal|shm|journal)$/.test(ent.name) ||
+        /^generation-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/.test(ent.name) ||
+        /^generation-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json\.tmp\.[0-9a-f]+$/.test(ent.name) ||
+        /^\..*\.tmp\.[0-9a-f]+$/.test(ent.name);
+      if (!isCanonical) continue;
       const entPath = join(tmp, ent.name);
       let st: Stats;
       try {
@@ -295,9 +316,8 @@ export function planGenerationGc(
       } catch {
         continue;
       }
-      if (st.isSymbolicLink()) continue; // never sweep symlinks
+      if (st.isSymbolicLink()) continue;
       if (!st.isFile()) continue;
-      // Age check (mtime-based — explicitly age-based, not ordering).
       const ageMs = now - st.mtimeMs;
       if (ageMs < tmpMaxAgeMs) continue;
       sweepTmp.push({
@@ -307,7 +327,7 @@ export function planGenerationGc(
     }
   }
 
-  return {
+  const plan: GenerationGcPlan = {
     project,
     cacheRoot,
     activeGenerationId,
@@ -317,47 +337,22 @@ export function planGenerationGc(
     sweepTmp,
     reasons,
   };
+  // Freeze the plan and all its nested arrays/entries so a caller
+  // cannot mutate them in place.
+  Object.freeze(plan);
+  Object.freeze(plan.retain);
+  Object.freeze(plan.delete);
+  Object.freeze(plan.sweepTmp);
+  for (const e of plan.retain) Object.freeze(e);
+  for (const e of plan.delete) Object.freeze(e);
+  for (const e of plan.sweepTmp) Object.freeze(e);
+  // Register the plan in the WeakMap so the applier can authenticate it.
+  planTokens.set(plan, true);
+  return plan;
 }
 
 // ─── APPLIER: applyGenerationGcPlan ──────────────────────────────────────
 
-/**
- * R169B-STEP2 §17: Apply a generation GC plan.
- *
- * The applier:
- *   1. Re-reads the active manifest and CAS revision.
- *   2. If the CAS revision changed since the plan was made →
- *      GC_PLAN_STALE, zero deletions.
- *   3. For each delete entry:
- *      a. Re-check the entry is not the active generation (defense
- *         in depth — the planner already excluded it).
- *      b. Re-check the entry is not pinned.
- *      c. Mark DELETING in the CAS.
- *      d. Delete the metadata sidecar (best-effort).
- *      e. Delete the DB file (best-effort).
- *      f. fsync the generations/ directory.
- *      g. Mark DELETED in the CAS.
- *      h. On any failure → GC_DELETE_FAILED warning, continue.
- *   4. For each sweep-tmp entry:
- *      a. Re-verify the path is inside tmp/ (containment).
- *      b. Re-verify the file is not a symlink.
- *      c. unlink (best-effort).
- *      d. On any failure → GC_DELETE_FAILED warning, continue.
- *
- * The applier NEVER:
- *   - Deletes the active generation (defense in depth).
- *   - Deletes a pinned generation (defense in depth).
- *   - Promotes anything from tmp/ — promotion is a separate
- *     publication act.
- *
- * Returns a `GenerationGcResult`:
- *   - `applied`: true if the plan was applied.
- *   - `reason`: null if applied; "GC_PLAN_STALE" if the CAS revision
- *     changed.
- *   - `deletedGenerations`: IDs actually deleted.
- *   - `deletedTmp`: paths actually unlinked.
- *   - `warnings`: non-fatal anomalies.
- */
 export function applyGenerationGcPlan(
   plan: GenerationGcPlan,
   options?: GenerationGcOptions,
@@ -366,36 +361,49 @@ export function applyGenerationGcPlan(
   const project = plan.project;
   const cacheRoot = options?.cacheRoot ?? plan.cacheRoot ?? getCacheRoot();
 
+  // 0. R169B-STEP3 (SEC-R169B-A1-01): Authenticate the plan.
+  if (!planTokens.has(plan)) {
+    throw new GenerationStoreError(
+      "GC_PLAN_UNAUTHENTICATED",
+      phase,
+      project,
+      `Plan is not authentic (not in the private WeakMap). Plans MUST be produced by planGenerationGc in the same process; spread/JSON-clone/literal objects are rejected.`,
+    );
+  }
+
   // 1. Re-validate trust root.
   assertTrustedRootNoSymlinks(cacheRoot, project, phase);
 
+  const projectStore = projectStoreDir(project, cacheRoot);
   const generations = generationsDir(project, cacheRoot);
   const tmp = tmpDir(project, cacheRoot);
   const manifestPath = activeManifestPath(project, cacheRoot);
 
-  // 2. Re-read the active manifest.
-  let activeManifest: GenerationManifestV1 | null = null;
+  // 2. R169B-STEP3 (MANIFEST-R169B-A1-04): Re-read the active manifest
+  // via readOptionalGenerationManifest. null ONLY on real ENOENT.
+  let activeManifest: GenerationManifestV1 | null;
   try {
-    activeManifest = parseGenerationManifest(manifestPath, project);
+    activeManifest = readOptionalGenerationManifest(manifestPath, project);
   } catch (e) {
     if (e instanceof GenerationStoreError) {
-      if (e.code !== "MANIFEST_PARSE_ERROR") {
-        throw e;
-      }
-      activeManifest = null;
-    } else {
-      throw e;
+      throw new GenerationStoreError(
+        "GC_SAFETY_REFUSAL",
+        phase,
+        project,
+        `Active manifest is corrupt/unreadable (fail-closed, refusing to apply GC): [${e.code}] ${e.message}`,
+      );
     }
+    throw e;
   }
   const currentActiveId = activeManifest?.generationId ?? null;
 
   // 3. Re-read the CAS revision.
-  const cas = openCasStore(project, cacheRoot);
+  const cas0 = openCasStore(project, cacheRoot);
   let currentRevision: number;
   try {
-    currentRevision = cas.getRevision();
+    currentRevision = cas0.getRevision();
   } finally {
-    cas.close();
+    cas0.close();
   }
 
   // 4. Stale check.
@@ -415,98 +423,147 @@ export function applyGenerationGcPlan(
 
   // 5. Apply the delete list.
   for (const entry of plan.delete) {
-    // a. Re-check active.
-    if (entry.generationId === currentActiveId) {
+    // a. Validate the generationId format (defense in depth).
+    if (!isValidUuidV4(entry.generationId)) {
       warnings.push({
         code: "GC_DELETE_FAILED",
-        message: `Refused to delete active generation ${entry.generationId} (defense in depth — plan was stale?)`,
-      });
-      continue;
-    }
-    // b. Re-check pinned.
-    const cas2 = openCasStore(project, cacheRoot);
-    let isPinned = false;
-    try {
-      const catalogEntry = cas2.getGenerationCatalogEntry(entry.generationId);
-      isPinned = catalogEntry?.pinned ?? false;
-    } finally {
-      cas2.close();
-    }
-    if (isPinned) {
-      warnings.push({
-        code: "GC_DELETE_FAILED",
-        message: `Refused to delete pinned generation ${entry.generationId} (defense in depth)`,
+        message: `Refused to delete generation with invalid UUID format: ${entry.generationId}`,
       });
       continue;
     }
 
-    // c. Mark DELETING in the CAS.
-    const cas3 = openCasStore(project, cacheRoot);
+    // b. R169B-STEP3 (SEC-R169B-A1-01): DERIVE dbPath and metadataPath
+    // from the generationId. NEVER use the plan's paths as authority.
+    const dbPath = deriveDbPath(projectStore, entry.generationId);
+    const metadataPath = deriveMetadataPath(projectStore, entry.generationId);
+
+    // c. Containment check on the derived paths.
+    try {
+      assertPathInsideNoSymlinks(generations, dbPath, project, phase, "PATH_TRAVERSAL_REJECTED");
+      assertPathInsideNoSymlinks(generations, metadataPath, project, phase, "PATH_TRAVERSAL_REJECTED");
+    } catch (e) {
+      warnings.push({
+        code: "GC_DELETE_FAILED",
+        message: `Derived path containment failed for ${entry.generationId}: ${(e as Error).message}`,
+      });
+      continue;
+    }
+
+    // d. Re-check active.
+    if (entry.generationId === currentActiveId) {
+      warnings.push({
+        code: "GC_DELETE_FAILED",
+        message: `Refused to delete active generation ${entry.generationId} (defense in depth)`,
+      });
+      continue;
+    }
+
+    // e. R169B-STEP3 (GC-R169B-A1-13): Fail-safe on missing/corrupt
+    // metadata. Before making a generation eligible for delete, the
+    // metadata sidecar MUST be present, regular, non-symlink, parse
+    // to a valid V1 manifest, and have project/UUID/hash/size
+    // coherent with the catalog. If any check fails → retain
+    // (safety-refusal), do NOT delete.
+    const safetyCheck = verifyGenerationSafety(project, entry.generationId, dbPath, metadataPath, phase);
+    if (!safetyCheck.ok) {
+      warnings.push({
+        code: "GC_SAFETY_REFUSAL",
+        message: `Refused to delete generation ${entry.generationId} (safety-refusal): ${safetyCheck.reason}`,
+      });
+      continue;
+    }
+
+    // f. Re-check pinned (under CAS lock to avoid TOCTOU).
+    const cas1 = openCasStore(project, cacheRoot);
     let markedDeleting = false;
     try {
-      cas3.beginImmediate();
-      // Re-check pinning under the lock (avoid TOCTOU).
-      const cat = cas3.getGenerationCatalogEntry(entry.generationId);
-      if (cat?.pinned) {
-        cas3.rollback();
+      cas1.beginImmediate();
+      const cat = cas1.getGenerationCatalogEntry(entry.generationId);
+      if (cat === undefined) {
+        cas1.rollback();
+        warnings.push({
+          code: "GC_DELETE_FAILED",
+          message: `Generation ${entry.generationId} not in catalog (already deleted?)`,
+        });
+        continue;
+      }
+      if (cat.pinned) {
+        cas1.rollback();
         warnings.push({
           code: "GC_DELETE_FAILED",
           message: `Refused to delete pinned generation ${entry.generationId} (under CAS lock)`,
         });
         continue;
       }
-      cas3.setCatalogStatus(entry.generationId, "DELETING");
-      cas3.appendPublicationHistory(entry.generationId, project, "MARK_DELETING", null);
-      cas3.incrementRevision();
-      cas3.commit();
+      if (cat.status !== "ACTIVE") {
+        cas1.rollback();
+        warnings.push({
+          code: "GC_DELETE_FAILED",
+          message: `Generation ${entry.generationId} status is ${cat.status} (not ACTIVE; already being deleted?)`,
+        });
+        continue;
+      }
+      cas1.setCatalogStatus(entry.generationId, "DELETING");
+      cas1.appendPublicationHistory(entry.generationId, project, "MARK_DELETING", null);
+      cas1.commit();
       markedDeleting = true;
     } catch (e) {
-      try { cas3.rollback(); } catch { /* best effort */ }
+      try { cas1.rollback(); } catch { /* best effort */ }
       warnings.push({
         code: "GC_DELETE_FAILED",
         message: `Failed to mark ${entry.generationId} as DELETING: ${(e as Error).message}`,
       });
       continue;
     } finally {
-      cas3.close();
+      cas1.close();
     }
     if (!markedDeleting) continue;
 
-    // d. Delete the metadata sidecar (best-effort).
-    if (entry.metadataPath) {
-      try {
-        if (existsSync(entry.metadataPath)) {
-          unlinkSync(entry.metadataPath);
-        }
-      } catch (e) {
-        warnings.push({
-          code: "GC_DELETE_FAILED",
-          message: `Failed to delete metadata sidecar ${entry.metadataPath}: ${(e as Error).message}`,
-        });
-      }
-    }
-
-    // e. Delete the DB file (best-effort).
+    // g. Delete the metadata sidecar.
+    let metadataDeleted = false;
     try {
-      if (existsSync(entry.dbPath)) {
-        // Defense in depth: verify the DB path is inside generations/.
-        assertPathInsideNoSymlinks(
-          generations,
-          entry.dbPath,
-          project,
-          phase,
-          "GENERATION_TARGET_SYMLINK_REJECTED",
-        );
-        unlinkSync(entry.dbPath);
+      if (existsSync(metadataPath)) {
+        // Re-verify non-symlink before unlink.
+        const ms = lstatSync(metadataPath);
+        if (ms.isSymbolicLink()) {
+          throw new Error(`metadata path is a symlink: ${metadataPath}`);
+        }
+        if (!ms.isFile()) {
+          throw new Error(`metadata path is not a regular file: ${metadataPath}`);
+        }
+        unlinkSync(metadataPath);
       }
+      metadataDeleted = true;
     } catch (e) {
       warnings.push({
-        code: "GC_DELETE_FAILED",
-        message: `Failed to delete DB ${entry.dbPath}: ${(e as Error).message}`,
+        code: "GC_DELETE_INCOMPLETE",
+        message: `Failed to delete metadata sidecar ${metadataPath}: ${(e as Error).message}`,
       });
     }
 
-    // f. fsync the generations/ directory.
+    // h. Delete the DB file.
+    let dbDeleted = false;
+    try {
+      if (existsSync(dbPath)) {
+        const ds = lstatSync(dbPath);
+        if (ds.isSymbolicLink()) {
+          throw new Error(`db path is a symlink: ${dbPath}`);
+        }
+        if (!ds.isFile()) {
+          throw new Error(`db path is not a regular file: ${dbPath}`);
+        }
+        unlinkSync(dbPath);
+      }
+      dbDeleted = true;
+    } catch (e) {
+      warnings.push({
+        code: "GC_DELETE_INCOMPLETE",
+        message: `Failed to delete DB ${dbPath}: ${(e as Error).message}`,
+      });
+    }
+
+    // i. fsync the generations/ directory.
+    let dirFsyncOk = false;
     let dirFd: number | null = null;
     try {
       const opened = openDirectoryNoFollow(generations, PROD_OPS);
@@ -514,33 +571,65 @@ export function applyGenerationGcPlan(
       PROD_OPS.fsyncSync(dirFd);
       PROD_OPS.closeSync(dirFd);
       dirFd = null;
+      dirFsyncOk = true;
     } catch (e) {
       if (dirFd !== null) {
         try { PROD_OPS.closeSync(dirFd); } catch { /* best effort */ }
       }
       warnings.push({
-        code: "GC_DELETE_FAILED",
+        code: "GC_DELETE_INCOMPLETE",
         message: `fsync of generations/ failed after deleting ${entry.generationId}: ${(e as Error).message}`,
       });
     }
 
-    // g. Mark DELETED in the CAS.
-    const cas4 = openCasStore(project, cacheRoot);
+    // j. R169B-STEP3 (GC-R169B-A1-11): Re-read to confirm absence.
+    // Only mark DELETED if metadata absent AND DB absent AND fsync ok.
+    const metadataConfirmedAbsent = !existsSync(metadataPath);
+    const dbConfirmedAbsent = !existsSync(dbPath);
+
+    if (!metadataDeleted || !dbDeleted || !dirFsyncOk || !metadataConfirmedAbsent || !dbConfirmedAbsent) {
+      // Incomplete — status stays DELETING. Next GC pass re-attempts.
+      warnings.push({
+        code: "GC_DELETE_INCOMPLETE",
+        message: `Generation ${entry.generationId} deletion incomplete (metadataDeleted=${metadataDeleted}, dbDeleted=${dbDeleted}, dirFsyncOk=${dirFsyncOk}, metadataConfirmedAbsent=${metadataConfirmedAbsent}, dbConfirmedAbsent=${dbConfirmedAbsent}). Status stays DELETING; next GC pass will re-attempt.`,
+      });
+      continue;
+    }
+
+    // k. Mark DELETED in the CAS.
+    const cas2 = openCasStore(project, cacheRoot);
     try {
-      cas4.beginImmediate();
-      cas4.setCatalogStatus(entry.generationId, "DELETED");
-      cas4.appendPublicationHistory(entry.generationId, project, "DELETE", null);
-      cas4.incrementRevision();
-      cas4.commit();
+      cas2.beginImmediate();
+      // Re-verify status is still DELETING (no concurrent transition).
+      const cat = cas2.getGenerationCatalogEntry(entry.generationId);
+      if (cat === undefined) {
+        cas2.rollback();
+        warnings.push({
+          code: "GC_DELETE_INCOMPLETE",
+          message: `Generation ${entry.generationId} disappeared from catalog between DELETING and DELETED`,
+        });
+        continue;
+      }
+      if (cat.status !== "DELETING") {
+        cas2.rollback();
+        warnings.push({
+          code: "GC_DELETE_INCOMPLETE",
+          message: `Generation ${entry.generationId} status changed from DELETING to ${cat.status} during deletion`,
+        });
+        continue;
+      }
+      cas2.setCatalogStatus(entry.generationId, "DELETED");
+      cas2.appendPublicationHistory(entry.generationId, project, "DELETE", null);
+      cas2.commit();
       deletedGenerations.push(entry.generationId);
     } catch (e) {
-      try { cas4.rollback(); } catch { /* best effort */ }
+      try { cas2.rollback(); } catch { /* best effort */ }
       warnings.push({
-        code: "GC_DELETE_FAILED",
+        code: "GC_DELETE_INCOMPLETE",
         message: `Failed to mark ${entry.generationId} as DELETED in CAS: ${(e as Error).message}`,
       });
     } finally {
-      cas4.close();
+      cas2.close();
     }
   }
 
@@ -548,13 +637,7 @@ export function applyGenerationGcPlan(
   for (const ent of plan.sweepTmp) {
     // a. Re-verify containment.
     try {
-      assertPathInsideNoSymlinks(
-        tmp,
-        ent.path,
-        project,
-        phase,
-        "PATH_TRAVERSAL_REJECTED",
-      );
+      assertPathInsideNoSymlinks(tmp, ent.path, project, phase, "PATH_TRAVERSAL_REJECTED");
     } catch (e) {
       warnings.push({
         code: "GC_DELETE_FAILED",
@@ -562,13 +645,12 @@ export function applyGenerationGcPlan(
       });
       continue;
     }
-    // b. Re-verify it is not a symlink.
+    // b. Re-verify non-symlink.
     let st: Stats;
     try {
       st = lstatSync(ent.path);
-    } catch (e) {
-      // Already gone — fine.
-      continue;
+    } catch {
+      continue; // already gone
     }
     if (st.isSymbolicLink()) {
       warnings.push({
@@ -596,6 +678,26 @@ export function applyGenerationGcPlan(
     }
   }
 
+  // 7. R169B-STEP3 (TMP-R169B-A1-19): fsync tmp/ after the sweep.
+  if (deletedTmp.length > 0) {
+    let tmpFd: number | null = null;
+    try {
+      const opened = openDirectoryNoFollow(tmp, PROD_OPS);
+      tmpFd = opened.fd;
+      PROD_OPS.fsyncSync(tmpFd);
+      PROD_OPS.closeSync(tmpFd);
+      tmpFd = null;
+    } catch (e) {
+      if (tmpFd !== null) {
+        try { PROD_OPS.closeSync(tmpFd); } catch { /* best effort */ }
+      }
+      warnings.push({
+        code: "GC_DELETE_FAILED",
+        message: `fsync of tmp/ failed after sweep: ${(e as Error).message}`,
+      });
+    }
+  }
+
   return {
     applied: true,
     reason: null,
@@ -603,4 +705,114 @@ export function applyGenerationGcPlan(
     deletedTmp,
     warnings,
   };
+}
+
+// ─── Safety verification helper (GC-R169B-A1-13) ───────────────────────
+
+/**
+ * R169B-STEP3 (GC-R169B-A1-13): Verify a generation is safe to delete.
+ * The metadata sidecar MUST be present, regular, non-symlink, parse
+ * to a valid V1 metadata, and have project/UUID/hash/size coherent
+ * with the catalog. If any check fails → retain (safety-refusal).
+ */
+function verifyGenerationSafety(
+  project: string,
+  generationId: string,
+  dbPath: string,
+  metadataPath: string,
+  phase: string,
+): { ok: true } | { ok: false; reason: string } {
+  void phase;
+  // 1. DB exists, regular, non-symlink.
+  try {
+    const ds = lstatSync(dbPath);
+    if (ds.isSymbolicLink()) {
+      return { ok: false, reason: `DB path is a symlink: ${dbPath}` };
+    }
+    if (!ds.isFile()) {
+      return { ok: false, reason: `DB path is not a regular file: ${dbPath}` };
+    }
+  } catch (e) {
+    return { ok: false, reason: `DB lstat failed: ${(e as Error).message}` };
+  }
+  // 2. Metadata exists, regular, non-symlink.
+  try {
+    const ms = lstatSync(metadataPath);
+    if (ms.isSymbolicLink()) {
+      return { ok: false, reason: `Metadata path is a symlink: ${metadataPath}` };
+    }
+    if (!ms.isFile()) {
+      return { ok: false, reason: `Metadata path is not a regular file: ${metadataPath}` };
+    }
+  } catch (e) {
+    return { ok: false, reason: `Metadata lstat failed: ${(e as Error).message}` };
+  }
+  // 3. Parse + validate metadata sidecar (strict V1 schema).
+  let metadataRaw: string;
+  try {
+    metadataRaw = readFileSyncTextSafe(metadataPath, 256 * 1024);
+  } catch (e) {
+    return { ok: false, reason: `Metadata read failed: ${(e as Error).message}` };
+  }
+  let metadataParsed: unknown;
+  try {
+    metadataParsed = JSON.parse(metadataRaw);
+  } catch (e) {
+    return { ok: false, reason: `Metadata JSON parse failed: ${(e as Error).message}` };
+  }
+  let metadataValidated;
+  try {
+    metadataValidated = validateGenerationMetadata(metadataParsed, project);
+  } catch (e) {
+    return { ok: false, reason: `Metadata validation failed: ${(e as Error).message}` };
+  }
+  // 4. Verify the metadata's manifest project matches.
+  const dm = metadataValidated.manifest;
+  if (dm.project !== project) {
+    return { ok: false, reason: `Metadata manifest project "${dm.project}" does not match expected "${project}"` };
+  }
+  // 5. Verify the metadata's manifest generationId matches.
+  if (dm.generationId !== generationId) {
+    return { ok: false, reason: `Metadata manifest generationId "${dm.generationId}" does not match expected "${generationId}"` };
+  }
+  // 6. Verify the DB's actual size matches the manifest's sizeBytes.
+  try {
+    const ds = lstatSync(dbPath);
+    if (ds.size !== dm.sizeBytes) {
+      return { ok: false, reason: `DB size ${ds.size} does not match manifest sizeBytes ${dm.sizeBytes}` };
+    }
+  } catch (e) {
+    return { ok: false, reason: `DB re-lstat failed: ${(e as Error).message}` };
+  }
+  return { ok: true };
+}
+
+/**
+ * R169B-STEP3: Read a file as UTF-8 text with a size bound. Returns
+ * the text content. Throws on read failure or size exceeded.
+ */
+function readFileSyncTextSafe(path: string, maxBytes: number): string {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (st.size > maxBytes) {
+      throw new Error(`file size ${st.size} exceeds max ${maxBytes}`);
+    }
+    const buf = Buffer.alloc(st.size);
+    let offset = 0;
+    while (offset < buf.length) {
+      const n = readSync(fd, buf, offset, buf.length - offset, null);
+      if (n <= 0) break;
+      offset += n;
+    }
+    if (offset !== buf.length) {
+      throw new Error(`short read: expected ${buf.length} bytes, got ${offset}`);
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
+  }
 }

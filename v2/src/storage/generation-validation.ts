@@ -77,6 +77,7 @@ import {
   GenerationStoreErrorCode,
   isManifestV1Key,
   isIndexStateV1Key,
+  GENERATION_METADATA_V1_KEYS,
 } from "./generation-types.js";
 
 import {
@@ -1395,6 +1396,187 @@ export function parseGenerationManifest(
   }
 
   return validateGenerationManifest(parsed, expectedProject);
+}
+
+// --- R169B-STEP3: readOptionalGenerationManifest (MANIFEST-R169B-A1-04) ---
+
+/**
+ * R169B-STEP3 (GPT 5.6 Pass 1 audit, MANIFEST-R169B-A1-04): Read an
+ * optional generation manifest. Returns `null` ONLY on a real ENOENT
+ * (file does not exist). Every other failure (JSON malformed, invalid
+ * UTF-8, EACCES, EIO, short read, growth during read, symlink,
+ * non-regular file, byte-too-large, schema invalid, project mismatch)
+ * raises a `GenerationStoreError` with the appropriate code.
+ *
+ * This closes the fail-closed gap where `parseGenerationManifest`
+ * lumped ENOENT together with all other errors under
+ * `MANIFEST_PARSE_ERROR`, allowing the publisher / GC to treat a
+ * CORRUPT manifest as "absent" and proceed as if no generation was
+ * active.
+ *
+ * The contract:
+ *   - `null` => the manifest file is genuinely absent (ENOENT).
+ *   - `GenerationManifestV1` => the manifest is present and valid.
+ *   - throws => the manifest is present but corrupt / invalid /
+ *     unreadable. The caller MUST fail-closed (treat as "manifest
+ *     corrupt" and refuse to publish / GC).
+ *
+ * Implementation: we delegate to `parseGenerationManifest` and
+ * translate a `MANIFEST_PARSE_ERROR` whose message starts with
+ * "Manifest file not found" (or whose underlying errno is ENOENT)
+ * into `null`. We re-tag every other `MANIFEST_PARSE_ERROR` so the
+ * caller can distinguish them via the error code.
+ */
+export function readOptionalGenerationManifest(
+  manifestPath: string,
+  expectedProject: string,
+): GenerationManifestV1 | null {
+  try {
+    return parseGenerationManifest(manifestPath, expectedProject);
+  } catch (e) {
+    if (e instanceof GenerationStoreError) {
+      // The parseGenerationManifest implementation raises
+      // MANIFEST_PARSE_ERROR for ENOENT with a message that starts
+      // with "Manifest file not found". We translate that ONE case
+      // to null.
+      if (
+        e.code === "MANIFEST_PARSE_ERROR" &&
+        (e.message.includes("Manifest file not found") ||
+          e.message.includes("Manifest file not found (open)"))
+      ) {
+        return null;
+      }
+      // Any other error (MANIFEST_PARSE_ERROR for JSON/UTF-8/short
+      // read, MANIFEST_TOO_LARGE, MANIFEST_SYMLINK_REJECTED,
+      // MANIFEST_TARGET_NOT_REGULAR, MANIFEST_SCHEMA_ERROR,
+      // MANIFEST_PROJECT_MISMATCH, etc.) is re-raised as-is.
+      throw e;
+    }
+    throw e;
+  }
+}
+
+// --- R169B-STEP3: validateGenerationMetadata (META-R169B-A1-17) ---
+
+/**
+ * R169B-STEP3 (GPT 5.6 Pass 1 audit, META-R169B-A1-17): Strict
+ * metadata V1 validator. The metadata sidecar is the immutable
+ * publication record. It must have the exact key set
+ * `GENERATION_METADATA_V1_KEYS`, with `formatVersion === 1`, a
+ * fully validated nested `manifest`, and string/null fields with
+ * the correct types.
+ *
+ * Returns a `GenerationMetadataV1` (frozen) on success. Throws
+ * `GenerationStoreError` with code `GENERATION_METADATA_INVALID`
+ * on any failure.
+ */
+export function validateGenerationMetadata(
+  value: unknown,
+  expectedProject: string,
+): import("./generation-types.js").GenerationMetadataV1 {
+  const phase = "validateGenerationMetadata";
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new GenerationStoreError(
+      "GENERATION_METADATA_INVALID",
+      phase,
+      expectedProject,
+      `Metadata payload is not an object (got ${value === null ? "null" : Array.isArray(value) ? "array" : typeof value})`,
+    );
+  }
+  const obj = value as Record<string, unknown>;
+  // Exact key set.
+  const actualKeys = Object.keys(obj);
+  const expectedSet = new Set<string>(
+    GENERATION_METADATA_V1_KEYS as readonly string[],
+  );
+  for (const k of actualKeys) {
+    if (!expectedSet.has(k)) {
+      throw new GenerationStoreError(
+        "GENERATION_METADATA_INVALID",
+        phase,
+        expectedProject,
+        `Metadata has unexpected key "${k}" (allowed: ${[...expectedSet].join(", ")})`,
+      );
+    }
+  }
+  for (const k of expectedSet) {
+    if (!(k in obj)) {
+      throw new GenerationStoreError(
+        "GENERATION_METADATA_INVALID",
+        phase,
+        expectedProject,
+        `Metadata is missing required key "${k}"`,
+      );
+    }
+  }
+  // formatVersion
+  if (obj.formatVersion !== 1) {
+    throw new GenerationStoreError(
+      "GENERATION_METADATA_INVALID",
+      phase,
+      expectedProject,
+      `Metadata formatVersion must be 1 (got ${JSON.stringify(obj.formatVersion)})`,
+    );
+  }
+  // manifest (nested)
+  const manifest = validateGenerationManifest(obj.manifest, expectedProject);
+  // publishedAt (non-empty string)
+  if (typeof obj.publishedAt !== "string" || obj.publishedAt.length === 0) {
+    throw new GenerationStoreError(
+      "GENERATION_METADATA_INVALID",
+      phase,
+      expectedProject,
+      `Metadata publishedAt must be a non-empty string (got ${JSON.stringify(obj.publishedAt)})`,
+    );
+  }
+  // deduped (boolean)
+  if (typeof obj.deduped !== "boolean") {
+    throw new GenerationStoreError(
+      "GENERATION_METADATA_INVALID",
+      phase,
+      expectedProject,
+      `Metadata deduped must be a boolean (got ${JSON.stringify(obj.deduped)})`,
+    );
+  }
+  // dedupSourceGenerationId (string | null)
+  if (obj.dedupSourceGenerationId !== null && typeof obj.dedupSourceGenerationId !== "string") {
+    throw new GenerationStoreError(
+      "GENERATION_METADATA_INVALID",
+      phase,
+      expectedProject,
+      `Metadata dedupSourceGenerationId must be a string or null (got ${JSON.stringify(obj.dedupSourceGenerationId)})`,
+    );
+  }
+  // previousActiveGenerationId (string | null)
+  if (obj.previousActiveGenerationId !== null && typeof obj.previousActiveGenerationId !== "string") {
+    throw new GenerationStoreError(
+      "GENERATION_METADATA_INVALID",
+      phase,
+      expectedProject,
+      `Metadata previousActiveGenerationId must be a string or null (got ${JSON.stringify(obj.previousActiveGenerationId)})`,
+    );
+  }
+  // pinned (boolean)
+  if (typeof obj.pinned !== "boolean") {
+    throw new GenerationStoreError(
+      "GENERATION_METADATA_INVALID",
+      phase,
+      expectedProject,
+      `Metadata pinned must be a boolean (got ${JSON.stringify(obj.pinned)})`,
+    );
+  }
+  const result: import("./generation-types.js").GenerationMetadataV1 = {
+    formatVersion: 1,
+    manifest,
+    publishedAt: obj.publishedAt,
+    deduped: obj.deduped,
+    dedupSourceGenerationId: obj.dedupSourceGenerationId as string | null,
+    previousActiveGenerationId: obj.previousActiveGenerationId as string | null,
+    pinned: obj.pinned,
+  };
+  Object.freeze(result);
+  Object.freeze(result.manifest);
+  return result;
 }
 
 // --- Path safety: symlink-rejecting containment (R169A-FIX SEC-R169A-02) ---
