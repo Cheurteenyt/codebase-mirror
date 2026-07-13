@@ -753,9 +753,13 @@ generations. Older generations are deleted.**
 - GC is **best-effort**. If a deletion fails (e.g. file is locked on
   Windows), GC logs the failure and continues. The next GC pass will
   retry.
-- GC never deletes the active generation. GC never deletes a DB that
-  has been opened by a reader in the current process (the OS holds the
-  file handle; deletion only unlinks the directory entry).
+- GC never deletes the active generation. GC retains generations by
+  policy/pinning, not by OS handle — POSIX allows unlink of open files,
+  so a reader that holds an fd on a deleted DB will see the old content
+  until it closes the fd, but the directory entry is gone immediately.
+  R169B+ must implement an explicit pin/refcount on top of the OS handle
+  to prevent deletion of any generation currently referenced by an
+  in-flight reader.
 - GC is **not** enabled in R169A. The policy is documented here so that
   R169B+ can implement it without redesign.
 
@@ -770,9 +774,12 @@ automatic downgrade, no manual bypass flag.
 - A missing generation target (manifest says `dbFile` but the file is
   absent) must be repaired by re-indexing. Until then, the resolver
   throws.
-- A legacy DB that cannot be opened must be repaired by re-indexing. The
-  resolver does not try to "open it read-only" or "skip the broken
-  table" — it throws.
+- A legacy source identity invalid (path/symlink/regular-file check
+  only; SQLite open validation deferred to R169D) must be repaired by
+  re-indexing. The resolver does not try to "open it read-only" or
+  "skip the broken table" — it throws. R169A validates path containment,
+  rejects symlinks, and rejects non-regular-files; the actual SQLite
+  header / schema validation is R169D's responsibility.
 - There is **no `--skip-manifest` flag**, **no `--force-legacy` flag**,
   **no `CBM_IGNORE_GENERATION_STORE=1` environment variable**. The
   integrity guarantee depends on the resolver being the only path; an
@@ -837,7 +844,7 @@ R169A is **zero overhead** when unused.
     `defaultCodeDbPath(project)`.
   - `CURRENT_GENERATION_MANIFEST_VERSION` is still `1`.
 
-When R169B activates the writer, the cost model is:
+When R169C integrates the R169B publisher primitives, the cost model is:
 
 - One extra `fsync` of the generation DB file per publication.
 - One extra `fsync` of the manifest file per publication.
@@ -857,9 +864,13 @@ R170 will add:
 
 - **Project lease:** an indexer must acquire a lease before publishing.
   The lease is identified by a fencing token (monotonic integer).
-- **Fencing on write:** the manifest writer includes the lease token in
-  the manifest. A stale indexer (one whose lease has expired) cannot
-  overwrite a newer manifest — the writer checks the token and refuses.
+- **Fencing on write:** the writer checks the lease token and refuses
+  to publish if the token is stale (lower than the highest token seen
+  for the project). Fencing token is required for publication
+  authorization. The token may live in a sidecar CAS/lease state, not
+  necessarily in the manifest V1 content. The exact location will be
+  decided in R170 — candidates include `index-state.json`, a separate
+  `lease.json` sidecar, or a CAS entry keyed by the project key.
 - **Fencing on read:** not required for correctness (readers always see
   a complete snapshot), but useful for diagnostics: a reader can detect
   that the active generation was published by a stale indexer and warn.
@@ -870,7 +881,10 @@ The R169A schema deliberately leaves room for this:
 
 - `MANIFEST_V1_KEYS` is closed, so adding a `leaseToken` field requires
   bumping `formatVersion` to `2` and a migration. This is intentional:
-  lease tokens are an operational concern, not a content concern.
+  lease tokens are an operational concern, not a content concern. R170
+  may keep the token out of the manifest V1 content entirely and store
+  it in a sidecar CAS/lease state — the closed manifest schema is
+  compatible with either approach.
 - `index-state.json` is already defined as the sidecar for operational
   state. R170 can extend it without breaking the manifest schema.
 

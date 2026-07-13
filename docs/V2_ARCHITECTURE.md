@@ -532,11 +532,18 @@ Verified by the `R169A — No production behavior change` test block in
 ### 15.13 R170 boundary (lease / fencing)
 
 R169A is single-host only. R170 will add multi-host lease / fencing:
-the indexer acquires a lease with a fencing token; the manifest writer
-includes the token; a stale indexer cannot overwrite a newer manifest.
-The V1 manifest schema is closed, so adding a `leaseToken` field
-requires `formatVersion = 2` and a migration. `index-state.json` is
-the sidecar where operational state (including lease) lives.
+the indexer acquires a lease with a fencing token; the writer checks
+the token and refuses to publish if it is stale. Fencing token is
+required for publication authorization. The token may live in a
+sidecar CAS/lease state, not necessarily in the manifest V1 content.
+The exact location will be decided in R170 — candidates include
+`index-state.json`, a separate `lease.json` sidecar, or a CAS entry
+keyed by the project key. The V1 manifest schema is closed, so adding
+a `leaseToken` field requires `formatVersion = 2` and a migration.
+R170 may keep the token out of the manifest V1 content entirely and
+store it in a sidecar CAS/lease state — the closed manifest schema is
+compatible with either approach. `index-state.json` is the sidecar
+where operational state (including lease) lives.
 
 ### 15.14 Activation plan
 

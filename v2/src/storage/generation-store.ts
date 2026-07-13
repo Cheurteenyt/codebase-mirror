@@ -50,6 +50,58 @@
  *     only; actual SQLite open validation occurs in R169D reader cutover.
  *   - QUAL-R169A-R2-01: every filesystem operation is wrapped in try/catch
  *     that produces a GenerationStoreError with the project name.
+ *
+ * R169A-FIX-R3 (GPT 5.6 pass 3 audit) changes:
+ *   - API-R169A-R3-01: writeProjectJsonAtomically is now INTERNAL
+ *     (renamed to writeProjectJsonAtomicallyInternal; not exported). The
+ *     public writers are typed, validating wrappers:
+ *       `writeGenerationManifestAtomically(project, manifest, options?, ops?, hook?)`
+ *       `writeIndexStateAtomically(project, state, options?, ops?, hook?)`
+ *     Both call their respective validator BEFORE any filesystem I/O.
+ *     If validation fails, NO temp / layout / target is created.
+ *   - API-R169A-R3-02: validateIndexAttemptState implemented with exact
+ *     key set, formatVersion, project equality, UUID validation, ISO-8601
+ *     timestamp validation, outcome + recovery enum checks, coherence
+ *     rules (SUCCESS / SUCCESS_WITH_WARNINGS / FAILED / STALE), structured
+ *     staleReason validation (code/message/paths/totalPaths/pathsTruncated),
+ *     safe-integer checks, no C0 control chars, string length bounds.
+ *     IndexAttemptStaleReasonV1 + INDEX_STATE_V1_KEYS added to types.
+ *   - SEC-R169A-R3-01: writeProjectJsonAtomicallyInternal no longer
+ *     calls mkdirSync — the parent must already exist (created by
+ *     ensureGenerationStoreLayoutDurable). Immediately before
+ *     openSync(tmpPath, "wx", 0o600), the writer re-runs
+ *     assertTrustedRootNoSymlinks + assertPathInsideNoSymlinks so a
+ *     symlink race between layout and temp-open is rejected. A
+ *     WriterTestHook (afterLayoutBeforeOpen) lets tests inject the race.
+ *   - SEC-R169A-R3-02: ensureGenerationStoreLayoutDurable no longer
+ *     accepts EEXIST silently. On EEXIST it lstat's the dir, rejects
+ *     symlinks, rejects non-directories (STORE_LAYOUT_CREATE_FAILED),
+ *     re-runs assertTrustedRootNoSymlinks + assertPathInsideNoSymlinks,
+ *     and checks permissions (mode & 0o077 !== 0 →
+ *     STORE_LAYOUT_PERMISSIONS_INSECURE). When O_DIRECTORY | O_NOFOLLOW
+ *     are available, the dir is opened with those flags.
+ *   - SEC-R169A-R3-03: parseGenerationManifest no longer does
+ *     statSync(path) → openSync(path, "r") (TOCTOU). It opens with
+ *     O_RDONLY | O_NOFOLLOW (when available) and fstat's the SAME fd.
+ *     Fallback (no O_NOFOLLOW): lstatSync → openSync → fstatSync →
+ *     compare dev+ino.
+ *   - OPS-R169A-R3-01: listProjectStoreKeys validates the trust root
+ *     (cacheRoot → cbm → projects) before readdirSync. New helper
+ *     `assertGenerationStoreRootTrusted(cacheRoot, phase)` validates
+ *     the chain WITHOUT a specific project key (used by listProjectStoreKeys).
+ *   - SEC-R169A-R3-04: ensureGenerationStoreLayoutDurable checks
+ *     existing dirs' permissions — mode & 0o077 must be 0. Failure →
+ *     STORE_LAYOUT_PERMISSIONS_INSECURE. POSIX uid check is best-effort.
+ *   - VALID-R169A-R3-01: MANIFEST_V1_KEYS is now Object.freeze'd at
+ *     module load (in generation-types.ts). The dead placeholder code
+ *     in validateGenerationManifest (the `missingKeys = actualKeys.filter(...)`
+ *     line that always returned `[]`) is removed.
+ *   - QUAL-R169A-R3-01: writeProjectJsonAtomicallyInternal validates
+ *     the `target` parameter at runtime (must be "manifest" or
+ *     "index-state"; else GENERATION_STORE_CONFIG_ERROR). Symlink codes
+ *     are now per-target: MANIFEST_SYMLINK_REJECTED for active-generation.json,
+ *     PROJECT_STATE_SYMLINK_REJECTED for index-state.json,
+ *     GENERATION_TARGET_SYMLINK_REJECTED for the generation DB file.
  */
 
 import {
@@ -65,10 +117,12 @@ import {
   writeSync,
   fsyncSync,
   statSync,
+  fstatSync,
   renameSync,
   unlinkSync,
   readdirSync,
   realpathSync,
+  constants as fsConstants,
 } from "node:fs";
 import {
   join,
@@ -81,16 +135,35 @@ import { homedir } from "node:os";
 
 import {
   GenerationManifestV1,
+  IndexAttemptStateV1,
+  IndexAttemptStaleReasonV1,
+  IndexAttemptOutcome,
+  IndexRecoveryAction,
   MANIFEST_V1_KEYS,
+  INDEX_STATE_V1_KEYS,
   ResolvedCodeDb,
   GenerationStoreError,
   GenerationStoreErrorCode,
   isManifestV1Key,
+  isIndexStateV1Key,
 } from "./generation-types.js";
 
 // Re-export types for convenience
-export type { GenerationManifestV1, ResolvedCodeDb } from "./generation-types.js";
-export { GenerationStoreError, MANIFEST_V1_KEYS, isManifestV1Key } from "./generation-types.js";
+export type {
+  GenerationManifestV1,
+  IndexAttemptStateV1,
+  IndexAttemptStaleReasonV1,
+  IndexAttemptOutcome,
+  IndexRecoveryAction,
+  ResolvedCodeDb,
+} from "./generation-types.js";
+export {
+  GenerationStoreError,
+  MANIFEST_V1_KEYS,
+  INDEX_STATE_V1_KEYS,
+  isManifestV1Key,
+  isIndexStateV1Key,
+} from "./generation-types.js";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -130,6 +203,30 @@ export const MAX_GENERATION_MANIFEST_BYTES = 64 * 1024;
 const MAX_ROOT_FINGERPRINT_LENGTH = 1024;
 const MAX_PROJECT_NAME_LENGTH = 1024;
 
+/**
+ * R169A-FIX-R3 (API-R169A-R3-02): Maximum length of string fields in an
+ * index-state sidecar. The `lastAttemptError` and `staleReason.message`
+ * fields are bounded to prevent a runaway indexer from producing a
+ * multi-MB sidecar. 8 KiB is generous for any plausible error message.
+ */
+const MAX_INDEX_STATE_ERROR_LENGTH = 8 * 1024;
+const MAX_INDEX_STATE_MESSAGE_LENGTH = 8 * 1024;
+const MAX_INDEX_STATE_CODE_LENGTH = 256;
+const MAX_INDEX_STATE_PATH_LENGTH = 32 * 1024;
+const MAX_INDEX_STATE_PATHS_ENTRIES = 1000;
+
+/**
+ * R169A-FIX-R3 (SEC-R169A-R3-02 / SEC-R169A-R3-03): Platform flags for
+ * O_NOFOLLOW and O_DIRECTORY. These are present on Linux and macOS but
+ * NOT on Windows. We gracefully degrade when they are absent.
+ */
+const O_NOFOLLOW: number = typeof (fsConstants as Record<string, unknown>).O_NOFOLLOW === "number"
+  ? (fsConstants as { O_NOFOLLOW: number }).O_NOFOLLOW
+  : 0;
+const O_DIRECTORY: number = typeof (fsConstants as Record<string, unknown>).O_DIRECTORY === "number"
+  ? (fsConstants as { O_DIRECTORY: number }).O_DIRECTORY
+  : 0;
+
 // ─── Options ────────────────────────────────────────────────────────────
 
 /**
@@ -151,15 +248,26 @@ export interface GenerationStoreOptions {
  *
  * Production code uses the real Node.js `fs` bindings (see PROD_OPS below).
  * Tests inject controlled failures at specific checkpoints (open, write,
- * fsync, close, rename, dir-fsync) to verify the atomic writer's durability
- * contract under fault.
+ * fsync, close, rename, dir-fsync, serialize) to verify the atomic writer's
+ * durability contract under fault.
  *
  * R169A-FIX-R2 (DUR-R169A-R2-01 / SEC-R169A-R2-02): `mkdirSync` now
  * accepts an optional `mode` so the writer and layout helpers can pin
  * directory permissions to 0700.
+ *
+ * R169A-FIX-R3 (API-R169A-R3-01): Added `serializeJson` so tests can
+ * inject a serialization failure (JSON.stringify returning undefined /
+ * throwing) without bypassing the validator. The validator runs in the
+ * typed public wrapper BEFORE the internal writer is called, so a test
+ * that wants to exercise ATOMIC_SERIALIZATION_FAILED must pass a valid
+ * manifest AND set `failAtSerialize` on TestOps.
+ *
+ * R169A-FIX-R3 (SEC-R169A-R3-03): Added `fstatSync` so the manifest
+ * parser can fstat the same fd it opened (closing the stat-then-open
+ * TOCTOU window).
  */
 export interface AtomicFileOps {
-  openSync(path: string, flags: string, mode?: number): number;
+  openSync(path: string, flags: string | number, mode?: number): number;
   readSync(fd: number, buffer: Buffer, offset: number, length: number, position: number | null): number;
   writeSync(
     fd: number,
@@ -170,10 +278,12 @@ export interface AtomicFileOps {
   ): number;
   fsyncSync(fd: number): void;
   closeSync(fd: number): void;
-  statSync(path: string): { size: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; mode: number };
+  statSync(path: string): { size: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; mode: number; uid?: number };
+  fstatSync(fd: number): { size: number; isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean; mode: number; dev: number; ino: number; uid?: number };
   renameSync(from: string, to: string): void;
   unlinkSync(path: string): void;
   mkdirSync(path: string, opts?: { recursive?: boolean; mode?: number }): void;
+  serializeJson(value: unknown): string;
 }
 
 /**
@@ -184,7 +294,7 @@ export interface AtomicFileOps {
  * fault injection simpler in tests.
  */
 const PROD_OPS: AtomicFileOps = {
-  openSync: (p, f, m) => openSync(p, f, m),
+  openSync: (p, f, m) => openSync(p, f as string, m),
   readSync: (fd, b, o, l, p) => readSync(fd, b, o, l, p),
   writeSync: (fd, b, o, l, p) => writeSync(fd, b, o, l, p),
   fsyncSync: (fd) => fsyncSync(fd),
@@ -197,6 +307,20 @@ const PROD_OPS: AtomicFileOps = {
       isFile: () => s.isFile(),
       isSymbolicLink: () => s.isSymbolicLink(),
       mode: s.mode,
+      uid: s.uid,
+    };
+  },
+  fstatSync: (fd) => {
+    const s = fstatSync(fd);
+    return {
+      size: s.size,
+      isDirectory: () => s.isDirectory(),
+      isFile: () => s.isFile(),
+      isSymbolicLink: () => s.isSymbolicLink(),
+      mode: s.mode,
+      dev: s.dev,
+      ino: s.ino,
+      uid: s.uid,
     };
   },
   renameSync: (f, t) => renameSync(f, t),
@@ -211,6 +335,13 @@ const PROD_OPS: AtomicFileOps = {
     } else {
       mkdirSync(p, opts);
     }
+  },
+  serializeJson: (value) => {
+    const r = JSON.stringify(value, null, 2);
+    if (typeof r !== "string") {
+      throw new Error(`JSON.stringify returned non-string (typeof=${typeof r})`);
+    }
+    return r;
   },
 };
 
@@ -434,8 +565,10 @@ export const isPathInside = isLexicallyInside;
  *
  * The `symlinkCode` argument controls which error code is thrown when a
  * symlink is detected — typically MANIFEST_SYMLINK_REJECTED for the
- * manifest path or GENERATION_TARGET_SYMLINK_REJECTED for the target DB.
- * Traversal errors always use PATH_TRAVERSAL_REJECTED.
+ * manifest path, GENERATION_TARGET_SYMLINK_REJECTED for the target DB,
+ * or PROJECT_STATE_SYMLINK_REJECTED for the index-state sidecar
+ * (R169A-FIX-R3 QUAL-R169A-R3-01). Traversal errors always use
+ * PATH_TRAVERSAL_REJECTED.
  *
  * R169A-FIX-R2 (SEC-R169A-R2-01): This function still does NOT lstat
  * `root` itself — that is the responsibility of `assertTrustedRootNoSymlinks`.
@@ -670,6 +803,53 @@ export function assertTrustedRootNoSymlinks(
   );
 }
 
+/**
+ * R169A-FIX-R3 (OPS-R169A-R3-01): Validate the trust root WITHOUT a
+ * specific project key. Used by `listProjectStoreKeys`, which enumerates
+ * ALL project keys under `<cacheRoot>/codebase-memory-mcp/projects/`.
+ *
+ * Walks the chain `<cacheRoot>`, `<cacheRoot>/codebase-memory-mcp`,
+ * `<cacheRoot>/codebase-memory-mcp/projects`. Any symlink in this chain
+ * is rejected. Only ENOENT is tolerated (the projects dir doesn't exist
+ * yet — `listProjectStoreKeys` returns `[]` in that case).
+ */
+export function assertGenerationStoreRootTrusted(
+  cacheRoot: string,
+  phase: string,
+): void {
+  const chain: Array<{ label: string; path: string }> = [
+    { label: "cacheRoot", path: cacheRoot },
+    { label: "codebase-memory-mcp", path: cbmCacheDir(cacheRoot) },
+    { label: "projects", path: generationStoreRoot(cacheRoot) },
+  ];
+
+  for (const { label, path } of chain) {
+    let stat;
+    try {
+      stat = lstatSync(path);
+    } catch (e) {
+      const errCode = (e as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT") {
+        continue;
+      }
+      throw new GenerationStoreError(
+        "PATH_TRAVERSAL_REJECTED",
+        phase,
+        "",
+        `Cannot lstat trust-root component "${label}" at "${path}": ${(e as Error).message}`,
+      );
+    }
+    if (stat.isSymbolicLink()) {
+      throw new GenerationStoreError(
+        "PATH_TRAVERSAL_REJECTED",
+        phase,
+        "",
+        `Trust-root component "${label}" at "${path}" is a symlink — rejected`,
+      );
+    }
+  }
+}
+
 // ─── Manifest parser and validator (section 18C) ────────────────────────
 
 /** UUID v4 regex (canonical form, lowercase). */
@@ -684,6 +864,25 @@ const SHA256_REGEX = /^[0-9a-f]{64}$/;
  */
 const ISO8601_WITH_TZ_REGEX =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** R169A-FIX-R3 (API-R169A-R3-02): Index-state outcome enum. */
+const INDEX_OUTCOMES: ReadonlySet<IndexAttemptOutcome> = new Set<IndexAttemptOutcome>([
+  "SUCCESS",
+  "SUCCESS_WITH_WARNINGS",
+  "PARTIAL",
+  "FAILED",
+  "STALE",
+]);
+
+/** R169A-FIX-R3 (API-R169A-R3-02): Index-state recovery enum (aligned with indexer). */
+const INDEX_RECOVERY_ACTIONS: ReadonlySet<IndexRecoveryAction> = new Set<IndexRecoveryAction>([
+  "none",
+  "retry_incremental",
+  "fix_filesystem",
+  "full_reindex",
+  "manifest_repair",
+  "legacy_migration",
+]);
 
 /**
  * R169A-FIX-R2 (VALID-R169A-R2-01): Validate a "safe string" field — used
@@ -702,10 +901,11 @@ function assertSafeStringField(
   maxLength: number,
   project: string,
   phase: string,
+  code: GenerationStoreErrorCode = "MANIFEST_SCHEMA_ERROR",
 ): void {
   if (typeof value !== "string") {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `${field} must be a string, got: ${JSON.stringify(value)}`,
@@ -713,7 +913,7 @@ function assertSafeStringField(
   }
   if (value.trim().length === 0) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `${field} must not be empty or whitespace-only`,
@@ -721,7 +921,7 @@ function assertSafeStringField(
   }
   if (value.length > maxLength) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `${field} length ${value.length} exceeds maximum ${maxLength}`,
@@ -731,7 +931,7 @@ function assertSafeStringField(
     const cc = value.charCodeAt(i);
     if (cc < 32) {
       throw new GenerationStoreError(
-        "MANIFEST_SCHEMA_ERROR",
+        code,
         phase,
         project,
         `${field} contains a C0 control character at offset ${i} (charCode=${cc})`,
@@ -750,10 +950,11 @@ function assertSafeNonNegativeInt(
   field: string,
   project: string,
   phase: string,
+  code: GenerationStoreErrorCode = "MANIFEST_SCHEMA_ERROR",
 ): void {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `${field} must be a safe non-negative integer, got: ${JSON.stringify(value)}`,
@@ -776,11 +977,12 @@ function assertCalendarValidTimestamp(
   value: string,
   project: string,
   phase: string,
+  code: GenerationStoreErrorCode = "MANIFEST_SCHEMA_ERROR",
 ): void {
   const match = ISO8601_WITH_TZ_REGEX.exec(value);
   if (!match) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `createdAt must match ISO-8601 with timezone, got: ${JSON.stringify(value)}`,
@@ -798,7 +1000,7 @@ function assertCalendarValidTimestamp(
   // component explicitly.
   if (month < 1 || month > 12) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `createdAt has invalid month: ${month} (value=${JSON.stringify(value)})`,
@@ -811,7 +1013,7 @@ function assertCalendarValidTimestamp(
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   if (day < 1 || day > daysInMonth) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `createdAt has invalid day: ${day} for year ${year} month ${month} (value=${JSON.stringify(value)})`,
@@ -819,7 +1021,7 @@ function assertCalendarValidTimestamp(
   }
   if (hour < 0 || hour > 23) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `createdAt has invalid hour: ${hour} (value=${JSON.stringify(value)})`,
@@ -827,7 +1029,7 @@ function assertCalendarValidTimestamp(
   }
   if (minute < 0 || minute > 59) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `createdAt has invalid minute: ${minute} (value=${JSON.stringify(value)})`,
@@ -835,7 +1037,7 @@ function assertCalendarValidTimestamp(
   }
   if (second < 0 || second > 59) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `createdAt has invalid second: ${second} (value=${JSON.stringify(value)})`,
@@ -846,7 +1048,7 @@ function assertCalendarValidTimestamp(
   const date = new Date(value);
   if (isNaN(date.getTime())) {
     throw new GenerationStoreError(
-      "MANIFEST_SCHEMA_ERROR",
+      code,
       phase,
       project,
       `createdAt does not parse to a valid Date: ${JSON.stringify(value)}`,
@@ -882,6 +1084,11 @@ function assertCalendarValidTimestamp(
  *   - sha256 must be 64 lowercase hex
  *   - No multiline values
  *
+ * R169A-FIX-R3 (VALID-R169A-R3-01): The dead placeholder code that
+ * computed `missingKeys = actualKeys.filter((k) => !isManifestV1Key(k) ? false : false)`
+ * (always returning `[]`) is removed. The real missing/extra key check
+ * below it is the authoritative one.
+ *
  * Throws GenerationStoreError on any validation failure.
  */
 export function validateGenerationManifest(
@@ -903,12 +1110,11 @@ export function validateGenerationManifest(
   const obj = value as Record<string, unknown>;
 
   // R169A-FIX-R2 (VALID-R169A-R2-01): Exact key set, checked against a
-  // PRIVATE, immutable set. `MANIFEST_V1_KEYS` is exported as a tuple
-  // (no .has / .add), and the validator's set is module-scoped — a
-  // consumer cannot mutate the authority.
+  // PRIVATE, immutable set. `MANIFEST_V1_KEYS` is exported as a frozen
+  // tuple (R169A-FIX-R3 VALID-R169A-R3-01: Object.freeze'd), and the
+  // validator's set is module-scoped — a consumer cannot mutate the
+  // authority.
   const actualKeys = Object.keys(obj);
-  const missingKeys = actualKeys.filter((k) => !isManifestV1Key(k) ? false : false); // placeholder; replaced below
-  void missingKeys; // unused; see real check below
   const actualKeySet = new Set(actualKeys);
   const missing: string[] = [];
   for (const k of MANIFEST_V1_KEYS) {
@@ -1036,6 +1242,373 @@ export function validateGenerationManifest(
   return obj as unknown as GenerationManifestV1;
 }
 
+// ─── Index state validator (R169A-FIX-R3 API-R169A-R3-02) ───────────────
+
+/**
+ * R169A-FIX-R3 (API-R169A-R3-02): Validate an `IndexAttemptStateV1`
+ * sidecar value.
+ *
+ * Validation rules:
+ *   - Must be a JSON object (not array/null)
+ *   - Exact key set (no missing, no extra) — checked against the private
+ *     `INDEX_STATE_V1_KEY_SET`. `INDEX_STATE_V1_KEYS` is exported as a
+ *     frozen readonly tuple; consumers cannot mutate the authority.
+ *   - formatVersion must be 1
+ *   - project must match expectedProject AND be a safe string (no
+ *     whitespace-only, no C0 control chars, max 1024 chars)
+ *   - activeGenerationId: null OR a canonical UUID v4
+ *   - lastAttemptId: canonical UUID v4 (non-null)
+ *   - lastAttemptAt: ISO-8601 with timezone AND calendar-valid
+ *   - lastAttemptOutcome: must be in the INDEX_OUTCOMES set
+ *   - recovery: must be in the INDEX_RECOVERY_ACTIONS set (aligned with
+ *     the indexer's `IndexResult.recovery` enum)
+ *   - lastAttemptError: null OR a safe string (max 8 KiB, no C0 controls)
+ *   - staleReason: null OR a structured object with:
+ *       * code: non-empty safe string (max 256 chars)
+ *       * message: non-empty safe string (max 8 KiB)
+ *       * paths: array of safe strings (each max 32 KiB, up to 1000 entries)
+ *       * totalPaths: optional safe non-negative int
+ *       * pathsTruncated: optional boolean
+ *   - Coherence rules (R169A-FIX-R3 §2.4):
+ *       * SUCCESS: lastAttemptError == null, staleReason == null,
+ *         recovery == "none"
+ *       * SUCCESS_WITH_WARNINGS: lastAttemptError == null
+ *       * FAILED: lastAttemptError must be a non-empty string
+ *       * STALE: staleReason non-null, recovery != "none"
+ *       * PARTIAL: no extra coherence constraints
+ *
+ * Throws GenerationStoreError on any validation failure. The error code
+ * is INDEX_STATE_SCHEMA_ERROR for structural / type / coherence faults,
+ * INDEX_STATE_PROJECT_MISMATCH for project equality, and
+ * INDEX_STATE_UNSUPPORTED_VERSION for formatVersion.
+ */
+export function validateIndexAttemptState(
+  value: unknown,
+  expectedProject: string,
+): IndexAttemptStateV1 {
+  const phase = "validateIndexAttemptState";
+  const SCHEMA = "INDEX_STATE_SCHEMA_ERROR" as const;
+
+  // Must be an object
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new GenerationStoreError(
+      SCHEMA,
+      phase,
+      expectedProject,
+      "Index-state must be a JSON object",
+    );
+  }
+
+  const obj = value as Record<string, unknown>;
+
+  // Exact key set
+  const actualKeys = Object.keys(obj);
+  const actualKeySet = new Set(actualKeys);
+  const missing: string[] = [];
+  for (const k of INDEX_STATE_V1_KEYS) {
+    if (!actualKeySet.has(k)) missing.push(k);
+  }
+  const extra: string[] = actualKeys.filter((k) => !isIndexStateV1Key(k));
+  if (missing.length > 0 || extra.length > 0) {
+    const details: string[] = [];
+    if (missing.length > 0) details.push(`missing: ${missing.join(", ")}`);
+    if (extra.length > 0) details.push(`extra: ${extra.join(", ")}`);
+    throw new GenerationStoreError(
+      SCHEMA,
+      phase,
+      expectedProject,
+      `Key set mismatch (${details.join("; ")})`,
+    );
+  }
+
+  // formatVersion
+  if (obj.formatVersion !== 1) {
+    throw new GenerationStoreError(
+      "INDEX_STATE_UNSUPPORTED_VERSION",
+      phase,
+      expectedProject,
+      `formatVersion must be 1, got: ${JSON.stringify(obj.formatVersion)}`,
+    );
+  }
+
+  // project — safe-string + equality
+  assertSafeStringField(obj.project, "project", MAX_PROJECT_NAME_LENGTH, expectedProject, phase, SCHEMA);
+  if (obj.project !== expectedProject) {
+    throw new GenerationStoreError(
+      "INDEX_STATE_PROJECT_MISMATCH",
+      phase,
+      expectedProject,
+      `project must be "${expectedProject}", got: ${JSON.stringify(obj.project)}`,
+    );
+  }
+
+  // activeGenerationId: null OR UUID v4
+  if (obj.activeGenerationId !== null) {
+    if (typeof obj.activeGenerationId !== "string" || !UUID_V4_REGEX.test(obj.activeGenerationId)) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `activeGenerationId must be null or a canonical UUID v4, got: ${JSON.stringify(obj.activeGenerationId)}`,
+      );
+    }
+  }
+
+  // lastAttemptId: UUID v4 (non-null)
+  if (typeof obj.lastAttemptId !== "string" || !UUID_V4_REGEX.test(obj.lastAttemptId)) {
+    throw new GenerationStoreError(
+      SCHEMA,
+      phase,
+      expectedProject,
+      `lastAttemptId must be a canonical UUID v4, got: ${JSON.stringify(obj.lastAttemptId)}`,
+    );
+  }
+
+  // lastAttemptAt: ISO-8601 with timezone + calendar-valid
+  if (typeof obj.lastAttemptAt !== "string") {
+    throw new GenerationStoreError(
+      SCHEMA,
+      phase,
+      expectedProject,
+      "lastAttemptAt must be a string",
+    );
+  }
+  assertCalendarValidTimestamp(obj.lastAttemptAt, expectedProject, phase, SCHEMA);
+
+  // lastAttemptOutcome: enum
+  if (typeof obj.lastAttemptOutcome !== "string" || !INDEX_OUTCOMES.has(obj.lastAttemptOutcome as IndexAttemptOutcome)) {
+    throw new GenerationStoreError(
+      SCHEMA,
+      phase,
+      expectedProject,
+      `lastAttemptOutcome must be one of ${[...INDEX_OUTCOMES].join("|")}, got: ${JSON.stringify(obj.lastAttemptOutcome)}`,
+    );
+  }
+  const outcome = obj.lastAttemptOutcome as IndexAttemptOutcome;
+
+  // recovery: enum
+  if (typeof obj.recovery !== "string" || !INDEX_RECOVERY_ACTIONS.has(obj.recovery as IndexRecoveryAction)) {
+    throw new GenerationStoreError(
+      SCHEMA,
+      phase,
+      expectedProject,
+      `recovery must be one of ${[...INDEX_RECOVERY_ACTIONS].join("|")}, got: ${JSON.stringify(obj.recovery)}`,
+    );
+  }
+  const recovery = obj.recovery as IndexRecoveryAction;
+
+  // lastAttemptError: null OR safe string
+  if (obj.lastAttemptError !== null) {
+    if (typeof obj.lastAttemptError !== "string") {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `lastAttemptError must be null or a string, got: ${JSON.stringify(obj.lastAttemptError)}`,
+      );
+    }
+    // Allow empty string for forward-compat (some indexers may emit ""),
+    // but reject C0 control chars and excessive length. Note: the
+    // coherence rule below (FAILED requires non-empty error) catches
+    // the empty-string-for-FAILED case.
+    if (obj.lastAttemptError.length > MAX_INDEX_STATE_ERROR_LENGTH) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `lastAttemptError length ${obj.lastAttemptError.length} exceeds maximum ${MAX_INDEX_STATE_ERROR_LENGTH}`,
+      );
+    }
+    for (let i = 0; i < obj.lastAttemptError.length; i++) {
+      const cc = obj.lastAttemptError.charCodeAt(i);
+      if (cc < 32) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `lastAttemptError contains a C0 control character at offset ${i} (charCode=${cc})`,
+        );
+      }
+    }
+  }
+
+  // staleReason: null OR structured object
+  let staleReason: IndexAttemptStaleReasonV1 | null = null;
+  if (obj.staleReason !== null) {
+    if (obj.staleReason === undefined || typeof obj.staleReason !== "object" || Array.isArray(obj.staleReason)) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `staleReason must be null or an object, got: ${JSON.stringify(obj.staleReason)}`,
+      );
+    }
+    const sr = obj.staleReason as Record<string, unknown>;
+    // Exact key set for the stale reason object: code, message, paths,
+    // totalPaths?, pathsTruncated?. No extra keys allowed.
+    const SR_REQUIRED: ReadonlySet<string> = new Set(["code", "message", "paths"]);
+    const SR_OPTIONAL: ReadonlySet<string> = new Set(["totalPaths", "pathsTruncated"]);
+    const srKeys = Object.keys(sr);
+    for (const k of SR_REQUIRED) {
+      if (!(k in sr)) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `staleReason.${k} is required`,
+        );
+      }
+    }
+    for (const k of srKeys) {
+      if (!SR_REQUIRED.has(k) && !SR_OPTIONAL.has(k)) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `staleReason has unknown key "${k}"`,
+        );
+      }
+    }
+    // code: non-empty safe string (max 256)
+    assertSafeStringField(sr.code, "staleReason.code", MAX_INDEX_STATE_CODE_LENGTH, expectedProject, phase, SCHEMA);
+    // message: non-empty safe string (max 8 KiB)
+    assertSafeStringField(sr.message, "staleReason.message", MAX_INDEX_STATE_MESSAGE_LENGTH, expectedProject, phase, SCHEMA);
+    // paths: array of strings
+    if (!Array.isArray(sr.paths)) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `staleReason.paths must be an array, got: ${JSON.stringify(sr.paths)}`,
+      );
+    }
+    if (sr.paths.length > MAX_INDEX_STATE_PATHS_ENTRIES) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `staleReason.paths length ${sr.paths.length} exceeds maximum ${MAX_INDEX_STATE_PATHS_ENTRIES}`,
+      );
+    }
+    for (let i = 0; i < sr.paths.length; i++) {
+      const p = sr.paths[i];
+      if (typeof p !== "string") {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `staleReason.paths[${i}] must be a string, got: ${JSON.stringify(p)}`,
+        );
+      }
+      if (p.length > MAX_INDEX_STATE_PATH_LENGTH) {
+        throw new GenerationStoreError(
+          SCHEMA,
+          phase,
+          expectedProject,
+          `staleReason.paths[${i}] length ${p.length} exceeds maximum ${MAX_INDEX_STATE_PATH_LENGTH}`,
+        );
+      }
+      for (let j = 0; j < p.length; j++) {
+        const cc = p.charCodeAt(j);
+        if (cc < 32) {
+          throw new GenerationStoreError(
+            SCHEMA,
+            phase,
+            expectedProject,
+            `staleReason.paths[${i}] contains a C0 control character at offset ${j} (charCode=${cc})`,
+          );
+        }
+      }
+    }
+    // totalPaths: optional safe non-negative int
+    if (sr.totalPaths !== undefined) {
+      assertSafeNonNegativeInt(sr.totalPaths, "staleReason.totalPaths", expectedProject, phase, SCHEMA);
+    }
+    // pathsTruncated: optional boolean
+    if (sr.pathsTruncated !== undefined && typeof sr.pathsTruncated !== "boolean") {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `staleReason.pathsTruncated must be a boolean, got: ${JSON.stringify(sr.pathsTruncated)}`,
+      );
+    }
+    staleReason = {
+      code: sr.code as string,
+      message: sr.message as string,
+      paths: sr.paths as readonly string[],
+      totalPaths: typeof sr.totalPaths === "number" ? sr.totalPaths : undefined,
+      pathsTruncated: typeof sr.pathsTruncated === "boolean" ? sr.pathsTruncated : undefined,
+    };
+  }
+
+  // Coherence rules (R169A-FIX-R3 §2.4).
+  if (outcome === "SUCCESS") {
+    if (obj.lastAttemptError !== null) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `Coherence violation: outcome=SUCCESS but lastAttemptError is non-null`,
+      );
+    }
+    if (staleReason !== null) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `Coherence violation: outcome=SUCCESS but staleReason is non-null`,
+      );
+    }
+    if (recovery !== "none") {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `Coherence violation: outcome=SUCCESS but recovery="${recovery}" (must be "none")`,
+      );
+    }
+  } else if (outcome === "SUCCESS_WITH_WARNINGS") {
+    if (obj.lastAttemptError !== null) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `Coherence violation: outcome=SUCCESS_WITH_WARNINGS but lastAttemptError is non-null`,
+      );
+    }
+  } else if (outcome === "FAILED") {
+    if (typeof obj.lastAttemptError !== "string" || obj.lastAttemptError.length === 0) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `Coherence violation: outcome=FAILED but lastAttemptError is empty or non-string`,
+      );
+    }
+  } else if (outcome === "STALE") {
+    if (staleReason === null) {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `Coherence violation: outcome=STALE but staleReason is null`,
+      );
+    }
+    if (recovery === "none") {
+      throw new GenerationStoreError(
+        SCHEMA,
+        phase,
+        expectedProject,
+        `Coherence violation: outcome=STALE but recovery="none" (must recommend an action)`,
+      );
+    }
+  }
+  // PARTIAL: no extra coherence constraints.
+
+  return obj as unknown as IndexAttemptStateV1;
+}
+
 /**
  * Read and parse a manifest from disk.
  * Throws on read error, JSON parse error, or validation error.
@@ -1045,6 +1618,14 @@ export function validateGenerationManifest(
  * `MANIFEST_TOO_LARGE` — do NOT read the file into memory. Reading is
  * done via an fd (openSync + readSync + closeSync) so we control the
  * exact number of bytes consumed.
+ *
+ * R169A-FIX-R3 (SEC-R169A-R3-03): The previous `statSync(path)` then
+ * `openSync(path, "r")` had a TOCTOU window — a symlink could be swapped
+ * between the two calls. The parser now opens with `O_RDONLY | O_NOFOLLOW`
+ * (when available) and fstat's the SAME fd. If `O_NOFOLLOW` is not
+ * available (Windows), the parser falls back to `lstatSync → openSync →
+ * fstatSync` and compares `dev` + `ino` between the lstat and fstat to
+ * detect a swap.
  */
 export function parseGenerationManifest(
   manifestPath: string,
@@ -1052,30 +1633,160 @@ export function parseGenerationManifest(
 ): GenerationManifestV1 {
   const phase = "parseGenerationManifest";
 
-  // R169A-FIX-R2: stat the file first to enforce the size bound.
-  let sizeStat;
-  try {
-    sizeStat = statSync(manifestPath);
-  } catch (e) {
-    const errCode = (e as NodeJS.ErrnoException).code;
-    if (errCode === "ENOENT") {
-      // Caller is responsible for distinguishing missing file from
-      // parse error; here we just surface as MANIFEST_PARSE_ERROR.
+  // R169A-FIX-R3 (SEC-R169A-R3-03): Open with O_NOFOLLOW when available
+  // so a symlink at `manifestPath` is rejected by the kernel. Then fstat
+  // the SAME fd to close the TOCTOU window.
+  let fd: number | null = null;
+  let sizeStat: { size: number; isFile(): boolean; isSymbolicLink(): boolean; dev: number; ino: number };
+
+  if (O_NOFOLLOW) {
+    // Preferred path: open with O_RDONLY | O_NOFOLLOW. If the path is a
+    // symlink, the kernel rejects with ELOOP. We fstat the same fd to
+    // get the size and verify it's a regular file.
+    const flags = fsConstants.O_RDONLY | O_NOFOLLOW;
+    try {
+      fd = openSync(manifestPath, flags);
+    } catch (e) {
+      const errCode = (e as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT") {
+        throw new GenerationStoreError(
+          "MANIFEST_PARSE_ERROR",
+          phase,
+          expectedProject,
+          `Manifest file not found: ${manifestPath}`,
+        );
+      }
+      if (errCode === "ELOOP") {
+        // ELOOP from O_NOFOLLOW means the path is a symlink.
+        throw new GenerationStoreError(
+          "MANIFEST_SYMLINK_REJECTED",
+          phase,
+          expectedProject,
+          `Manifest path is a symlink (rejected by O_NOFOLLOW): ${manifestPath}`,
+        );
+      }
       throw new GenerationStoreError(
         "MANIFEST_PARSE_ERROR",
         phase,
         expectedProject,
-        `Manifest file not found: ${manifestPath}`,
+        `Failed to open manifest with O_NOFOLLOW "${manifestPath}": ${(e as Error).message}`,
       );
     }
+    try {
+      const s = fstatSync(fd);
+      sizeStat = {
+        size: s.size,
+        isFile: () => s.isFile(),
+        isSymbolicLink: () => s.isSymbolicLink(),
+        dev: s.dev,
+        ino: s.ino,
+      };
+    } catch (e) {
+      try { closeSync(fd); } catch { /* best effort */ }
+      throw new GenerationStoreError(
+        "MANIFEST_PARSE_ERROR",
+        phase,
+        expectedProject,
+        `Failed to fstat manifest fd: ${(e as Error).message}`,
+      );
+    }
+  } else {
+    // Fallback (no O_NOFOLLOW): lstatSync → openSync → fstatSync →
+    // compare dev+ino between lstat and fstat. If different, a symlink
+    // swap happened between lstat and open.
+    let lstat;
+    try {
+      lstat = lstatSync(manifestPath);
+    } catch (e) {
+      const errCode = (e as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT") {
+        throw new GenerationStoreError(
+          "MANIFEST_PARSE_ERROR",
+          phase,
+          expectedProject,
+          `Manifest file not found: ${manifestPath}`,
+        );
+      }
+      throw new GenerationStoreError(
+        "MANIFEST_PARSE_ERROR",
+        phase,
+        expectedProject,
+        `Failed to lstat manifest "${manifestPath}": ${(e as Error).message}`,
+      );
+    }
+    if (lstat.isSymbolicLink()) {
+      throw new GenerationStoreError(
+        "MANIFEST_SYMLINK_REJECTED",
+        phase,
+        expectedProject,
+        `Manifest path is a symlink: ${manifestPath}`,
+      );
+    }
+    try {
+      fd = openSync(manifestPath, "r");
+    } catch (e) {
+      const errCode = (e as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT") {
+        throw new GenerationStoreError(
+          "MANIFEST_PARSE_ERROR",
+          phase,
+          expectedProject,
+          `Manifest file not found (open): ${manifestPath}`,
+        );
+      }
+      throw new GenerationStoreError(
+        "MANIFEST_PARSE_ERROR",
+        phase,
+        expectedProject,
+        `Failed to open manifest "${manifestPath}": ${(e as Error).message}`,
+      );
+    }
+    let fstat;
+    try {
+      fstat = fstatSync(fd);
+    } catch (e) {
+      try { closeSync(fd); } catch { /* best effort */ }
+      throw new GenerationStoreError(
+        "MANIFEST_PARSE_ERROR",
+        phase,
+        expectedProject,
+        `Failed to fstat manifest fd: ${(e as Error).message}`,
+      );
+    }
+    // Compare dev+ino between lstat and fstat. If different, a symlink
+    // swap happened between lstat and open — reject.
+    if (lstat.dev !== fstat.dev || lstat.ino !== fstat.ino) {
+      try { closeSync(fd); } catch { /* best effort */ }
+      throw new GenerationStoreError(
+        "MANIFEST_SYMLINK_REJECTED",
+        phase,
+        expectedProject,
+        `Manifest path was swapped between lstat and open (dev/ino mismatch): ${manifestPath}`,
+      );
+    }
+    sizeStat = {
+      size: fstat.size,
+      isFile: () => fstat.isFile(),
+      isSymbolicLink: () => fstat.isSymbolicLink(),
+      dev: fstat.dev,
+      ino: fstat.ino,
+    };
+  }
+
+  // Verify it's a regular file (rejects directories, FIFOs, sockets, etc).
+  if (!sizeStat.isFile()) {
+    try { closeSync(fd); } catch { /* best effort */ }
     throw new GenerationStoreError(
-      "MANIFEST_PARSE_ERROR",
+      "MANIFEST_TARGET_NOT_REGULAR",
       phase,
       expectedProject,
-      `Failed to stat manifest "${manifestPath}": ${(e as Error).message}`,
+      `Manifest path is not a regular file: ${manifestPath}`,
     );
   }
+
+  // Size bound check.
   if (sizeStat.size > MAX_GENERATION_MANIFEST_BYTES) {
+    try { closeSync(fd); } catch { /* best effort */ }
     throw new GenerationStoreError(
       "MANIFEST_TOO_LARGE",
       phase,
@@ -1087,10 +1798,8 @@ export function parseGenerationManifest(
   // Read via fd so we control the byte count. We allocate a buffer of
   // exactly `size` bytes (capped by the size check above) and read into
   // it. A short read is an error (file shrank between stat and read).
-  let fd: number | null = null;
   let raw: string;
   try {
-    fd = openSync(manifestPath, "r");
     const buf = Buffer.alloc(sizeStat.size);
     let offset = 0;
     while (offset < buf.length) {
@@ -1233,8 +1942,8 @@ export function resolveActiveCodeDb(
 
   if (manifestExists) {
     // Parse and validate the manifest — fail closed on any error.
-    // R169A-FIX-R2: parseGenerationManifest enforces the 64 KiB size
-    // bound before reading.
+    // R169A-FIX-R3 (SEC-R169A-R3-03): parseGenerationManifest opens with
+    // O_NOFOLLOW + fstat to close the TOCTOU window.
     const manifest = parseGenerationManifest(manifestPath, project);
 
     // Resolve the generation DB path
@@ -1394,7 +2103,7 @@ export function resolveActiveCodeDb(
   };
 }
 
-// ─── Layout durability (R169A-FIX-R2 DUR-R169A-R2-01) ───────────────────
+// ─── Layout durability (R169A-FIX-R2 DUR-R169A-R2-01, R169A-FIX-R3) ──────
 
 /**
  * R169A-FIX-R2 (DUR-R169A-R2-01): Ensure the per-project store layout
@@ -1403,10 +2112,22 @@ export function resolveActiveCodeDb(
  * For each directory in the chain:
  *   1. If it doesn't exist, mkdir with mode 0700.
  *      Failure → STORE_LAYOUT_CREATE_FAILED.
- *   2. fsync the directory.
+ *   2. If mkdir returned EEXIST (concurrent writer), revalidate:
+ *      lstatSync, reject symlink, reject non-directory, re-run trust
+ *      root + path-inside, check permissions (R169A-FIX-R3
+ *      SEC-R169A-R3-02 + SEC-R169A-R3-04).
+ *   3. For EXISTING directories (found via lstat before mkdir),
+ *      revalidate the same way (R169A-FIX-R3 SEC-R169A-R3-02).
+ *   4. fsync the directory.
  *      Failure → STORE_LAYOUT_DURABILITY_UNKNOWN.
- *   3. If the directory was newly created, fsync its PARENT directory.
+ *   5. If the directory was newly created, fsync its PARENT directory.
  *      Failure → STORE_LAYOUT_DURABILITY_UNKNOWN.
+ *
+ * R169A-FIX-R3 (SEC-R169A-R3-04): Existing directories must satisfy
+ * `mode & 0o077 === 0` (no group/other permissions). Otherwise →
+ * STORE_LAYOUT_PERMISSIONS_INSECURE. On POSIX, the directory's uid
+ * SHOULD match `process.getuid()` (best-effort — not enforced on
+ * platforms where `getuid` is unavailable).
  *
  * Why fsync the parent? `mkdir` creates the directory ENTRY in the
  * parent. Without fsyncing the parent, a crash after mkdir may leave
@@ -1463,12 +2184,13 @@ export function ensureGenerationStoreLayoutDurable(
   const created: string[] = [];
 
   for (const { path: dirPath, parent } of dirs) {
-    // Check existence with lstat first. We do NOT use recursive mkdir
-    // here because we want to know whether THIS directory was newly
-    // created (so we can fsync the parent).
+    // R169A-FIX-R3 (SEC-R169A-R3-02 + SEC-R169A-R3-04): Check existence
+    // with lstat first. We do NOT use recursive mkdir here because we
+    // want to know whether THIS directory was newly created (so we can
+    // fsync the parent), AND we want to validate existing dirs.
     let existed = false;
     try {
-      const st = lstatSync(dirPath);
+      const st = opImpl.statSync(dirPath);
       existed = true;
       if (st.isSymbolicLink()) {
         // Defense-in-depth: assertTrustedRootNoSymlinks should have
@@ -1488,6 +2210,29 @@ export function ensureGenerationStoreLayoutDurable(
           `Layout path exists but is not a directory: ${dirPath}`,
         );
       }
+      // R169A-FIX-R3 (SEC-R169A-R3-04): Existing directory permission check.
+      // mode & 0o077 must be 0 (no group/other read/write/execute).
+      if ((st.mode & 0o077) !== 0) {
+        throw new GenerationStoreError(
+          "STORE_LAYOUT_PERMISSIONS_INSECURE",
+          phase,
+          project,
+          `Layout directory "${dirPath}" has insecure permissions: mode=0o${st.mode.toString(8)} (group/other bits must be 0)`,
+        );
+      }
+      // R169A-FIX-R3 (SEC-R169A-R3-04): Best-effort uid check on POSIX.
+      // Skip on platforms where process.getuid is unavailable (Windows).
+      if (typeof st.uid === "number" && typeof process.getuid === "function") {
+        const expectedUid = process.getuid();
+        if (st.uid !== expectedUid) {
+          throw new GenerationStoreError(
+            "STORE_LAYOUT_PERMISSIONS_INSECURE",
+            phase,
+            project,
+            `Layout directory "${dirPath}" is owned by uid ${st.uid}, expected ${expectedUid}`,
+          );
+        }
+      }
     } catch (e) {
       if (e instanceof GenerationStoreError) throw e;
       const errCode = (e as NodeJS.ErrnoException).code;
@@ -1506,8 +2251,9 @@ export function ensureGenerationStoreLayoutDurable(
       try {
         opImpl.mkdirSync(dirPath, { recursive: false, mode: 0o700 });
       } catch (e) {
-        // If the dir was created by a concurrent writer between our
-        // lstat and our mkdir, EEXIST is fine — treat as "existed".
+        // R169A-FIX-R3 (SEC-R169A-R3-02): EEXIST is no longer silently
+        // accepted. A concurrent writer may have created the dir — OR
+        // may have replaced it with a symlink / regular file. Revalidate.
         const errCode = (e as NodeJS.ErrnoException).code;
         if (errCode !== "EEXIST") {
           throw new GenerationStoreError(
@@ -1517,12 +2263,85 @@ export function ensureGenerationStoreLayoutDurable(
             `Failed to create layout directory "${dirPath}" with mode 0700: ${(e as Error).message}`,
           );
         }
+        // EEXIST — revalidate the path that now exists.
+        let existStat;
+        try {
+          existStat = opImpl.statSync(dirPath);
+        } catch (e2) {
+          throw new GenerationStoreError(
+            "STORE_LAYOUT_CREATE_FAILED",
+            phase,
+            project,
+            `EEXIST on mkdir but cannot stat "${dirPath}": ${(e2 as Error).message}`,
+          );
+        }
+        if (existStat.isSymbolicLink()) {
+          throw new GenerationStoreError(
+            "PATH_TRAVERSAL_REJECTED",
+            phase,
+            project,
+            `Layout directory became a symlink between lstat and mkdir: ${dirPath}`,
+          );
+        }
+        if (!existStat.isDirectory()) {
+          throw new GenerationStoreError(
+            "STORE_LAYOUT_CREATE_FAILED",
+            phase,
+            project,
+            `Layout path exists but is not a directory (EEXIST): ${dirPath}`,
+          );
+        }
+        // R169A-FIX-R3 (SEC-R169A-R3-04): Same permission check for the
+        // EEXIST case.
+        if ((existStat.mode & 0o077) !== 0) {
+          throw new GenerationStoreError(
+            "STORE_LAYOUT_PERMISSIONS_INSECURE",
+            phase,
+            project,
+            `Layout directory "${dirPath}" (EEXIST) has insecure permissions: mode=0o${existStat.mode.toString(8)}`,
+          );
+        }
+        if (typeof existStat.uid === "number" && typeof process.getuid === "function") {
+          const expectedUid = process.getuid();
+          if (existStat.uid !== expectedUid) {
+            throw new GenerationStoreError(
+              "STORE_LAYOUT_PERMISSIONS_INSECURE",
+              phase,
+              project,
+              `Layout directory "${dirPath}" (EEXIST) is owned by uid ${existStat.uid}, expected ${expectedUid}`,
+            );
+          }
+        }
+        // R169A-FIX-R3 (SEC-R169A-R3-02): Re-run the trust root + path
+        // containment check. If the dir was replaced by a symlink to
+        // elsewhere between our lstat and mkdir, this catches it.
+        assertTrustedRootNoSymlinks(cacheRoot, project, phase);
+        assertPathInsideNoSymlinks(
+          parent,
+          dirPath,
+          project,
+          phase,
+          "PATH_TRAVERSAL_REJECTED",
+        );
         // EEXIST — someone else created it; treat as existed.
         existed = true;
       }
       if (!existed) {
         created.push(dirPath);
       }
+    } else {
+      // R169A-FIX-R3 (SEC-R169A-R3-02): For directories that already
+      // existed (found via lstat), re-run the trust root + path
+      // containment check. This catches a symlink swap that happened
+      // between assertTrustedRootNoSymlinks (at the top of this
+      // function) and now.
+      assertPathInsideNoSymlinks(
+        parent,
+        dirPath,
+        project,
+        phase,
+        "PATH_TRAVERSAL_REJECTED",
+      );
     }
 
     // fsync the directory itself. This ensures its metadata (mtime,
@@ -1530,9 +2349,17 @@ export function ensureGenerationStoreLayoutDurable(
     // writes INSIDE the directory (e.g. a temp file we're about to
     // create) hit the directory entry's link count promptly. Even if
     // the directory already existed, fsyncing it is cheap and idempotent.
+    //
+    // R169A-FIX-R3 (SEC-R169A-R3-02): When O_DIRECTORY | O_NOFOLLOW are
+    // available, open the directory with those flags. O_NOFOLLOW rejects
+    // symlinks at the kernel level; O_DIRECTORY rejects non-dirs.
     let dirFd: number | null = null;
     try {
-      dirFd = opImpl.openSync(dirPath, "r");
+      if (O_DIRECTORY && O_NOFOLLOW) {
+        dirFd = opImpl.openSync(dirPath, fsConstants.O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+      } else {
+        dirFd = opImpl.openSync(dirPath, "r");
+      }
       opImpl.fsyncSync(dirFd);
       opImpl.closeSync(dirFd);
       dirFd = null;
@@ -1574,25 +2401,51 @@ export function ensureGenerationStoreLayoutDurable(
   return { created };
 }
 
-// ─── Atomic JSON writer (section 18E, R169A-FIX DUR-R169A-01/02, R2) ────
+// ─── Atomic JSON writer (section 18E, R169A-FIX DUR-R169A-01/02, R2/R3) ─
+
+/**
+ * R169A-FIX-R3 (API-R169A-R3-01): Test hook for the internal writer.
+ *
+ * `afterLayoutBeforeOpen` is called AFTER `ensureGenerationStoreLayoutDurable`
+ * has created the layout directories AND BEFORE the temp file is opened
+ * with `openSync(tmpPath, "wx", 0o600)`. This is the window in which a
+ * concurrent process could replace the parent dir with a symlink. Tests
+ * use this hook to inject the race and verify the writer's pre-open
+ * revalidation rejects it (SEC-R169A-R3-01).
+ */
+export interface WriterTestHook {
+  /** Called after layout creation, before temp file open. */
+  afterLayoutBeforeOpen?(ctx: { targetPath: string; projectDir: string; project: string }): void;
+}
 
 /**
  * Write a JSON file atomically using the temp-rename-fsync pattern.
  *
- * INTERNAL — not exported. Use `writeProjectJsonAtomically` for the
- * project-aware wrapper that derives the target path, validates the
- * trust root, and ensures layout durability.
+ * INTERNAL — not exported. Use `writeGenerationManifestAtomically` or
+ * `writeIndexStateAtomically` for the typed, validating public wrappers.
  *
  * R169A-FIX-R2 (SEC-R169A-R2-02): This function still accepts an
  * arbitrary `targetPath`, but it is now ONLY called by
- * `writeProjectJsonAtomically` after the trust root and target path have
- * been validated. Direct callers from outside this module are not
- * permitted — there is no public API for writing JSON to an arbitrary
+ * `writeProjectJsonAtomicallyInternal` after the trust root and target
+ * path have been validated. Direct callers from outside this module are
+ * not permitted — there is no public API for writing JSON to an arbitrary
  * path under the cache root.
  *
- * R169A-FIX-R2 (DUR-R169A-R2-01): `ops.mkdirSync` is now called with
- * `mode: 0o700` so the temp directory is created with strict
- * permissions. The temp file is still 0o600.
+ * R169A-FIX-R3 (SEC-R169A-R3-01): The previous version called
+ * `ops.mkdirSync(dir, { recursive: true, mode: 0o700 })` here as a
+ * belt-and-suspenders step. This is REMOVED — a concurrent process can
+ * replace a directory with a symlink between the validation and the
+ * mkdir, and `mkdir -p` would silently follow the symlink. The writer
+ * now REQUIRES the parent to already exist (created by
+ * `ensureGenerationStoreLayoutDurable`). Immediately before
+ * `openSync(tmpPath, "wx", 0o600)`, the writer re-runs
+ * `assertTrustedRootNoSymlinks` + `assertPathInsideNoSymlinks` so a
+ * symlink race between layout and temp-open is rejected. The
+ * `WriterTestHook.afterLayoutBeforeOpen` callback lets tests inject
+ * the race.
+ *
+ * R169A-FIX-R2 (DUR-R169A-R2-01): `ops.mkdirSync` was previously called
+ * with `mode: 0o700` for the temp dir. Removed in R3 — see above.
  *
  * R169A-FIX (DUR-R169A-02) — Serialization safety:
  *   1. Serialize to JSON BEFORE any filesystem mutation. If
@@ -1648,13 +2501,15 @@ function writeJsonAtomically(
   //      top-level value)
   // Both cases must throw ATOMIC_SERIALIZATION_FAILED before any file
   // is opened — otherwise a partial temp file could be left behind.
+  //
+  // R169A-FIX-R3 (API-R169A-R3-01): Serialization goes through
+  // `ops.serializeJson` so tests can inject a failure (the typed public
+  // wrappers validate the value BEFORE calling the internal writer, so
+  // a test that wants to exercise ATOMIC_SERIALIZATION_FAILED must pass
+  // a valid manifest AND set `failAtSerialize` on TestOps).
   let serialized: string;
   try {
-    const r = JSON.stringify(value, null, 2);
-    if (typeof r !== "string") {
-      throw new Error(`JSON.stringify returned non-string (typeof=${typeof r})`);
-    }
-    serialized = r;
+    serialized = ops.serializeJson(value);
   } catch (e) {
     throw new GenerationStoreError(
       "ATOMIC_SERIALIZATION_FAILED",
@@ -1665,22 +2520,13 @@ function writeJsonAtomically(
   }
   const payload = Buffer.from(serialized + "\n", "utf8");
 
-  // R169A-FIX-R2 (DUR-R169A-R2-01): The directory must already exist by
-  // the time we get here — writeProjectJsonAtomically calls
-  // ensureGenerationStoreLayoutDurable first. We still mkdir as a
-  // belt-and-suspenders step (mode 0700) in case the dir was deleted
-  // between layout and write. Production callers will see this be a
-  // no-op (dir exists).
-  try {
-    ops.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  } catch (e) {
-    throw new GenerationStoreError(
-      "ATOMIC_WRITE_FAILED",
-      phase,
-      project,
-      `Failed to ensure temp directory "${dir}" with mode 0700: ${(e as Error).message}`,
-    );
-  }
+  // R169A-FIX-R3 (SEC-R169A-R3-01): The parent directory must already
+  // exist by the time we get here — writeProjectJsonAtomicallyInternal
+  // calls ensureGenerationStoreLayoutDurable first. We DO NOT call
+  // mkdirSync here — a concurrent process could replace a directory
+  // with a symlink between validation and mkdir, and `mkdir -p` would
+  // silently follow the symlink. The pre-open revalidation below
+  // catches any race.
 
   let fd: number | null = null;
   let renameSucceeded = false;
@@ -1808,73 +2654,166 @@ function writeJsonAtomically(
 }
 
 /**
- * R169A-FIX-R2 (SEC-R169A-R2-02): Project-aware atomic JSON writer.
+ * R169A-FIX-R3 (API-R169A-R3-01 + QUAL-R169A-R3-01): Internal
+ * project-aware atomic JSON writer.
  *
- * This is the PUBLIC writer. It derives the target path from `project`
- * and `target` (NOT from the caller), validates the trust root, rejects
- * symlinked targets, ensures the layout is durable, and then delegates
- * to the internal `writeJsonAtomically`.
+ * INTERNAL — not exported. The public API is `writeGenerationManifestAtomically`
+ * and `writeIndexStateAtomically`, which validate the value BEFORE
+ * calling this function.
  *
  * Wrapper contract:
- *   1. Derive target path: `manifest` → `activeManifestPath(project)`;
+ *   1. Validate `target` is "manifest" or "index-state" at runtime
+ *      (QUAL-R169A-R3-01). Else GENERATION_STORE_CONFIG_ERROR.
+ *   2. Derive target path: `manifest` → `activeManifestPath(project)`;
  *      `index-state` → `indexStatePath(project)`.
- *   2. `assertTrustedRootNoSymlinks(cacheRoot, project, phase)` —
+ *   3. `assertTrustedRootNoSymlinks(cacheRoot, project, phase)` —
  *      validates cacheRoot, cbmCacheDir, projects, project-key. Any
  *      symlink in this chain → PATH_TRAVERSAL_REJECTED.
- *   3. `assertPathInsideNoSymlinks(generationStoreRoot, targetPath, ...)`
- *      — full chain walk from the store root to the target file.
- *   4. Reject if target (if existing) is a symlink — `assertNotSymlink`.
- *   5. `ensureGenerationStoreLayoutDurable(project, options, ops)` —
+ *   4. `assertPathInsideNoSymlinks(generationStoreRoot, targetPath, ...)`
+ *      — full chain walk from the store root to the target file. The
+ *      symlink code is per-target: MANIFEST_SYMLINK_REJECTED for
+ *      active-generation.json, PROJECT_STATE_SYMLINK_REJECTED for
+ *      index-state.json (R169A-FIX-R3 QUAL-R169A-R3-01).
+ *   5. Reject if target (if existing) is a symlink — `assertNotSymlink`
+ *      with the per-target code.
+ *   6. `ensureGenerationStoreLayoutDurable(project, options, ops)` —
  *      mkdir 0700 + fsync every directory in the chain + fsync parent
  *      of newly created dirs. Failures: STORE_LAYOUT_CREATE_FAILED,
- *      STORE_LAYOUT_DURABILITY_UNKNOWN.
- *   6. `writeJsonAtomically(targetPath, value, project, phase, ops)` —
- *      the temp-rename-fsync pattern. Temp file mode 0600, temp dir
- *      mode 0700.
- *
- * All errors are wrapped in `GenerationStoreError` with the project
- * name. The wrapper NEVER accepts an arbitrary target path — the path
- * is always derived from `project` + `target`.
+ *      STORE_LAYOUT_DURABILITY_UNKNOWN, STORE_LAYOUT_PERMISSIONS_INSECURE.
+ *   7. R169A-FIX-R3 (SEC-R169A-R3-01): If `hook.afterLayoutBeforeOpen`
+ *      is provided, call it. Tests use this to inject a symlink race
+ *      between layout creation and temp open.
+ *   8. R169A-FIX-R3 (SEC-R169A-R3-01): Re-run `assertTrustedRootNoSymlinks`
+ *      and `assertPathInsideNoSymlinks` IMMEDIATELY before
+ *      `openSync(tmpPath, "wx", 0o600)`. If the parent dir was replaced
+ *      by a symlink between layout and now, this catches it.
+ *   9. `writeJsonAtomically(targetPath, value, project, phase, ops)` —
+ *      the temp-rename-fsync pattern. Temp file mode 0600.
  */
-export function writeProjectJsonAtomically(
+function writeProjectJsonAtomicallyInternal(
   project: string,
   target: "manifest" | "index-state",
   value: unknown,
   options?: GenerationStoreOptions,
   ops?: AtomicFileOps,
+  hook?: WriterTestHook,
 ): void {
-  const phase = "writeProjectJsonAtomically";
+  const phase = "writeProjectJsonAtomicallyInternal";
   const cacheRoot = options?.cacheRoot ?? getCacheRoot();
+  const opImpl = ops ?? PROD_OPS;
 
-  // 1. Derive target path from project + target type.
+  // 1. R169A-FIX-R3 (QUAL-R169A-R3-01): Runtime target validation.
+  if (target !== "manifest" && target !== "index-state") {
+    throw new GenerationStoreError(
+      "GENERATION_STORE_CONFIG_ERROR",
+      phase,
+      project,
+      `target must be "manifest" or "index-state", got: ${JSON.stringify(target)}`,
+    );
+  }
+
+  // 2. Derive target path from project + target type.
   const targetPath = target === "manifest"
     ? activeManifestPath(project, cacheRoot)
     : indexStatePath(project, cacheRoot);
 
-  // 2. Validate the trust root (cacheRoot → cbm → projects → project-key).
-  //    This catches a symlinked cacheRoot or any of its CBM subdirectories
-  //    BEFORE we touch the target.
+  // 3. Validate the trust root (cacheRoot → cbm → projects → project-key).
   assertTrustedRootNoSymlinks(cacheRoot, project, phase);
 
-  // 3. Strict chain walk from the store root to the target file.
+  // 4. Strict chain walk from the store root to the target file.
+  // R169A-FIX-R3 (QUAL-R169A-R3-01): per-target symlink code.
   const storeRoot = generationStoreRoot(cacheRoot);
-  const symlinkCode = target === "manifest"
-    ? "MANIFEST_SYMLINK_REJECTED" as GenerationStoreErrorCode
-    : "GENERATION_TARGET_SYMLINK_REJECTED" as GenerationStoreErrorCode;
+  const symlinkCode: GenerationStoreErrorCode = target === "manifest"
+    ? "MANIFEST_SYMLINK_REJECTED"
+    : "PROJECT_STATE_SYMLINK_REJECTED";
   assertPathInsideNoSymlinks(storeRoot, targetPath, project, phase, symlinkCode);
 
-  // 4. Defense-in-depth: if the target file already exists, reject it
-  //    if it's a symlink. (assertPathInsideNoSymlinks already walked
-  //    the chain; this is a final check on the target itself.)
+  // 5. Defense-in-depth: if the target file already exists, reject it
+  //    if it's a symlink.
   assertNotSymlink(targetPath, symlinkCode, project);
 
-  // 5. Ensure layout is durable (mkdir 0700 + fsync chain). This must
+  // 6. Ensure layout is durable (mkdir 0700 + fsync chain). This must
   //    happen BEFORE the write so the directory entries are durable by
   //    the time the temp file is created.
-  ensureGenerationStoreLayoutDurable(project, options, ops);
+  ensureGenerationStoreLayoutDurable(project, options, opImpl);
 
-  // 6. Delegate to the internal atomic writer.
-  writeJsonAtomically(targetPath, value, project, phase, ops);
+  // 7. R169A-FIX-R3 (SEC-R169A-R3-01): Test hook — inject a race here.
+  if (hook?.afterLayoutBeforeOpen) {
+    hook.afterLayoutBeforeOpen({
+      targetPath,
+      projectDir: projectStoreDir(project, cacheRoot),
+      project,
+    });
+  }
+
+  // 8. R169A-FIX-R3 (SEC-R169A-R3-01): Pre-open revalidation. A
+  //    concurrent process could replace the parent dir with a symlink
+  //    between layout creation (step 6) and the temp open (step 9).
+  //    Re-run the trust root + path-inside checks. If the parent is
+  //    now a symlink, reject with PATH_TRAVERSAL_REJECTED before any
+  //    temp file is created.
+  assertTrustedRootNoSymlinks(cacheRoot, project, phase);
+  assertPathInsideNoSymlinks(storeRoot, targetPath, project, phase, symlinkCode);
+  assertNotSymlink(targetPath, symlinkCode, project);
+
+  // 9. Delegate to the internal atomic writer.
+  writeJsonAtomically(targetPath, value, project, phase, opImpl);
+}
+
+/**
+ * R169A-FIX-R3 (API-R169A-R3-01): Public typed writer for the active
+ * generation manifest.
+ *
+ * Calls `validateGenerationManifest(manifest, project)` BEFORE any
+ * filesystem I/O. If validation fails, NO temp / layout / target is
+ * created — the on-disk state is unchanged.
+ *
+ * On success, writes `manifest` to `<projectStore>/active-generation.json`
+ * atomically (temp-rename-fsync pattern, temp file mode 0600).
+ *
+ * The optional `ops` parameter is for tests (fault injection). The
+ * optional `hook` parameter is for tests (race injection between
+ * layout creation and temp open — see SEC-R169A-R3-01).
+ */
+export function writeGenerationManifestAtomically(
+  project: string,
+  manifest: GenerationManifestV1,
+  options?: GenerationStoreOptions,
+  ops?: AtomicFileOps,
+  hook?: WriterTestHook,
+): void {
+  // Validate BEFORE any I/O. If this throws, no temp / layout / target
+  // is created.
+  validateGenerationManifest(manifest, project);
+  writeProjectJsonAtomicallyInternal(project, "manifest", manifest, options, ops, hook);
+}
+
+/**
+ * R169A-FIX-R3 (API-R169A-R3-01): Public typed writer for the index-state
+ * sidecar.
+ *
+ * Calls `validateIndexAttemptState(state, project)` BEFORE any filesystem
+ * I/O. If validation fails, NO temp / layout / target is created — the
+ * on-disk state is unchanged.
+ *
+ * On success, writes `state` to `<projectStore>/index-state.json`
+ * atomically (temp-rename-fsync pattern, temp file mode 0600).
+ *
+ * The optional `ops` parameter is for tests (fault injection). The
+ * optional `hook` parameter is for tests (race injection between
+ * layout creation and temp open — see SEC-R169A-R3-01).
+ */
+export function writeIndexStateAtomically(
+  project: string,
+  state: IndexAttemptStateV1,
+  options?: GenerationStoreOptions,
+  ops?: AtomicFileOps,
+  hook?: WriterTestHook,
+): void {
+  // Validate BEFORE any I/O. If this throws, no temp / layout / target
+  // is created.
+  validateIndexAttemptState(state, project);
+  writeProjectJsonAtomicallyInternal(project, "index-state", state, options, ops, hook);
 }
 
 // ─── Project listing (section 9.4, future; R169A-FIX OPS-R169A-01) ──────
@@ -1896,13 +2835,24 @@ export function writeProjectJsonAtomically(
  *
  * R169A-FIX-R2 (QUAL-R169A-R2-01): readdirSync is wrapped in try/catch
  * that produces a GenerationStoreError.
+ *
+ * R169A-FIX-R3 (OPS-R169A-R3-01): The trust root (cacheRoot → cbm →
+ * projects) is validated BEFORE readdirSync. If `projects/` (or any of
+ * its parents) is a symlink → PATH_TRAVERSAL_REJECTED. Only ENOENT is
+ * tolerated.
  */
 export function listProjectStoreKeys(cacheRoot?: string): string[] {
   const phase = "listProjectStoreKeys";
-  const root = generationStoreRoot(cacheRoot);
+  const root = cacheRoot ?? getCacheRoot();
+
+  // R169A-FIX-R3 (OPS-R169A-R3-01): Validate the trust root BEFORE
+  // readdirSync. This catches a symlinked cacheRoot / cbmCacheDir /
+  // projects BEFORE we enumerate.
+  assertGenerationStoreRootTrusted(root, phase);
+
   let entries;
   try {
-    entries = readdirSync(root, { withFileTypes: true });
+    entries = readdirSync(generationStoreRoot(root), { withFileTypes: true });
   } catch (e) {
     const errCode = (e as NodeJS.ErrnoException).code;
     if (errCode === "ENOENT") return [];
@@ -1910,7 +2860,7 @@ export function listProjectStoreKeys(cacheRoot?: string): string[] {
       "GENERATION_STORE_CONFIG_ERROR",
       phase,
       "",
-      `Failed to read project store root "${root}": ${(e as Error).message}`,
+      `Failed to read project store root "${generationStoreRoot(root)}": ${(e as Error).message}`,
     );
   }
   return entries
