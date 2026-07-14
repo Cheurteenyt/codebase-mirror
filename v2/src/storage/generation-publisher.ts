@@ -1553,9 +1553,11 @@ export function publishPreparedGeneration(
       // R169B-STEP6 (META-R169B-A4-08): in dedup, the metadata
       // preexisted (we did NOT create it). metadataCreated stays false.
       // Unlink staging via centralized primitive (A3).
+      // R169B (§5 GATE): pass the staging identity (dev/ino from
+      // token.preStat) so the cleanup can detect replacement.
       {
         const tmpD = tmpDir(project, cacheRoot);
-        const cleanupRes = unlinkStagingDurably(stagingPath, null, tmpD, warnings);
+        const cleanupRes = unlinkStagingDurably(stagingPath, { dev: token.preStat.dev, ino: token.preStat.ino }, tmpD, warnings);
         if (cleanupRes.removed && cleanupRes.confirmedAbsent) {
           mutationState.stagingRemoved = true;
         }
@@ -1980,9 +1982,11 @@ export function publishPreparedGeneration(
       }
 
       // 10. Unlink staging via centralized primitive (A3).
+      // R169B (§5 GATE): pass the staging identity (dev/ino from
+      // token.preStat) so the cleanup can detect replacement.
       {
         const tmpD = tmpDir(project, cacheRoot);
-        const cleanupRes = unlinkStagingDurably(stagingPath, null, tmpD, warnings);
+        const cleanupRes = unlinkStagingDurably(stagingPath, { dev: token.preStat.dev, ino: token.preStat.ino }, tmpD, warnings);
         if (cleanupRes.removed && cleanupRes.confirmedAbsent) {
           mutationState.stagingRemoved = true;
         }

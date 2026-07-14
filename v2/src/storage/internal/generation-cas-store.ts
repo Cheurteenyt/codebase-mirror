@@ -68,6 +68,7 @@ import {
 import {
   projectStoreDir,
   GENERATIONS_SUBDIR,
+  getCacheRoot,
 } from "../generation-paths.js";
 import {
   assertTrustedRootNoSymlinks,
@@ -285,9 +286,15 @@ export function openCasStore(
   cacheRoot?: string,
 ): CasStore {
   const phase = "openCasStore";
-  assertTrustedRootNoSymlinks(cacheRoot ?? "", project, phase);
+  // R169B (§6 GATE): use effectiveCacheRoot consistently — the trust
+  // root check, path derivation, and dbPath must all use the same
+  // value. Previously, cacheRoot ?? "" was passed to the trust root
+  // check while projectStoreDir used the default cacheRoot when
+  // cacheRoot was undefined — a mismatch.
+  const effectiveCacheRoot = cacheRoot ?? getCacheRoot();
+  assertTrustedRootNoSymlinks(effectiveCacheRoot, project, phase);
 
-  const projectStore = projectStoreDir(project, cacheRoot);
+  const projectStore = projectStoreDir(project, effectiveCacheRoot);
   // R169B-STEP10 (B4): use the shared leaf layout module.
   // R169B-STEP10 (§11): pass the real parent so it gets fsynced on creation.
   try {

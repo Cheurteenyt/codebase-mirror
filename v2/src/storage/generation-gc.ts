@@ -341,12 +341,33 @@ export function planGenerationGc(
   // Include -wal, -shm, -journal sidecars, .json temp metadata, and
   // atomic temp JSON (.*.tmp.<rand>).
   const sweepTmp: GenerationGcTmpEntry[] = [];
-  if (existsSync(tmp)) {
+  // R169B (§10 GATE): fail-closed on tmp/ errors.
+  let tmpExists = false;
+  try {
+    const tmpStat = lstatSync(tmp);
+    if (tmpStat.isSymbolicLink() || !tmpStat.isDirectory()) {
+      throw new GenerationStoreError("GC_SAFETY_REFUSAL", phase, project,
+        `tmp/ is not a regular directory: ${tmp}`);
+    }
+    tmpExists = true;
+  } catch (e) {
+    const errCode = (e as NodeJS.ErrnoException).code;
+    if (errCode === "ENOENT") {
+      tmpExists = false;
+    } else if (e instanceof GenerationStoreError) {
+      throw e;
+    } else {
+      throw new GenerationStoreError("GC_SAFETY_REFUSAL", phase, project,
+        `lstat tmp/ failed: ${(e as Error).message}`);
+    }
+  }
+  if (tmpExists) {
     let tmpEntries: import("node:fs").Dirent[];
     try {
       tmpEntries = readdirSync(tmp, { withFileTypes: true }) as unknown as import("node:fs").Dirent[];
-    } catch {
-      tmpEntries = [];
+    } catch (e) {
+      throw new GenerationStoreError("GC_SAFETY_REFUSAL", phase, project,
+        `readdir tmp/ failed: ${(e as Error).message}`);
     }
     const now = Date.now();
     for (const ent of tmpEntries) {
@@ -430,6 +451,19 @@ export function applyGenerationGcPlan(
       phase,
       project,
       `Plan is not authentic (not in the private WeakMap). Plans MUST be produced by planGenerationGc in the same process; spread/JSON-clone/literal objects are rejected.`,
+    );
+  }
+
+  // R169B (§7 GATE): reject cacheRoot mismatch. The plan was created
+  // with plan.cacheRoot — if options.cacheRoot differs, the applier
+  // would operate on a different filesystem location than the planner
+  // inspected, which is a security hole.
+  if (options?.cacheRoot !== undefined && options.cacheRoot !== plan.cacheRoot) {
+    throw new GenerationStoreError(
+      "GC_PLAN_UNAUTHENTICATED",
+      phase,
+      project,
+      `cacheRoot mismatch: options.cacheRoot="${options.cacheRoot}" != plan.cacheRoot="${plan.cacheRoot}" (the applier rejects cacheRoot overrides for security)`,
     );
   }
 
@@ -952,9 +986,34 @@ function deleteGenerationUnderCasLock(
       });
       return { deleted: false, warnings };
     }
-    // Also re-check against the manifest active (defense in depth).
-    // currentActiveId was read before the lock; casActive is under the
-    // lock. Both must not equal generationId.
+    // R169B (§8 GATE): re-read the active manifest UNDER the lock.
+    // currentActiveId was read before the lock — a publisher could have
+    // written a new manifest between the plan and the lock. If the
+    // candidate is now the manifest active, refuse (race prevented).
+    let lockedActiveId: string | null = null;
+    try {
+      const lockedManifest = readOptionalGenerationManifest(
+        activeManifestPath(project, cacheRoot), project,
+      );
+      lockedActiveId = lockedManifest?.generationId ?? null;
+    } catch {
+      // Corrupt manifest under lock = fail-closed.
+      cas.rollback();
+      warnings.push({
+        code: "GC_SAFETY_REFUSAL",
+        message: `Refused to delete generation ${generationId} — active manifest is corrupt/unreadable under the GC lock (fail-closed)`,
+      });
+      return { deleted: false, warnings };
+    }
+    if (generationId === lockedActiveId) {
+      cas.rollback();
+      warnings.push({
+        code: "GC_DELETE_FAILED",
+        message: `Refused to delete generation ${generationId} — it is the manifest active (re-read under lock)`,
+      });
+      return { deleted: false, warnings };
+    }
+    // Also re-check against the manifest active read before the lock.
     if (generationId === currentActiveId) {
       cas.rollback();
       warnings.push({
@@ -1011,8 +1070,11 @@ function deleteGenerationUnderCasLock(
     // dev/ino/size for metadata) to the proof captured by the safety
     // check BEFORE the lock. This closes the TOCTOU window between the
     // safety check (outside the lock) and the actual deletion (under
-    // the lock). For recovery (files may already be absent), skip the
-    // proof — the deletion is idempotent.
+    // the lock).
+    // R169B (§9 GATE): For recovery (isRecovery=true), the files may
+    // already be absent (ENOENT = idempotent). But if a file is STILL
+    // PRESENT, we must verify it is the same file the catalog describes
+    // — otherwise a replacement file could be deleted by the recovery.
     if (!isRecovery && proof) {
       try {
         const proofDbStat = lstatSync(dbPath);
@@ -1099,6 +1161,9 @@ function deleteGenerationUnderCasLock(
     }
 
     // 7. Delete the DB file (idempotent — ENOENT is OK for recovery).
+    // R169B (§9 GATE): For recovery, if the DB is still present, verify
+    // its hash matches the catalog before unlinking. Only ENOENT is
+    // truly idempotent; a present file must be proven to be the original.
     let dbDeleteOk = false;
     try {
       const ds = lstatSync(dbPath);
@@ -1107,6 +1172,13 @@ function deleteGenerationUnderCasLock(
       }
       if (!ds.isFile()) {
         throw new Error(`db path is not a regular file: ${dbPath}`);
+      }
+      // R169B (§9): recovery must verify hash for present files.
+      if (isRecovery) {
+        const recoveryHash = computeGcSha256(dbPath);
+        if (recoveryHash !== cat.sha256) {
+          throw new Error(`recovery DB hash mismatch: ${recoveryHash} != catalog ${cat.sha256}`);
+        }
       }
       unlinkSync(dbPath);
       dbDeleteOk = true;
@@ -1150,6 +1222,9 @@ function deleteGenerationUnderCasLock(
     }
 
     // 9. Delete the metadata sidecar (idempotent).
+    // R169B (§9 GATE): For recovery, if the metadata is still present,
+    // validate it (parse + schema) before unlinking. Only ENOENT is
+    // truly idempotent.
     let metadataDeleteOk = false;
     try {
       const ms = lstatSync(metadataPath);
@@ -1158,6 +1233,12 @@ function deleteGenerationUnderCasLock(
       }
       if (!ms.isFile()) {
         throw new Error(`metadata path is not a regular file: ${metadataPath}`);
+      }
+      // R169B (§9): recovery must validate metadata for present files.
+      if (isRecovery) {
+        const metaRaw = readFileSyncTextSafe(metadataPath, 256 * 1024);
+        const metaParsed = JSON.parse(metaRaw);
+        validateGenerationMetadata(metaParsed, project);
       }
       unlinkSync(metadataPath);
       metadataDeleteOk = true;
@@ -1360,12 +1441,41 @@ export function planGenerationOrphanRecovery(
   const orphans: GenerationOrphanEntry[] = [];
   const now = new Date().toISOString();
 
-  if (existsSync(generations)) {
+  // R169B (§10 GATE): fail-closed on filesystem errors. existsSync
+  // masks permission errors and broken symlinks. Use lstat instead —
+  // only ENOENT means "absent"; any other error is a safety refusal.
+  let generationsExists = false;
+  try {
+    const gensStat = lstatSync(generations);
+    if (gensStat.isSymbolicLink()) {
+      throw new GenerationStoreError("GC_SAFETY_REFUSAL", phase, project,
+        `generations/ is a symlink: ${generations}`);
+    }
+    if (!gensStat.isDirectory()) {
+      throw new GenerationStoreError("GC_SAFETY_REFUSAL", phase, project,
+        `generations/ is not a directory: ${generations}`);
+    }
+    generationsExists = true;
+  } catch (e) {
+    const errCode = (e as NodeJS.ErrnoException).code;
+    if (errCode === "ENOENT") {
+      generationsExists = false;
+    } else if (e instanceof GenerationStoreError) {
+      throw e;
+    } else {
+      throw new GenerationStoreError("GC_SAFETY_REFUSAL", phase, project,
+        `lstat generations/ failed: ${(e as Error).message}`);
+    }
+  }
+
+  if (generationsExists) {
     let entries: import("node:fs").Dirent[];
     try {
       entries = readdirSync(generations, { withFileTypes: true }) as unknown as import("node:fs").Dirent[];
-    } catch {
-      entries = [];
+    } catch (e) {
+      // R169B (§10): readdir error = fail-closed, not empty list.
+      throw new GenerationStoreError("GC_SAFETY_REFUSAL", phase, project,
+        `readdir generations/ failed: ${(e as Error).message}`);
     }
     for (const ent of entries) {
       if (!ent.isFile()) continue;
