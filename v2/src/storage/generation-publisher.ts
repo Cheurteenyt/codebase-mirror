@@ -139,6 +139,43 @@ import {
   prepareGenerationManifestForWrite,
 } from "./internal/generation-store-io.js";
 import { openCasStore } from "./internal/generation-cas-store.js";
+import { PROD_PUBLISHER_OPS } from "./internal/generation-publisher-ops.js";
+import type { PublisherOps } from "./generation-types.js";
+
+// ─── R169B-STEP3 (C3): Crash harness injection points ──────────────────
+//
+// Module-level injection of a faultable PublisherOps and a barrier
+// callback. These are used ONLY by `publishPreparedGenerationInternal`
+// (the test-facing wrapper) to inject precise faults at the critical
+// mutation points (fsync temp, link temp→final, fsync generations/,
+// CAS commit). The public `publishPreparedGeneration` calls the
+// Internal variant with no injection, so production behavior is
+// unchanged.
+//
+// The injection is scoped to a single publish call via try/finally,
+// so a thrown error does NOT leak the injection to subsequent calls.
+
+let _injectedPublisherOps: PublisherOps | null = null;
+let _injectedBarrier: ((point: string) => void) | null = null;
+
+/**
+ * Returns the active PublisherOps for the current publish call.
+ * If no injection is active, returns PROD_PUBLISHER_OPS.
+ */
+function _ops(): PublisherOps {
+  return _injectedPublisherOps ?? PROD_PUBLISHER_OPS;
+}
+
+/**
+ * Invokes the barrier callback (if any) at a named crash point.
+ * Used by the crash harness to synchronize child-process kills.
+ * Errors in the barrier are swallowed (best-effort).
+ */
+function _barrier(point: string): void {
+  if (_injectedBarrier !== null) {
+    try { _injectedBarrier(point); } catch { /* best effort */ }
+  }
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────
 
@@ -1792,9 +1829,11 @@ export function publishPreparedGeneration(
       }
 
       // R169B-STEP10 (P0): fsync(tempFd) failure MUST block promotion.
+      // R169B-STEP3 (C3): routed through _ops() for fault injection.
+      _barrier("pre-fsync-temp");
       let tempFsyncFailed = false;
       try {
-        fsyncSync(tempFd!);
+        _ops().fsyncSync(tempFd!);
       } catch (e) {
         tempFsyncFailed = true;
       }
@@ -1848,8 +1887,10 @@ export function publishPreparedGeneration(
       }
 
       // 6. link(temp, final) — no-clobber.
+      // R169B-STEP3 (C3): routed through _ops() for fault injection.
+      _barrier("pre-link");
       try {
-        linkSync(tempPath, finalPath);
+        _ops().linkSync(tempPath, finalPath);
       } catch (e) {
         const errCode = (e as NodeJS.ErrnoException).code;
         const r = cleanupTemp();
@@ -2182,6 +2223,8 @@ export function publishPreparedGeneration(
     const newRevision = cas.getRevision();
 
     // 14. COMMIT.
+    // R169B-STEP3 (C3): barrier before CAS commit (crash harness sync point).
+    _barrier("pre-cas-commit");
     cas.commit();
     casCommitted = true;
     mutationState.casCommitted = true;
@@ -2238,6 +2281,47 @@ export function publishPreparedGeneration(
     if (cas !== null) {
       cas.close();
     }
+  }
+}
+
+// ─── R169B-STEP3 (C3): publishPreparedGenerationInternal ─────────────────
+//
+// Test-facing wrapper around `publishPreparedGeneration` that injects
+// a faultable PublisherOps and a barrier callback for the crash
+// harness. The injection is scoped to a single call via try/finally
+// so a thrown error does NOT leak the injection to subsequent calls.
+//
+// Production code NEVER calls this — it calls the public
+// `publishPreparedGeneration` directly. Only the crash harness tests
+// (tests/storage/r169b-crash-harness.test.ts) import this function.
+//
+// The `ops` parameter is wrapped via `createFaultablePublisherOps` by
+// the caller; this function just stores it module-level so the
+// `_ops()` helper inside `publishPreparedGeneration` picks it up.
+//
+// The `onBarrier` callback is invoked at named crash points:
+//   - "pre-fsync-temp"   — before fsync(tempFd)
+//   - "pre-link"         — before link(temp, final)
+//   - "pre-cas-commit"   — before cas.commit()
+// The crash harness uses these to synchronize child-process kills.
+
+export function publishPreparedGenerationInternal(
+  prepared: PreparedGeneration,
+  options: PublishPreparedGenerationOptions,
+  storeOptions: GenerationStoreOptions | undefined,
+  ops: PublisherOps,
+  onBarrier?: (point: string) => void,
+): PublicationResult {
+  // Save the previous injection (in case of nesting — unlikely but safe).
+  const prevOps = _injectedPublisherOps;
+  const prevBarrier = _injectedBarrier;
+  _injectedPublisherOps = ops;
+  _injectedBarrier = onBarrier ?? null;
+  try {
+    return publishPreparedGeneration(prepared, options, storeOptions);
+  } finally {
+    _injectedPublisherOps = prevOps;
+    _injectedBarrier = prevBarrier;
   }
 }
 
