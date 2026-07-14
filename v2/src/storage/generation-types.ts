@@ -982,6 +982,12 @@ export interface ReservationToken {
   stagingPath: string;
   cacheRoot: string;
   project: string;
+  /**
+   * R169B-STEP10 (A2): filesystem identity of the staging file, captured
+   * at reserve time. Used by discardGenerationReservation to verify the
+   * file hasn't been replaced before unlinking.
+   */
+  identity: { dev: number; ino: number } | null;
 }
 
 // R169B-STEP5 backward compat: keep the old PublicationMutationPhase

@@ -442,6 +442,7 @@ export function reserveGenerationStaging(
     stagingPath,
     cacheRoot,
     project,
+    identity: { dev: st.dev, ino: st.ino },
   });
   return reservation;
 }
@@ -2448,9 +2449,7 @@ export function discardGenerationReservation(
   const project = reservation.project;
   const generationId = reservation.generationId;
   const stagingPath = reservation.stagingPath;
-  const cacheRoot = options?.cacheRoot ?? reservation.cacheRoot ?? getCacheRoot();
-
-  // 1. Validate reservation token.
+  // R169B-STEP10 (A2): verify cacheRoot matches the token if provided.
   const resToken = reservationTokens.get(reservation);
   if (!resToken) {
     throw new GenerationStoreError(
@@ -2461,6 +2460,17 @@ export function discardGenerationReservation(
       generationId,
     );
   }
+  if (options?.cacheRoot !== undefined && options.cacheRoot !== resToken.cacheRoot) {
+    throw new GenerationStoreError(
+      "PUBLICATION_RESERVATION_INVALID",
+      phase,
+      project,
+      `options.cacheRoot="${options.cacheRoot}" does not match reservation cacheRoot="${resToken.cacheRoot}"`,
+      generationId,
+    );
+  }
+  const cacheRoot = resToken.cacheRoot;
+
   // 2. Check state — must be RESERVED or DISCARDED (not PREPARING/PREPARED).
   if (resToken.state === "PREPARING" || resToken.state === "PREPARED") {
     throw new GenerationStoreError(
@@ -2482,7 +2492,20 @@ export function discardGenerationReservation(
   } catch (e) {
     const errCode = (e as NodeJS.ErrnoException).code;
     if (errCode === "ENOENT") {
-      // Already gone.
+      // R169B-STEP10 (A2): file is already gone. Still fsync tmp/ and
+      // mark token DISCARDED.
+      let tmpDirFd: number | null = null;
+      try {
+        const tmp = tmpDir(project, cacheRoot);
+        const opened = openDirectoryNoFollow(tmp, PROD_OPS);
+        tmpDirFd = opened.fd;
+        PROD_OPS.fsyncSync(tmpDirFd);
+        PROD_OPS.closeSync(tmpDirFd);
+        tmpDirFd = null;
+      } catch {
+        if (tmpDirFd !== null) { try { PROD_OPS.closeSync(tmpDirFd); } catch {} }
+      }
+      resToken.state = "DISCARDED";
       return { project, generationId, stagingPath, deleted: false, warnings };
     }
     warnings.push({
@@ -2497,6 +2520,19 @@ export function discardGenerationReservation(
       message: `Staging file is not a regular file: ${stagingPath}`,
     });
     return { project, generationId, stagingPath, deleted: false, warnings };
+  }
+
+  // R169B-STEP10 (A2): verify dev/ino identity before unlinking.
+  // The token stores the identity captured at reserve time. If the
+  // file was replaced, do NOT unlink.
+  if (resToken.identity) {
+    if (currentStat.dev !== resToken.identity.dev || currentStat.ino !== resToken.identity.ino) {
+      warnings.push({
+        code: "STAGING_CLEANUP_DEFERRED",
+        message: `Staging file identity mismatch (expected dev=${resToken.identity.dev} ino=${resToken.identity.ino}, got dev=${currentStat.dev} ino=${currentStat.ino}) — not unlinking`,
+      });
+      return { project, generationId, stagingPath, deleted: false, warnings };
+    }
   }
 
   // 4. Unlink.
