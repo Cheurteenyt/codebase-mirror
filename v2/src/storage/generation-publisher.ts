@@ -679,7 +679,20 @@ export function prepareGenerationForPublication(
       );
     }
   } finally {
-    try { db.close(); } catch { /* best effort */ }
+    // R169B-STEP10 (FINAL-05): SQLite close failure is NOT best-effort.
+    // A failed close can mean the WAL was not properly checkpointed or
+    // the connection is in an error state. We must fail-closed.
+    try {
+      db.close();
+    } catch (e) {
+      throw new GenerationStoreError(
+        "STAGING_DB_WAL_DIRTY",
+        phase,
+        project,
+        `SQLite close failed during WAL finalization: ${(e as Error).message}`,
+        generationId,
+      );
+    }
   }
 
   // R169B-STEP4 (SQLITE-R169B-A2-03): fsync the staging DB file after
@@ -706,13 +719,17 @@ export function prepareGenerationForPublication(
   }
 
   // 6. Verify no sidecars exist.
+  // R169B-STEP10 (FINAL-04): use lstat ENOENT, not existsSync.
+  // existsSync returns false on EACCES/EIO/ENOTDIR, masking real errors.
   const sidecars = [
     `${stagingPath}-wal`,
     `${stagingPath}-shm`,
     `${stagingPath}-journal`,
   ];
   for (const sidecar of sidecars) {
-    if (existsSync(sidecar)) {
+    try {
+      lstatSync(sidecar);
+      // If lstat succeeded, the sidecar exists → dirty.
       throw new GenerationStoreError(
         "STAGING_DB_WAL_DIRTY",
         phase,
@@ -720,6 +737,20 @@ export function prepareGenerationForPublication(
         `WAL sidecar exists after journal_mode=DELETE: ${sidecar}`,
         generationId,
       );
+    } catch (e) {
+      if (e instanceof GenerationStoreError) throw e;
+      const errCode = (e as NodeJS.ErrnoException).code;
+      if (errCode !== "ENOENT") {
+        // Any error other than ENOENT = fail-closed.
+        throw new GenerationStoreError(
+          "STAGING_DB_WAL_DIRTY",
+          phase,
+          project,
+          `Cannot lstat sidecar "${sidecar}": ${errCode} (${(e as Error).message})`,
+          generationId,
+        );
+      }
+      // ENOENT — sidecar is genuinely absent. OK.
     }
   }
 
@@ -991,7 +1022,18 @@ export function prepareGenerationForPublication(
       );
     }
   } finally {
-    try { dbReadOnly.close(); } catch { /* best effort */ }
+    // R169B-STEP10 (FINAL-05): read-only close failure is also fail-closed.
+    try {
+      dbReadOnly.close();
+    } catch (e) {
+      throw new GenerationStoreError(
+        "STAGING_DB_STATE_INVALID",
+        phase,
+        project,
+        `SQLite read-only close failed: ${(e as Error).message}`,
+        generationId,
+      );
+    }
   }
 
   // 22-24. Streaming SHA-256 + sizeBytes + TOCTOU re-stat.
@@ -1719,6 +1761,28 @@ export function publishPreparedGeneration(
         }
         throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
           `link(temp, final) failed: ${(e as Error).message}`, generationId);
+      }
+
+      // R169B-STEP10 (FINAL-06): verify final dev/ino immediately after link.
+      // The final DB must be the same inode as the temp we just linked.
+      try {
+        const finalStat = lstatSync(finalPath);
+        if (finalStat.dev !== tempIdentity.dev || finalStat.ino !== tempIdentity.ino) {
+          // The final path does not point to our temp — something replaced it.
+          cleanupTemp();
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Post-link identity mismatch: final dev/ino=${finalStat.dev}/${finalStat.ino} != temp dev/ino=${tempIdentity.dev}/${tempIdentity.ino}`, generationId);
+        }
+        if (finalStat.size !== manifest.sizeBytes) {
+          cleanupTemp();
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Post-link size mismatch: final size=${finalStat.size} != manifest sizeBytes=${manifest.sizeBytes}`, generationId);
+        }
+      } catch (e) {
+        if (e instanceof GenerationStoreError) throw e;
+        cleanupTemp();
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `Post-link lstat failed: ${(e as Error).message}`, generationId);
       }
 
       // 7. fsync generations/ (makes the final dir entry durable).
