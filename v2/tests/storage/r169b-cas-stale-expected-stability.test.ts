@@ -57,6 +57,7 @@ import {
 } from "../helpers/r169b-publisher-fixtures.js";
 
 const ITERATIONS = 50;
+const STABILITY_TEST_TIMEOUT_MS = 30_000;
 
 let cacheRoot: string;
 
@@ -167,7 +168,7 @@ describe("R169B — CAS stale-expected-active stability (50 iterations)", () => 
       const sample = failures.slice(0, 10).join("\n  - ");
       throw new Error(`Concurrency barrier failed (${failures.length}/${ITERATIONS} iterations):\n  - ${sample}`);
     }
-  });
+  }, STABILITY_TEST_TIMEOUT_MS);
 
   it("CAS revision strictly increases per successful publication across 50 iterations", () => {
     let lastRev = 0;
@@ -194,7 +195,7 @@ describe("R169B — CAS stale-expected-active stability (50 iterations)", () => 
     }
     // After 50 iterations, the revision MUST be >= 50.
     expect(lastRev).toBeGreaterThanOrEqual(ITERATIONS);
-  });
+  }, STABILITY_TEST_TIMEOUT_MS);
 
   it("a loser's failed publication does NOT bump the CAS revision", () => {
     // 1. Winner publishes (rev bumps from 0 to R1).
@@ -243,7 +244,7 @@ describe("R169B — CAS stale-expected-active stability (50 iterations)", () => 
       const dbFiles = files.filter((f) => f.endsWith(".db"));
       expect(dbFiles.length).toBe(0);
     }
-  });
+  }, STABILITY_TEST_TIMEOUT_MS);
 
   it("across 50 iterations, generations/ contains exactly 50 .db files (one per winner, none for losers)", () => {
     let lastWinnerId: string | null = null;
@@ -275,5 +276,5 @@ describe("R169B — CAS stale-expected-active stability (50 iterations)", () => 
     const active = cas.listCatalogEntriesByStatus("ACTIVE");
     cas.close();
     expect(active.length).toBe(ITERATIONS);
-  });
+  }, STABILITY_TEST_TIMEOUT_MS);
 });

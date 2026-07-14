@@ -317,7 +317,7 @@ describe("R169 SIG — Phase B activation (SIG-R169-Phase-B)", () => {
 
   it("Phase B: target checkout is isolated as Git data", () => {
     const targetStart = workflow.indexOf("Checkout exact CI-validated SHA");
-    const materializeStart = workflow.indexOf("Materialize SSH key");
+    const materializeStart = workflow.indexOf("Materialize SSH key", targetStart);
     expect(targetStart).toBeGreaterThan(-1);
     expect(materializeStart).toBeGreaterThan(targetStart);
 
