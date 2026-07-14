@@ -928,6 +928,47 @@ function deleteGenerationUnderCasLock(
       cas.appendPublicationHistory(generationId, project, "MARK_DELETING", null);
     }
 
+    // R169B-STEP10 (B3): GC proof under lock — re-lstat DB/metadata and
+    // compare dev/ino/size to the safety check proof before unlink.
+    // This closes the TOCTOU window between the safety check (outside
+    // the lock) and the actual deletion (under the lock).
+    // For recovery (files may already be absent), skip the proof —
+    // the deletion is idempotent.
+    if (!isRecovery) {
+      try {
+        const proofDbStat = lstatSync(dbPath);
+        if (proofDbStat.isSymbolicLink() || !proofDbStat.isFile()) {
+          throw new Error(`DB is not a regular file under lock: ${dbPath}`);
+        }
+        // Verify DB hash matches catalog entry.
+        const proofHash = computeGcSha256(dbPath);
+        if (proofHash !== cat.sha256) {
+          throw new Error(`DB hash mismatch under lock: ${proofHash} != ${cat.sha256}`);
+        }
+      } catch (e) {
+        cas.rollback();
+        warnings.push({
+          code: "GC_DELETE_FAILED",
+          message: `GC proof verification failed under lock for ${generationId}: ${(e as Error).message}`,
+        });
+        return { deleted: false, warnings };
+      }
+      // Verify metadata exists and is regular.
+      try {
+        const proofMetaStat = lstatSync(metadataPath);
+        if (proofMetaStat.isSymbolicLink() || !proofMetaStat.isFile()) {
+          throw new Error(`metadata is not a regular file under lock: ${metadataPath}`);
+        }
+      } catch (e) {
+        cas.rollback();
+        warnings.push({
+          code: "GC_DELETE_FAILED",
+          message: `GC proof metadata verification failed under lock: ${(e as Error).message}`,
+        });
+        return { deleted: false, warnings };
+      }
+    }
+
     // 7. Delete the DB file (idempotent — ENOENT is OK for recovery).
     let dbDeleteOk = false;
     try {

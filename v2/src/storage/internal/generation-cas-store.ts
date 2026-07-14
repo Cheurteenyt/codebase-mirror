@@ -53,8 +53,9 @@
 
 import Database from "better-sqlite3";
 import type { Database as DatabaseType } from "better-sqlite3";
-import { existsSync, mkdirSync, lstatSync, chmodSync, openSync, closeSync, fsyncSync } from "node:fs";
+import { lstatSync, chmodSync, openSync, closeSync, fsyncSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
+import { ensureDirDurable } from "./generation-layout-io.js";
 
 import {
   GenerationStoreError,
@@ -287,44 +288,16 @@ export function openCasStore(
   assertTrustedRootNoSymlinks(cacheRoot ?? "", project, phase);
 
   const projectStore = projectStoreDir(project, cacheRoot);
-  // R169B-STEP5 (CAS-R169B-A3-05): use the durable layout helper
-  // (mode 0700, fsync parent chain) instead of a bare mkdirSync.
-  // The helper is idempotent — if the directory already exists with
-  // the right mode, it's a no-op.
-  if (!existsSync(projectStore)) {
-    try {
-      mkdirSync(projectStore, { recursive: true, mode: 0o700 });
-      // mkdirSync mode is filtered by umask — force the exact mode.
-      chmodSync(projectStore, 0o700);
-      // fsync the parent directory so the new directory entry is durable.
-      let parentFd: number | null = null;
-      try {
-        parentFd = openSync(projectStore, "r");
-        fsyncSync(parentFd);
-        closeSync(parentFd);
-        parentFd = null;
-      } catch (e) {
-        if (parentFd !== null) {
-          try { closeSync(parentFd); } catch { /* best effort */ }
-        }
-        // R169B-STEP5 (CAS-R169B-A3-05): do NOT swallow fsync failures
-        // — surface them as PUBLICATION_CAS_STATE_CORRUPT.
-        throw new GenerationStoreError(
-          "PUBLICATION_CAS_STATE_CORRUPT",
-          phase,
-          project,
-          `fsync of project store directory "${projectStore}" failed: ${(e as Error).message}`,
-        );
-      }
-    } catch (e) {
-      if (e instanceof GenerationStoreError) throw e;
-      throw new GenerationStoreError(
-        "PUBLICATION_CAS_STATE_CORRUPT",
-        phase,
-        project,
-        `Failed to create project store directory "${projectStore}" for CAS DB: ${(e as Error).message}`,
-      );
-    }
+  // R169B-STEP10 (B4): use the shared leaf layout module.
+  try {
+    ensureDirDurable(projectStore, null);
+  } catch (e) {
+    throw new GenerationStoreError(
+      "PUBLICATION_CAS_STATE_CORRUPT",
+      phase,
+      project,
+      `Failed to ensure durable layout for CAS DB: ${(e as Error).message}`,
+    );
   }
 
   const dbPath = join(projectStore, CAS_DB_FILENAME);
