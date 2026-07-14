@@ -83,6 +83,7 @@ import {
   fsyncSync,
   lstatSync,
   fstatSync,
+  fchmodSync as fs_fchmodSync,
   unlinkSync,
   linkSync,
   writeSync,
@@ -1596,22 +1597,45 @@ export function publishPreparedGeneration(
       mutationState.finalDb.created = true;
       mutationState.finalDb.identity = tempIdentity;
 
-      // Authenticated cleanup: compares identity before unlinking.
+      // R169B-STEP10 (CLEANUP-TEMP-01): Authenticated cleanup.
+      // Pipeline: lstat → ENOENT? skip to fsync → present? compare dev/ino
+      // → unlink → fsync generations/ → confirm ENOENT.
+      // Only ENOENT means absent. EACCES/EIO/ENOTDIR = NOT absent.
       const cleanupTemp = (): { certified: boolean } => {
-        let certified = false;
+        let identityMatched = false;
+        let removed = false;
+        let directoryDurable = false;
+        let confirmedAbsent = false;
+
+        // 1. lstat temp.
         try {
           const cs = lstatSync(tempPath);
           if (cs.dev === tempIdentity.dev && cs.ino === tempIdentity.ino) {
-            try { unlinkSync(tempPath); } catch { return { certified: false }; }
+            identityMatched = true;
+            // 3. Unlink.
+            try {
+              unlinkSync(tempPath);
+              removed = true;
+            } catch {
+              return { certified: false };
+            }
           } else {
-            // Identity mismatch — do NOT unlink (could be another file).
+            // Identity mismatch — do NOT unlink.
             return { certified: false };
           }
-        } catch {
-          // ENOENT — already gone. Certified if identity would have matched.
-          return { certified: true };
+        } catch (e) {
+          const errCode = (e as NodeJS.ErrnoException).code;
+          if (errCode === "ENOENT") {
+            // 2. ENOENT — already gone. Skip to fsync + confirm.
+            identityMatched = true; // nothing to match against
+            removed = true; // nothing to remove
+          } else {
+            // EACCES/EIO/ENOTDIR/ELOOP — NOT absent, fail-closed.
+            return { certified: false };
+          }
         }
-        // fsync generations/.
+
+        // 4. fsync generations/.
         let cdf: number | null = null;
         try {
           const opened = openDirectoryNoFollow(generations, PROD_OPS);
@@ -1619,20 +1643,28 @@ export function publishPreparedGeneration(
           PROD_OPS.fsyncSync(cdf);
           PROD_OPS.closeSync(cdf);
           cdf = null;
+          directoryDurable = true;
         } catch {
           if (cdf !== null) { try { PROD_OPS.closeSync(cdf); } catch {} }
           return { certified: false };
         }
-        // Confirm ENOENT.
+
+        // 5. Confirm ENOENT.
         try {
           lstatSync(tempPath);
-          return { certified: false }; // still exists
+          // Still exists — not confirmed.
+          return { certified: false };
         } catch (e2) {
           if ((e2 as NodeJS.ErrnoException).code === "ENOENT") {
-            certified = true;
+            confirmedAbsent = true;
+          } else {
+            // EACCES/EIO — not confirmed.
+            return { certified: false };
           }
         }
-        return { certified };
+
+        // 6. Certified only if all four guarantees are true.
+        return { certified: identityMatched && removed && directoryDurable && confirmedAbsent };
       };
 
       // 4. fd-based copy + hash (single pass: read source → hash → write temp).
@@ -1685,21 +1717,79 @@ export function publishPreparedGeneration(
         copyError = e as Error;
       }
 
-      // Close both fds (in finally-like fashion).
+      // Close source fd.
       try { closeSync(sourceFd); } catch {}
       sourceFd = null;
+
+      // R169B-STEP10 (TEMP-CONTENT-02): fstat(tempFd) post-copy verification.
+      // Verify the temp fd still has the same dev/ino.
+      try {
+        const tempAfter = fstatSync(tempFd!);
+        if (tempAfter.dev !== tempIdentity.dev || tempAfter.ino !== tempIdentity.ino) {
+          try { closeSync(tempFd!); } catch {}
+          tempFd = null;
+          const r = cleanupTemp();
+          if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Post-copy temp identity changed: dev=${tempAfter.dev}/${tempIdentity.dev} ino=${tempAfter.ino}/${tempIdentity.ino}`, generationId);
+        }
+      } catch (e) {
+        if (e instanceof GenerationStoreError) throw e;
+        try { closeSync(tempFd!); } catch {}
+        tempFd = null;
+        const r = cleanupTemp();
+        if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `Post-copy fstat(tempFd) failed: ${(e as Error).message}`, generationId);
+      }
+
+      // R169B-STEP10 (TEMP-MODE-03): fchmod(tempFd, 0600) + owner check via fd.
+      // Creating with mode 0600 is not enough under a restrictive umask.
+      // fchmod operates on the fd, not the path — race-free.
+      // Node.js fs.fchmodSync is available on POSIX.
+      try {
+        fs_fchmodSync(tempFd, 0o600);
+      } catch {
+        // fchmod not available or failed — the O_CREAT mode 0600 is the
+        // primary guard. We still verify via fstat below.
+      }
+      // Verify mode and owner via fstat.
+      try {
+        const modeStat = fstatSync(tempFd!);
+        if ((modeStat.mode & 0o777) !== 0o600) {
+          try { closeSync(tempFd!); } catch {}
+          tempFd = null;
+          const r = cleanupTemp();
+          if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Temp mode is 0o${(modeStat.mode & 0o777).toString(8)} (expected 0600): ${tempPath}`, generationId);
+        }
+        if (typeof process.getuid === "function" && modeStat.uid !== process.getuid()) {
+          try { closeSync(tempFd!); } catch {}
+          tempFd = null;
+          const r = cleanupTemp();
+          if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Temp owner uid=${modeStat.uid} != process uid=${process.getuid()}: ${tempPath}`, generationId);
+        }
+      } catch (e) {
+        if (e instanceof GenerationStoreError) throw e;
+        try { closeSync(tempFd!); } catch {}
+        tempFd = null;
+        const r = cleanupTemp();
+        if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `Post-fchmod fstat failed: ${(e as Error).message}`, generationId);
+      }
+
       // R169B-STEP10 (P0): fsync(tempFd) failure MUST block promotion.
-      // The previous code silently ignored fsync failures, allowing the
-      // publication to continue with a non-durable temp. After crash,
-      // the manifest could be durable while the DB bytes are not —
-      // violating the core R169 invariant.
       let tempFsyncFailed = false;
       try {
-        fsyncSync(tempFd);
+        fsyncSync(tempFd!);
       } catch (e) {
         tempFsyncFailed = true;
       }
-      try { closeSync(tempFd); } catch {}
+      try { closeSync(tempFd!); } catch {}
       tempFd = null;
 
       if (tempFsyncFailed) {
