@@ -590,9 +590,13 @@ export function applyGenerationGcPlan(
     }
 
     // f-k. Delete the generation under the CAS lock (Model A).
+    // R169B-STEP10 (§10): pass the proof captured by the safety check.
+    // deleteGenerationUnderCasLock re-lstats and compares every field
+    // under the lock to detect TOCTOU replacement.
     const result = deleteGenerationUnderCasLock(
       project, cacheRoot, entry.generationId, dbPath, metadataPath,
       generations, currentActiveId, phase, /* isRecovery */ false,
+      safetyCheck.proof,
     );
     for (const w of result.warnings) warnings.push(w);
     if (result.deleted) deletedGenerations.push(entry.generationId);
@@ -708,7 +712,7 @@ function verifyGenerationSafety(
   metadataPath: string,
   catalogEntry: CasGenerationCatalogEntry,
   phase: string,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true; proof: GenerationDeletionProof } | { ok: false; reason: string } {
   void phase;
   // 1. DB exists, regular, non-symlink.
   let dbStat: Stats;
@@ -724,12 +728,13 @@ function verifyGenerationSafety(
     return { ok: false, reason: `DB lstat failed: ${(e as Error).message}` };
   }
   // 2. Metadata exists, regular, non-symlink.
+  let metaStat: Stats;
   try {
-    const ms = lstatSync(metadataPath);
-    if (ms.isSymbolicLink()) {
+    metaStat = lstatSync(metadataPath);
+    if (metaStat.isSymbolicLink()) {
       return { ok: false, reason: `Metadata path is a symlink: ${metadataPath}` };
     }
-    if (!ms.isFile()) {
+    if (!metaStat.isFile()) {
       return { ok: false, reason: `Metadata path is not a regular file: ${metadataPath}` };
     }
   } catch (e) {
@@ -794,7 +799,54 @@ function verifyGenerationSafety(
   if (actualHash !== catalogEntry.sha256) {
     return { ok: false, reason: `DB actual sha256 ${actualHash} does not match catalog sha256 ${catalogEntry.sha256}` };
   }
-  return { ok: true };
+  // R169B-STEP10 (§10 POST-PUSH): Capture a full GenerationDeletionProof
+  // BEFORE acquiring the CAS lock. The proof contains dev/ino/size/sha256
+  // for the DB and dev/ino/size for the metadata. Under the lock,
+  // deleteGenerationUnderCasLock re-lstats both files and compares every
+  // field. If any field changed (file was replaced between the safety
+  // check and the lock), the deletion is refused.
+  // Metadata sha256 is expensive to compute (would require reading the
+  // full file twice); we use dev/ino/size which is sufficient to detect
+  // replacement. The metadata content was already validated above.
+  const proof: GenerationDeletionProof = {
+    db: {
+      dev: dbStat.dev,
+      ino: dbStat.ino,
+      size: dbStat.size,
+      sha256: actualHash,
+    },
+    metadata: {
+      dev: metaStat.dev,
+      ino: metaStat.ino,
+      size: metaStat.size,
+      sha256: "",  // not recomputed — dev/ino/size is sufficient
+    },
+    catalogSha256: catalogEntry.sha256,
+  };
+  return { ok: true, proof };
+}
+
+/**
+ * R169B-STEP10 (§10 POST-PUSH): A deletion proof captured by the safety
+ * check (outside the CAS lock) and verified under the lock. Contains
+ * dev/ino/size/sha256 for the DB and dev/ino/size for the metadata.
+ * If any field changed between the safety check and the lock, the
+ * deletion is refused (the file was replaced).
+ */
+interface GenerationDeletionProof {
+  readonly db: {
+    readonly dev: number;
+    readonly ino: number;
+    readonly size: number;
+    readonly sha256: string;
+  };
+  readonly metadata: {
+    readonly dev: number;
+    readonly ino: number;
+    readonly size: number;
+    readonly sha256: string;  // empty if not recomputed
+  };
+  readonly catalogSha256: string;
 }
 
 /**
@@ -882,6 +934,7 @@ function deleteGenerationUnderCasLock(
   currentActiveId: string | null,
   phase: string,
   isRecovery: boolean,
+  proof?: GenerationDeletionProof,
 ): { deleted: boolean; warnings: GenerationStoreWarning[] } {
   void phase;
   const warnings: GenerationStoreWarning[] = [];
@@ -953,19 +1006,71 @@ function deleteGenerationUnderCasLock(
       cas.appendPublicationHistory(generationId, project, "MARK_DELETING", null);
     }
 
-    // R169B-STEP10 (B3): GC proof under lock — re-lstat DB/metadata and
-    // compare dev/ino/size to the safety check proof before unlink.
-    // This closes the TOCTOU window between the safety check (outside
-    // the lock) and the actual deletion (under the lock).
-    // For recovery (files may already be absent), skip the proof —
-    // the deletion is idempotent.
-    if (!isRecovery) {
+    // R169B-STEP10 (§10 POST-PUSH): GC proof under lock — re-lstat
+    // DB/metadata and compare ALL fields (dev/ino/size/sha256 for DB,
+    // dev/ino/size for metadata) to the proof captured by the safety
+    // check BEFORE the lock. This closes the TOCTOU window between the
+    // safety check (outside the lock) and the actual deletion (under
+    // the lock). For recovery (files may already be absent), skip the
+    // proof — the deletion is idempotent.
+    if (!isRecovery && proof) {
       try {
         const proofDbStat = lstatSync(dbPath);
         if (proofDbStat.isSymbolicLink() || !proofDbStat.isFile()) {
           throw new Error(`DB is not a regular file under lock: ${dbPath}`);
         }
-        // Verify DB hash matches catalog entry.
+        // R169B-STEP10 (§10): Compare dev/ino/size to the proof.
+        if (proofDbStat.dev !== proof.db.dev ||
+            proofDbStat.ino !== proof.db.ino ||
+            proofDbStat.size !== proof.db.size) {
+          throw new Error(
+            `DB identity changed under lock: dev=${proofDbStat.dev}/${proof.db.dev} ino=${proofDbStat.ino}/${proof.db.ino} size=${proofDbStat.size}/${proof.db.size}`,
+          );
+        }
+        // Verify DB hash matches catalog entry (and the proof's hash).
+        const proofHash = computeGcSha256(dbPath);
+        if (proofHash !== cat.sha256) {
+          throw new Error(`DB hash mismatch under lock: ${proofHash} != ${cat.sha256}`);
+        }
+        if (proofHash !== proof.db.sha256) {
+          throw new Error(`DB hash changed under lock: ${proofHash} != ${proof.db.sha256}`);
+        }
+      } catch (e) {
+        cas.rollback();
+        warnings.push({
+          code: "GC_DELETE_FAILED",
+          message: `GC proof verification failed under lock for ${generationId}: ${(e as Error).message}`,
+        });
+        return { deleted: false, warnings };
+      }
+      // Verify metadata identity (dev/ino/size) matches the proof.
+      try {
+        const proofMetaStat = lstatSync(metadataPath);
+        if (proofMetaStat.isSymbolicLink() || !proofMetaStat.isFile()) {
+          throw new Error(`metadata is not a regular file under lock: ${metadataPath}`);
+        }
+        if (proofMetaStat.dev !== proof.metadata.dev ||
+            proofMetaStat.ino !== proof.metadata.ino ||
+            proofMetaStat.size !== proof.metadata.size) {
+          throw new Error(
+            `metadata identity changed under lock: dev=${proofMetaStat.dev}/${proof.metadata.dev} ino=${proofMetaStat.ino}/${proof.metadata.ino} size=${proofMetaStat.size}/${proof.metadata.size}`,
+          );
+        }
+      } catch (e) {
+        cas.rollback();
+        warnings.push({
+          code: "GC_DELETE_FAILED",
+          message: `GC proof metadata verification failed under lock: ${(e as Error).message}`,
+        });
+        return { deleted: false, warnings };
+      }
+    } else if (!isRecovery) {
+      // No proof provided (legacy caller) — fall back to the B3 hash check.
+      try {
+        const proofDbStat = lstatSync(dbPath);
+        if (proofDbStat.isSymbolicLink() || !proofDbStat.isFile()) {
+          throw new Error(`DB is not a regular file under lock: ${dbPath}`);
+        }
         const proofHash = computeGcSha256(dbPath);
         if (proofHash !== cat.sha256) {
           throw new Error(`DB hash mismatch under lock: ${proofHash} != ${cat.sha256}`);
@@ -978,7 +1083,6 @@ function deleteGenerationUnderCasLock(
         });
         return { deleted: false, warnings };
       }
-      // Verify metadata exists and is regular.
       try {
         const proofMetaStat = lstatSync(metadataPath);
         if (proofMetaStat.isSymbolicLink() || !proofMetaStat.isFile()) {
@@ -1545,24 +1649,101 @@ export function applyGenerationOrphanRecovery(
         // manifest, which we don't delete; we only recover the CAS).
         const dbPath = deriveDbPath(projectStore, gid);
         const metaPath = deriveMetadataPath(projectStore, gid);
+        // R169B-STEP10 (§8): Re-read the active manifest at apply time.
+        // It must match the metadata's manifest for the recovery to be valid.
+        const manifestPathForRecovery = activeManifestPath(project, cacheRoot);
         try {
+          // 1. DB: lstat, regular, non-symlink, mode 0600, owner match.
           const dbStat = lstatSync(dbPath);
-          if (!dbStat.isFile()) { warnings.push({ code: "GC_DELETE_FAILED", message: `Active DB not regular: ${dbPath}` }); retainedOrphans.push(orphan); continue; }
+          if (dbStat.isSymbolicLink() || !dbStat.isFile()) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active DB not a regular file: ${dbPath}` });
+            retainedOrphans.push(orphan); continue;
+          }
+          if ((dbStat.mode & 0o777) !== 0o600) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active DB mode ${String(dbStat.mode & 0o777)} != 0600: ${dbPath}` });
+            retainedOrphans.push(orphan); continue;
+          }
+          if (typeof process.getuid === "function" && dbStat.uid !== process.getuid()) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active DB owner uid=${dbStat.uid} != process uid=${process.getuid()}: ${dbPath}` });
+            retainedOrphans.push(orphan); continue;
+          }
+          // 2. Metadata: lstat, regular, non-symlink, mode 0600, owner match.
           const metaStat = lstatSync(metaPath);
-          if (!metaStat.isFile()) { warnings.push({ code: "GC_DELETE_FAILED", message: `Active metadata not regular: ${metaPath}` }); retainedOrphans.push(orphan); continue; }
+          if (metaStat.isSymbolicLink() || !metaStat.isFile()) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active metadata not a regular file: ${metaPath}` });
+            retainedOrphans.push(orphan); continue;
+          }
+          if ((metaStat.mode & 0o777) !== 0o600) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active metadata mode ${String(metaStat.mode & 0o777)} != 0600: ${metaPath}` });
+            retainedOrphans.push(orphan); continue;
+          }
+          if (typeof process.getuid === "function" && metaStat.uid !== process.getuid()) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active metadata owner uid=${metaStat.uid} != process uid=${process.getuid()}: ${metaPath}` });
+            retainedOrphans.push(orphan); continue;
+          }
+          // 3. DB size == manifest.sizeBytes (from metadata).
           const metaRaw = readFileSyncTextSafe(metaPath, 256 * 1024);
           const metaParsed = JSON.parse(metaRaw);
           const metaValidated = validateGenerationMetadata(metaParsed, project);
+          const m = metaValidated.manifest;
+          if (dbStat.size !== m.sizeBytes) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active DB size ${dbStat.size} != manifest sizeBytes ${m.sizeBytes}` });
+            retainedOrphans.push(orphan); continue;
+          }
+          // 4. DB hash == manifest.sha256.
           const actualHash = computeGcSha256(dbPath);
-          if (actualHash !== metaValidated.manifest.sha256) { warnings.push({ code: "GC_DELETE_FAILED", message: `Active DB hash mismatch during CAS recovery` }); retainedOrphans.push(orphan); continue; }
+          if (actualHash !== m.sha256) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active DB hash mismatch during CAS recovery` });
+            retainedOrphans.push(orphan); continue;
+          }
+          // 5. dbFile canonique: manifest.dbFile must match the canonical path.
+          const expectedDbFile = `generations/generation-${gid}.db`;
+          if (m.dbFile !== expectedDbFile) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active manifest dbFile ${m.dbFile} != canonical ${expectedDbFile}` });
+            retainedOrphans.push(orphan); continue;
+          }
+          // 6. Active manifest == metadata.manifest (re-read manifest, compare).
+          let activeManifest: GenerationManifestV1 | null;
+          try {
+            activeManifest = readOptionalGenerationManifest(manifestPathForRecovery, project);
+          } catch {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active manifest corrupt/unreadable during CAS recovery` });
+            retainedOrphans.push(orphan); continue;
+          }
+          if (!activeManifest || activeManifest.generationId !== gid) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active manifest does not point at generation ${gid} — refusing CAS recovery` });
+            retainedOrphans.push(orphan); continue;
+          }
+          // Compare manifest fields.
+          const am = activeManifest;
+          if (am.sha256 !== m.sha256 || am.sizeBytes !== m.sizeBytes ||
+              am.rootFingerprint !== m.rootFingerprint ||
+              am.extractorSemanticsVersion !== m.extractorSemanticsVersion ||
+              am.discoveryPolicyVersion !== m.discoveryPolicyVersion) {
+            warnings.push({ code: "GC_DELETE_FAILED", message: `Active manifest != metadata.manifest (sha256/size/fingerprint/versions mismatch)` });
+            retainedOrphans.push(orphan); continue;
+          }
+          // All disk checks passed. Recover the CAS under lock.
           const cas = openCasStore(project, cacheRoot);
           try {
             cas.beginImmediate();
             const now = new Date().toISOString();
-            const m = metaValidated.manifest;
             const existing = cas.getGenerationCatalogEntry(gid);
+            // R169B-STEP10 (§9): preserve pinned from metadata if the
+            // metadata's pinned field is set. The metadata V1 schema
+            // may carry a `pinned` boolean; if so, honor it.
+            const pinnedFromMeta = (metaValidated as { pinned?: boolean }).pinned === true;
+            const pinned = existing?.pinned ?? pinnedFromMeta;
             if (!existing) {
-              cas.upsertGenerationCatalog({ generationId: gid, project, sha256: m.sha256, sizeBytes: m.sizeBytes, rootFingerprint: m.rootFingerprint, extractorSemanticsVersion: m.extractorSemanticsVersion, discoveryPolicyVersion: m.discoveryPolicyVersion, firstPublishedAt: m.createdAt, lastSeenAt: now, pinned: false, status: "ACTIVE" });
+              cas.upsertGenerationCatalog({
+                generationId: gid, project,
+                sha256: m.sha256, sizeBytes: m.sizeBytes,
+                rootFingerprint: m.rootFingerprint,
+                extractorSemanticsVersion: m.extractorSemanticsVersion,
+                discoveryPolicyVersion: m.discoveryPolicyVersion,
+                firstPublishedAt: m.createdAt, lastSeenAt: now,
+                pinned, status: "ACTIVE",
+              });
             }
             cas.setActiveGenerationId(gid);
             cas.appendPublicationHistory(gid, project, "RECOVER", null);
