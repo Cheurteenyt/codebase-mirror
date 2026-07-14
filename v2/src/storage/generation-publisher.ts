@@ -1509,28 +1509,13 @@ export function publishPreparedGeneration(
       // token cannot revert to PREPARED (the staging is absent).
       // R169B-STEP6 (META-R169B-A4-08): in dedup, the metadata
       // preexisted (we did NOT create it). metadataCreated stays false.
-      try {
-        unlinkSync(stagingPath);
-        mutationState.stagingRemoved = true;
-        // R169B-STEP10 (§7): fsync tmp/ after dedup staging unlink.
-        let dedupTmpFd: number | null = null;
-        try {
-          const tmpD = tmpDir(project, cacheRoot);
-          const opened = openDirectoryNoFollow(tmpD, PROD_OPS);
-          dedupTmpFd = opened.fd;
-          PROD_OPS.fsyncSync(dedupTmpFd);
-          PROD_OPS.closeSync(dedupTmpFd);
-          dedupTmpFd = null;
-        } catch {
-          if (dedupTmpFd !== null) { try { PROD_OPS.closeSync(dedupTmpFd); } catch {} }
-          warnings.push({ code: "TMP_DIR_FSYNC_DEFERRED", message: "fsync tmp/ after dedup staging unlink failed (non-fatal)" });
+      // Unlink staging via centralized primitive (A3).
+      {
+        const tmpD = tmpDir(project, cacheRoot);
+        const cleanupRes = unlinkStagingDurably(stagingPath, null, tmpD, warnings);
+        if (cleanupRes.removed && cleanupRes.confirmedAbsent) {
+          mutationState.stagingRemoved = true;
         }
-      } catch (e) {
-        warnings.push({
-          code: "STAGING_ALIAS_CLEANUP_DEFERRED",
-          message: `Failed to unlink staging alias after dedup: ${(e as Error).message}`,
-        });
-        // Staging is still present — stagingRemoved stays false.
       }
       mutationState.metadata.preexisted = true;
     } else {
@@ -1944,27 +1929,13 @@ export function publishPreparedGeneration(
         warnings.push({ code: "PROMOTION_TEMP_CLEANUP_DEFERRED", message: "fsync generations/ after temp unlink failed (non-fatal)" });
       }
 
-      // 10. Unlink staging + fsync tmp/ (TMP-DUR-R169B-A7-04).
-      try {
-        unlinkSync(stagingPath);
-        mutationState.stagingRemoved = true;
-        let tmpDirFd: number | null = null;
-        try {
-          const tmpD = tmpDir(project, cacheRoot);
-          const opened = openDirectoryNoFollow(tmpD, PROD_OPS);
-          tmpDirFd = opened.fd;
-          PROD_OPS.fsyncSync(tmpDirFd);
-          PROD_OPS.closeSync(tmpDirFd);
-          tmpDirFd = null;
-        } catch {
-          if (tmpDirFd !== null) { try { PROD_OPS.closeSync(tmpDirFd); } catch {} }
-          warnings.push({ code: "TMP_DIR_FSYNC_DEFERRED", message: "fsync tmp/ after staging unlink failed (non-fatal)" });
+      // 10. Unlink staging via centralized primitive (A3).
+      {
+        const tmpD = tmpDir(project, cacheRoot);
+        const cleanupRes = unlinkStagingDurably(stagingPath, null, tmpD, warnings);
+        if (cleanupRes.removed && cleanupRes.confirmedAbsent) {
+          mutationState.stagingRemoved = true;
         }
-      } catch (e) {
-        warnings.push({
-          code: "STAGING_CLEANUP_DEFERRED",
-          message: `Failed to unlink staging DB "${stagingPath}": ${(e as Error).message}`,
-        });
       }
     }
 
@@ -2388,28 +2359,11 @@ export function discardPreparedGeneration(
     };
   }
 
-  // 5. Safe to delete.
-  try {
-    unlinkSync(stagingPath);
-    deleted = true;
-    // R169B-STEP10 (§7): fsync tmp/ after discard staging unlink.
-    let discardTmpFd: number | null = null;
-    try {
-      const tmpD = tmpDir(prepared.project, prepared.cacheRoot);
-      const opened = openDirectoryNoFollow(tmpD, PROD_OPS);
-      discardTmpFd = opened.fd;
-      PROD_OPS.fsyncSync(discardTmpFd);
-      PROD_OPS.closeSync(discardTmpFd);
-      discardTmpFd = null;
-    } catch {
-      if (discardTmpFd !== null) { try { PROD_OPS.closeSync(discardTmpFd); } catch {} }
-      warnings.push({ code: "TMP_DIR_FSYNC_DEFERRED", message: "fsync tmp/ after discard staging unlink failed (non-fatal)" });
-    }
-  } catch (e) {
-    warnings.push({
-      code: "STAGING_ALIAS_CLEANUP_DEFERRED",
-      message: `Failed to unlink staging file "${stagingPath}": ${(e as Error).message}`,
-    });
+  // 5. Safe to delete via centralized primitive (A3).
+  {
+    const tmpD = tmpDir(prepared.project, prepared.cacheRoot);
+    const cleanupRes = unlinkStagingDurably(stagingPath, { dev: preStat.dev, ino: preStat.ino }, tmpD, warnings);
+    deleted = cleanupRes.removed && cleanupRes.confirmedAbsent;
   }
 
   return {
@@ -2485,104 +2439,11 @@ export function discardGenerationReservation(
   const warnings: GenerationStoreWarning[] = [];
   let deleted = false;
 
-  // 3. Stat the staging file.
-  let currentStat: Stats;
-  try {
-    currentStat = lstatSync(stagingPath);
-  } catch (e) {
-    const errCode = (e as NodeJS.ErrnoException).code;
-    if (errCode === "ENOENT") {
-      // R169B-STEP10 (A2): file is already gone. Still fsync tmp/ and
-      // mark token DISCARDED.
-      let tmpDirFd: number | null = null;
-      try {
-        const tmp = tmpDir(project, cacheRoot);
-        const opened = openDirectoryNoFollow(tmp, PROD_OPS);
-        tmpDirFd = opened.fd;
-        PROD_OPS.fsyncSync(tmpDirFd);
-        PROD_OPS.closeSync(tmpDirFd);
-        tmpDirFd = null;
-      } catch {
-        if (tmpDirFd !== null) { try { PROD_OPS.closeSync(tmpDirFd); } catch {} }
-      }
-      resToken.state = "DISCARDED";
-      return { project, generationId, stagingPath, deleted: false, warnings };
-    }
-    warnings.push({
-      code: "STAGING_CLEANUP_DEFERRED",
-      message: `Cannot stat staging file: ${(e as Error).message}`,
-    });
-    return { project, generationId, stagingPath, deleted: false, warnings };
-  }
-  if (currentStat.isSymbolicLink() || !currentStat.isFile()) {
-    warnings.push({
-      code: "STAGING_CLEANUP_DEFERRED",
-      message: `Staging file is not a regular file: ${stagingPath}`,
-    });
-    return { project, generationId, stagingPath, deleted: false, warnings };
-  }
-
-  // R169B-STEP10 (A2): verify dev/ino identity before unlinking.
-  // The token stores the identity captured at reserve time. If the
-  // file was replaced, do NOT unlink.
-  if (resToken.identity) {
-    if (currentStat.dev !== resToken.identity.dev || currentStat.ino !== resToken.identity.ino) {
-      warnings.push({
-        code: "STAGING_CLEANUP_DEFERRED",
-        message: `Staging file identity mismatch (expected dev=${resToken.identity.dev} ino=${resToken.identity.ino}, got dev=${currentStat.dev} ino=${currentStat.ino}) — not unlinking`,
-      });
-      return { project, generationId, stagingPath, deleted: false, warnings };
-    }
-  }
-
-  // 4. Unlink.
-  try {
-    unlinkSync(stagingPath);
-    deleted = true;
-  } catch (e) {
-    warnings.push({
-      code: "STAGING_CLEANUP_DEFERRED",
-      message: `Failed to unlink staging file: ${(e as Error).message}`,
-    });
-    return { project, generationId, stagingPath, deleted: false, warnings };
-  }
-
-  // 5. fsync tmp/ directory.
-  let tmpDirFd: number | null = null;
-  try {
-    const tmp = tmpDir(project, cacheRoot);
-    const opened = openDirectoryNoFollow(tmp, PROD_OPS);
-    tmpDirFd = opened.fd;
-    PROD_OPS.fsyncSync(tmpDirFd);
-    PROD_OPS.closeSync(tmpDirFd);
-    tmpDirFd = null;
-  } catch (e) {
-    if (tmpDirFd !== null) {
-      try { PROD_OPS.closeSync(tmpDirFd); } catch { /* best effort */ }
-    }
-    warnings.push({
-      code: "TMP_DIR_FSYNC_DEFERRED",
-      message: `fsync of tmp/ after reservation discard failed (non-fatal): ${(e as Error).message}`,
-    });
-  }
-
-  // 6. Confirm absence via lstat ENOENT.
-  try {
-    lstatSync(stagingPath);
-    // Still exists — cleanup not durable.
-    warnings.push({
-      code: "STAGING_CLEANUP_DEFERRED",
-      message: `Staging file still exists after unlink: ${stagingPath}`,
-    });
-    deleted = false;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-      warnings.push({
-        code: "STAGING_CLEANUP_DEFERRED",
-        message: `lstat after unlink returned unexpected error: ${(e as Error).message}`,
-      });
-    }
-    // ENOENT — confirmed absent.
+  // Use centralized primitive (A3).
+  {
+    const tmpD = tmpDir(project, cacheRoot);
+    const cleanupRes = unlinkStagingDurably(stagingPath, resToken.identity, tmpD, warnings);
+    deleted = cleanupRes.removed && cleanupRes.confirmedAbsent;
   }
 
   // Mark reservation as DISCARDED.
@@ -2592,6 +2453,135 @@ export function discardGenerationReservation(
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────
+
+/**
+ * R169B-STEP10 (A3): Centralized staging cleanup primitive.
+ * Used by: publication normale, dedup, discardPreparedGeneration,
+ * discardGenerationReservation, recovery.
+ *
+ * Pipeline:
+ *   1. lstat staging path (ENOENT only = absent, EACCES/EIO = fail-closed)
+ *   2. If present: compare dev/ino to expectedIdentity (if provided)
+ *   3. unlink
+ *   4. fsync tmp/ directory
+ *   5. Confirm ENOENT
+ *
+ * Returns StagingCleanupResult with four boolean guarantees.
+ * A cleanup is certified only if all four are true.
+ */
+interface StagingCleanupResult {
+  identityMatched: boolean;
+  removed: boolean;
+  directoryDurable: boolean;
+  confirmedAbsent: boolean;
+  warnings: GenerationStoreWarning[];
+}
+
+function unlinkStagingDurably(
+  stagingPath: string,
+  expectedIdentity: { dev: number; ino: number } | null,
+  tmpDirectory: string,
+  warnings: GenerationStoreWarning[],
+): StagingCleanupResult {
+  const result: StagingCleanupResult = {
+    identityMatched: false,
+    removed: false,
+    directoryDurable: false,
+    confirmedAbsent: false,
+    warnings,
+  };
+
+  // 1. lstat staging path.
+  let stat: Stats | null = null;
+  try {
+    stat = lstatSync(stagingPath);
+  } catch (e) {
+    const errCode = (e as NodeJS.ErrnoException).code;
+    if (errCode === "ENOENT") {
+      // Already gone — skip to fsync + confirm.
+      result.identityMatched = true;
+      result.removed = true;
+    } else {
+      // EACCES/EIO/ENOTDIR — fail-closed.
+      warnings.push({
+        code: "STAGING_CLEANUP_DEFERRED",
+        message: `Cannot lstat staging file: ${errCode} (${(e as Error).message})`,
+      });
+      return result;
+    }
+  }
+
+  // 2. Verify identity (if stat succeeded).
+  if (stat) {
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      warnings.push({
+        code: "STAGING_CLEANUP_DEFERRED",
+        message: `Staging file is not a regular file: ${stagingPath}`,
+      });
+      return result;
+    }
+    if (expectedIdentity) {
+      if (stat.dev !== expectedIdentity.dev || stat.ino !== expectedIdentity.ino) {
+        warnings.push({
+          code: "STAGING_CLEANUP_DEFERRED",
+          message: `Staging identity mismatch (expected dev=${expectedIdentity.dev} ino=${expectedIdentity.ino}, got dev=${stat.dev} ino=${stat.ino}) — not unlinking`,
+        });
+        return result;
+      }
+    }
+    result.identityMatched = true;
+
+    // 3. Unlink.
+    try {
+      unlinkSync(stagingPath);
+      result.removed = true;
+    } catch (e) {
+      warnings.push({
+        code: "STAGING_CLEANUP_DEFERRED",
+        message: `Failed to unlink staging file: ${(e as Error).message}`,
+      });
+      return result;
+    }
+  }
+
+  // 4. fsync tmp/ directory.
+  let tmpFd: number | null = null;
+  try {
+    const opened = openDirectoryNoFollow(tmpDirectory, PROD_OPS);
+    tmpFd = opened.fd;
+    PROD_OPS.fsyncSync(tmpFd);
+    PROD_OPS.closeSync(tmpFd);
+    tmpFd = null;
+    result.directoryDurable = true;
+  } catch (e) {
+    if (tmpFd !== null) { try { PROD_OPS.closeSync(tmpFd); } catch {} }
+    warnings.push({
+      code: "TMP_DIR_FSYNC_DEFERRED",
+      message: `fsync of tmp/ failed (non-fatal): ${(e as Error).message}`,
+    });
+  }
+
+  // 5. Confirm ENOENT.
+  try {
+    lstatSync(stagingPath);
+    // Still exists — not confirmed.
+    warnings.push({
+      code: "STAGING_CLEANUP_DEFERRED",
+      message: `Staging file still exists after unlink: ${stagingPath}`,
+    });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      result.confirmedAbsent = true;
+    } else {
+      warnings.push({
+        code: "STAGING_CLEANUP_DEFERRED",
+        message: `lstat after unlink returned unexpected error: ${(e as Error).message}`,
+      });
+    }
+  }
+
+  return result;
+}
 
 /**
  * R169B-STEP2: Build the metadata sidecar payload (a JSON-serializable
