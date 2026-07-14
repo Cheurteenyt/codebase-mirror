@@ -335,6 +335,7 @@ const TSX_BIN = path.join(V2_ROOT, "node_modules/.bin/tsx");
 function makeChildScript(crashPoint: string): string {
   return `
 import { reserveGenerationStaging, prepareGenerationForPublication, publishPreparedGenerationInternal } from ${JSON.stringify(SRC_ROOT + "/storage/generation-publisher.ts")};
+import { PROD_PUBLISHER_OPS } from ${JSON.stringify(SRC_ROOT + "/storage/internal/generation-publisher-ops.ts")};
 import { createValidStagingDb, FIXTURE_PROJECT_NAME } from ${JSON.stringify(TESTS_ROOT + "/helpers/r169b-publisher-fixtures.ts")};
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -350,10 +351,10 @@ const onBarrier = (point: string) => {
   // If this is the crash point, sleep a bit to give the parent time
   // to kill us.
   if (point === crashPoint) {
-    // Busy-wait for up to 5 seconds. The parent should kill us
+    // Busy-wait for up to 2 seconds. The parent should kill us
     // within ~100ms of seeing the barrier file.
     const start = Date.now();
-    while (Date.now() - start < 5000) {
+    while (Date.now() - start < 2000) {
       // spin
     }
   }
@@ -368,9 +369,7 @@ try {
     p,
     { expectedActiveGenerationId: null },
     { cacheRoot },
-    // Use the production ops — we're testing real crash safety, not
-    // fault injection.
-    (await import(${JSON.stringify(SRC_ROOT + "/storage/internal/generation-publisher-ops.ts")})).PROD_PUBLISHER_OPS,
+    PROD_PUBLISHER_OPS,
     onBarrier,
   );
   // If we got here, the publish completed before the parent could kill
