@@ -582,7 +582,13 @@ export type GenerationStoreWarningCode =
   | "GC_SAFETY_REFUSAL"
   // R169B-STEP3: GC deletion incomplete (DB/metadata/fsync/commit
   // failure mid-deletion). Status stays DELETING; next GC re-attempts.
-  | "GC_DELETE_INCOMPLETE";
+  | "GC_DELETE_INCOMPLETE"
+  // R169B-STEP9: promotion temp cleanup deferred (temp left in generations/).
+  | "PROMOTION_TEMP_CLEANUP_DEFERRED"
+  // R169B-STEP9: tmp/ directory fsync deferred (staging removal durability unknown).
+  | "TMP_DIR_FSYNC_DEFERRED"
+  // R169B-STEP9: staging DB cleanup deferred (unlink failure).
+  | "STAGING_CLEANUP_DEFERRED";
 
 /**
  * R169B-STEP1: A structured warning record. Carried alongside a

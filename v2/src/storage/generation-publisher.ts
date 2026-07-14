@@ -85,8 +85,7 @@ import {
   fstatSync,
   unlinkSync,
   linkSync,
-  copyFileSync,
-  chmodSync,
+  writeSync,
   existsSync,
   readSync,
   constants as fsConstants,
@@ -1475,151 +1474,217 @@ export function publishPreparedGeneration(
       }
       mutationState.metadata.preexisted = true;
     } else {
-      // R169B-STEP8 (SEC-COPY-R169B-A6-01 P0): temp-file based promotion.
-      // Create a temp file in generations/, copy staging → temp, then
-      // link(temp, final) no-clobber. Cleanup only touches the temp
-      // (which has a known identity), never the final path.
+      // R169B-STEP9 (TEMP-ID-R169B-A7-01 P0): fd-based temp promotion.
+      // The temp fd is kept open during copy+hash. Identity is captured
+      // at exclusive-create time via fstat(fd), not after copy. Cleanup
+      // compares dev/ino/size before unlinking.
       effectiveGenerationId = generationId;
       effectiveMetadataPath = metadataPath;
       effectiveManifest = manifest;
 
-      // 1. Create temp file with unique name in generations/.
+      // 1. Open staging source O_RDONLY|O_NOFOLLOW.
+      let sourceFd: number | null = null;
+      try {
+        sourceFd = openSync(stagingPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      } catch (e) {
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `Failed to open staging source: ${(e as Error).message}`, generationId);
+      }
+      // fstat source and compare to token preStat.
+      let sourceStat: Stats;
+      try {
+        sourceStat = fstatSync(sourceFd);
+        if (sourceStat.dev !== token.preStat.dev || sourceStat.ino !== token.preStat.ino || sourceStat.size !== token.preStat.size) {
+          try { closeSync(sourceFd); } catch {}
+          throw new GenerationStoreError("PUBLICATION_STAGING_MUTATED", phase, project,
+            `Staging identity changed since prepare: dev=${sourceStat.dev}/${token.preStat.dev} ino=${sourceStat.ino}/${token.preStat.ino} size=${sourceStat.size}/${token.preStat.size}`, generationId);
+        }
+      } catch (e) {
+        if (e instanceof GenerationStoreError) throw e;
+        try { closeSync(sourceFd); } catch {}
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `fstat of staging source failed: ${(e as Error).message}`, generationId);
+      }
+
+      // 2. Create temp O_CREAT|O_EXCL|O_RDWR|O_NOFOLLOW, mode 0600.
       const tempNonce = randomUUID();
       const tempPath = join(generations, `.publish-${generationId}-${tempNonce}.db`);
       let tempFd: number | null = null;
       try {
-        tempFd = openSync(tempPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+        tempFd = openSync(tempPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_RDWR | fsConstants.O_NOFOLLOW, 0o600);
       } catch (e) {
-        throw new GenerationStoreError(
-          "GENERATION_PROMOTION_FAILED",
-          phase,
-          project,
-          `Failed to create temp file for promotion at "${tempPath}": ${(e as Error).message}`,
-          generationId,
-        );
+        try { closeSync(sourceFd); } catch {}
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `Failed to create temp: ${(e as Error).message}`, generationId);
       }
-      try { closeSync(tempFd); } catch { /* best effort */ }
-      tempFd = null;
 
-      // Helper: clean up the temp file (identity-safe — unique name).
-      const cleanupTemp = (): void => {
-        try { unlinkSync(tempPath); } catch { /* best effort */ }
-        let cleanupDirFd: number | null = null;
+      // 3. Capture temp identity IMMEDIATELY via fstat(fd).
+      let tempIdentity: FileIdentity;
+      try {
+        const ts = fstatSync(tempFd);
+        if (ts.isSymbolicLink() || !ts.isFile()) {
+          try { closeSync(tempFd); } catch {}
+          try { closeSync(sourceFd); } catch {}
+          try { unlinkSync(tempPath); } catch {}
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Temp is not a regular file: ${tempPath}`, generationId);
+        }
+        tempIdentity = { dev: ts.dev, ino: ts.ino, size: ts.size };
+      } catch (e) {
+        if (e instanceof GenerationStoreError) throw e;
+        try { closeSync(tempFd); } catch {}
+        try { closeSync(sourceFd); } catch {}
+        try { unlinkSync(tempPath); } catch {}
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `fstat of temp failed: ${(e as Error).message}`, generationId);
+      }
+      mutationState.finalDb.created = true;
+      mutationState.finalDb.identity = tempIdentity;
+
+      // Authenticated cleanup: compares identity before unlinking.
+      const cleanupTemp = (): { certified: boolean } => {
+        let certified = false;
+        try {
+          const cs = lstatSync(tempPath);
+          if (cs.dev === tempIdentity.dev && cs.ino === tempIdentity.ino && cs.size === tempIdentity.size) {
+            try { unlinkSync(tempPath); } catch { return { certified: false }; }
+          } else {
+            // Identity mismatch — do NOT unlink (could be another file).
+            return { certified: false };
+          }
+        } catch {
+          // ENOENT — already gone. Certified if identity would have matched.
+          return { certified: true };
+        }
+        // fsync generations/.
+        let cdf: number | null = null;
         try {
           const opened = openDirectoryNoFollow(generations, PROD_OPS);
-          cleanupDirFd = opened.fd;
-          PROD_OPS.fsyncSync(cleanupDirFd);
-          PROD_OPS.closeSync(cleanupDirFd);
-          cleanupDirFd = null;
+          cdf = opened.fd;
+          PROD_OPS.fsyncSync(cdf);
+          PROD_OPS.closeSync(cdf);
+          cdf = null;
         } catch {
-          if (cleanupDirFd !== null) {
-            try { PROD_OPS.closeSync(cleanupDirFd); } catch { /* best effort */ }
+          if (cdf !== null) { try { PROD_OPS.closeSync(cdf); } catch {} }
+          return { certified: false };
+        }
+        // Confirm ENOENT.
+        try {
+          lstatSync(tempPath);
+          return { certified: false }; // still exists
+        } catch (e2) {
+          if ((e2 as NodeJS.ErrnoException).code === "ENOENT") {
+            certified = true;
           }
         }
+        return { certified };
       };
 
-      // 2. Copy/reflink staging → temp.
-      const COPYFILE_FICLONE = fsConstants.COPYFILE_FICLONE;
+      // 4. fd-based copy + hash (single pass: read source → hash → write temp).
+      let copyError: Error | null = null;
       try {
-        copyFileSync(stagingPath, tempPath, COPYFILE_FICLONE);
-      } catch (e) {
-        const errCode = (e as NodeJS.ErrnoException).code;
-        if (errCode === "ENOTSUP" || errCode === "EXDEV" || errCode === "EOPNOTSUPP") {
+        const hasher = createHash("sha256");
+        const chunk = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
+        let totalWritten = 0;
+        while (true) {
+          let bytesRead: number;
           try {
-            copyFileSync(stagingPath, tempPath);
-          } catch (e2) {
-            cleanupTemp();
-            throw new GenerationStoreError(
-              "GENERATION_PROMOTION_FAILED",
-              phase,
-              project,
-              `copy to temp failed (fallback): ${(e2 as Error).message}`,
-              generationId,
-            );
+            bytesRead = readSync(sourceFd, chunk, 0, HASH_CHUNK_BYTES, null);
+          } catch (e) {
+            copyError = e as Error;
+            break;
           }
-        } else {
-          cleanupTemp();
-          throw new GenerationStoreError(
-            "GENERATION_PROMOTION_FAILED",
-            phase,
-            project,
-            `copy/reflink to temp failed: ${(e as Error).message}`,
-            generationId,
-          );
+          if (bytesRead === 0) break;
+          hasher.update(chunk.subarray(0, bytesRead));
+          // Write all bytes to temp fd.
+          let written = 0;
+          while (written < bytesRead) {
+            try {
+              const n = writeSync(tempFd, chunk, written, bytesRead - written, null);
+              if (n <= 0) { copyError = new Error("zero-progress write"); break; }
+              written += n;
+            } catch (e) {
+              copyError = e as Error;
+              break;
+            }
+          }
+          if (copyError) break;
+          totalWritten += bytesRead;
         }
+        if (!copyError) {
+          // Verify source stability (fstat before/after).
+          const sourceAfter = fstatSync(sourceFd);
+          if (sourceAfter.dev !== sourceStat.dev || sourceAfter.ino !== sourceStat.ino || sourceAfter.size !== sourceStat.size) {
+            copyError = new Error("source mutated during copy");
+          }
+          // Compute hash.
+          const tempHash = hasher.digest("hex");
+          if (tempHash !== manifest.sha256) {
+            copyError = new Error(`hash mismatch: ${tempHash} != ${manifest.sha256}`);
+          }
+          if (totalWritten !== sourceStat.size) {
+            copyError = new Error(`short copy: ${totalWritten} != ${sourceStat.size}`);
+          }
+        }
+      } catch (e) {
+        copyError = e as Error;
       }
 
-      // 3. Capture temp identity.
-      let tempStat: Stats;
+      // Close both fds (in finally-like fashion).
+      try { closeSync(sourceFd); } catch {}
+      sourceFd = null;
+      // Keep temp fd for fsync, then close.
+      try { fsyncSync(tempFd); } catch {
+        // fsync failure is non-fatal for the fd (the data may still be on disk).
+      }
+      try { closeSync(tempFd); } catch {}
+      tempFd = null;
+
+      if (copyError) {
+        const result = cleanupTemp();
+        if (!result.certified) {
+          // Cleanup failed — do NOT reset mutation state.
+        } else {
+          mutationState.finalDb.created = false;
+          mutationState.finalDb.identity = null;
+        }
+        throw new GenerationStoreError("PUBLICATION_STAGING_MUTATED", phase, project,
+          `Copy/hash failed: ${copyError.message}`, generationId);
+      }
+
+      // 5. Verify temp identity is still ours (lstat == fstat).
       try {
-        tempStat = lstatSync(tempPath);
-        if (tempStat.isSymbolicLink() || !tempStat.isFile()) {
-          cleanupTemp();
-          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `Temp is not a regular file: ${tempPath}`, generationId);
+        const pre = lstatSync(tempPath);
+        if (pre.dev !== tempIdentity.dev || pre.ino !== tempIdentity.ino) {
+          const r = cleanupTemp();
+          if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Temp identity changed before link`, generationId);
         }
       } catch (e) {
         if (e instanceof GenerationStoreError) throw e;
-        cleanupTemp();
-        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `lstat of temp failed: ${(e as Error).message}`, generationId);
-      }
-      mutationState.finalDb.created = true;
-      mutationState.finalDb.identity = { dev: tempStat.dev, ino: tempStat.ino, size: tempStat.size };
-
-      // 4. chmod 0600 + ownership check.
-      if ((tempStat.mode & 0o777) !== 0o600) {
-        try { chmodSync(tempPath, 0o600); } catch (e) {
-          cleanupTemp();
-          mutationState.finalDb.created = false;
-          mutationState.finalDb.identity = null;
-          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `chmod 0600 on temp failed: ${(e as Error).message}`, generationId);
-        }
-      }
-      if (typeof process.getuid === "function" && tempStat.uid !== process.getuid()) {
-        cleanupTemp();
-        mutationState.finalDb.created = false;
-        mutationState.finalDb.identity = null;
-        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `Temp owner uid mismatch: ${tempStat.uid} vs ${process.getuid()}`, generationId);
+        const r = cleanupTemp();
+        if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `lstat temp before link failed: ${(e as Error).message}`, generationId);
       }
 
-      // 5. Hash the temp, verify against manifest.
-      const tempHash = computeSha256WithIdentityChecks(tempPath, project, phase, generationId);
-      if (tempHash !== manifest.sha256) {
-        cleanupTemp();
-        mutationState.finalDb.created = false;
-        mutationState.finalDb.identity = null;
-        throw new GenerationStoreError("PUBLICATION_STAGING_MUTATED", phase, project, `Temp sha256 ${tempHash} != manifest ${manifest.sha256}`, generationId);
-      }
-
-      // 6. fsync the temp.
-      let tempFsFd: number | null = null;
-      try {
-        tempFsFd = openSync(tempPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-        fsyncSync(tempFsFd);
-        closeSync(tempFsFd);
-        tempFsFd = null;
-      } catch (e) {
-        if (tempFsFd !== null) { try { closeSync(tempFsFd); } catch {} }
-        cleanupTemp();
-        mutationState.finalDb.created = false;
-        mutationState.finalDb.identity = null;
-        throw new GenerationStoreError("GENERATION_PROMOTION_DURABILITY_UNKNOWN", phase, project, `fsync of temp failed: ${(e as Error).message}`, generationId);
-      }
-
-      // 7. link(temp, final) — no-clobber.
+      // 6. link(temp, final) — no-clobber.
       try {
         linkSync(tempPath, finalPath);
       } catch (e) {
         const errCode = (e as NodeJS.ErrnoException).code;
-        cleanupTemp();
-        mutationState.finalDb.created = false;
-        mutationState.finalDb.identity = null;
+        const r = cleanupTemp();
+        if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
         if (errCode === "EEXIST") {
-          throw new GenerationStoreError("GENERATION_PROMOTION_CONFLICT", phase, project, `link target exists: ${finalPath}`, generationId);
+          throw new GenerationStoreError("GENERATION_PROMOTION_CONFLICT", phase, project,
+            `link target exists: ${finalPath}`, generationId);
         }
-        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `link(temp, final) failed: ${(e as Error).message}`, generationId);
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `link(temp, final) failed: ${(e as Error).message}`, generationId);
       }
 
-      // 8. fsync generations/ (makes the final dir entry durable).
+      // 7. fsync generations/ (makes the final dir entry durable).
       let dirFd: number | null = null;
       try {
         const opened = openDirectoryNoFollow(generations, PROD_OPS);
@@ -1629,15 +1694,29 @@ export function publishPreparedGeneration(
         dirFd = null;
       } catch (e) {
         if (dirFd !== null) { try { PROD_OPS.closeSync(dirFd); } catch {} }
+        // The link succeeded but dir fsync failed. Temp still exists — clean up.
         cleanupTemp();
-        throw new GenerationStoreError("GENERATION_PROMOTION_DURABILITY_UNKNOWN", phase, project, `fsync generations/ after link failed: ${(e as Error).message}`, generationId);
+        throw new GenerationStoreError("GENERATION_PROMOTION_DURABILITY_UNKNOWN", phase, project,
+          `fsync generations/ after link failed: ${(e as Error).message}`, generationId);
       }
       mutationState.finalDb.durable = true;
 
-      // 9. unlink temp.
-      try { unlinkSync(tempPath); } catch { /* best effort */ }
+      // 8. Unlink temp (after identity re-check).
+      try {
+        const preUnlink = lstatSync(tempPath);
+        if (preUnlink.dev === tempIdentity.dev && preUnlink.ino === tempIdentity.ino) {
+          unlinkSync(tempPath);
+        } else {
+          warnings.push({ code: "PROMOTION_TEMP_CLEANUP_DEFERRED", message: `Temp identity mismatch before unlink — leaving temp in place: ${tempPath}` });
+        }
+      } catch (e) {
+        const ec = (e as NodeJS.ErrnoException).code;
+        if (ec !== "ENOENT") {
+          warnings.push({ code: "PROMOTION_TEMP_CLEANUP_DEFERRED", message: `Failed to unlink temp: ${(e as Error).message}` });
+        }
+      }
 
-      // 10. fsync generations/ after temp unlink.
+      // 9. fsync generations/ after temp unlink.
       let dirFd2: number | null = null;
       try {
         const opened = openDirectoryNoFollow(generations, PROD_OPS);
@@ -1647,10 +1726,10 @@ export function publishPreparedGeneration(
         dirFd2 = null;
       } catch {
         if (dirFd2 !== null) { try { PROD_OPS.closeSync(dirFd2); } catch {} }
-        warnings.push({ code: "STAGING_ALIAS_CLEANUP_DEFERRED", message: "fsync generations/ after temp unlink failed (non-fatal)" });
+        warnings.push({ code: "PROMOTION_TEMP_CLEANUP_DEFERRED", message: "fsync generations/ after temp unlink failed (non-fatal)" });
       }
 
-      // Unlink staging + fsync tmp/ (R169B-STEP8 TMP-DUR-R169B-A6-04).
+      // 10. Unlink staging + fsync tmp/ (TMP-DUR-R169B-A7-04).
       try {
         unlinkSync(stagingPath);
         mutationState.stagingRemoved = true;
@@ -1664,12 +1743,12 @@ export function publishPreparedGeneration(
           tmpDirFd = null;
         } catch {
           if (tmpDirFd !== null) { try { PROD_OPS.closeSync(tmpDirFd); } catch {} }
-          warnings.push({ code: "STAGING_ALIAS_CLEANUP_DEFERRED", message: "fsync tmp/ after staging unlink failed (non-fatal)" });
+          warnings.push({ code: "TMP_DIR_FSYNC_DEFERRED", message: "fsync tmp/ after staging unlink failed (non-fatal)" });
         }
       } catch (e) {
         warnings.push({
-          code: "STAGING_ALIAS_CLEANUP_DEFERRED",
-          message: `Failed to unlink staging DB "${stagingPath}" after promotion: ${(e as Error).message}`,
+          code: "STAGING_CLEANUP_DEFERRED",
+          message: `Failed to unlink staging DB "${stagingPath}": ${(e as Error).message}`,
         });
       }
     }

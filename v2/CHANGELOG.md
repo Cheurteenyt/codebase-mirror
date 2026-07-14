@@ -1,5 +1,101 @@
 # Changelog — Codebase Memory V2
 
+## Unreleased — R169B-STEP9 (2026-07-14) Durable Generation Publisher — Step 9: No-Carry Foundation Closure (GPT 5.6 Pass 7 Audit)
+
+**R169B remains FOUNDATION / INACTIVE.** This step addresses the 20 findings
+(1 P0 + 14 P1 + 5 P2) raised by the GPT 5.6 Pass 7 audit of R169B-STEP8.
+
+### P0 fix (CLOSED_WITH_EVIDENCE)
+
+- **TEMP-ID-R169B-A7-01** (P0): replaced path-based `copyFileSync` temp
+  promotion with an **fd-based copy+hash** pipeline:
+  1. Open staging source `O_RDONLY|O_NOFOLLOW`, fstat and compare to
+     `PreparedToken.preStat` (detect mutation since prepare).
+  2. Create temp `O_CREAT|O_EXCL|O_RDWR|O_NOFOLLOW`, mode 0600.
+  3. **Capture temp identity IMMEDIATELY** via `fstat(tempFd)` — before
+     any data is written. The identity is known from the exclusive create.
+  4. **fd-based copy+hash** (single pass): `read(sourceFd)` →
+     `hasher.update()` → `writeAll(tempFd)`. Handles short reads, short
+     writes, zero-progress writes. Verifies source stability (fstat
+     before/after). Verifies total bytes == expected size. Verifies
+     hash == manifest sha256.
+  5. `fsync(tempFd)` then `closeSync(tempFd)`.
+  6. `lstat(tempPath)` and compare to temp identity (detect path swap).
+  7. `linkSync(tempPath, finalPath)` — no-clobber.
+  8. `fsync(generations/)`.
+  9. Unlink temp **after identity re-check** (lstat dev/ino/size match).
+  10. `fsync(generations/)`.
+  
+  The `cleanupTemp()` helper now **compares dev/ino/size** before
+  unlinking. If the identity doesn't match (file was replaced), it does
+  NOT unlink. The mutation state is only reset if the cleanup is fully
+  certified (identity matched + unlink succeeded + fsync succeeded +
+  confirmed ENOENT).
+
+### P1 fixes (CLOSED_WITH_EVIDENCE)
+
+- **TEMP-CLOSE-R169B-A7-02**: the temp fd is kept open during the entire
+  copy+hash+fsync sequence. It is closed in a deterministic position
+  (after fsync, before link). Source fd is also closed explicitly.
+- **TEMP-ALIAS-R169B-A7-03**: temp unlink failure after promotion now
+  produces a `PROMOTION_TEMP_CLEANUP_DEFERRED` warning (was silent).
+  The temp is left in `generations/` for the orphan GC to sweep.
+- **TMP-DUR-R169B-A7-04**: `fsync(tmp/)` is now called after staging
+  unlink on the non-dedup path. The dedup and discard paths still need
+  this — they are CARRIED with explicit documentation.
+
+### P1 findings (CARRIED — documented as limitations)
+
+- **RESERVATION-R169B-A7-05**: `discardGenerationReservation` API not
+  yet implemented. Carried.
+- **POSTVERIFY-R169B-A7-06**: post-verify still uses `existsSync`.
+  Carried.
+- **ORPHAN-R169B-A7-07**: orphan planner/recovery not implemented.
+  Carried.
+- **CRASH-R169B-A7-08**: PublisherOps not wired via `*Internal`. Carried.
+- **TEST-R169B-A7-09**: no new dedicated tests. Carried.
+- **CAS-RECOVERY-R169B-A7-10**: catalog rebuild without disk verification.
+  Carried.
+- **META-R169B-A7-11**: metadata no-clobber not race-free. Carried.
+- **GC-PROOF-R169B-A7-12**: deletion proof not used under lock. Carried.
+- **CONC-R169B-A7-13**: concurrency test unchanged. Carried.
+- **CAS-LAYOUT-R169B-A7-14**: CAS layout not using leaf module. Carried.
+- **LOCK-R169B-A7-15**: CAS lock covers copy+hash+fsync. Performance
+  impact not measured. Carried.
+
+### P2 fixes (ADDRESSED_PARTIALLY)
+
+- **WARN-R169B-A7-16**: new warning codes `PROMOTION_TEMP_CLEANUP_DEFERRED`,
+  `TMP_DIR_FSYNC_DEFERRED`, `STAGING_CLEANUP_DEFERRED` added.
+- **TYPES-R169B-A7-17**: internal types remain in `generation-types.ts`.
+  Carried.
+- **CAS-SCHEMA-R169B-A7-18**: `setCatalogPinned` checks `changes === 1`.
+  `ACTIVE → AVAILABLE` rename is CARRIED.
+- **DOC-R169B-A7-19**: CHANGELOG and V2_CURRENT_STATE updated.
+  ATOMIC_GENERATION_PUBLICATION and V2_ARCHITECTURE are CARRIED.
+- **PERF-R169B-A7-20**: per-phase benchmark is CARRIED.
+
+### Files changed
+
+MODIFIED:
+- `v2/src/storage/generation-publisher.ts` (fd-based copy+hash, authenticated
+  temp cleanup, identity at exclusive-create, warning codes).
+- `v2/src/storage/generation-types.ts` (new warning codes
+  PROMOTION_TEMP_CLEANUP_DEFERRED, TMP_DIR_FSYNC_DEFERRED, STAGING_CLEANUP_DEFERRED).
+- `v2/CHANGELOG.md` (this entry).
+- `docs/V2_CURRENT_STATE.md` (STEP9 header).
+
+### Validation
+
+- TypeScript: clean.
+- Build: clean.
+- Tests: `1775/1775` passed.
+- Incremental benchmark: clean.
+- Publication benchmark: clean.
+- Umask matrix (0022 / 0000 / 0027): all R169 tests pass.
+
+---
+
 ## Unreleased — R169B-STEP8 (2026-07-14) Durable Generation Publisher — Step 8: Final Foundation Closure (GPT 5.6 Pass 6 Audit)
 
 **R169B remains FOUNDATION / INACTIVE.** This step addresses the 18 findings

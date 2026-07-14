@@ -1,7 +1,7 @@
 # V2 Current State — Codebase Memory V2
 
-> **Authoritative snapshot of the current product state.** Updated R169B-STEP8 (2026-07-14) — final foundation closure: temp-file promotion, identity-safe cleanup, tmp fsync.
-> R169A–R169B-STEP7 remain as described in their respective changelog entries. R169B-STEP8 (this revision) addresses the 18 findings from the GPT 5.6 Pass 6 audit — most critically, the P0 SEC-COPY-R169B-A6-01: the promotion now uses a temp-file approach (create temp in generations/ → copy staging to temp → link(temp, final) no-clobber), making cleanup truly identity-safe. All eight steps remain FOUNDATION / INACTIVE — the indexer and readers still use the legacy `<project>.db` path. `DATA-CARRY-01` (P1) remains open until R169E.
+> **Authoritative snapshot of the current product state.** Updated R169B-STEP9 (2026-07-14) — no-carry foundation closure: fd-based temp promotion with authenticated cleanup.
+> R169A–R169B-STEP8 remain as described in their respective changelog entries. R169B-STEP9 (this revision) addresses the 20 findings from the GPT 5.6 Pass 7 audit — most critically, the P0 TEMP-ID-R169B-A7-01: the temp promotion now uses an fd-based copy+hash pipeline where the temp identity is captured at exclusive-create time (via fstat on the fd), the fd is kept open during the entire copy+hash+fsync sequence, and the cleanup compares dev/ino/size before unlinking. All nine steps remain FOUNDATION / INACTIVE — the indexer and readers still use the legacy `<project>.db` path. `DATA-CARRY-01` (P1) remains open until R169E.
 > For the historical roadmap, see [V2_ROADMAP.md](V2_ROADMAP.md) (archive, 0.15.9 era).
 > For the authoritative version and bug count, see `v2/package.json` and `v2/CHANGELOG.md`.
 
