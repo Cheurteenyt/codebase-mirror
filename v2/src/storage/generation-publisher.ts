@@ -1546,7 +1546,7 @@ export function publishPreparedGeneration(
         let certified = false;
         try {
           const cs = lstatSync(tempPath);
-          if (cs.dev === tempIdentity.dev && cs.ino === tempIdentity.ino && cs.size === tempIdentity.size) {
+          if (cs.dev === tempIdentity.dev && cs.ino === tempIdentity.ino) {
             try { unlinkSync(tempPath); } catch { return { certified: false }; }
           } else {
             // Identity mismatch — do NOT unlink (could be another file).
@@ -1633,12 +1633,36 @@ export function publishPreparedGeneration(
       // Close both fds (in finally-like fashion).
       try { closeSync(sourceFd); } catch {}
       sourceFd = null;
-      // Keep temp fd for fsync, then close.
-      try { fsyncSync(tempFd); } catch {
-        // fsync failure is non-fatal for the fd (the data may still be on disk).
+      // R169B-STEP10 (P0): fsync(tempFd) failure MUST block promotion.
+      // The previous code silently ignored fsync failures, allowing the
+      // publication to continue with a non-durable temp. After crash,
+      // the manifest could be durable while the DB bytes are not —
+      // violating the core R169 invariant.
+      let tempFsyncFailed = false;
+      try {
+        fsyncSync(tempFd);
+      } catch (e) {
+        tempFsyncFailed = true;
       }
       try { closeSync(tempFd); } catch {}
       tempFd = null;
+
+      if (tempFsyncFailed) {
+        // fsync failed — the temp bytes may not survive a crash.
+        // Block the promotion: cleanup the temp and abort.
+        const r = cleanupTemp();
+        if (r.certified) {
+          mutationState.finalDb.created = false;
+          mutationState.finalDb.identity = null;
+        }
+        throw new GenerationStoreError(
+          "GENERATION_PROMOTION_DURABILITY_UNKNOWN",
+          phase,
+          project,
+          `fsync of temp DB failed — promotion BLOCKED (temp bytes may not be durable)`,
+          generationId,
+        );
+      }
 
       if (copyError) {
         const result = cleanupTemp();
