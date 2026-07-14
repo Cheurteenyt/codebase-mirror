@@ -2020,45 +2020,100 @@ export function publishPreparedGeneration(
       );
     }
     const verifiedDbPath = join(projectStore, verifiedManifest.dbFile);
-    // R169B-STEP10 (§9): strict post-verify — use lstat, not existsSync.
-    // existsSync returns false on EACCES/EIO/ENOTDIR, masking real errors.
+    // R169B-STEP10 (A1): verifyPublishedGenerationStrict — full post-verify.
+    // Manifest: compare ALL fields to effectiveManifest (not just generationId).
+    // DB: lstat, regular, non-symlink, mode 0600, owner, size, dev/ino (if
+    // non-dedup, compare to tempIdentity), SHA-256 hash (O_NOFOLLOW + fstat).
+    // Metadata: lstat, regular, non-symlink, mode 0600, owner, size bound,
+    // UTF-8 fatal, GenerationMetadataV1 strict, metadata.manifest == active.
     try {
+      // --- Manifest: compare ALL fields ---
+      const m = verifiedManifest;
+      const e = effectiveManifest;
+      if (m.formatVersion !== e.formatVersion || m.project !== e.project ||
+          m.generationId !== e.generationId || m.dbFile !== e.dbFile ||
+          m.rootFingerprint !== e.rootFingerprint ||
+          m.extractorSemanticsVersion !== e.extractorSemanticsVersion ||
+          m.discoveryPolicyVersion !== e.discoveryPolicyVersion ||
+          m.nodeCount !== e.nodeCount || m.edgeCount !== e.edgeCount ||
+          m.fileCount !== e.fileCount || m.sizeBytes !== e.sizeBytes ||
+          m.sha256 !== e.sha256) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: manifest fields do not match effectiveManifest`, generationId);
+      }
+      // --- DB: lstat, regular, mode, owner, size, identity, hash ---
       const dbVerifyStat = lstatSync(verifiedDbPath);
       if (dbVerifyStat.isSymbolicLink() || !dbVerifyStat.isFile()) {
         throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
           `Post-verify: DB is not a regular file: ${verifiedDbPath}`, generationId);
       }
-      // Verify mode 0600.
       if ((dbVerifyStat.mode & 0o777) !== 0o600) {
         throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
           `Post-verify: DB mode is 0o${(dbVerifyStat.mode & 0o777).toString(8)} (expected 0600): ${verifiedDbPath}`, generationId);
       }
-      // Verify owner on POSIX.
       if (typeof process.getuid === "function" && dbVerifyStat.uid !== process.getuid()) {
         throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
           `Post-verify: DB owner uid=${dbVerifyStat.uid} != process uid=${process.getuid()}: ${verifiedDbPath}`, generationId);
       }
-      // Verify size matches manifest.
       if (dbVerifyStat.size !== verifiedManifest.sizeBytes) {
         throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
           `Post-verify: DB size ${dbVerifyStat.size} != manifest ${verifiedManifest.sizeBytes}: ${verifiedDbPath}`, generationId);
       }
-    } catch (e) {
-      if (e instanceof GenerationStoreError) throw e;
-      throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
-        `Post-verify: DB lstat failed: ${(e as Error).message}: ${verifiedDbPath}`, generationId);
-    }
-    // Verify metadata sidecar.
-    try {
+      // R169B-STEP10 (A1): verify dev/ino for non-dedup (must match temp identity).
+      if (!deduped && mutationState.finalDb.identity) {
+        if (dbVerifyStat.dev !== mutationState.finalDb.identity.dev ||
+            dbVerifyStat.ino !== mutationState.finalDb.identity.ino) {
+          throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+            `Post-verify: DB dev/ino mismatch: expected ${mutationState.finalDb.identity.dev}/${mutationState.finalDb.identity.ino}, got ${dbVerifyStat.dev}/${dbVerifyStat.ino}`, generationId);
+        }
+      }
+      // R169B-STEP10 (A1): post-link SHA-256 hash verification.
+      // The hash prepared at copy time proves the bytes copied. This hash
+      // proves the bytes at the final path after link are unchanged.
+      const postLinkHash = computeSha256WithIdentityChecks(verifiedDbPath, project, phase, generationId);
+      if (postLinkHash !== verifiedManifest.sha256) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: DB sha256 ${postLinkHash} != manifest ${verifiedManifest.sha256}: ${verifiedDbPath}`, generationId);
+      }
+      // --- Metadata: lstat, regular, mode, owner, size, schema, manifest ---
       const metaVerifyStat = lstatSync(effectiveMetadataPath);
       if (metaVerifyStat.isSymbolicLink() || !metaVerifyStat.isFile()) {
         throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
           `Post-verify: metadata is not a regular file: ${effectiveMetadataPath}`, generationId);
       }
+      if ((metaVerifyStat.mode & 0o777) !== 0o600) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: metadata mode is 0o${(metaVerifyStat.mode & 0o777).toString(8)} (expected 0600): ${effectiveMetadataPath}`, generationId);
+      }
+      if (typeof process.getuid === "function" && metaVerifyStat.uid !== process.getuid()) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: metadata owner uid=${metaVerifyStat.uid} != process uid=${process.getuid()}: ${effectiveMetadataPath}`, generationId);
+      }
+      if (metaVerifyStat.size > MAX_METADATA_SIDECAR_BYTES) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: metadata size ${metaVerifyStat.size} exceeds max ${MAX_METADATA_SIDECAR_BYTES}: ${effectiveMetadataPath}`, generationId);
+      }
+      // Read + validate metadata sidecar.
+      const metaRaw = readFileSyncText(effectiveMetadataPath, MAX_METADATA_SIDECAR_BYTES);
+      const metaParsed = JSON.parse(metaRaw);
+      const metaValidated = validateGenerationMetadata(metaParsed, project);
+      // Verify metadata.manifest matches the active manifest exactly.
+      const dm = metaValidated.manifest;
+      if (dm.formatVersion !== m.formatVersion || dm.project !== m.project ||
+          dm.generationId !== m.generationId || dm.dbFile !== m.dbFile ||
+          dm.rootFingerprint !== m.rootFingerprint ||
+          dm.extractorSemanticsVersion !== m.extractorSemanticsVersion ||
+          dm.discoveryPolicyVersion !== m.discoveryPolicyVersion ||
+          dm.nodeCount !== m.nodeCount || dm.edgeCount !== m.edgeCount ||
+          dm.fileCount !== m.fileCount || dm.sizeBytes !== m.sizeBytes ||
+          dm.sha256 !== m.sha256) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: metadata.manifest does not match active manifest`, generationId);
+      }
     } catch (e) {
       if (e instanceof GenerationStoreError) throw e;
       throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
-        `Post-verify: metadata lstat failed: ${(e as Error).message}: ${effectiveMetadataPath}`, generationId);
+        `Post-verify failed: ${(e as Error).message}`, generationId);
     }
 
     // 13. Update CAS.
