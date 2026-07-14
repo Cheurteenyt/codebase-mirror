@@ -286,8 +286,19 @@ describe("R169B-STEP3 (C3) — fault injection via PublisherOps", () => {
     );
 
     expect(result.publicationState).toBe("PUBLISHED");
-    // The 3 barriers MUST have been hit in this order.
-    expect(barriers).toEqual(["pre-fsync-temp", "pre-link", "pre-cas-commit"]);
+    // The barriers MUST have been hit in this order. R169B-STEP10 (§13)
+    // expanded the barrier set from 3 to 8 points.
+    expect(barriers).toEqual([
+      "pre-fsync-temp",
+      "after-temp-fsync",
+      "pre-link",
+      "after-link",
+      "after-generations-fsync",
+      "after-metadata",
+      "after-manifest",
+      "pre-cas-commit",
+      "after-cas-commit",
+    ]);
   });
 
   it("the injection does NOT leak across calls (a subsequent normal publish succeeds)", () => {

@@ -1845,6 +1845,7 @@ export function publishPreparedGeneration(
       }
       try { closeSync(tempFd!); } catch {}
       tempFd = null;
+      _barrier("after-temp-fsync");
 
       if (tempFsyncFailed) {
         // fsync failed — the temp bytes may not survive a crash.
@@ -1908,6 +1909,7 @@ export function publishPreparedGeneration(
         throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
           `link(temp, final) failed: ${(e as Error).message}`, generationId);
       }
+      _barrier("after-link");
 
       // R169B-STEP10 (FINAL-06): verify final dev/ino immediately after link.
       // The final DB must be the same inode as the temp we just linked.
@@ -1946,6 +1948,7 @@ export function publishPreparedGeneration(
         throw new GenerationStoreError("GENERATION_PROMOTION_DURABILITY_UNKNOWN", phase, project,
           `fsync generations/ after link failed: ${(e as Error).message}`, generationId);
       }
+      _barrier("after-generations-fsync");
       mutationState.finalDb.durable = true;
 
       // 8. Unlink temp (after identity re-check).
@@ -2002,6 +2005,7 @@ export function publishPreparedGeneration(
         pinned: !!options?.pin,
       });
       writeMetadataSidecarAtomically(effectiveMetadataPath, metadataPayload, project, phase, effectiveGenerationId);
+      _barrier("after-metadata");
     }
     // R169B-STEP6 (PHASE-R169B-A4-02): metadata is durable (for non-dedup)
     // or already existed (for dedup). Mark metadataCreated=true only for
@@ -2072,6 +2076,7 @@ export function publishPreparedGeneration(
     // 11. Write active-generation.json atomically (canonical payload).
     const preparedPayload = prepareGenerationManifestForWrite(effectiveManifest, project);
     writeJsonAtomically(manifestPath, preparedPayload.payload, project, phase, PROD_OPS);
+    _barrier("after-manifest");
     // R169B-STEP6 (PHASE-R169B-A4-02): the manifest is now visible to
     // readers. This is a point of no return — the token is CONSUMED.
     mutationState.manifestVisible = true;
@@ -2234,6 +2239,7 @@ export function publishPreparedGeneration(
     cas.commit();
     casCommitted = true;
     mutationState.casCommitted = true;
+    _barrier("after-cas-commit");
 
     // 15. Transition token → CONSUMED.
     token.state = "CONSUMED";

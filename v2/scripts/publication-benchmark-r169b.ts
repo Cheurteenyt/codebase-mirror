@@ -31,9 +31,11 @@ import {
   reserveGenerationStaging,
   prepareGenerationForPublication,
   publishPreparedGeneration,
+  publishPreparedGenerationInternal,
   discardPreparedGeneration,
 } from "../src/storage/generation-publisher.js";
 import { planGenerationGc, applyGenerationGcPlan } from "../src/storage/generation-gc.js";
+import { PROD_PUBLISHER_OPS } from "../src/storage/internal/generation-publisher-ops.js";
 import {
   projectStoreDir,
   generationsDir,
@@ -59,6 +61,25 @@ interface PhaseTimings {
   publishMs: number[];
 }
 
+/**
+ * R169B-STEP10 (§15): Fine-grained barrier timings inside PUBLISH.
+ * Measures the time between consecutive barrier callbacks to break
+ * down the publish phase into sub-phases.
+ */
+interface BarrierTimings {
+  // Each entry is the time (ms) between the previous barrier and this one.
+  // The first entry is from publish start to pre-fsync-temp.
+  preFsyncTemp: number[];
+  fsyncTemp: number[];       // pre-fsync-temp → after-temp-fsync
+  link: number[];            // after-temp-fsync → pre-link (lstat check)
+  linkSync: number[];        // pre-link → after-link
+  generationsFsync: number[]; // after-link → after-generations-fsync
+  metadata: number[];        // after-generations-fsync → after-metadata
+  manifest: number[];        // after-metadata → after-manifest
+  postverify: number[];      // after-manifest → pre-cas-commit
+  casCommit: number[];       // pre-cas-commit → after-cas-commit
+}
+
 interface BenchResult {
   scenario: string;
   wallMs: number;
@@ -69,6 +90,8 @@ interface BenchResult {
   catalogActive: number;
   catalogDeleted: number;
   dedupedRepub: boolean;
+  dbBytes: number;
+  barriers: BarrierTimings | null;
   phases: {
     reserveAvgMs: number;
     populateAvgMs: number;
@@ -78,6 +101,12 @@ interface BenchResult {
     populateTotalMs: number;
     prepareTotalMs: number;
     publishTotalMs: number;
+    reserveP50: number;
+    reserveP95: number;
+    prepareP50: number;
+    prepareP95: number;
+    publishP50: number;
+    publishP95: number;
   };
   invariants: {
     manifestValid: boolean;
@@ -154,6 +183,22 @@ function runBenchmark(): BenchResult {
     publishMs: [],
   };
 
+  // R169B-STEP10 (§15): Fine-grained barrier timings.
+  const barriers: BarrierTimings = {
+    preFsyncTemp: [],
+    fsyncTemp: [],
+    link: [],
+    linkSync: [],
+    generationsFsync: [],
+    metadata: [],
+    manifest: [],
+    postverify: [],
+    casCommit: [],
+  };
+
+  // R169B-STEP10 (§15): track DB bytes for MB/s computation.
+  const dbSizes: number[] = [];
+
   const start = nowMs();
 
   try {
@@ -174,14 +219,42 @@ function runBenchmark(): BenchResult {
       const t3 = nowMs();
       phases.prepareMs.push(t3 - t2);
 
-      // PUBLISH
-      const result = publishPreparedGeneration(
+      // PUBLISH — use publishPreparedGenerationInternal with a barrier
+      // callback to capture fine-grained sub-phase timings.
+      let lastBarrierTime = 0;
+      const onBarrier = (point: string): void => {
+        const now = nowMs();
+        const delta = lastBarrierTime === 0 ? 0 : now - lastBarrierTime;
+        lastBarrierTime = now;
+        switch (point) {
+          case "pre-fsync-temp": barriers.preFsyncTemp.push(delta); break;
+          case "after-temp-fsync": barriers.fsyncTemp.push(delta); break;
+          case "pre-link": barriers.link.push(delta); break;
+          case "after-link": barriers.linkSync.push(delta); break;
+          case "after-generations-fsync": barriers.generationsFsync.push(delta); break;
+          case "after-metadata": barriers.metadata.push(delta); break;
+          case "after-manifest": barriers.manifest.push(delta); break;
+          case "pre-cas-commit": barriers.postverify.push(delta); break;
+          case "after-cas-commit": barriers.casCommit.push(delta); break;
+        }
+      };
+      lastBarrierTime = nowMs();
+      const result = publishPreparedGenerationInternal(
         prepared,
         { expectedActiveGenerationId: i === 0 ? null : publishedIds[publishedIds.length - 1] },
         { cacheRoot },
+        PROD_PUBLISHER_OPS,
+        onBarrier,
       );
       const t4 = nowMs();
       phases.publishMs.push(t4 - t3);
+
+      // Track DB size.
+      try {
+        const fs = require("node:fs");
+        const st = fs.statSync(reservation.stagingPath);
+        dbSizes.push(st.size);
+      } catch { /* best effort */ }
 
       // Verify CAS revision is monotonic.
       if (result.cas.revision <= lastRevision) {
@@ -281,6 +354,18 @@ function runBenchmark(): BenchResult {
     catalogActive,
     catalogDeleted,
     dedupedRepub,
+    dbBytes: dbSizes.reduce((a, b) => a + b, 0),
+    barriers: {
+      preFsyncTemp: barriers.preFsyncTemp,
+      fsyncTemp: barriers.fsyncTemp,
+      link: barriers.link,
+      linkSync: barriers.linkSync,
+      generationsFsync: barriers.generationsFsync,
+      metadata: barriers.metadata,
+      manifest: barriers.manifest,
+      postverify: barriers.postverify,
+      casCommit: barriers.casCommit,
+    },
     phases: {
       reserveAvgMs: Math.round(avg(phases.reserveMs) * 100) / 100,
       populateAvgMs: Math.round(avg(phases.populateMs) * 100) / 100,
@@ -290,6 +375,12 @@ function runBenchmark(): BenchResult {
       populateTotalMs: Math.round(sum(phases.populateMs)),
       prepareTotalMs: Math.round(sum(phases.prepareMs)),
       publishTotalMs: Math.round(sum(phases.publishMs)),
+      reserveP50: Math.round(percentile(phases.reserveMs, 50) * 100) / 100,
+      reserveP95: Math.round(percentile(phases.reserveMs, 95) * 100) / 100,
+      prepareP50: Math.round(percentile(phases.prepareMs, 50) * 100) / 100,
+      prepareP95: Math.round(percentile(phases.prepareMs, 95) * 100) / 100,
+      publishP50: Math.round(percentile(phases.publishMs, 50) * 100) / 100,
+      publishP95: Math.round(percentile(phases.publishMs, 95) * 100) / 100,
     },
     invariants: {
       manifestValid,
@@ -316,6 +407,28 @@ function formatResult(r: BenchResult): string {
   lines.push(`    ────────`);
   lines.push(`    SUM       ${phaseSum} ms (wall ${r.wallMs} ms, overhead ${r.wallMs - phaseSum} ms)`);
   lines.push(``);
+  if (r.barriers) {
+    const b = r.barriers;
+    lines.push(`  PUBLISH sub-phases (barrier-to-barrier, avg ms/gen):`);
+    lines.push(`    copy+hash (start → pre-fsync-temp)   ${avg(b.preFsyncTemp).toFixed(2)}`);
+    lines.push(`    fsync(temp)                          ${avg(b.fsyncTemp).toFixed(2)}`);
+    lines.push(`    lstat check (after-fsync → pre-link) ${avg(b.link).toFixed(2)}`);
+    lines.push(`    link(temp, final)                    ${avg(b.linkSync).toFixed(2)}`);
+    lines.push(`    fsync(generations/)                  ${avg(b.generationsFsync).toFixed(2)}`);
+    lines.push(`    metadata write                       ${avg(b.metadata).toFixed(2)}`);
+    lines.push(`    manifest write                       ${avg(b.manifest).toFixed(2)}`);
+    lines.push(`    postverify                           ${avg(b.postverify).toFixed(2)}`);
+    lines.push(`    CAS commit                           ${avg(b.casCommit).toFixed(2)}`);
+    lines.push(``);
+  }
+  if (r.dbBytes > 0) {
+    const mb = r.dbBytes / (1024 * 1024);
+    const publishSec = r.phases.publishTotalMs / 1000;
+    const mbPerSec = publishSec > 0 ? (mb * r.generations) / publishSec : 0;
+    lines.push(`  DB size:      ${(mb / r.generations).toFixed(2)} MB/gen (${r.dbBytes} bytes total)`);
+    lines.push(`  throughput:   ${mbPerSec.toFixed(1)} MB/s (publish phase)`);
+    lines.push(``);
+  }
   lines.push(`  CAS revision: ${r.casRevision}`);
   lines.push(`  CAS catalog:  ACTIVE=${r.catalogActive}, DELETED=${r.catalogDeleted}`);
   lines.push(`  active gen:   ${r.activeGenerationId ?? "(none)"}`);
@@ -327,6 +440,18 @@ function formatResult(r: BenchResult): string {
   lines.push(`    CAS monotonic:   ${r.invariants.casMonotonic ? "OK" : "FAIL"}`);
   lines.push(`  errors: ${r.errors}`);
   return lines.join("\n");
+}
+
+function avg(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
+function percentile(arr: number[], p: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, idx)] ?? 0;
 }
 
 const result = runBenchmark();
