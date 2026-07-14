@@ -1866,6 +1866,9 @@ export function publishPreparedGeneration(
         );
       }
 
+      // R169B (§18 GATE): copy/hash error taxonomy. Distinguish:
+      // SOURCE_MUTATED / HASH_MISMATCH / SHORT_COPY → PUBLICATION_STAGING_MUTATED
+      // READ_FAILED / WRITE_FAILED / ZERO_PROGRESS → GENERATION_PROMOTION_FAILED
       if (copyError) {
         const result = cleanupTemp();
         if (!result.certified) {
@@ -1874,8 +1877,16 @@ export function publishPreparedGeneration(
           mutationState.finalDb.created = false;
           mutationState.finalDb.identity = null;
         }
-        throw new GenerationStoreError("PUBLICATION_STAGING_MUTATED", phase, project,
-          `Copy/hash failed: ${copyError.message}`, generationId);
+        const msg = copyError.message;
+        const isStagingMutation =
+          msg.includes("source mutated") ||
+          msg.includes("hash mismatch") ||
+          msg.includes("short copy");
+        const errorCode = isStagingMutation
+          ? "PUBLICATION_STAGING_MUTATED" as const
+          : "GENERATION_PROMOTION_FAILED" as const;
+        throw new GenerationStoreError(errorCode, phase, project,
+          `Copy/hash failed: ${msg}`, generationId);
       }
 
       // 5. Verify temp identity is still ours (lstat == fstat).
