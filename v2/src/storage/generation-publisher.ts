@@ -1465,6 +1465,19 @@ export function publishPreparedGeneration(
       try {
         unlinkSync(stagingPath);
         mutationState.stagingRemoved = true;
+        // R169B-STEP10 (§7): fsync tmp/ after dedup staging unlink.
+        let dedupTmpFd: number | null = null;
+        try {
+          const tmpD = tmpDir(project, cacheRoot);
+          const opened = openDirectoryNoFollow(tmpD, PROD_OPS);
+          dedupTmpFd = opened.fd;
+          PROD_OPS.fsyncSync(dedupTmpFd);
+          PROD_OPS.closeSync(dedupTmpFd);
+          dedupTmpFd = null;
+        } catch {
+          if (dedupTmpFd !== null) { try { PROD_OPS.closeSync(dedupTmpFd); } catch {} }
+          warnings.push({ code: "TMP_DIR_FSYNC_DEFERRED", message: "fsync tmp/ after dedup staging unlink failed (non-fatal)" });
+        }
       } catch (e) {
         warnings.push({
           code: "STAGING_ALIAS_CLEANUP_DEFERRED",
@@ -1833,23 +1846,45 @@ export function publishPreparedGeneration(
       );
     }
     const verifiedDbPath = join(projectStore, verifiedManifest.dbFile);
-    if (!existsSync(verifiedDbPath)) {
-      throw new GenerationStoreError(
-        "PUBLICATION_VERIFY_FAILED",
-        phase,
-        project,
-        `DB file missing after publication: ${verifiedDbPath}`,
-        generationId,
-      );
+    // R169B-STEP10 (§9): strict post-verify — use lstat, not existsSync.
+    // existsSync returns false on EACCES/EIO/ENOTDIR, masking real errors.
+    try {
+      const dbVerifyStat = lstatSync(verifiedDbPath);
+      if (dbVerifyStat.isSymbolicLink() || !dbVerifyStat.isFile()) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: DB is not a regular file: ${verifiedDbPath}`, generationId);
+      }
+      // Verify mode 0600.
+      if ((dbVerifyStat.mode & 0o777) !== 0o600) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: DB mode is 0o${(dbVerifyStat.mode & 0o777).toString(8)} (expected 0600): ${verifiedDbPath}`, generationId);
+      }
+      // Verify owner on POSIX.
+      if (typeof process.getuid === "function" && dbVerifyStat.uid !== process.getuid()) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: DB owner uid=${dbVerifyStat.uid} != process uid=${process.getuid()}: ${verifiedDbPath}`, generationId);
+      }
+      // Verify size matches manifest.
+      if (dbVerifyStat.size !== verifiedManifest.sizeBytes) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: DB size ${dbVerifyStat.size} != manifest ${verifiedManifest.sizeBytes}: ${verifiedDbPath}`, generationId);
+      }
+    } catch (e) {
+      if (e instanceof GenerationStoreError) throw e;
+      throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+        `Post-verify: DB lstat failed: ${(e as Error).message}: ${verifiedDbPath}`, generationId);
     }
-    if (!existsSync(effectiveMetadataPath)) {
-      throw new GenerationStoreError(
-        "PUBLICATION_VERIFY_FAILED",
-        phase,
-        project,
-        `Metadata sidecar missing after publication: ${effectiveMetadataPath}`,
-        generationId,
-      );
+    // Verify metadata sidecar.
+    try {
+      const metaVerifyStat = lstatSync(effectiveMetadataPath);
+      if (metaVerifyStat.isSymbolicLink() || !metaVerifyStat.isFile()) {
+        throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+          `Post-verify: metadata is not a regular file: ${effectiveMetadataPath}`, generationId);
+      }
+    } catch (e) {
+      if (e instanceof GenerationStoreError) throw e;
+      throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+        `Post-verify: metadata lstat failed: ${(e as Error).message}: ${effectiveMetadataPath}`, generationId);
     }
 
     // 13. Update CAS.
@@ -2067,6 +2102,19 @@ export function discardPreparedGeneration(
   try {
     unlinkSync(stagingPath);
     deleted = true;
+    // R169B-STEP10 (§7): fsync tmp/ after discard staging unlink.
+    let discardTmpFd: number | null = null;
+    try {
+      const tmpD = tmpDir(prepared.project, prepared.cacheRoot);
+      const opened = openDirectoryNoFollow(tmpD, PROD_OPS);
+      discardTmpFd = opened.fd;
+      PROD_OPS.fsyncSync(discardTmpFd);
+      PROD_OPS.closeSync(discardTmpFd);
+      discardTmpFd = null;
+    } catch {
+      if (discardTmpFd !== null) { try { PROD_OPS.closeSync(discardTmpFd); } catch {} }
+      warnings.push({ code: "TMP_DIR_FSYNC_DEFERRED", message: "fsync tmp/ after discard staging unlink failed (non-fatal)" });
+    }
   } catch (e) {
     warnings.push({
       code: "STAGING_ALIAS_CLEANUP_DEFERRED",
@@ -2081,6 +2129,141 @@ export function discardPreparedGeneration(
     deleted,
     warnings,
   };
+}
+
+// ─── DISCARD RESERVATION: discardGenerationReservation ────────────────────
+
+/**
+ * R169B-STEP10 (§8): Discard a reservation that failed during prepare.
+ *
+ * When `prepareGenerationForPublication` fails terminally (after SQLite
+ * was opened), the reservation is marked DISCARDED and the staging DB
+ * is left on disk. This function provides the caller with an API to
+ * clean up that staging DB safely.
+ *
+ * The function:
+ *   1. Validates the reservation token (WeakMap lookup).
+ *   2. Checks the reservation state (must be DISCARDED or RESERVED).
+ *   3. Stats the staging file and verifies it exists.
+ *   4. Unlinks the staging file.
+ *   5. fsyncs the tmp/ directory (durability).
+ *   6. Confirms absence via lstat ENOENT.
+ *
+ * Returns a `DiscardResult` (same shape as `discardPreparedGeneration`).
+ */
+export function discardGenerationReservation(
+  reservation: GenerationStagingReservation,
+  options?: GenerationStoreOptions,
+): DiscardResult {
+  const phase = "discardGenerationReservation";
+  const project = reservation.project;
+  const generationId = reservation.generationId;
+  const stagingPath = reservation.stagingPath;
+  const cacheRoot = options?.cacheRoot ?? reservation.cacheRoot ?? getCacheRoot();
+
+  // 1. Validate reservation token.
+  const resToken = reservationTokens.get(reservation);
+  if (!resToken) {
+    throw new GenerationStoreError(
+      "PUBLICATION_RESERVATION_INVALID",
+      phase,
+      project,
+      `Reservation is not authentic (not in the private WeakMap)`,
+      generationId,
+    );
+  }
+  // 2. Check state — must be RESERVED or DISCARDED (not PREPARING/PREPARED).
+  if (resToken.state === "PREPARING" || resToken.state === "PREPARED") {
+    throw new GenerationStoreError(
+      "PUBLICATION_RESERVATION_INVALID",
+      phase,
+      project,
+      `Reservation is in state ${resToken.state} (expected RESERVED or DISCARDED)`,
+      generationId,
+    );
+  }
+
+  const warnings: GenerationStoreWarning[] = [];
+  let deleted = false;
+
+  // 3. Stat the staging file.
+  let currentStat: Stats;
+  try {
+    currentStat = lstatSync(stagingPath);
+  } catch (e) {
+    const errCode = (e as NodeJS.ErrnoException).code;
+    if (errCode === "ENOENT") {
+      // Already gone.
+      return { project, generationId, stagingPath, deleted: false, warnings };
+    }
+    warnings.push({
+      code: "STAGING_CLEANUP_DEFERRED",
+      message: `Cannot stat staging file: ${(e as Error).message}`,
+    });
+    return { project, generationId, stagingPath, deleted: false, warnings };
+  }
+  if (currentStat.isSymbolicLink() || !currentStat.isFile()) {
+    warnings.push({
+      code: "STAGING_CLEANUP_DEFERRED",
+      message: `Staging file is not a regular file: ${stagingPath}`,
+    });
+    return { project, generationId, stagingPath, deleted: false, warnings };
+  }
+
+  // 4. Unlink.
+  try {
+    unlinkSync(stagingPath);
+    deleted = true;
+  } catch (e) {
+    warnings.push({
+      code: "STAGING_CLEANUP_DEFERRED",
+      message: `Failed to unlink staging file: ${(e as Error).message}`,
+    });
+    return { project, generationId, stagingPath, deleted: false, warnings };
+  }
+
+  // 5. fsync tmp/ directory.
+  let tmpDirFd: number | null = null;
+  try {
+    const tmp = tmpDir(project, cacheRoot);
+    const opened = openDirectoryNoFollow(tmp, PROD_OPS);
+    tmpDirFd = opened.fd;
+    PROD_OPS.fsyncSync(tmpDirFd);
+    PROD_OPS.closeSync(tmpDirFd);
+    tmpDirFd = null;
+  } catch (e) {
+    if (tmpDirFd !== null) {
+      try { PROD_OPS.closeSync(tmpDirFd); } catch { /* best effort */ }
+    }
+    warnings.push({
+      code: "TMP_DIR_FSYNC_DEFERRED",
+      message: `fsync of tmp/ after reservation discard failed (non-fatal): ${(e as Error).message}`,
+    });
+  }
+
+  // 6. Confirm absence via lstat ENOENT.
+  try {
+    lstatSync(stagingPath);
+    // Still exists — cleanup not durable.
+    warnings.push({
+      code: "STAGING_CLEANUP_DEFERRED",
+      message: `Staging file still exists after unlink: ${stagingPath}`,
+    });
+    deleted = false;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      warnings.push({
+        code: "STAGING_CLEANUP_DEFERRED",
+        message: `lstat after unlink returned unexpected error: ${(e as Error).message}`,
+      });
+    }
+    // ENOENT — confirmed absent.
+  }
+
+  // Mark reservation as DISCARDED.
+  resToken.state = "DISCARDED";
+
+  return { project, generationId, stagingPath, deleted, warnings };
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────
