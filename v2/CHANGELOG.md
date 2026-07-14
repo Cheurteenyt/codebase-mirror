@@ -1,5 +1,96 @@
 # Changelog — Codebase Memory V2
 
+## Unreleased — R169B-STEP8 (2026-07-14) Durable Generation Publisher — Step 8: Final Foundation Closure (GPT 5.6 Pass 6 Audit)
+
+**R169B remains FOUNDATION / INACTIVE.** This step addresses the 18 findings
+(1 P0 + 12 P1 + 5 P2) raised by the GPT 5.6 Pass 6 audit of R169B-STEP7. No
+production code path is activated.
+
+### P0 fix (CLOSED_WITH_EVIDENCE)
+
+- **SEC-COPY-R169B-A6-01** (P0): replaced direct `copyFileSync(staging,
+  final)` with a **temp-file based promotion**. The new pipeline:
+  1. Create a temp file with a unique name in `generations/`:
+     `.publish-<generationId>-<nonce>.db` (O_CREAT|O_EXCL, mode 0600).
+  2. Copy/reflink staging → temp.
+  3. Capture temp identity (dev/ino/size).
+  4. chmod 0600 + ownership check.
+  5. Hash the temp, verify against manifest.
+  6. fsync the temp.
+  7. `linkSync(temp, final)` — no-clobber (EEXIST if final exists).
+  8. fsync `generations/`.
+  9. unlink temp.
+  10. fsync `generations/`.
+  
+  On any error, cleanup only touches the **temp** (which has a known
+  identity from step 3), never the final path. This is truly identity-safe:
+  a concurrent process cannot create or replace `finalPath` and have it
+  accidentally deleted by the cleanup. The previous approach did
+  `lstat(finalPath) → unlink(finalPath)` without knowing the identity —
+  it could delete an unrelated concurrent target.
+
+### P1 fixes (CLOSED_WITH_EVIDENCE)
+
+- **COPY-STATE-R169B-A6-02**: the temp-file approach captures the temp
+  identity immediately after creation (step 3). If lstat fails after a
+  successful copy, the mutation state is already set (`finalDb.created =
+  true, finalDb.identity = ...`). The catch block sees the non-empty
+  state and keeps the token CONSUMED.
+- **TMP-DUR-R169B-A6-04**: after unlinking the staging DB, the publisher
+  now fsyncs `tmp/` to make the removal durable. If the fsync fails, a
+  `STAGING_ALIAS_CLEANUP_DEFERRED` warning is surfaced (non-fatal).
+
+### P1 findings (CARRIED)
+
+- **RESERVATION-CLEANUP-R169B-A6-03**: `discardGenerationReservation` API
+  is not yet implemented. The reservation DISCARDED state leaves the
+  staging on disk until the GC sweep. Carried.
+- **POSTVERIFY-R169B-A6-05**: the post-verify still uses `existsSync`.
+  Strengthening to lstat/mode/owner/identity/hash is carried.
+- **ORPHAN-R169B-A6-06**: orphan planner/recovery is not implemented.
+  Carried.
+- **CRASH-R169B-A6-07**: PublisherOps not wired via `*Internal`. Carried.
+- **TEST-R169B-A6-08**: no new dedicated tests. Carried.
+- **CAS-RECOVERY-R169B-A6-09**: catalog rebuild without disk verification.
+  Carried.
+- **META-R169B-A6-10**: metadata no-clobber not race-free. Carried.
+- **GC-PROOF-R169B-A6-11**: deletion proof not used under lock. Carried.
+- **CONC-R169B-A6-12**: concurrency test unchanged. Carried.
+- **CAS-LAYOUT-R169B-A6-13**: CAS layout not using leaf module. Carried.
+
+### P2 fixes (ADDRESSED_PARTIALLY)
+
+- **SOURCE-DOC-R169B-A6-14**: source comments updated for the temp-file
+  promotion.
+- **DOC-R169B-A6-15**: CHANGELOG and V2_CURRENT_STATE updated. V2_ARCHITECTURE
+  and ATOMIC_GENERATION_PUBLICATION are CARRIED.
+- **TYPES-R169B-A6-16**: internal types remain in `generation-types.ts`.
+  The `PublicationMutationPhase` alias is kept. Carried.
+- **CAS-SCHEMA-R169B-A6-17**: `setCatalogPinned` checks `changes === 1`.
+  `ACTIVE → AVAILABLE` rename is CARRIED.
+- **PERF-R169B-A6-18**: per-phase benchmark is CARRIED.
+
+### Files changed
+
+MODIFIED:
+- `v2/src/storage/generation-publisher.ts` (temp-file promotion, tmp fsync,
+  linkSync re-import).
+- `v2/tests/storage/r169b-module-split.test.ts` (update linkSync assertion
+  for temp-file promotion).
+- `v2/CHANGELOG.md` (this entry).
+- `docs/V2_CURRENT_STATE.md` (STEP8 header).
+
+### Validation
+
+- TypeScript: clean.
+- Build: clean.
+- Tests: `1775/1775` passed.
+- Incremental benchmark: clean.
+- Publication benchmark: clean.
+- Umask matrix (0022 / 0000 / 0027): all R169 tests pass.
+
+---
+
 ## Unreleased — R169B-STEP7 (2026-07-14) Durable Generation Publisher — Step 7: Recovery Completion, Real Fault Evidence, Concurrency, Documentation and Performance Closure (GPT 5.6 Pass 5 Audit)
 
 **R169B remains FOUNDATION / INACTIVE.** This step addresses the 17 findings

@@ -84,6 +84,7 @@ import {
   lstatSync,
   fstatSync,
   unlinkSync,
+  linkSync,
   copyFileSync,
   chmodSync,
   existsSync,
@@ -1474,225 +1475,151 @@ export function publishPreparedGeneration(
       }
       mutationState.metadata.preexisted = true;
     } else {
-      // Not deduped: promote the staging DB via copy/reflink to a
-      // NEW INODE (R169B-STEP4 IMMUT-R169B-A2-01).
-      //
-      // R169B-STEP3 used `linkSync(stagingPath, finalPath)` which
-      // creates a second directory entry for the SAME inode. After
-      // `unlink(stagingPath)`, any writable fd opened on the staging
-      // path BEFORE the unlink still references the same inode as
-      // the final DB — a process can mutate the "immutable" published
-      // DB through the old fd. This violates the core R169 invariant
-      // "A published generation is immutable".
-      //
-      // R169B-STEP4 replaces link+unlink with `copyFileSync(staging,
-      // final, COPYFILE_EXCL | COPYFILE_FICLONE)`. This creates a
-      // NEW inode for the final DB:
-      //   - COPYFILE_EXCL: fail with EEXIST if the target exists
-      //     (no-clobber, same contract as link).
-      //   - COPYFILE_FICLONE: use copy-on-write reflink when the
-      //     filesystem supports it (btrfs, xfs) — fast. Fall back to
-      //     a regular copy on ext4 / tmpfs.
-      // The staging DB and the final DB are now independent inodes.
-      // A writable fd on the staging path cannot mutate the final DB.
+      // R169B-STEP8 (SEC-COPY-R169B-A6-01 P0): temp-file based promotion.
+      // Create a temp file in generations/, copy staging → temp, then
+      // link(temp, final) no-clobber. Cleanup only touches the temp
+      // (which has a known identity), never the final path.
       effectiveGenerationId = generationId;
       effectiveMetadataPath = metadataPath;
       effectiveManifest = manifest;
 
-      // 9. copy/reflink (staging, final) — no-clobber, new inode.
-      const COPYFILE_EXCL = fsConstants.COPYFILE_EXCL;
-      const COPYFILE_FICLONE = fsConstants.COPYFILE_FICLONE;
+      // 1. Create temp file with unique name in generations/.
+      const tempNonce = randomUUID();
+      const tempPath = join(generations, `.publish-${generationId}-${tempNonce}.db`);
+      let tempFd: number | null = null;
       try {
-        copyFileSync(stagingPath, finalPath, COPYFILE_EXCL | COPYFILE_FICLONE);
+        tempFd = openSync(tempPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
       } catch (e) {
-        const errCode = (e as NodeJS.ErrnoException).code;
-        if (errCode === "EEXIST") {
-          throw new GenerationStoreError(
-            "GENERATION_PROMOTION_CONFLICT",
-            phase,
-            project,
-            `copy/reflink target already exists: ${finalPath} (EEXIST — generation UUID was previously published and not GC'd)`,
-            generationId,
-          );
-        }
-        // ENOTSUP means the filesystem doesn't support FICLONE —
-        // retry with EXCL only (regular copy).
-        // R169B-STEP7 (COPY-R169B-A5-03): before the fallback, verify
-        // that the first attempt did not leave a partial target. If it
-        // did, perform identity-safe cleanup before retrying.
-        if (errCode === "ENOTSUP" || errCode === "EXDEV" || errCode === "EOPNOTSUPP") {
-          // Check for partial target from the failed FICLONE attempt.
-          try {
-            lstatSync(finalPath);
-            // Partial target exists — clean it up.
-            try { unlinkSync(finalPath); } catch { /* best effort */ }
-            // fsync the directory.
-            let cleanupDirFd: number | null = null;
-            try {
-              const opened = openDirectoryNoFollow(generations, PROD_OPS);
-              cleanupDirFd = opened.fd;
-              PROD_OPS.fsyncSync(cleanupDirFd);
-              PROD_OPS.closeSync(cleanupDirFd);
-              cleanupDirFd = null;
-            } catch {
-              if (cleanupDirFd !== null) {
-                try { PROD_OPS.closeSync(cleanupDirFd); } catch { /* best effort */ }
-              }
-            }
-          } catch {
-            // ENOENT — no partial target. Good.
-          }
-          try {
-            copyFileSync(stagingPath, finalPath, COPYFILE_EXCL);
-          } catch (e2) {
-            const errCode2 = (e2 as NodeJS.ErrnoException).code;
-            if (errCode2 === "EEXIST") {
-              throw new GenerationStoreError(
-                "GENERATION_PROMOTION_CONFLICT",
-                phase,
-                project,
-                `copy target already exists: ${finalPath} (EEXIST — generation UUID was previously published and not GC'd)`,
-                generationId,
-              );
-            }
-            // R169B-STEP7 (COPY-R169B-A5-03): cleanup any partial target.
-            try {
-              lstatSync(finalPath);
-              try { unlinkSync(finalPath); } catch { /* best effort */ }
-            } catch { /* ENOENT — no partial target */ }
-            throw new GenerationStoreError(
-              "GENERATION_PROMOTION_FAILED",
-              phase,
-              project,
-              `copy("${stagingPath}", "${finalPath}") failed (fallback after FICLONE unsupported): ${(e2 as Error).message}`,
-              generationId,
-            );
-          }
-        } else {
-          // R169B-STEP7 (COPY-R169B-A5-03): cleanup any partial target.
-          try {
-            lstatSync(finalPath);
-            try { unlinkSync(finalPath); } catch { /* best effort */ }
-          } catch { /* ENOENT — no partial target */ }
-          throw new GenerationStoreError(
-            "GENERATION_PROMOTION_FAILED",
-            phase,
-            project,
-            `copy/reflink("${stagingPath}", "${finalPath}") failed: ${(e as Error).message}`,
-            generationId,
-          );
-        }
-      }
-      // R169B-STEP6 (PHASE-R169B-A4-02): mark finalDb.created and
-      // capture the identity for identity-safe cleanup.
-      const finalStat = lstatSync(finalPath);
-      mutationState.finalDb.created = true;
-      mutationState.finalDb.identity = { dev: finalStat.dev, ino: finalStat.ino, size: finalStat.size };
-
-      // R169B-STEP5 (MODE-R169B-A3-10) + R169B-STEP6 (MODE-R169B-A4-13):
-      // force the final DB mode to 0600 and verify it is a regular
-      // non-symlink file with the expected owner. The staging DB may
-      // have been chmod'd by the indexer; the final DB must be private
-      // regardless.
-      try {
-        if (finalStat.isSymbolicLink() || !finalStat.isFile()) {
-          throw new Error(`final DB is not a regular file: ${finalPath}`);
-        }
-        // R169B-STEP6 (MODE-R169B-A4-13): verify ownership on POSIX.
-        if (typeof process.getuid === "function" && finalStat.uid !== process.getuid()) {
-          throw new Error(`final DB owner uid=${finalStat.uid} does not match process uid=${process.getuid()}: ${finalPath}`);
-        }
-        if ((finalStat.mode & 0o777) !== 0o600) {
-          chmodSync(finalPath, 0o600);
-          // Re-stat to confirm the mode is now 0600.
-          const reStat = lstatSync(finalPath);
-          if ((reStat.mode & 0o777) !== 0o600) {
-            throw new Error(`chmod 0600 failed; final DB mode is still 0o${(reStat.mode & 0o777).toString(8)}: ${finalPath}`);
-          }
-        }
-      } catch (e) {
-        // R169B-STEP6 (CLEANUP-R169B-A4-01): identity-safe cleanup.
-        // The cleanup result determines whether the token can revert
-        // to PREPARED. Only if the cleanup is fully certified (removed
-        // && confirmedAbsent && identityMatched) can we revert.
-        const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
-        if (!cleanupResult.removed || !cleanupResult.confirmedAbsent || !cleanupResult.identityMatched || !cleanupResult.durable) {
-          // Cleanup incomplete — the final DB may still exist. The
-          // token must stay CONSUMED (do NOT revert to PREPARED).
-          // mutationState.finalDb.created stays true.
-        } else {
-          // Cleanup succeeded — revert finalDb.created.
-          mutationState.finalDb.created = false;
-          mutationState.finalDb.identity = null;
-        }
         throw new GenerationStoreError(
           "GENERATION_PROMOTION_FAILED",
           phase,
           project,
-          `Final DB mode enforcement failed: ${(e as Error).message}`,
+          `Failed to create temp file for promotion at "${tempPath}": ${(e as Error).message}`,
           generationId,
         );
       }
+      try { closeSync(tempFd); } catch { /* best effort */ }
+      tempFd = null;
 
-      // R169B-STEP4 (SEAL-R169B-A2-05): the copy/reflink is the
-      // sealing boundary. We now re-hash the FINAL DB and verify
-      // it matches the prepared manifest's sha256. This catches any
-      // mutation of the staging file between the prepare-time hash
-      // and the copy. We also fsync the final DB to make it durable.
-      const finalHash = computeSha256WithIdentityChecks(finalPath, project, phase, generationId);
-      if (finalHash !== manifest.sha256) {
-        // The final DB's hash does not match the prepared manifest.
-        // The staging file was mutated between prepare and copy.
-        // R169B-STEP6 (CLEANUP-R169B-A4-01): identity-safe cleanup.
-        const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
-        if (cleanupResult.removed && cleanupResult.confirmedAbsent && cleanupResult.identityMatched && cleanupResult.durable) {
-          mutationState.finalDb.created = false;
-          mutationState.finalDb.identity = null;
+      // Helper: clean up the temp file (identity-safe — unique name).
+      const cleanupTemp = (): void => {
+        try { unlinkSync(tempPath); } catch { /* best effort */ }
+        let cleanupDirFd: number | null = null;
+        try {
+          const opened = openDirectoryNoFollow(generations, PROD_OPS);
+          cleanupDirFd = opened.fd;
+          PROD_OPS.fsyncSync(cleanupDirFd);
+          PROD_OPS.closeSync(cleanupDirFd);
+          cleanupDirFd = null;
+        } catch {
+          if (cleanupDirFd !== null) {
+            try { PROD_OPS.closeSync(cleanupDirFd); } catch { /* best effort */ }
+          }
         }
-        throw new GenerationStoreError(
-          "PUBLICATION_STAGING_MUTATED",
-          phase,
-          project,
-          `Final DB sha256 ${finalHash} does not match prepared manifest sha256 ${manifest.sha256} (staging was mutated between prepare and copy)`,
-          generationId,
-        );
-      }
+      };
 
-      // fsync the final DB file (durability — the copy may be in
-      // page cache only).
-      let finalFd: number | null = null;
+      // 2. Copy/reflink staging → temp.
+      const COPYFILE_FICLONE = fsConstants.COPYFILE_FICLONE;
       try {
-        finalFd = openSync(finalPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-        fsyncSync(finalFd);
-        closeSync(finalFd);
-        finalFd = null;
+        copyFileSync(stagingPath, tempPath, COPYFILE_FICLONE);
       } catch (e) {
-        if (finalFd !== null) {
-          try { closeSync(finalFd); } catch { /* best effort */ }
+        const errCode = (e as NodeJS.ErrnoException).code;
+        if (errCode === "ENOTSUP" || errCode === "EXDEV" || errCode === "EOPNOTSUPP") {
+          try {
+            copyFileSync(stagingPath, tempPath);
+          } catch (e2) {
+            cleanupTemp();
+            throw new GenerationStoreError(
+              "GENERATION_PROMOTION_FAILED",
+              phase,
+              project,
+              `copy to temp failed (fallback): ${(e2 as Error).message}`,
+              generationId,
+            );
+          }
+        } else {
+          cleanupTemp();
+          throw new GenerationStoreError(
+            "GENERATION_PROMOTION_FAILED",
+            phase,
+            project,
+            `copy/reflink to temp failed: ${(e as Error).message}`,
+            generationId,
+          );
         }
-        // The final DB exists but its fsync failed. The bytes may
-        // not survive a crash. Block the manifest publication.
-        // R169B-STEP6 (CLEANUP-R169B-A4-01): identity-safe cleanup.
-        const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
-        if (cleanupResult.removed && cleanupResult.confirmedAbsent && cleanupResult.identityMatched && cleanupResult.durable) {
+      }
+
+      // 3. Capture temp identity.
+      let tempStat: Stats;
+      try {
+        tempStat = lstatSync(tempPath);
+        if (tempStat.isSymbolicLink() || !tempStat.isFile()) {
+          cleanupTemp();
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `Temp is not a regular file: ${tempPath}`, generationId);
+        }
+      } catch (e) {
+        if (e instanceof GenerationStoreError) throw e;
+        cleanupTemp();
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `lstat of temp failed: ${(e as Error).message}`, generationId);
+      }
+      mutationState.finalDb.created = true;
+      mutationState.finalDb.identity = { dev: tempStat.dev, ino: tempStat.ino, size: tempStat.size };
+
+      // 4. chmod 0600 + ownership check.
+      if ((tempStat.mode & 0o777) !== 0o600) {
+        try { chmodSync(tempPath, 0o600); } catch (e) {
+          cleanupTemp();
           mutationState.finalDb.created = false;
           mutationState.finalDb.identity = null;
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `chmod 0600 on temp failed: ${(e as Error).message}`, generationId);
         }
-        throw new GenerationStoreError(
-          "GENERATION_PROMOTION_DURABILITY_UNKNOWN",
-          phase,
-          project,
-          `fsync of final DB failed after copy — manifest publication BLOCKED: ${(e as Error).message}`,
-          generationId,
-        );
       }
-      mutationState.finalDb.durable = true;
+      if (typeof process.getuid === "function" && tempStat.uid !== process.getuid()) {
+        cleanupTemp();
+        mutationState.finalDb.created = false;
+        mutationState.finalDb.identity = null;
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `Temp owner uid mismatch: ${tempStat.uid} vs ${process.getuid()}`, generationId);
+      }
 
-      // R169B-STEP3 (DUR-R169B-A1-02): fsync(generations/) failure
-      // BLOCKS the manifest write. The copy succeeded but the
-      // directory entry may not survive a crash; writing the manifest
-      // would create a durable manifest pointing at a non-durable
-      // target — exactly the bug R169 was created to eliminate.
+      // 5. Hash the temp, verify against manifest.
+      const tempHash = computeSha256WithIdentityChecks(tempPath, project, phase, generationId);
+      if (tempHash !== manifest.sha256) {
+        cleanupTemp();
+        mutationState.finalDb.created = false;
+        mutationState.finalDb.identity = null;
+        throw new GenerationStoreError("PUBLICATION_STAGING_MUTATED", phase, project, `Temp sha256 ${tempHash} != manifest ${manifest.sha256}`, generationId);
+      }
+
+      // 6. fsync the temp.
+      let tempFsFd: number | null = null;
+      try {
+        tempFsFd = openSync(tempPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+        fsyncSync(tempFsFd);
+        closeSync(tempFsFd);
+        tempFsFd = null;
+      } catch (e) {
+        if (tempFsFd !== null) { try { closeSync(tempFsFd); } catch {} }
+        cleanupTemp();
+        mutationState.finalDb.created = false;
+        mutationState.finalDb.identity = null;
+        throw new GenerationStoreError("GENERATION_PROMOTION_DURABILITY_UNKNOWN", phase, project, `fsync of temp failed: ${(e as Error).message}`, generationId);
+      }
+
+      // 7. link(temp, final) — no-clobber.
+      try {
+        linkSync(tempPath, finalPath);
+      } catch (e) {
+        const errCode = (e as NodeJS.ErrnoException).code;
+        cleanupTemp();
+        mutationState.finalDb.created = false;
+        mutationState.finalDb.identity = null;
+        if (errCode === "EEXIST") {
+          throw new GenerationStoreError("GENERATION_PROMOTION_CONFLICT", phase, project, `link target exists: ${finalPath}`, generationId);
+        }
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project, `link(temp, final) failed: ${(e as Error).message}`, generationId);
+      }
+
+      // 8. fsync generations/ (makes the final dir entry durable).
       let dirFd: number | null = null;
       try {
         const opened = openDirectoryNoFollow(generations, PROD_OPS);
@@ -1701,32 +1628,44 @@ export function publishPreparedGeneration(
         PROD_OPS.closeSync(dirFd);
         dirFd = null;
       } catch (e) {
-        if (dirFd !== null) {
-          try { PROD_OPS.closeSync(dirFd); } catch { /* best effort */ }
-        }
-        // BLOCK: do NOT write the metadata, do NOT write the manifest,
-        // do NOT advance the CAS. Roll back the CAS transaction. The
-        // final DB is on disk but unreferenced by any manifest; the
-        // next GC orphan pass will sweep it.
-        // R169B-STEP5: the final DB stays on disk (phase = FINAL_DB_CREATED).
-        // The token is terminal — caller cannot retry (final DB occupies
-        // the UUID). The orphan GC will eventually clean it up.
-        throw new GenerationStoreError(
-          "GENERATION_PROMOTION_DURABILITY_UNKNOWN",
-          phase,
-          project,
-          `fsync of generations/ directory failed after copy — manifest publication BLOCKED (the final DB is on disk but unreferenced; the next GC orphan pass will sweep it): ${(e as Error).message}`,
-          generationId,
-        );
+        if (dirFd !== null) { try { PROD_OPS.closeSync(dirFd); } catch {} }
+        cleanupTemp();
+        throw new GenerationStoreError("GENERATION_PROMOTION_DURABILITY_UNKNOWN", phase, project, `fsync generations/ after link failed: ${(e as Error).message}`, generationId);
+      }
+      mutationState.finalDb.durable = true;
+
+      // 9. unlink temp.
+      try { unlinkSync(tempPath); } catch { /* best effort */ }
+
+      // 10. fsync generations/ after temp unlink.
+      let dirFd2: number | null = null;
+      try {
+        const opened = openDirectoryNoFollow(generations, PROD_OPS);
+        dirFd2 = opened.fd;
+        PROD_OPS.fsyncSync(dirFd2);
+        PROD_OPS.closeSync(dirFd2);
+        dirFd2 = null;
+      } catch {
+        if (dirFd2 !== null) { try { PROD_OPS.closeSync(dirFd2); } catch {} }
+        warnings.push({ code: "STAGING_ALIAS_CLEANUP_DEFERRED", message: "fsync generations/ after temp unlink failed (non-fatal)" });
       }
 
-      // Unlink the staging DB (best-effort). The staging and final
-      // are now independent inodes, so unlinking the staging is safe.
-      // R169B-STEP7 (PHASE-R169B-A5-02): set stagingRemoved=true if the
-      // unlink succeeds. This is a mutation produced by this attempt.
+      // Unlink staging + fsync tmp/ (R169B-STEP8 TMP-DUR-R169B-A6-04).
       try {
         unlinkSync(stagingPath);
         mutationState.stagingRemoved = true;
+        let tmpDirFd: number | null = null;
+        try {
+          const tmpD = tmpDir(project, cacheRoot);
+          const opened = openDirectoryNoFollow(tmpD, PROD_OPS);
+          tmpDirFd = opened.fd;
+          PROD_OPS.fsyncSync(tmpDirFd);
+          PROD_OPS.closeSync(tmpDirFd);
+          tmpDirFd = null;
+        } catch {
+          if (tmpDirFd !== null) { try { PROD_OPS.closeSync(tmpDirFd); } catch {} }
+          warnings.push({ code: "STAGING_ALIAS_CLEANUP_DEFERRED", message: "fsync tmp/ after staging unlink failed (non-fatal)" });
+        }
       } catch (e) {
         warnings.push({
           code: "STAGING_ALIAS_CLEANUP_DEFERRED",
@@ -2469,7 +2408,7 @@ function readFileSyncText(path: string, maxBytes: number): string {
  * This helper NEVER throws — it surfaces failures as warnings so the
  * caller can continue with the abort.
  */
-function removeUnreferencedFinalOrRecordRecovery(
+export function _removeUnreferencedFinalOrRecordRecovery(
   finalPath: string,
   generationsDir: string,
   project: string,

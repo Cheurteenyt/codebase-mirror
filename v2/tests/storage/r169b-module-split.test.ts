@@ -952,12 +952,10 @@ describe("R169B-STEP2 — Publisher / CAS / GC module structure", () => {
   it("the publisher uses link() (not rename()) for promotion", () => {
     const src = readStorageSource("generation-publisher.ts");
     expect(src).toMatch(/\blinkSync\b/);
-    // The publisher MUST NOT use renameSync for promotion (rename is
-    // not no-clobber on POSIX). It may use renameSync internally via
-    // the atomic writer, but the promotion step itself uses link.
-    // Verify the promotion step uses link by checking the surrounding
-    // context.
-    expect(src).toMatch(/linkSync\(stagingPath,\s*finalPath\)/);
+    // R169B-STEP8: the publisher now uses link(tempPath, finalPath) for
+    // no-clobber promotion (was link(stagingPath, finalPath) in STEP4).
+    // The temp file approach ensures identity-safe cleanup.
+    expect(src).toMatch(/linkSync\(tempPath,\s*finalPath\)/);
   });
 
   it("the publisher computes SHA-256 in streaming chunks (not readFileSync)", () => {
