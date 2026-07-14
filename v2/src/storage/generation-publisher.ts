@@ -1492,13 +1492,16 @@ export function publishPreparedGeneration(
         );
       }
       // All checks passed — use the dedup candidate's identity.
+      // R169B-STEP10 (A1-01): use metadataValidated.manifest as the
+      // authority for effectiveManifest. The dedup reuses an EXISTING
+      // generation — its createdAt, sha256, sizeBytes, counts, etc.
+      // are all from the original publication. The new staging's
+      // manifest is only used to prove content equality (hash/size/
+      // fingerprint/versions match); the dedup candidate's metadata
+      // is the immutable authority.
       effectiveGenerationId = dedupGenId;
       effectiveMetadataPath = dedupMetadataPath;
-      effectiveManifest = {
-        ...manifest,
-        generationId: dedupGenId,
-        dbFile: `${GENERATIONS_SUBDIR}/generation-${dedupGenId}.db`,
-      };
+      effectiveManifest = metadataValidated.manifest;
       // Unlink the staging file (best-effort).
       // R169B-STEP6 (PHASE-R169B-A4-02): mark stagingRemoved — the
       // staging is gone. If the publication fails after this, the
@@ -1990,6 +1993,63 @@ export function publishPreparedGeneration(
       mutationState.metadata.durable = true;
     }
 
+    // R169B-STEP10 (A1-02): verifyPublicationCandidateStrict — verify
+    // DB + metadata BEFORE writing the manifest. If this fails, the
+    // manifest is NOT written and readers continue to see the old
+    // generation. This closes the window where a reader could see a
+    // manifest pointing at a corrupt/missing DB.
+    try {
+      // DB: lstat, regular, non-symlink, mode 0600, owner, size, hash.
+      const candidateDbPath = join(projectStore, effectiveManifest.dbFile);
+      const candidateStat = lstatSync(candidateDbPath);
+      if (candidateStat.isSymbolicLink() || !candidateStat.isFile()) {
+        throw new Error(`candidate DB is not a regular file: ${candidateDbPath}`);
+      }
+      if ((candidateStat.mode & 0o777) !== 0o600) {
+        throw new Error(`candidate DB mode is 0o${(candidateStat.mode & 0o777).toString(8)} (expected 0600)`);
+      }
+      if (typeof process.getuid === "function" && candidateStat.uid !== process.getuid()) {
+        throw new Error(`candidate DB owner uid=${candidateStat.uid} != process uid=${process.getuid()}`);
+      }
+      if (candidateStat.size !== effectiveManifest.sizeBytes) {
+        throw new Error(`candidate DB size ${candidateStat.size} != manifest ${effectiveManifest.sizeBytes}`);
+      }
+      // Verify dev/ino for non-dedup.
+      if (!deduped && mutationState.finalDb.identity) {
+        if (candidateStat.dev !== mutationState.finalDb.identity.dev ||
+            candidateStat.ino !== mutationState.finalDb.identity.ino) {
+          throw new Error(`candidate DB dev/ino mismatch`);
+        }
+      }
+      // Candidate hash verification.
+      const candidateHash = computeSha256WithIdentityChecks(candidateDbPath, project, phase, generationId);
+      if (candidateHash !== effectiveManifest.sha256) {
+        throw new Error(`candidate DB sha256 ${candidateHash} != manifest ${effectiveManifest.sha256}`);
+      }
+      // Metadata: lstat, regular, non-symlink, mode 0600, owner, size bound, schema.
+      const candidateMetaStat = lstatSync(effectiveMetadataPath);
+      if (candidateMetaStat.isSymbolicLink() || !candidateMetaStat.isFile()) {
+        throw new Error(`candidate metadata is not a regular file: ${effectiveMetadataPath}`);
+      }
+      if ((candidateMetaStat.mode & 0o777) !== 0o600) {
+        throw new Error(`candidate metadata mode is 0o${(candidateMetaStat.mode & 0o777).toString(8)}`);
+      }
+      if (typeof process.getuid === "function" && candidateMetaStat.uid !== process.getuid()) {
+        throw new Error(`candidate metadata owner uid mismatch`);
+      }
+      if (candidateMetaStat.size > MAX_METADATA_SIDECAR_BYTES) {
+        throw new Error(`candidate metadata size ${candidateMetaStat.size} exceeds max`);
+      }
+      // Read + validate metadata.
+      const candidateMetaRaw = readFileSyncText(effectiveMetadataPath, MAX_METADATA_SIDECAR_BYTES);
+      const candidateMetaParsed = JSON.parse(candidateMetaRaw);
+      validateGenerationMetadata(candidateMetaParsed, project);
+    } catch (e) {
+      if (e instanceof GenerationStoreError) throw e;
+      throw new GenerationStoreError("PUBLICATION_VERIFY_FAILED", phase, project,
+        `Candidate verification (pre-manifest) failed: ${(e as Error).message}`, generationId);
+    }
+
     // 11. Write active-generation.json atomically (canonical payload).
     const preparedPayload = prepareGenerationManifestForWrite(effectiveManifest, project);
     writeJsonAtomically(manifestPath, preparedPayload.payload, project, phase, PROD_OPS);
@@ -2032,7 +2092,7 @@ export function publishPreparedGeneration(
       const e = effectiveManifest;
       if (m.formatVersion !== e.formatVersion || m.project !== e.project ||
           m.generationId !== e.generationId || m.dbFile !== e.dbFile ||
-          m.rootFingerprint !== e.rootFingerprint ||
+          m.createdAt !== e.createdAt || m.rootFingerprint !== e.rootFingerprint ||
           m.extractorSemanticsVersion !== e.extractorSemanticsVersion ||
           m.discoveryPolicyVersion !== e.discoveryPolicyVersion ||
           m.nodeCount !== e.nodeCount || m.edgeCount !== e.edgeCount ||
@@ -2101,7 +2161,7 @@ export function publishPreparedGeneration(
       const dm = metaValidated.manifest;
       if (dm.formatVersion !== m.formatVersion || dm.project !== m.project ||
           dm.generationId !== m.generationId || dm.dbFile !== m.dbFile ||
-          dm.rootFingerprint !== m.rootFingerprint ||
+          dm.createdAt !== m.createdAt || dm.rootFingerprint !== m.rootFingerprint ||
           dm.extractorSemanticsVersion !== m.extractorSemanticsVersion ||
           dm.discoveryPolicyVersion !== m.discoveryPolicyVersion ||
           dm.nodeCount !== m.nodeCount || dm.edgeCount !== m.edgeCount ||
