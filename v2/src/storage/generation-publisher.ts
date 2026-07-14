@@ -555,6 +555,15 @@ export function prepareGenerationForPublication(
   }
   // Transition RESERVED → PREPARING.
   resToken.state = "PREPARING";
+  // R169B-STEP7 (RESERVATION-R169B-A5-04): wrap the prepare body in a
+  // try/catch. If the failure happens BEFORE the SQLite DB is opened
+  // (trust-root, cacheRoot, containment), the staging is untouched and
+  // the reservation can revert to RESERVED (retryable). If the failure
+  // happens AFTER the SQLite DB is opened (WAL, validation, hash), the
+  // staging may be in an inconsistent state and the reservation is
+  // terminal (DISCARDED).
+  let sqliteOpened = false;
+  try {
   const cacheRoot = options?.cacheRoot ?? reservation.cacheRoot ?? getCacheRoot();
   // Verify cacheRoot matches the token.
   if (resToken.cacheRoot !== cacheRoot && options?.cacheRoot !== undefined) {
@@ -582,6 +591,7 @@ export function prepareGenerationForPublication(
   let db: DatabaseType;
   try {
     db = new Database(stagingPath, { fileMustExist: true });
+    sqliteOpened = true; // R169B-STEP7 (RESERVATION-R169B-A5-04)
   } catch (e) {
     throw new GenerationStoreError(
       "STAGING_DB_BUSY",
@@ -1050,6 +1060,19 @@ export function prepareGenerationForPublication(
   resToken.state = "PREPARED";
 
   return prepared;
+  } catch (e) {
+    // R169B-STEP7 (RESERVATION-R169B-A5-04): revert the reservation
+    // state on failure. If SQLite was NOT opened (failure before the
+    // DB open), the staging is untouched → revert to RESERVED (retryable).
+    // If SQLite WAS opened (WAL, validation, hash), the staging may be
+    // in an inconsistent state → mark DISCARDED (terminal, needs cleanup).
+    if (!sqliteOpened) {
+      resToken.state = "RESERVED";
+    } else {
+      resToken.state = "DISCARDED";
+    }
+    throw e;
+  }
 }
 
 // ─── PUBLISH: publishPreparedGeneration ───────────────────────────────────
@@ -1494,7 +1517,31 @@ export function publishPreparedGeneration(
         }
         // ENOTSUP means the filesystem doesn't support FICLONE —
         // retry with EXCL only (regular copy).
+        // R169B-STEP7 (COPY-R169B-A5-03): before the fallback, verify
+        // that the first attempt did not leave a partial target. If it
+        // did, perform identity-safe cleanup before retrying.
         if (errCode === "ENOTSUP" || errCode === "EXDEV" || errCode === "EOPNOTSUPP") {
+          // Check for partial target from the failed FICLONE attempt.
+          try {
+            lstatSync(finalPath);
+            // Partial target exists — clean it up.
+            try { unlinkSync(finalPath); } catch { /* best effort */ }
+            // fsync the directory.
+            let cleanupDirFd: number | null = null;
+            try {
+              const opened = openDirectoryNoFollow(generations, PROD_OPS);
+              cleanupDirFd = opened.fd;
+              PROD_OPS.fsyncSync(cleanupDirFd);
+              PROD_OPS.closeSync(cleanupDirFd);
+              cleanupDirFd = null;
+            } catch {
+              if (cleanupDirFd !== null) {
+                try { PROD_OPS.closeSync(cleanupDirFd); } catch { /* best effort */ }
+              }
+            }
+          } catch {
+            // ENOENT — no partial target. Good.
+          }
           try {
             copyFileSync(stagingPath, finalPath, COPYFILE_EXCL);
           } catch (e2) {
@@ -1508,6 +1555,11 @@ export function publishPreparedGeneration(
                 generationId,
               );
             }
+            // R169B-STEP7 (COPY-R169B-A5-03): cleanup any partial target.
+            try {
+              lstatSync(finalPath);
+              try { unlinkSync(finalPath); } catch { /* best effort */ }
+            } catch { /* ENOENT — no partial target */ }
             throw new GenerationStoreError(
               "GENERATION_PROMOTION_FAILED",
               phase,
@@ -1517,6 +1569,11 @@ export function publishPreparedGeneration(
             );
           }
         } else {
+          // R169B-STEP7 (COPY-R169B-A5-03): cleanup any partial target.
+          try {
+            lstatSync(finalPath);
+            try { unlinkSync(finalPath); } catch { /* best effort */ }
+          } catch { /* ENOENT — no partial target */ }
           throw new GenerationStoreError(
             "GENERATION_PROMOTION_FAILED",
             phase,
@@ -1559,7 +1616,7 @@ export function publishPreparedGeneration(
         // to PREPARED. Only if the cleanup is fully certified (removed
         // && confirmedAbsent && identityMatched) can we revert.
         const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
-        if (!cleanupResult.removed || !cleanupResult.confirmedAbsent || !cleanupResult.identityMatched) {
+        if (!cleanupResult.removed || !cleanupResult.confirmedAbsent || !cleanupResult.identityMatched || !cleanupResult.durable) {
           // Cleanup incomplete — the final DB may still exist. The
           // token must stay CONSUMED (do NOT revert to PREPARED).
           // mutationState.finalDb.created stays true.
@@ -1588,7 +1645,7 @@ export function publishPreparedGeneration(
         // The staging file was mutated between prepare and copy.
         // R169B-STEP6 (CLEANUP-R169B-A4-01): identity-safe cleanup.
         const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
-        if (cleanupResult.removed && cleanupResult.confirmedAbsent && cleanupResult.identityMatched) {
+        if (cleanupResult.removed && cleanupResult.confirmedAbsent && cleanupResult.identityMatched && cleanupResult.durable) {
           mutationState.finalDb.created = false;
           mutationState.finalDb.identity = null;
         }
@@ -1617,7 +1674,7 @@ export function publishPreparedGeneration(
         // not survive a crash. Block the manifest publication.
         // R169B-STEP6 (CLEANUP-R169B-A4-01): identity-safe cleanup.
         const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
-        if (cleanupResult.removed && cleanupResult.confirmedAbsent && cleanupResult.identityMatched) {
+        if (cleanupResult.removed && cleanupResult.confirmedAbsent && cleanupResult.identityMatched && cleanupResult.durable) {
           mutationState.finalDb.created = false;
           mutationState.finalDb.identity = null;
         }
@@ -1665,13 +1722,11 @@ export function publishPreparedGeneration(
 
       // Unlink the staging DB (best-effort). The staging and final
       // are now independent inodes, so unlinking the staging is safe.
-      // R169B-STEP5 (TOKEN-R169B-A3-01): if the unlink succeeds,
-      // advance the phase to STAGING_REMOVED (the staging is gone).
-      // The final DB still exists, so the "dominant" phase is
-      // FINAL_DB_CREATED; but we record STAGING_REMOVED for accuracy.
+      // R169B-STEP7 (PHASE-R169B-A5-02): set stagingRemoved=true if the
+      // unlink succeeds. This is a mutation produced by this attempt.
       try {
         unlinkSync(stagingPath);
-        // Phase stays FINAL_DB_CREATED (the more advanced state).
+        mutationState.stagingRemoved = true;
       } catch (e) {
         warnings.push({
           code: "STAGING_ALIAS_CLEANUP_DEFERRED",
@@ -1818,15 +1873,14 @@ export function publishPreparedGeneration(
     }
     // R169B-STEP6 (PHASE-R169B-A4-02 + CLEANUP-R169B-A4-01): the token
     // state depends on the mutation state. Only revert to PREPARED if NO
-    // visible mutation happened (all fields false/zero). If the staging
-    // was removed, the final DB was created, the metadata was written,
-    // or the manifest was written, the token is CONSUMED (terminal) —
-    // the caller must run recovery.
+    // visible mutation happened (all changed fields false/zero).
+    // R169B-STEP7 (PHASE-R169B-A5-02): metadata.preexisted is NOT a
+    // mutation — it describes a state that existed before this attempt.
+    // Only count fields that this attempt actually changed.
     const noMutation =
       !mutationState.stagingRemoved &&
       !mutationState.finalDb.created &&
       !mutationState.metadata.created &&
-      !mutationState.metadata.preexisted &&
       !mutationState.manifestVisible &&
       !mutationState.casCommitted;
     if (noMutation) {
