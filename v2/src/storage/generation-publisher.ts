@@ -2849,6 +2849,10 @@ function writeMetadataSidecarAtomically(
   }
 
   // link succeeded — fsync generations/ to make the directory entry durable.
+  // R169B-STEP10 (§6 POST-PUSH): fsync failure here is FATAL. If the
+  // directory entry is not durable, a crash could leave the manifest
+  // pointing at a metadata file that doesn't exist on disk. This
+  // violates the R169B contract and breaks recovery/GC.
   let metaDirFd: number | null = null;
   try {
     const metaDir = join(metadataPath, "..");
@@ -2859,11 +2863,34 @@ function writeMetadataSidecarAtomically(
     metaDirFd = null;
   } catch (e) {
     if (metaDirFd !== null) { try { PROD_OPS.closeSync(metaDirFd); } catch {} }
-    // Non-fatal — the link is on disk.
+    // FATAL: the metadata link may not survive a crash. Block the
+    // manifest write by throwing. The caller will NOT mark metadata
+    // as durable, and the manifest will not be written.
+    throw new GenerationStoreError(
+      "GENERATION_METADATA_INVALID",
+      phase,
+      project,
+      `fsync of generations/ after metadata link failed — metadata directory entry may not be durable: ${(e as Error).message}`,
+      generationId,
+    );
   }
 
-  // Unlink temp (best-effort).
+  // Unlink temp (best-effort), then fsync generations/ again to make
+  // the temp unlink durable.
   try { unlinkSync(metadataTempPath); } catch {}
+  let metaDirFd2: number | null = null;
+  try {
+    const metaDir = join(metadataPath, "..");
+    const opened = openDirectoryNoFollow(metaDir, PROD_OPS);
+    metaDirFd2 = opened.fd;
+    PROD_OPS.fsyncSync(metaDirFd2);
+    PROD_OPS.closeSync(metaDirFd2);
+    metaDirFd2 = null;
+  } catch (e) {
+    if (metaDirFd2 !== null) { try { PROD_OPS.closeSync(metaDirFd2); } catch {} }
+    // Non-fatal — the temp unlink is best-effort. The metadata link
+    // is already durable. An orphan temp will be swept by GC.
+  }
 }
 
 // ─── R169B-STEP3 — Internal helpers (re-validation, hashing, IO) ─────────
