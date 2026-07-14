@@ -1,5 +1,95 @@
 # Changelog — Codebase Memory V2
 
+## Unreleased — R169B-STEP10 (2026-07-14) Durable Generation Publisher — Step 10: Bloc B Completion + Bloc C Crash Harness (GPT 5.6 Final Integration Gate)
+
+**R169B remains FOUNDATION / INACTIVE.** This step implements the Bloc B
+completion (B3 GC proof under lock + B4 CAS layout leaf module) and the
+entire Bloc C crash harness (C1 concurrency barrier + C2 publisher/GC
+race + C3 PublisherOps wiring + child crash processes) from the GPT 5.6
+final integration gate report. It also delivers the dedicated test files
+for all new Bloc B behaviors and the long-overdue documentation rewrite.
+
+### Bloc B completion (B3 + B4)
+
+- **B3 — GC proof under lock** (`generation-gc.ts`): under BEGIN
+  IMMEDIATE, before unlink, the GC now re-lstats the DB and metadata,
+  verifies they are regular non-symlink files, and recomputes the DB
+  sha256 to compare with the catalog entry. This closes the TOCTOU
+  window between the safety check (outside the lock) and the actual
+  deletion (under the lock). For recovery (files may already be
+  absent), the proof is skipped — the deletion is idempotent. If the
+  proof fails, the CAS transaction is rolled back and the generation
+  is NOT deleted.
+- **B4 — CAS layout leaf module** (`internal/generation-layout-io.ts`):
+  new shared leaf module with `ensureDirDurable()`. Creates directories
+  with mode 0o700, chmod (force exact mode regardless of umask), and
+  fsync. If newly created, also fsyncs the parent. Replaced the ad-hoc
+  mkdirSync + chmodSync + fsync in `openCasStore` with a call to
+  `ensureDirDurable`. No module cycle — pure leaf with no imports from
+  the storage module chain.
+
+### Bloc C — crash harness (C1 + C2 + C3)
+
+- **C1 — Concurrency barrier test** (`tests/storage/r169b-concurrency-barrier.test.ts`):
+  50 iterations of (winner publishes, loser publishes with
+  expectedActive=null). The loser MUST get STRICTLY
+  PUBLICATION_CAS_MISMATCH (never BUSY, never PROMOTION_CONFLICT).
+  Validates: manifest points at winner; CAS active matches winner;
+  loser's UUID never enters the catalog; CAS revision strictly
+  increases per successful publication; loser's failure does NOT bump
+  the revision; no staging DB files leak in tmp/; generations/
+  contains exactly 50 .db files (one per winner, none for losers).
+- **C2 — Publisher/GC race test** (`tests/storage/r169b-publisher-gc-race.test.ts`):
+  STALE: publish between plan and apply → GC_PLAN_STALE, no deletions.
+  OK: plan→apply deletes the oldest generation. OK: retainCount=0
+  deletes all non-active. MULTI-PROCESS: real tsx children for GC and
+  publisher race, validates 7 consistency invariants regardless of who
+  won the race (manifest exists, active DB on disk, CAS active matches
+  manifest, no DELETING entries, no orphan DBs, no catalog ghosts).
+- **C3 — Crash harness** (`tests/storage/r169b-crash-harness.test.ts` +
+  `publishPreparedGenerationInternal`): wires the PublisherOps
+  fault-injection harness into the publisher via a new
+  `publishPreparedGenerationInternal` function. Module-level
+  `_injectedPublisherOps` + `_injectedBarrier` are scoped to a single
+  publish call via try/finally (no leak). Routed 2 critical fs calls
+  (fsync(tempFd), linkSync(temp, final)) through `_ops()`. Added 3
+  barrier points (pre-fsync-temp, pre-link, pre-cas-commit). 5
+  fault-injection tests + 2 child-process crash tests (real SIGKILL
+  at pre-link and pre-cas-commit, validates on-disk durability and
+  recovery).
+
+### Dedicated test files for Bloc B behaviors
+
+- **B1+B2+B3+B4 tests** (`tests/storage/r169b-bloc-b-tests.test.ts`):
+  21 dedicated tests. B1: planGenerationOrphanRecovery (6) +
+  applyGenerationOrphanRecovery (3). B2: CAS recovery disk-aware (3).
+  B3: GC safety check + proof under lock (4). B4: ensureDirDurable (5).
+
+### Documentation rewrite
+
+- **`docs/ATOMIC_GENERATION_PUBLICATION.md`** (NEW): comprehensive
+  design doc for the R169B durable generation publisher. Covers the
+  pipeline (reserve → populate → prepare → publish), the temp-file
+  promotion protocol, the CAS catalog model, the GC Model A, the
+  orphan recovery, and the crash safety invariants.
+- **`docs/V2_ARCHITECTURE.md`** (NEW): v2 architecture overview.
+  Covers the module dependency graph, the storage layer, the indexer
+  pipeline, the UI server, and the MCP tools.
+- **`docs/V2_CURRENT_STATE.md`** (NEW): current state of the v2
+  codebase. Covers R169A (atomic generation publication foundation)
+  and R169B (durable generation publisher), the test suite (1775+
+  tests), the benchmark coverage, and the FOUNDATION/INACTIVE status.
+
+### Validation
+
+- TypeScript: clean.
+- Build: clean.
+- Tests: 496 storage tests pass (was 475 before C1-C3 + B1-B4 tests).
+- Publication benchmark: clean.
+- Umask matrix (0022/0000/0027): all R169 tests pass.
+
+---
+
 ## Unreleased — R169B-STEP9 (2026-07-14) Durable Generation Publisher — Step 9: No-Carry Foundation Closure (GPT 5.6 Pass 7 Audit)
 
 **R169B remains FOUNDATION / INACTIVE.** This step addresses the 20 findings
