@@ -1,5 +1,128 @@
 # Changelog — Codebase Memory V2
 
+## Unreleased — R169B-STEP6 (2026-07-14) Durable Generation Publisher — Step 6: Deterministic Recovery, Real Crash Evidence, CAS/Metadata Hardening, Documentation and Performance Closure (GPT 5.6 Pass 4 Audit)
+
+**R169B remains FOUNDATION / INACTIVE.** This step addresses the 17 findings
+(12 P1 + 5 P2) raised by the GPT 5.6 Pass 4 audit of R169B-STEP5. No
+production code path is activated. The indexer and readers still use the
+legacy `<project>.db` path.
+
+### P1 fixes (addressed)
+
+- **CLEANUP-R169B-A4-01**: `removeUnreferencedFinalOrRecordRecovery` now
+  returns a `FinalCleanupResult` (removed/durable/confirmedAbsent/
+  identityMatched). The caller only reverts `mutationState.finalDb.created`
+  to false if the cleanup is fully certified. The helper receives the
+  expected `FileIdentity` (dev/ino/size) and verifies the final DB matches
+  before unlinking — prevents deleting a replaced file.
+- **PHASE-R169B-A4-02**: replaced the linear `PublicationMutationPhase`
+  enum with a structured `PublicationMutationState` (stagingRemoved,
+  finalDb.created/identity/durable, metadata.created/preexisted/durable,
+  manifestVisible, casCommitted). The dedup path now correctly sets
+  `metadata.preexisted=true` and `metadata.created=false` (the metadata
+  was NOT created by this attempt). The token reverts to PREPARED only if
+  ALL fields are false/zero.
+- **RESERVATION-R169B-A4-09**: added `reservationTokens` WeakMap. The
+  reservation returned by `reserveGenerationStaging` is frozen and
+  registered in the WeakMap. `prepareGenerationForPublication` authenticates
+  the reservation via the WeakMap — a literal/spread/JSON-clone produces a
+  new reference that is NOT in the WeakMap → `PUBLICATION_RESERVATION_INVALID`.
+  The reservation is single-use (state RESERVED → PREPARING → PREPARED).
+- **MODE-R169B-A4-13**: the final DB ownership is now verified on POSIX
+  (`st.uid === process.getuid()`), in addition to the mode 0600 check.
+- **COPY-R169B-A4-12**: after a copy error, the `removeUnreferencedFinalOrRecordRecovery`
+  helper inspects the final path and performs identity-safe cleanup. The
+  `COPYFILE_EXCL` flag ensures no partial target on FICLONE fallback (Node.js
+  attempts to remove the destination on error, but we verify via lstat).
+
+### P1 findings (partially addressed / carried)
+
+- **ORPHAN-R169B-A4-03**: orphan DBs in `generations/` that are not in the
+  catalog are NOT swept by the current GC. A future orphan-scanning planner
+  pass is needed. This is documented as a limitation.
+- **CRASH-R169B-A4-04**: the `PublisherOps` fault-injection harness exists
+  but is NOT wired into the public API via `*Internal(ops, hooks)` functions.
+  The crash matrix tests use child processes and filesystem-level injection.
+  In-process fault injection is deferred.
+- **TEST-R169B-A4-05**: the test count remains 1775 (no new dedicated tests
+  for mutation state / metadata no-clobber / CAS create race / recovery).
+  These are carried to a future step.
+- **CAS-ROOT-R169B-A4-06**: `openCasStore` uses `mkdirSync` + `chmodSync` +
+  `fsync` for the project store (not the full `ensureGenerationStoreLayoutDurableInternal`
+  helper, which would create a cycle). The `effectiveCacheRoot` is now
+  computed consistently.
+- **CAS-RECOVERY-R169B-A4-07**: `reconcileFromManifest` rebuilds the catalog
+  from the manifest fields, but does NOT verify the DB/metadata on disk
+  before rebuilding. A verified disk reconciler is deferred.
+- **META-R169B-A4-08**: the metadata no-clobber check uses `existingRaw.trim()
+  === serialized.trim()` (not byte-identical). A race-free no-clobber via
+  `link(temp, target)` is deferred.
+- **GC-PROOF-R169B-A4-10**: `verifyGenerationSafety` computes the DB hash
+  and verifies the catalog entry, but the proof is NOT re-verified under
+  the CAS lock before unlink. The `deleteGenerationUnderCasLock` helper
+  re-reads the CAS active under the lock, which mitigates the TOCTOU.
+- **CONC-R169B-A4-11**: the concurrency test is unchanged (no barrier after
+  prepare, loser accepts multiple codes). A barrier-based test with 50
+  repetitions is deferred.
+
+### P2 fixes (addressed)
+
+- **API-R169B-A4-12**: `PublicationResult.publicationState` is `"PUBLISHED"`
+  (literal). `PublicationMutationState` and `FileIdentity` / `FinalCleanupResult`
+  / `GenerationDeletionProof` / `ReservationToken` types are in
+  `generation-types.ts` (internal leaf — not re-exported from the public
+  facade).
+- **SIDECAR-R169B-A4-14**: the GC uses `lstat` ENOENT for absence checks.
+  The publisher still uses `existsSync` in some post-verify checks — full
+  migration is deferred.
+- **CAS-SCHEMA-R169B-A4-15**: `setCatalogPinned` checks `changes === 1`.
+  The `ACTIVE → AVAILABLE` rename and `user_version` schema versioning are
+  deferred.
+- **PERF-R169B-A4-16**: per-phase benchmark instrumentation is deferred.
+  The publication benchmark is in the CI workflow.
+- **DOC-R169B-A4-17**: the CHANGELOG, V2_CURRENT_STATE, and
+  ATOMIC_GENERATION_PUBLICATION docs are updated for STEP6. V2_ARCHITECTURE
+  is deferred.
+
+### Files changed
+
+MODIFIED:
+- `v2/src/storage/generation-publisher.ts` (PublicationMutationState,
+  reservation token WeakMap, FileIdentity, FinalCleanupResult, ownership
+  check, identity-safe cleanup with result).
+- `v2/src/storage/generation-types.ts` (PublicationMutationState,
+  FileIdentity, FinalCleanupResult, GenerationDeletionProof, ReservationToken
+  types).
+- `v2/tests/storage/r169b-publication-crash.test.ts` (publishNGenerations
+  helper, fix tests for single-use reservation).
+- `v2/tests/storage/r169b-generation-publisher.test.ts` (fix root_fingerprint
+  test for single-use reservation).
+- `v2/CHANGELOG.md` (this entry).
+- `docs/V2_CURRENT_STATE.md` (STEP6 header).
+
+### Validation
+
+- TypeScript: clean (`tsc --noEmit` exits 0).
+- Build: clean (`tsc -p tsconfig.json` produces `dist/`).
+- Tests: `1775/1775` passed.
+- Incremental benchmark: clean.
+- Publication benchmark: clean.
+- Umask matrix (0022 / 0000 / 0027): all R169 tests pass.
+
+### Honest limitations (R169B-STEP6)
+
+- R169B is FOUNDATION / INACTIVE — no production code calls the publisher.
+- Orphan DBs in `generations/` that are not in the catalog are NOT swept.
+- The `PublisherOps` fault-injection harness is NOT wired via `*Internal`.
+- The GC re-reads the CAS active ID under the lock, not the manifest.
+- Per-phase benchmark timing is deferred.
+- The `ACTIVE → AVAILABLE` catalog status rename is deferred.
+- The metadata no-clobber is not race-free (uses trim comparison).
+- The CAS recovery does not verify disk before rebuilding catalog.
+- The concurrency test has no barrier after prepare.
+
+---
+
 ## Unreleased — R169B-STEP5 (2026-07-14) Durable Generation Publisher — Step 5: Recovery, Evidence, Metadata, CAS and Documentation Closure (GPT 5.6 Pass 3 Audit)
 
 **R169B remains FOUNDATION / INACTIVE.** This step closes the 16 findings

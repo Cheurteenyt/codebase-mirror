@@ -890,26 +890,97 @@ export interface PublicationResult {
 }
 
 /**
- * R169B-STEP5 (TOKEN-R169B-A3-01): the publication mutation phase.
- * Replaces the boolean `visibleMutation` with a structured phase that
- * tracks exactly how far the publication progressed. The token state
- * machine uses this to decide whether to revert to PREPARED, go
+ * R169B-STEP6 (PHASE-R169B-A4-02): the publication mutation state.
+ * Replaces the linear PublicationMutationPhase enum with a structured
+ * state that correctly models the independent dimensions of the
+ * publication pipeline. The token state machine uses this to decide
+ * whether to revert to PREPARED (only if no mutation happened), go
  * CONSUMED (terminal, needs recovery), or stay as-is.
  *
- *   - "NONE": no visible mutation yet. Token can revert to PREPARED.
- *   - "STAGING_REMOVED": the staging DB was unlinked (dedup path or
- *     non-dedup cleanup). The staging is gone; retry would need a new
- *     reservation. Token is terminal (needs recovery / new reservation).
- *   - "FINAL_DB_CREATED": the final DB was created (copy/reflink). The
- *     final DB exists but no manifest points at it. Token is terminal.
- *   - "METADATA_DURABLE": the metadata sidecar was written. Token is
- *     terminal.
- *   - "MANIFEST_VISIBLE": the active manifest was written. Readers can
- *     see the new generation. The CAS may not yet reflect it. Token is
- *     CONSUMED; reconciliation on next publish will fix the CAS.
- *   - "CAS_COMMITTED": the CAS transaction committed. Publication
- *     complete. Token is CONSUMED.
+ * The fields are independent:
+ *   - stagingRemoved: the staging DB was unlinked (dedup or non-dedup).
+ *   - finalDb.created: the final DB was created (copy/reflink).
+ *   - finalDb.identity: dev/ino/size of the created final DB (for
+ *     identity-safe cleanup).
+ *   - metadata.created: the metadata sidecar was written by THIS attempt
+ *     (false for dedup where the metadata preexisted).
+ *   - metadata.preexisted: the metadata sidecar already existed before
+ *     this attempt (dedup case).
+ *   - manifestVisible: the active manifest was written (readers can see
+ *     the new generation).
+ *   - casCommitted: the CAS transaction committed.
+ *
+ * Token decision:
+ *   - PREPARED only if ALL fields are false/zero (no mutation).
+ *   - CONSUMED if any field is true (terminal, needs recovery).
  */
+export interface PublicationMutationState {
+  stagingRemoved: boolean;
+  finalDb: {
+    created: boolean;
+    identity: FileIdentity | null;
+    durable: boolean;
+  };
+  metadata: {
+    created: boolean;
+    preexisted: boolean;
+    durable: boolean;
+  };
+  manifestVisible: boolean;
+  casCommitted: boolean;
+}
+
+/**
+ * R169B-STEP6: a file identity snapshot (dev/ino/size) used for
+ * identity-safe cleanup and proof verification.
+ */
+export interface FileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+}
+
+/**
+ * R169B-STEP6 (CLEANUP-R169B-A4-01): the result of an identity-safe
+ * cleanup of an unreferenced final DB. The caller uses this to decide
+ * whether the token can revert to PREPARED (only if `removed &&
+ * confirmedAbsent && identityMatched`) or must stay CONSUMED.
+ */
+export interface FinalCleanupResult {
+  readonly removed: boolean;
+  readonly durable: boolean;
+  readonly confirmedAbsent: boolean;
+  readonly identityMatched: boolean;
+  readonly warnings: readonly GenerationStoreWarning[];
+}
+
+/**
+ * R169B-STEP6 (GC-PROOF-R169B-A4-10): a deletion proof captured by
+ * verifyGenerationSafety and verified under the CAS lock before unlink.
+ */
+export interface GenerationDeletionProof {
+  readonly db: FileIdentity & { readonly sha256: string };
+  readonly metadata: FileIdentity & { readonly sha256: string };
+  readonly catalogRevision: number;
+}
+
+/**
+ * R169B-STEP6 (RESERVATION-R169B-A4-09): the reservation token held in
+ * the module-scope WeakMap. The reservation is authenticated by the
+ * WeakMap — a literal/spread/JSON-clone produces a new reference that
+ * is NOT in the WeakMap.
+ */
+export interface ReservationToken {
+  state: "RESERVED" | "PREPARING" | "PREPARED" | "DISCARDED";
+  generationId: string;
+  stagingPath: string;
+  cacheRoot: string;
+  project: string;
+}
+
+// R169B-STEP5 backward compat: keep the old PublicationMutationPhase
+// type as an alias for transitional code. New code should use
+// PublicationMutationState.
 export type PublicationMutationPhase =
   | "NONE"
   | "STAGING_REMOVED"

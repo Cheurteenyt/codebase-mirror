@@ -334,13 +334,16 @@ describe("R169B-STEP2 publisher — prepareGenerationForPublication (validation)
   });
 
   it("rejects a root_fingerprint mismatch with input.rootFingerprint (STAGING_DB_PROJECT_MISMATCH)", () => {
-    const { reservation } = reserveAndPopulateValid();
-    expect(() =>
-      prepareGenerationForPublication(reservation, { rootFingerprint: "/different/root:1:2" }),
-    ).toThrow(GenerationStoreError);
+    // R169B-STEP6 (RESERVATION-R169B-A4-09): reservation is single-use.
+    // Create a fresh reservation for this test.
+    const reservation = reserveGenerationStaging(FIXTURE_PROJECT_NAME, { cacheRoot });
+    const { close } = createValidStagingDb(reservation.stagingPath);
+    close();
     try {
       prepareGenerationForPublication(reservation, { rootFingerprint: "/different/root:1:2" });
+      expect.fail("expected call to throw GenerationStoreError with code STAGING_DB_PROJECT_MISMATCH");
     } catch (e) {
+      expect(e).toBeInstanceOf(GenerationStoreError);
       expect((e as GenerationStoreError).code).toBe("STAGING_DB_PROJECT_MISMATCH");
     }
   });

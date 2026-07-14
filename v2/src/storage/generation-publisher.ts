@@ -108,7 +108,10 @@ import {
   type DiscardResult,
   type PublishPreparedGenerationOptions,
   type CasGenerationCatalogEntry,
-  type PublicationMutationPhase,
+  type PublicationMutationState,
+  type FileIdentity,
+  type FinalCleanupResult,
+  type ReservationToken,
 } from "./generation-types.js";
 import {
   getCacheRoot,
@@ -222,6 +225,15 @@ interface PreparedToken {
  * reach into it to forge a token.
  */
 const preparedTokens: WeakMap<PreparedGeneration, PreparedToken> = new WeakMap();
+
+/**
+ * R169B-STEP6 (RESERVATION-R169B-A4-09): the private WeakMap that
+ * holds the reservation tokens. Keyed by the ACTUAL object reference
+ * returned by `reserveGenerationStaging`. A spread / JSON clone / cast
+ * produces a different reference and is therefore NOT in the WeakMap —
+ * `prepareGenerationForPublication` raises `PUBLICATION_RESERVATION_INVALID`.
+ */
+const reservationTokens: WeakMap<GenerationStagingReservation, ReservationToken> = new WeakMap();
 
 /**
  * R169B-STEP2: Internal PreparedGeneration shape (mutable, before
@@ -412,13 +424,25 @@ export function reserveGenerationStaging(
     );
   }
 
-  return {
+  const reservation: GenerationStagingReservation = {
     project,
     generationId,
     stagingPath,
     cacheRoot,
     createdAt: new Date().toISOString(),
   };
+  Object.freeze(reservation);
+  // R169B-STEP6 (RESERVATION-R169B-A4-09): register the reservation
+  // token in the WeakMap so prepareGenerationForPublication can
+  // authenticate it.
+  reservationTokens.set(reservation, {
+    state: "RESERVED",
+    generationId,
+    stagingPath,
+    cacheRoot,
+    project,
+  });
+  return reservation;
 }
 
 // ─── PREPARE: prepareGenerationForPublication ─────────────────────────────
@@ -490,10 +514,58 @@ export function prepareGenerationForPublication(
   options?: GenerationStoreOptions,
 ): PreparedGeneration {
   const phase = "prepareGenerationForPublication";
+  // R169B-STEP6 (RESERVATION-R169B-A4-09): authenticate the reservation
+  // via the WeakMap. A literal/spread/JSON-clone produces a new
+  // reference that is NOT in the WeakMap → PUBLICATION_RESERVATION_INVALID.
+  const resToken = reservationTokens.get(reservation);
+  if (!resToken) {
+    throw new GenerationStoreError(
+      "PUBLICATION_RESERVATION_INVALID",
+      phase,
+      reservation.project,
+      `Reservation is not authentic (not in the private WeakMap). Reservations MUST be produced by reserveGenerationStaging in the same process; spread/JSON-clone/literal objects are rejected.`,
+      reservation.generationId,
+    );
+  }
+  if (resToken.state !== "RESERVED") {
+    throw new GenerationStoreError(
+      "PUBLICATION_RESERVATION_INVALID",
+      phase,
+      reservation.project,
+      `Reservation is in state ${resToken.state} (expected RESERVED). A reservation is single-use.`,
+      reservation.generationId,
+    );
+  }
+  // Verify the reservation fields match the token.
   const project = reservation.project;
   const generationId = reservation.generationId;
   const stagingPath = reservation.stagingPath;
+  if (
+    resToken.project !== project ||
+    resToken.generationId !== generationId ||
+    resToken.stagingPath !== stagingPath
+  ) {
+    throw new GenerationStoreError(
+      "PUBLICATION_RESERVATION_INVALID",
+      phase,
+      project,
+      `Reservation fields do not match the token (project/stagingPath/generationId mismatch)`,
+      generationId,
+    );
+  }
+  // Transition RESERVED → PREPARING.
+  resToken.state = "PREPARING";
   const cacheRoot = options?.cacheRoot ?? reservation.cacheRoot ?? getCacheRoot();
+  // Verify cacheRoot matches the token.
+  if (resToken.cacheRoot !== cacheRoot && options?.cacheRoot !== undefined) {
+    throw new GenerationStoreError(
+      "PUBLICATION_RESERVATION_INVALID",
+      phase,
+      project,
+      `options.cacheRoot="${options.cacheRoot}" does not match reservation cacheRoot="${resToken.cacheRoot}"`,
+      generationId,
+    );
+  }
 
   // Re-validate the trust root (the reservation may have been created
   // in a different process; defense in depth).
@@ -972,6 +1044,10 @@ export function prepareGenerationForPublication(
     preStat: { dev: preDev, ino: preIno, size: preSize },
     sha256,
   });
+  // R169B-STEP6 (RESERVATION-R169B-A4-09): transition the reservation
+  // token to PREPARED (single-use — cannot prepare the same reservation
+  // twice).
+  resToken.state = "PREPARED";
 
   return prepared;
 }
@@ -1169,11 +1245,17 @@ export function publishPreparedGeneration(
   // 5. Open the CAS DB. BEGIN IMMEDIATE.
   let cas: ReturnType<typeof openCasStore> | null = null;
   let casCommitted = false;
-  // R169B-STEP5 (TOKEN-R169B-A3-01): replace the boolean visibleMutation
-  // with a structured phase. The token state machine uses this to decide
-  // whether to revert to PREPARED (only if phase === "NONE"), go CONSUMED
-  // (terminal, needs recovery), or stay as-is.
-  let mutationPhase: PublicationMutationPhase = "NONE";
+  // R169B-STEP6 (PHASE-R169B-A4-02): replace the linear enum with a
+  // structured PublicationMutationState. The fields are independent,
+  // so we can correctly handle the dedup path (metadataCreated=false)
+  // and the non-dedup path (metadataCreated=true).
+  const mutationState: PublicationMutationState = {
+    stagingRemoved: false,
+    finalDb: { created: false, identity: null, durable: false },
+    metadata: { created: false, preexisted: false, durable: false },
+    manifestVisible: false,
+    casCommitted: false,
+  };
   try {
     cas = openCasStore(project, cacheRoot);
     cas.beginImmediate();
@@ -1352,19 +1434,22 @@ export function publishPreparedGeneration(
         dbFile: `${GENERATIONS_SUBDIR}/generation-${dedupGenId}.db`,
       };
       // Unlink the staging file (best-effort).
-      // R169B-STEP5 (TOKEN-R169B-A3-01): mark STAGING_REMOVED — the
+      // R169B-STEP6 (PHASE-R169B-A4-02): mark stagingRemoved — the
       // staging is gone. If the publication fails after this, the
       // token cannot revert to PREPARED (the staging is absent).
+      // R169B-STEP6 (META-R169B-A4-08): in dedup, the metadata
+      // preexisted (we did NOT create it). metadataCreated stays false.
       try {
         unlinkSync(stagingPath);
-        mutationPhase = "STAGING_REMOVED";
+        mutationState.stagingRemoved = true;
       } catch (e) {
         warnings.push({
           code: "STAGING_ALIAS_CLEANUP_DEFERRED",
           message: `Failed to unlink staging alias after dedup: ${(e as Error).message}`,
         });
-        // Staging is still present — phase stays NONE (can retry/discard).
+        // Staging is still present — stagingRemoved stays false.
       }
+      mutationState.metadata.preexisted = true;
     } else {
       // Not deduped: promote the staging DB via copy/reflink to a
       // NEW INODE (R169B-STEP4 IMMUT-R169B-A2-01).
@@ -1441,16 +1526,24 @@ export function publishPreparedGeneration(
           );
         }
       }
-      mutationPhase = "FINAL_DB_CREATED";
+      // R169B-STEP6 (PHASE-R169B-A4-02): mark finalDb.created and
+      // capture the identity for identity-safe cleanup.
+      const finalStat = lstatSync(finalPath);
+      mutationState.finalDb.created = true;
+      mutationState.finalDb.identity = { dev: finalStat.dev, ino: finalStat.ino, size: finalStat.size };
 
-      // R169B-STEP5 (MODE-R169B-A3-10): force the final DB mode to 0600
-      // and verify it is a regular non-symlink file with the expected
-      // owner. The staging DB may have been chmod'd by the indexer;
-      // the final DB must be private regardless.
+      // R169B-STEP5 (MODE-R169B-A3-10) + R169B-STEP6 (MODE-R169B-A4-13):
+      // force the final DB mode to 0600 and verify it is a regular
+      // non-symlink file with the expected owner. The staging DB may
+      // have been chmod'd by the indexer; the final DB must be private
+      // regardless.
       try {
-        const finalStat = lstatSync(finalPath);
         if (finalStat.isSymbolicLink() || !finalStat.isFile()) {
           throw new Error(`final DB is not a regular file: ${finalPath}`);
+        }
+        // R169B-STEP6 (MODE-R169B-A4-13): verify ownership on POSIX.
+        if (typeof process.getuid === "function" && finalStat.uid !== process.getuid()) {
+          throw new Error(`final DB owner uid=${finalStat.uid} does not match process uid=${process.getuid()}: ${finalPath}`);
         }
         if ((finalStat.mode & 0o777) !== 0o600) {
           chmodSync(finalPath, 0o600);
@@ -1461,9 +1554,20 @@ export function publishPreparedGeneration(
           }
         }
       } catch (e) {
-        // Cleanup the final DB (identity-safe) and abort.
-        removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, warnings);
-        mutationPhase = "NONE";
+        // R169B-STEP6 (CLEANUP-R169B-A4-01): identity-safe cleanup.
+        // The cleanup result determines whether the token can revert
+        // to PREPARED. Only if the cleanup is fully certified (removed
+        // && confirmedAbsent && identityMatched) can we revert.
+        const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
+        if (!cleanupResult.removed || !cleanupResult.confirmedAbsent || !cleanupResult.identityMatched) {
+          // Cleanup incomplete — the final DB may still exist. The
+          // token must stay CONSUMED (do NOT revert to PREPARED).
+          // mutationState.finalDb.created stays true.
+        } else {
+          // Cleanup succeeded — revert finalDb.created.
+          mutationState.finalDb.created = false;
+          mutationState.finalDb.identity = null;
+        }
         throw new GenerationStoreError(
           "GENERATION_PROMOTION_FAILED",
           phase,
@@ -1482,9 +1586,12 @@ export function publishPreparedGeneration(
       if (finalHash !== manifest.sha256) {
         // The final DB's hash does not match the prepared manifest.
         // The staging file was mutated between prepare and copy.
-        // R169B-STEP5 (CLEANUP-R169B-A3-03): identity-safe cleanup.
-        removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, warnings);
-        mutationPhase = "NONE";
+        // R169B-STEP6 (CLEANUP-R169B-A4-01): identity-safe cleanup.
+        const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
+        if (cleanupResult.removed && cleanupResult.confirmedAbsent && cleanupResult.identityMatched) {
+          mutationState.finalDb.created = false;
+          mutationState.finalDb.identity = null;
+        }
         throw new GenerationStoreError(
           "PUBLICATION_STAGING_MUTATED",
           phase,
@@ -1508,9 +1615,12 @@ export function publishPreparedGeneration(
         }
         // The final DB exists but its fsync failed. The bytes may
         // not survive a crash. Block the manifest publication.
-        // R169B-STEP5 (CLEANUP-R169B-A3-03): identity-safe cleanup.
-        removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, warnings);
-        mutationPhase = "NONE";
+        // R169B-STEP6 (CLEANUP-R169B-A4-01): identity-safe cleanup.
+        const cleanupResult = removeUnreferencedFinalOrRecordRecovery(finalPath, generations, project, phase, generationId, mutationState.finalDb.identity, warnings);
+        if (cleanupResult.removed && cleanupResult.confirmedAbsent && cleanupResult.identityMatched) {
+          mutationState.finalDb.created = false;
+          mutationState.finalDb.identity = null;
+        }
         throw new GenerationStoreError(
           "GENERATION_PROMOTION_DURABILITY_UNKNOWN",
           phase,
@@ -1519,6 +1629,7 @@ export function publishPreparedGeneration(
           generationId,
         );
       }
+      mutationState.finalDb.durable = true;
 
       // R169B-STEP3 (DUR-R169B-A1-02): fsync(generations/) failure
       // BLOCKS the manifest write. The copy succeeded but the
@@ -1586,18 +1697,21 @@ export function publishPreparedGeneration(
       });
       writeMetadataSidecarAtomically(effectiveMetadataPath, metadataPayload, project, phase, effectiveGenerationId);
     }
-    // R169B-STEP5 (TOKEN-R169B-A3-01): metadata is durable (for non-dedup)
-    // or already existed (for dedup). Advance the phase.
-    if (mutationPhase === "NONE" || mutationPhase === "STAGING_REMOVED") {
-      mutationPhase = "METADATA_DURABLE";
+    // R169B-STEP6 (PHASE-R169B-A4-02): metadata is durable (for non-dedup)
+    // or already existed (for dedup). Mark metadataCreated=true only for
+    // non-dedup (we actually wrote it). For dedup, metadataCreated stays
+    // false (the metadata preexisted).
+    if (!deduped) {
+      mutationState.metadata.created = true;
+      mutationState.metadata.durable = true;
     }
 
     // 11. Write active-generation.json atomically (canonical payload).
     const preparedPayload = prepareGenerationManifestForWrite(effectiveManifest, project);
     writeJsonAtomically(manifestPath, preparedPayload.payload, project, phase, PROD_OPS);
-    // R169B-STEP5 (TOKEN-R169B-A3-01): the manifest is now visible to
+    // R169B-STEP6 (PHASE-R169B-A4-02): the manifest is now visible to
     // readers. This is a point of no return — the token is CONSUMED.
-    mutationPhase = "MANIFEST_VISIBLE";
+    mutationState.manifestVisible = true;
 
     // 12. Re-read and verify the active manifest + DB exists + metadata exists.
     let verifiedManifest: GenerationManifestV1;
@@ -1677,7 +1791,7 @@ export function publishPreparedGeneration(
     // 14. COMMIT.
     cas.commit();
     casCommitted = true;
-    mutationPhase = "CAS_COMMITTED";
+    mutationState.casCommitted = true;
 
     // 15. Transition token → CONSUMED.
     token.state = "CONSUMED";
@@ -1702,14 +1816,20 @@ export function publishPreparedGeneration(
     if (cas !== null && !casCommitted) {
       try { cas.rollback(); } catch { /* best effort */ }
     }
-    // R169B-STEP5 (TOKEN-R169B-A3-01): the token state depends on the
-    // mutation phase. Only revert to PREPARED if NO visible mutation
-    // happened (phase === "NONE"). If the staging was removed, the
-    // final DB was created, the metadata was written, or the manifest
-    // was written, the token is CONSUMED (terminal) — the caller must
-    // run recovery. The manifest/CAS reconciliation on the next
-    // publish will fix any inconsistency.
-    if (mutationPhase === "NONE") {
+    // R169B-STEP6 (PHASE-R169B-A4-02 + CLEANUP-R169B-A4-01): the token
+    // state depends on the mutation state. Only revert to PREPARED if NO
+    // visible mutation happened (all fields false/zero). If the staging
+    // was removed, the final DB was created, the metadata was written,
+    // or the manifest was written, the token is CONSUMED (terminal) —
+    // the caller must run recovery.
+    const noMutation =
+      !mutationState.stagingRemoved &&
+      !mutationState.finalDb.created &&
+      !mutationState.metadata.created &&
+      !mutationState.metadata.preexisted &&
+      !mutationState.manifestVisible &&
+      !mutationState.casCommitted;
+    if (noMutation) {
       token.state = "PREPARED";
     } else {
       token.state = "CONSUMED";
@@ -2301,9 +2421,23 @@ function removeUnreferencedFinalOrRecordRecovery(
   project: string,
   phase: string,
   generationId: string,
+  expectedIdentity: FileIdentity | null,
   warnings: GenerationStoreWarning[],
-): void {
+): FinalCleanupResult {
   void project; void phase; void generationId;
+  const result: {
+    removed: boolean;
+    durable: boolean;
+    confirmedAbsent: boolean;
+    identityMatched: boolean;
+    warnings: GenerationStoreWarning[];
+  } = {
+    removed: false,
+    durable: false,
+    confirmedAbsent: false,
+    identityMatched: false,
+    warnings,
+  };
   // 1. lstat the final DB.
   let st: Stats;
   try {
@@ -2313,36 +2447,54 @@ function removeUnreferencedFinalOrRecordRecovery(
         code: "GC_DELETE_FAILED",
         message: `Cleanup: final DB is a symlink (not unlinking): ${finalPath}`,
       });
-      return;
+      return result;
     }
     if (!st.isFile()) {
       warnings.push({
         code: "GC_DELETE_FAILED",
         message: `Cleanup: final DB is not a regular file (not unlinking): ${finalPath}`,
       });
-      return;
+      return result;
     }
+    // R169B-STEP6 (CLEANUP-R169B-A4-01): verify the identity matches
+    // the expected identity (dev/ino/size). If it doesn't match, the
+    // file was replaced — do NOT unlink (could be another process's file).
+    if (expectedIdentity !== null) {
+      if (st.dev !== expectedIdentity.dev || st.ino !== expectedIdentity.ino || st.size !== expectedIdentity.size) {
+        warnings.push({
+          code: "GC_DELETE_FAILED",
+          message: `Cleanup: final DB identity mismatch (expected dev=${expectedIdentity.dev} ino=${expectedIdentity.ino} size=${expectedIdentity.size}, got dev=${st.dev} ino=${st.ino} size=${st.size}) — not unlinking: ${finalPath}`,
+        });
+        return result;
+      }
+    }
+    result.identityMatched = true;
   } catch (e) {
     const errCode = (e as NodeJS.ErrnoException).code;
     if (errCode === "ENOENT") {
-      // Already gone — nothing to clean up.
-      return;
+      // Already gone — nothing to clean up. This is a successful
+      // idempotent cleanup.
+      result.removed = true;
+      result.confirmedAbsent = true;
+      result.identityMatched = true; // no identity to match against
+      return result;
     }
     warnings.push({
       code: "GC_DELETE_FAILED",
       message: `Cleanup: lstat of final DB failed: ${(e as Error).message}`,
     });
-    return;
+    return result;
   }
   // 2. unlink.
   try {
     unlinkSync(finalPath);
+    result.removed = true;
   } catch (e) {
     warnings.push({
       code: "GC_DELETE_FAILED",
       message: `Cleanup: unlink of final DB failed: ${(e as Error).message}`,
     });
-    return;
+    return result;
   }
   // 3. fsync the generations/ directory.
   let dirFd: number | null = null;
@@ -2352,6 +2504,7 @@ function removeUnreferencedFinalOrRecordRecovery(
     PROD_OPS.fsyncSync(dirFd);
     PROD_OPS.closeSync(dirFd);
     dirFd = null;
+    result.durable = true;
   } catch (e) {
     if (dirFd !== null) {
       try { PROD_OPS.closeSync(dirFd); } catch { /* best effort */ }
@@ -2371,12 +2524,14 @@ function removeUnreferencedFinalOrRecordRecovery(
     });
   } catch (e) {
     const errCode = (e as NodeJS.ErrnoException).code;
-    if (errCode !== "ENOENT") {
+    if (errCode === "ENOENT") {
+      result.confirmedAbsent = true;
+    } else {
       warnings.push({
         code: "GC_DELETE_FAILED",
         message: `Cleanup: lstat after unlink returned ${errCode}: ${finalPath}`,
       });
     }
-    // ENOENT — confirmed absent. Success.
   }
+  return result;
 }

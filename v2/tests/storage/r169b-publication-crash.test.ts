@@ -100,6 +100,21 @@ function reserveAndPopulateValid(): { reservation: ReturnType<typeof reserveGene
   return { reservation, prepared };
 }
 
+// R169B-STEP6 helper: publish N generations, returning their IDs.
+function publishNGenerations(n: number): string[] {
+  const ids: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const { prepared } = reserveAndPopulateValid();
+    const result = publishPreparedGeneration(
+      prepared,
+      { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
+      { cacheRoot },
+    );
+    ids.push(result.generationId);
+  }
+  return ids;
+}
+
 // ─── DUR-R169B-A1-02: fsync(generations/) failure BLOCKS manifest ─────
 
 describe("R169B-STEP3 — DUR-R169B-A1-02: fsync(generations/) failure blocks manifest", () => {
@@ -378,17 +393,7 @@ describe("R169B-STEP3 — CAS-R169B-A1-09: expectedActiveGenerationId required",
 describe("R169B-STEP3 — GC-R169B-A1-11: incomplete delete stays DELETING", () => {
   it("if the DB file becomes a non-regular file, the GC safety check refuses with GC_SAFETY_REFUSAL", () => {
     // Publish 4 generations (only 3 retained: active + 2 previous).
-    const ids: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const { reservation } = reserveAndPopulateValid();
-      const prepared = prepareGenerationForPublication(reservation);
-      const result = publishPreparedGeneration(
-        prepared,
-        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
-        { cacheRoot },
-      );
-      ids.push(result.generationId);
-    }
+    const ids = publishNGenerations(4);
     // ids[0] is the oldest, will be deleted by GC.
     // Make ids[0]'s DB a DIRECTORY (lstat returns isFile()=false).
     // The GC's safety check (verifyGenerationSafety) catches this
@@ -415,17 +420,7 @@ describe("R169B-STEP3 — GC-R169B-A1-11: incomplete delete stays DELETING", () 
   });
 
   it("GC delete marks DELETING then DELETED on the happy path (state machine verification)", () => {
-    const ids: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const { reservation } = reserveAndPopulateValid();
-      const prepared = prepareGenerationForPublication(reservation);
-      const result = publishPreparedGeneration(
-        prepared,
-        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
-        { cacheRoot },
-      );
-      ids.push(result.generationId);
-    }
+    const ids = publishNGenerations(4);
     // ids[0] should be deleted (oldest, not active, not pinned).
     const plan = planGenerationGc(FIXTURE_PROJECT_NAME, { cacheRoot });
     expect(plan.delete.some((e) => e.generationId === ids[0])).toBe(true);
@@ -451,17 +446,7 @@ describe("R169B-STEP3 — GC-R169B-A1-11: incomplete delete stays DELETING", () 
 
 describe("R169B-STEP3 — GC-R169B-A1-13: safety-refusal on missing/corrupt metadata", () => {
   it("GC refuses to delete a generation whose metadata sidecar is missing", () => {
-    const ids: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const { reservation } = reserveAndPopulateValid();
-      const prepared = prepareGenerationForPublication(reservation);
-      const result = publishPreparedGeneration(
-        prepared,
-        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
-        { cacheRoot },
-      );
-      ids.push(result.generationId);
-    }
+    const ids = publishNGenerations(4);
     // Delete ids[0]'s metadata sidecar manually (simulating corruption).
     const metaPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.json`);
     rmSync(metaPath, { force: true });
@@ -480,17 +465,7 @@ describe("R169B-STEP3 — GC-R169B-A1-13: safety-refusal on missing/corrupt meta
   });
 
   it("GC refuses to delete a generation whose metadata is corrupt JSON", () => {
-    const ids: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const { reservation } = reserveAndPopulateValid();
-      const prepared = prepareGenerationForPublication(reservation);
-      const result = publishPreparedGeneration(
-        prepared,
-        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
-        { cacheRoot },
-      );
-      ids.push(result.generationId);
-    }
+    const ids = publishNGenerations(4);
     // Corrupt ids[0]'s metadata sidecar.
     const metaPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.json`);
     writeFileSync(metaPath, "{ corrupt", "utf-8");
@@ -686,17 +661,7 @@ describe("R169B-STEP4 — IMMUT-R169B-A2-01: copy/reflink creates a new inode (i
 describe("R169B-STEP4 — GC-RECOVERY-R169B-A2-06: DELETING recovery", () => {
   it("a generation stuck in DELETING is recovered by the next GC pass", () => {
     // Publish 4 generations (only 3 retained: active + 2 previous).
-    const ids: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const { reservation } = reserveAndPopulateValid();
-      const prepared = prepareGenerationForPublication(reservation);
-      const result = publishPreparedGeneration(
-        prepared,
-        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
-        { cacheRoot },
-      );
-      ids.push(result.generationId);
-    }
+    const ids = publishNGenerations(4);
     // Manually mark ids[0] as DELETING in the CAS (simulating a
     // previous incomplete GC pass).
     const cas = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
@@ -728,17 +693,7 @@ describe("R169B-STEP4 — GC-RECOVERY-R169B-A2-06: DELETING recovery", () => {
   });
 
   it("recovery is idempotent — if both files are already absent, mark DELETED", () => {
-    const ids: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const { reservation } = reserveAndPopulateValid();
-      const prepared = prepareGenerationForPublication(reservation);
-      const result = publishPreparedGeneration(
-        prepared,
-        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
-        { cacheRoot },
-      );
-      ids.push(result.generationId);
-    }
+    const ids = publishNGenerations(4);
     // Mark ids[0] as DELETING AND manually delete both files.
     const cas = openCasStore(FIXTURE_PROJECT_NAME, cacheRoot);
     cas.beginImmediate();
@@ -768,17 +723,7 @@ describe("R169B-STEP4 — GC-RECOVERY-R169B-A2-06: DELETING recovery", () => {
 
 describe("R169B-STEP4 — GC-SAFETY-R169B-A2-07: safety check with catalog hash", () => {
   it("GC refuses to delete a generation whose DB hash does not match the catalog", () => {
-    const ids: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      const { reservation } = reserveAndPopulateValid();
-      const prepared = prepareGenerationForPublication(reservation);
-      const result = publishPreparedGeneration(
-        prepared,
-        { expectedActiveGenerationId: i === 0 ? null : ids[ids.length - 1] },
-        { cacheRoot },
-      );
-      ids.push(result.generationId);
-    }
+    const ids = publishNGenerations(4);
     // Corrupt ids[0]'s DB by appending bytes (changes the hash but
     // NOT the catalog entry — the catalog still has the original hash).
     const dbPath = join(projectStoreDir(FIXTURE_PROJECT_NAME, cacheRoot), GENERATIONS_SUBDIR, `generation-${ids[0]}.db`);
