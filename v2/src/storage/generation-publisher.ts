@@ -1669,10 +1669,10 @@ export function publishPreparedGeneration(
 
       // 4. fd-based copy + hash (single pass: read source → hash → write temp).
       let copyError: Error | null = null;
+      let totalWritten = 0;
       try {
         const hasher = createHash("sha256");
         const chunk = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
-        let totalWritten = 0;
         while (true) {
           let bytesRead: number;
           try {
@@ -1721,8 +1721,9 @@ export function publishPreparedGeneration(
       try { closeSync(sourceFd); } catch {}
       sourceFd = null;
 
-      // R169B-STEP10 (TEMP-CONTENT-02): fstat(tempFd) post-copy verification.
-      // Verify the temp fd still has the same dev/ino.
+      // R169B-STEP10 (TEMP-CONTENT-FINAL-01): fstat(tempFd) post-copy.
+      // Verify dev/ino unchanged AND size == totalWritten AND
+      // size == manifest.sizeBytes.
       try {
         const tempAfter = fstatSync(tempFd!);
         if (tempAfter.dev !== tempIdentity.dev || tempAfter.ino !== tempIdentity.ino) {
@@ -1732,6 +1733,23 @@ export function publishPreparedGeneration(
           if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
           throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
             `Post-copy temp identity changed: dev=${tempAfter.dev}/${tempIdentity.dev} ino=${tempAfter.ino}/${tempIdentity.ino}`, generationId);
+        }
+        // R169B-STEP10 (TEMP-CONTENT-FINAL-01): verify temp size.
+        if (tempAfter.size !== totalWritten) {
+          try { closeSync(tempFd!); } catch {}
+          tempFd = null;
+          const r = cleanupTemp();
+          if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Post-copy temp size ${tempAfter.size} != totalWritten ${totalWritten}`, generationId);
+        }
+        if (tempAfter.size !== manifest.sizeBytes) {
+          try { closeSync(tempFd!); } catch {}
+          tempFd = null;
+          const r = cleanupTemp();
+          if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+          throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+            `Post-copy temp size ${tempAfter.size} != manifest.sizeBytes ${manifest.sizeBytes}`, generationId);
         }
       } catch (e) {
         if (e instanceof GenerationStoreError) throw e;
@@ -1743,15 +1761,17 @@ export function publishPreparedGeneration(
           `Post-copy fstat(tempFd) failed: ${(e as Error).message}`, generationId);
       }
 
-      // R169B-STEP10 (TEMP-MODE-03): fchmod(tempFd, 0600) + owner check via fd.
-      // Creating with mode 0600 is not enough under a restrictive umask.
-      // fchmod operates on the fd, not the path — race-free.
-      // Node.js fs.fchmodSync is available on POSIX.
+      // R169B-STEP10 (TEMP-MODE-FINAL-02): fchmod(tempFd, 0600) fail-closed.
+      // On Linux (certified platform), fchmod failure is fatal.
       try {
         fs_fchmodSync(tempFd, 0o600);
-      } catch {
-        // fchmod not available or failed — the O_CREAT mode 0600 is the
-        // primary guard. We still verify via fstat below.
+      } catch (e) {
+        try { closeSync(tempFd!); } catch {}
+        tempFd = null;
+        const r = cleanupTemp();
+        if (r.certified) { mutationState.finalDb.created = false; mutationState.finalDb.identity = null; }
+        throw new GenerationStoreError("GENERATION_PROMOTION_FAILED", phase, project,
+          `fchmod(tempFd, 0600) failed: ${(e as Error).message}`, generationId);
       }
       // Verify mode and owner via fstat.
       try {
