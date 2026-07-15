@@ -40,7 +40,7 @@
     "@types/node": "^22.7.4",
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.1",
-    "typescript": "^5.7.2",
+    "typescript": "^7.0.2",
     "vite": "^6.4.3",
     "vitest": "^4.1.10"
   },
