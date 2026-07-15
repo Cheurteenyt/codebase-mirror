@@ -30,6 +30,7 @@ test additions (8,664 nodes) and is retained only as a transfer baseline.
 | Full parallel reindex, 23 workers | 2.614 s |
 | Extraction errors | 0 |
 | Incremental smoke | 9/9 scenarios and invariants passed |
+| Publication smoke, Ubuntu/WSL Node 22 | 396 ms / 5 generations, all invariants passed |
 
 Full discovery is deliberately the default correctness contract. The faster
 discovery mode is explicit and non-incremental. Combining `fast` with
@@ -166,4 +167,5 @@ latency and memory budgets before they become merge-blocking.
 - Docker runtime smoke could not run locally because the Linux daemon was
   unavailable; Linux CI is authoritative.
 - The inactive generation-store publication path is not yet safe to activate on
-  Windows and remains outside the product hot path.
+  Windows and remains outside the product hot path. Its POSIX smoke benchmark
+  passes under Ubuntu/WSL.

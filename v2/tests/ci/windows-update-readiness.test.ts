@@ -21,4 +21,14 @@ describe("cross-platform update verification commands", () => {
       expect(command).not.toMatch(/(?:^|\s)[A-Z_][A-Z0-9_]*=\S+\s/);
     });
   }
+
+  it("keeps the publication benchmark on the current discovery policy", () => {
+    const benchmarkSource = readFileSync(
+      join(V2_ROOT, "scripts", "publication-benchmark-r169b.ts"),
+      "utf8",
+    );
+
+    expect(benchmarkSource).toContain("CURRENT_DISCOVERY_POLICY_VERSION");
+    expect(benchmarkSource).not.toMatch(/\b2,\s*\/\/ discoveryPolicyVersion/);
+  });
 });
