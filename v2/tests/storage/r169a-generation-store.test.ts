@@ -2258,6 +2258,7 @@ describe("R169A — Source inspection: legacy path consumers (section 18G)", () 
     "src/cli/commands/human.ts",
     "src/intelligence/graph-status.ts",
     "src/ui/project-store-registry.ts",
+    "src/ui/routes/index.ts",
     "src/ui/routes/project.ts",
     "src/ui/server.ts",
   ];

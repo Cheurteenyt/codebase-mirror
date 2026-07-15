@@ -64,7 +64,9 @@ describe('R148: Full Uncertainty Lock', () => {
       join(__dirname, '..', '..', 'src', 'indexer', 'indexer.ts'), 'utf-8'
     );
     expect(indexerSource).toContain('prefix + sep');
-    expect(indexerSource).toContain("import { join, relative as nodeRelative, sep }");
+    const nodePathImport = indexerSource.match(/import\s*\{([^}]*)\}\s*from 'node:path';/);
+    expect(nodePathImport?.[1]).toMatch(/\brelative\s+as\s+nodeRelative\b/);
+    expect(nodePathImport?.[1]).toMatch(/\bsep\b/);
   });
 
   // ── OUTCOME-R148-01: CLI duplicate warning fix ────────────────────────
