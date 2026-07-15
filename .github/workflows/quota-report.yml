@@ -25,6 +25,10 @@ jobs:
       CACHE_CRITICAL_PERCENT: '85'
       STALE_WARNING_PERCENT: '10'
       CACHE_RETENTION_DAYS: '7'
+      # The automatic GITHUB_TOKEN cannot read the repository-admin
+      # storage-limit endpoint. This owner-managed variable is validated below
+      # and must mirror the effective GitHub cache setting.
+      CACHE_LIMIT_GB: ${{ vars.ACTIONS_CACHE_LIMIT_GB }}
     steps:
       - name: Generate fail-closed repository storage report
         env:
@@ -284,15 +288,15 @@ jobs:
               critical_threshold = percent_env("CACHE_CRITICAL_PERCENT")
               stale_warning_threshold = percent_env("STALE_WARNING_PERCENT")
               retention_days = positive_int_env("CACHE_RETENTION_DAYS")
+              max_cache_size_gb = positive_int_env("CACHE_LIMIT_GB")
               if warning_threshold >= critical_threshold:
                   raise ReportError("CACHE_WARNING_PERCENT must be lower than CACHE_CRITICAL_PERCENT")
 
               usage = api_json(f"repos/{repository}/actions/cache/usage")
-              storage_limit = api_json(f"repos/{repository}/actions/cache/storage-limit")
               runs = api_json(f"repos/{repository}/actions/runs?per_page=1")
               rate_limit = api_json("rate_limit")
               repository_info = api_json(f"repos/{repository}")
-              assert usage is not None and storage_limit is not None
+              assert usage is not None
               assert runs is not None and rate_limit is not None and repository_info is not None
 
               full_name = require_string(repository_info, "full_name", "repository")
@@ -312,11 +316,6 @@ jobs:
 
               usage_count = require_nonnegative_int(usage, "active_caches_count", "cache usage")
               usage_size = require_nonnegative_int(usage, "active_caches_size_in_bytes", "cache usage")
-              max_cache_size_gb = require_nonnegative_int(
-                  storage_limit, "max_cache_size_gb", "cache storage limit"
-              )
-              if max_cache_size_gb == 0:
-                  raise ReportError("cache storage limit must be greater than zero")
               limit_size = max_cache_size_gb * 1_000_000_000
 
               total_runs = require_nonnegative_int(runs, "total_count", "workflow runs")

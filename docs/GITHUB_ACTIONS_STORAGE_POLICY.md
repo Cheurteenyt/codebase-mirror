@@ -10,8 +10,8 @@ cache state on its own.
   **Settings > Actions > General > Artifact and log retention**.
 - Dependency-cache retention must remain **7 days since last access** in
   **Settings > Actions > General > Cache settings**.
-- The cache storage limit is currently **10 GB**. The Quota Report reads the
-  effective limit from GitHub's API on every run; it does not assume 10 GB.
+- The cache storage limit is currently **10 GB**. The repository variable
+  `ACTIONS_CACHE_LIMIT_GB` must contain the same value (`10`).
 - GitHub may evict least-recently-accessed entries when the configured limit is
   exceeded. The repository does not add a second scheduled deletion mechanism.
 
@@ -27,6 +27,13 @@ maintainer must verify both settings after any GitHub settings change. The
 artifact/log value can be read with
 `GET /repos/{owner}/{repo}/actions/permissions/artifact-and-log-retention`;
 changing it remains a separate, explicit maintainer operation.
+
+The cache-limit endpoint also requires repository-administration access and is
+therefore deliberately unavailable to the read-only automatic `GITHUB_TOKEN`.
+After changing the effective limit, a maintainer must verify
+`GET /repos/{owner}/{repo}/actions/cache/storage-limit` with an owner token and
+update `ACTIONS_CACHE_LIMIT_GB` to the same positive integer. A missing or
+invalid variable makes the report fail closed instead of estimating capacity.
 
 ## Read-only observability
 
@@ -48,8 +55,8 @@ The step summary reports:
 
 - active cache count and bytes from the cache-usage endpoint;
 - count and bytes recomputed from a complete, validated, paginated cache list;
-- the effective GitHub storage limit, conservative usage percentage, and
-  remaining capacity;
+- the owner-verified configured storage limit, conservative usage percentage,
+  and remaining capacity;
 - distinct refs, refs that no longer exist, and the size attached to them;
 - dependency-cache entries not accessed during the seven-day cache window;
 - workflow-run count and remaining API rate limits.
