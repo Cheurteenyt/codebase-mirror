@@ -921,7 +921,10 @@ describe("SIG-R169-Phase-B-TEST-ENV-R4-01 — GITHUB_ACTIONS disables test hooks
     expect(existsSync(marker)).toBe(false);
 
     // The script should succeed with mirrored (hook didn't advance GitLab)
-    expect(result.status).toBe(0);
+    expect(
+      result.status,
+      `stdout:\n${result.stdout ?? ""}\nstderr:\n${result.stderr ?? ""}\noutputs:\n${JSON.stringify(outputs, null, 2)}\nspawn error:\n${result.error?.stack ?? "none"}`,
+    ).toBe(0);
     expect(outputs.final_result).toBe("mirrored");
     expect(outputs.push_attempted).toBe("true");
     expect(outputs.push_completed).toBe("true");

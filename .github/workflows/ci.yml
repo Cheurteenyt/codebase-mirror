@@ -204,7 +204,15 @@ jobs:
           version: v0.10.0
 
       - name: Test
-        run: npx vitest run
+        shell: bash
+        run: |
+          # The mirror runtime suite launches many short-lived Git processes.
+          # Keep it out of the general worker pool to avoid runner-level
+          # process contention while preserving fail-closed assertions.
+          npx vitest run --exclude tests/ci/r168-mirror-runtime.test.ts
+          npx vitest run tests/ci/r168-mirror-runtime.test.ts \
+            --maxWorkers=1 \
+            --no-file-parallelism
 
       # R90: Incremental benchmark with correctness invariants
       - name: Incremental benchmark invariants

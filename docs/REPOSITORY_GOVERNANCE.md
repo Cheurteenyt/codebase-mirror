@@ -189,7 +189,7 @@ that promise.
 
 | Setting | Status | Proof |
 |---------|--------|-------|
-| Dependabot version updates | ACTIVE | PR Dependabot #1 created; `.github/dependabot.yml` committed |
+| Dependabot version updates | DISABLED BY POLICY | `.github/dependabot.yml` sets `open-pull-requests-limit: 0` for every ecosystem so scheduled version PRs do not create persistent branches |
 | Dependency graph / vulnerability alerts | ACTIVE | Vulnerability-alert API enabled |
 | Dependabot security updates | ACTIVE | Repository security settings API |
 | Secret scanning | ACTIVE | Repository security settings API; zero open alerts at last audit |
@@ -210,6 +210,11 @@ Five Dependabot alerts still referenced versions older than the committed
 lockfile during the last audit. Do not dismiss them as fixed until GitHub has
 recomputed the dependency graph or the current manifest evidence has been
 reviewed again.
+
+Setting `open-pull-requests-limit: 0` disables scheduled version updates only.
+Dependabot security updates remain enabled and may create a temporary PR when a
+new vulnerable dependency is detected. After the security fix is merged or
+closed, branch deletion must return the repository to `main` only.
 
 ### Deferred
 
@@ -318,7 +323,7 @@ After any modification to GitHub repository settings:
 [ ] Variable `GITLAB_MIRROR_KEY_FINGERPRINT` present
 [ ] Variable `GITLAB_ED25519_HOST_FINGERPRINT` present
 [ ] No self-hosted runners configured
-[ ] Dependabot active (github-actions)
+[ ] Dependabot security updates active; scheduled version PR limit remains zero
 [ ] Default `GITHUB_TOKEN` permission read-only
 [ ] Actions PR creation is enabled only while Code Owner review is required
 [ ] Bot-created PR workflow runs are approved only after exact-diff review
