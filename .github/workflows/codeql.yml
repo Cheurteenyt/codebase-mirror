@@ -1,0 +1,145 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact lowercase main commit SHA that must be analyzed
+        required: true
+        type: string
+  schedule:
+    - cron: '23 3 * * 3'  # Wednesday 03:23 UTC
+
+# Deny every permission unless the analysis job explicitly requires it.
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Exact main SHA preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Validate dispatched main identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+
+          API_VERSION = "2026-03-10"
+          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
+
+          event = os.environ["EVENT_NAME"]
+          repository = os.environ["GH_REPOSITORY"]
+
+          def fail(message):
+              print(f"::error::{message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          if repository != EXPECTED_REPOSITORY:
+              fail("This exact-SHA gate is bound to Cheurteenyt/codebase-mirror.")
+
+          if event != "workflow_dispatch":
+              if event not in {"push", "pull_request", "schedule"}:
+                  fail(f"Unexpected CodeQL event: {event}")
+              print(f"Native {event} CodeQL event accepted; dispatch SHA gate not required.")
+              raise SystemExit(0)
+
+          ref = os.environ["EVENT_REF"]
+          event_sha = os.environ["EVENT_SHA"]
+          expected_sha = os.environ["EXPECTED_SHA"]
+          if ref != "refs/heads/main":
+              fail(f"Dispatched CodeQL must run on refs/heads/main, got: {ref}")
+          if not SHA_PATTERN.fullmatch(expected_sha):
+              fail("expected_sha must be an exact lowercase 40-character commit SHA.")
+          if event_sha != expected_sha:
+              fail("github.sha does not match the dispatched expected_sha.")
+
+          request = urllib.request.Request(
+              f"{os.environ['GH_API_URL'].rstrip('/')}/repos/{repository}/git/ref/heads/main",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": API_VERSION,
+                  "User-Agent": "codebase-mirror-codeql-exact-sha",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  main_ref = json.load(response)
+          except urllib.error.HTTPError as exc:
+              detail = exc.read().decode("utf-8", "replace")[:1000]
+              fail(f"GitHub main-ref API failed ({exc.code}): {detail}")
+          except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+              fail(f"GitHub main-ref API failed: {exc}")
+
+          main_object = main_ref.get("object") or {}
+          if (
+              main_ref.get("ref") != "refs/heads/main"
+              or main_object.get("type") != "commit"
+              or main_object.get("sha") != expected_sha
+          ):
+              fail("The live GitHub main ref does not resolve to expected_sha.")
+
+          print(f"Exact dispatched main SHA verified: {expected_sha}")
+          PY
+
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - javascript-typescript
+          - python
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          category: /language:${{ matrix.language }}

@@ -29,20 +29,20 @@ settings freeze protocol.
 | Restrict updates | OFF | No restriction on branch updates |
 | Require linear history | ON | No merge commits on `main` (squash-only) |
 | Require a pull request | ON | No direct pushes to `main` (except break-glass) |
-| Required approvals | 0 | Single maintainer; PR + checks still required |
-| Dismiss stale approvals | OFF | Not needed with 0 approvals |
+| Required approvals | 1 | Native human boundary against write-capable branch workflows |
+| Dismiss stale approvals | ON | Every new push invalidates the previous approval |
 | Require review from teams | OFF | No teams configured |
-| Require Code Owners | OFF | No CODEOWNERS file yet |
-| Require approval of most recent push | OFF | Not needed with 0 approvals |
+| Require Code Owners | ON | Root `CODEOWNERS` assigns all paths to `@Cheurteenyt` |
+| Require approval of most recent push | OFF | The deploy-key push actor is attributed to the sole owner; stale-review dismissal provides the exact-head boundary |
 | Require conversation resolution | ON | All conversations must be resolved before merge |
 | Allowed merge method | Squash only | Linear history + clean commit messages |
 | Require status checks | ON | CI must pass before merge |
 | Required checks | `Backend (v2)`, `Frontend (graph-ui)`, `npm pack + install + CLI smoke`, `Docker build + CLI + non-root smoke` | All four always-run CI jobs must be green |
 | Require branches up to date | ON | PR branch must be rebased on latest `main` |
 | Block force pushes | ON | No `--force` to `main` |
-| Require deployments to succeed | OFF | Not needed |
+| Require deployments to succeed | OFF | A `workflow_run` deployment resolves from `main`, not the candidate SHA; it would not add the promised GLM boundary |
 | Require signed commits | OFF | Not yet configured |
-| Require code scanning | OFF (deferred) | CodeQL not yet activated |
+| Require code scanning | OFF (observe first) | Pinned CodeQL workflow is active but is not a required check until stable |
 | Require code quality | OFF (deferred) | Not yet configured |
 | Restrict code coverage | OFF (deferred) | Not yet configured |
 | Automatic Copilot code review | OFF | Not configured |
@@ -54,17 +54,20 @@ settings freeze protocol.
 | `Mirror validated main` | `workflow_run` on CI success | No (post-merge) | Runs after merge to main |
 | `gitlab-passive-mirror` | Environment deployment | No (post-merge) | Mirror deployment record |
 | `Repository Health Report` | Weekly schedule | No | Informational only |
+| `CodeQL / Analyze (javascript-typescript)` | PR/main/schedule | No | Observe alerts before making it required |
+| `CodeQL / Analyze (python)` | PR/main/schedule | No | Observe alerts before making it required |
+| `GLM merge gate` | Successful exact-SHA GLM branch CI | No | Owner-reviewed integration orchestrator, not a status-check bypass |
 
 ## 3. Settings → General → Pull Requests
 
 | Setting | Value | Verification |
 |---------|-------|-------------|
-| Allow squash merging | ON | VERIFIED BY SCREENSHOT |
-| Allow merge commits | OFF | MANUAL VERIFICATION REQUIRED |
-| Allow rebase merging | OFF | MANUAL VERIFICATION REQUIRED |
-| Allow auto-merge | ON | VERIFIED BY SCREENSHOT |
-| Automatically delete head branches | ON | VERIFIED BY SCREENSHOT |
-| Always suggest updating pull request branches | ON | VERIFIED BY SCREENSHOT |
+| Allow squash merging | ON | VERIFIED BY API |
+| Allow merge commits | OFF | VERIFIED BY API |
+| Allow rebase merging | OFF | VERIFIED BY API |
+| Allow auto-merge | ON | VERIFIED BY API |
+| Automatically delete head branches | ON | VERIFIED BY API |
+| Always suggest updating pull request branches | ON | VERIFIED BY API |
 
 ## 4. Settings → General → Archives
 
@@ -88,11 +91,12 @@ not affecting normal single-branch pushes or mirror operations.
 
 | Setting | Expected | Verification |
 |---------|----------|-------------|
-| Default GITHUB_TOKEN permissions | Read-only | MANUAL VERIFICATION REQUIRED |
-| Allow GitHub Actions to create PRs | OFF | No maintained workflow needs `pull-requests: write` |
+| Default GITHUB_TOKEN permissions | Read-only | VERIFIED BY API |
+| Allow GitHub Actions to create and approve PRs | ON | Required only for the GLM PR broker; Actions bot approval cannot satisfy required Code Owner review |
 | Fork PR workflows | Approval required | MANUAL VERIFICATION REQUIRED |
 | Actions allowed | All actions, with full-length SHA pinning required | Authenticated GitHub API + workflow audit |
-| Artifact/log retention | 90 days recommended | MANUAL VERIFICATION REQUIRED |
+| Artifact/log retention | 7 days | VERIFIED BY API; dependency caches use their independent last-access policy |
+| PR workflows created by `GITHUB_TOKEN` | Owner approval required per run | GitHub safety behavior; inspect the exact diff before selecting **Approve workflows to run** |
 
 > **Note:** Verify these settings with an authenticated GitHub API call during
 > each governance audit. Settings without API coverage still require a manual
@@ -126,6 +130,47 @@ not affecting normal single-branch pushes or mirror operations.
 All deployment records for this environment are preserved as audit history.
 Do not delete the environment — it would destroy its secrets and rules.
 
+## 7b. Environment: `glm-merge-gate`
+
+| Setting | Value |
+|---------|-------|
+| Required reviewer | `Cheurteenyt` |
+| Prevent self-review | OFF |
+| Administrator bypass | OFF |
+| Wait timer | None |
+| Deployment branches | Custom policy: exact branch `main` |
+| Secrets | None |
+| Variables | None |
+
+This environment was created before the workflow reached `main`. It protects
+the canonical repository-owned job that squash-merges a qualified GLM pull
+request and dispatches exact post-merge checks. The ruleset separately requires
+an approval from the base-branch Code Owner and dismisses that approval after
+every push. The Actions bot can open the PR but cannot satisfy the Code Owner
+rule. See
+[GLM_GITHUB_OPERATIONS.md](GLM_GITHUB_OPERATIONS.md).
+
+### 7c. Residual GLM deploy-key boundary
+
+The repository-scoped SSH write key protects credential portability, not API
+isolation. A holder can push a branch workflow that explicitly requests wider
+ephemeral `GITHUB_TOKEN` permissions; the repository's read-only default is not
+a maximum. Consequently, z.ai and the deploy key are trusted for operational
+side effects outside `main`. Unexpected cache, run, ref, release, or API
+activity requires immediate key revocation and an Actions audit.
+
+The protected-`main` ruleset and exact `@Cheurteenyt` CODEOWNER review prevent
+an unreviewed integration. The protected merge environment is an explicit
+operator confirmation for the supported automation, but the ruleset does not
+make that environment an exclusive merge credential: after exact owner review,
+a branch workflow token can attempt the merge API directly. The separate
+main-only GitLab environment still prevents mirror-secret access.
+
+A stricter model in which the second confirmation is technically mandatory
+requires a separate staging repository or a narrowly permissioned GitHub App
+whose identity is pinned in the ruleset. Same-repository SSH alone cannot make
+that promise.
+
 ## 8. GitLab Contract
 
 | Rule | Status |
@@ -145,26 +190,26 @@ Do not delete the environment — it would destroy its secrets and rules.
 | Setting | Status | Proof |
 |---------|--------|-------|
 | Dependabot version updates | ACTIVE | PR Dependabot #1 created; `.github/dependabot.yml` committed |
+| Dependency graph / vulnerability alerts | ACTIVE | Vulnerability-alert API enabled |
+| Dependabot security updates | ACTIVE | Repository security settings API |
+| Secret scanning | ACTIVE | Repository security settings API; zero open alerts at last audit |
+| Push protection | ACTIVE | Repository security settings API |
+| Private vulnerability reporting | ACTIVE | Private-reporting API |
+| CodeQL | CONFIGURED | Pinned workflow for JavaScript/TypeScript and Python; first runs must be observed before ruleset promotion |
 
-### NOT Verified / Probably OFF
+### Not enabled or not promoted
 
 | Setting | Status | Note |
 |---------|--------|------|
-| Dependency graph | NOT VERIFIED | Capture showed "Enable" button |
-| Dependabot alerts | NOT VERIFIED | Capture showed "Enable" button |
-| Dependabot security updates | NOT VERIFIED | Capture showed "Enable" button |
-| Grouped security updates | NOT VERIFIED | Capture showed "Enable" button |
-| Secret scanning | NOT VERIFIED | MANUAL VERIFICATION REQUIRED |
-| Push protection | NOT VERIFIED | MANUAL VERIFICATION REQUIRED |
-| Private vulnerability reporting | NOT VERIFIED | Capture showed OFF |
-| CodeQL | NOT CONFIGURED | Not yet set up |
-| Copilot Autofix | NOT VERIFIED | Toggle visible but requires CodeQL for real scanning |
+| Secret scanning non-provider patterns | OFF | Optional; evaluate after baseline stabilization |
+| Secret validity checks | OFF | Optional; evaluate after baseline stabilization |
+| CodeQL required-check rule | DEFERRED | Promote only after stable successful runs and exact check names are observed |
+| Copilot Autofix | NOT VERIFIED | Evaluate only after CodeQL has produced a stable baseline |
 
-### Recommended (activate progressively after R169 stabilization)
-
-1. Dependency graph → Dependabot alerts → Dependabot security updates
-2. Secret scanning → Push protection
-3. CodeQL default setup → observe → fix alerts → then consider as required check
+Five Dependabot alerts still referenced versions older than the committed
+lockfile during the last audit. Do not dismiss them as fixed until GitHub has
+recomputed the dependency graph or the current manifest evidence has been
+reviewed again.
 
 ### Deferred
 
@@ -177,7 +222,8 @@ Do not delete the environment — it would destroy its secrets and rules.
 
 ## 10. Repository Settings Freeze
 
-After validation of the PR #2 baseline, repository settings are **frozen**.
+After validation of the current protected-`main` baseline, repository settings
+are **frozen**.
 
 Settings may only be modified for one of the following events:
 
@@ -213,6 +259,7 @@ feature/round branch
   → CI triggered by each v2/** checkpoint push; latest SHA green
   → GitHub Pull Request
   → required PR checks: Backend (v2) + Frontend (graph-ui) + package smoke + Docker smoke green
+  → exact-head approval from @Cheurteenyt as required Code Owner
   → conversations resolved
   → squash merge
   → branch automatically deleted
@@ -250,6 +297,8 @@ After any modification to GitHub repository settings:
 [ ] Ruleset `protect-main` is Active
 [ ] Target is `main`
 [ ] PR required before merge
+[ ] One approval required and dismissed on every push
+[ ] Code Owner review required; `* @Cheurteenyt` resolves from base `main`
 [ ] Backend + Frontend + Package Smoke + Docker Smoke are required checks
 [ ] Squash-only merge
 [ ] Force push blocked
@@ -260,6 +309,9 @@ After any modification to GitHub repository settings:
 [ ] Auto-merge ON (but use carefully)
 [ ] Push policy max 5 refs ON
 [ ] Environment `gitlab-passive-mirror` restricted to `main`
+[ ] Environment `glm-merge-gate` has reviewer `Cheurteenyt`
+[ ] `glm-merge-gate` administrator bypass OFF and exact `main` policy
+[ ] `glm-merge-gate` has no secret or variable
 [ ] Secret `GITLAB_MIRROR_SSH_PRIVATE_KEY` present and non-empty
 [ ] Variable `GITLAB_REPOSITORY_SSH_URL` present
 [ ] Variable `GITLAB_KNOWN_HOSTS` present
@@ -267,6 +319,11 @@ After any modification to GitHub repository settings:
 [ ] Variable `GITLAB_ED25519_HOST_FINGERPRINT` present
 [ ] No self-hosted runners configured
 [ ] Dependabot active (github-actions)
+[ ] Default `GITHUB_TOKEN` permission read-only
+[ ] Actions PR creation is enabled only while Code Owner review is required
+[ ] Bot-created PR workflow runs are approved only after exact-diff review
+[ ] GLM deploy key is treated as a trusted operational principal and revoked on unexpected API activity
+[ ] Artifact/log retention is 7 days
 [ ] No `pull_request_target` in any workflow without audit
 ```
 
@@ -277,6 +334,8 @@ After any modification to GitHub repository settings:
 - [RELEASE_POLICY.md](RELEASE_POLICY.md) — Release governance
 - [MAINTAINERS_GUIDE.md](../MAINTAINERS_GUIDE.md) — Development workflow and conventions
 - [RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md](RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md) — SSH wrapper for environments without native OpenSSH
+- [GLM_GITHUB_OPERATIONS.md](GLM_GITHUB_OPERATIONS.md) — GLM push, PR brokerage, owner review, and gated squash merge
+- [GITHUB_ACTIONS_STORAGE_POLICY.md](GITHUB_ACTIONS_STORAGE_POLICY.md) — Cache quota, retention, and exact-ID cleanup policy
 
 ## 16. Cross-host Signature Trust Boundary (SIG-R169)
 

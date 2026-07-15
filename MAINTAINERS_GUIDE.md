@@ -180,11 +180,30 @@ quota-report API call) must have their own job-level override.
   minus benchmark), npm package/install/CLI smoke, and Docker build/CLI/
   non-root smoke. It runs on pushes to `main`, pushes to `v2/**`, and PRs
   targeting `main`. Workflow-level `permissions: contents: read`.
+- **GLM checkpoint integration** (`.github/workflows/glm-pr-broker.yml` and
+  `.github/workflows/glm-merge-gate.yml`): pushes to `v2/glm/**` use the
+  repository-scoped SSH deploy key only. GitHub opens the PR, validates the
+  exact successful CI head without executing branch code under a write token,
+  requires an exact-head `@Cheurteenyt` CODEOWNER review, then waits for a
+  separate owner approval on the `glm-merge-gate` environment before the
+  supported exact-SHA squash-and-dispatch job. The CODEOWNER review is the hard
+  code-authorization boundary; the environment is an operational confirmation,
+  not an exclusive merge credential. See
+  [GLM_GITHUB_OPERATIONS.md](docs/GLM_GITHUB_OPERATIONS.md).
+  The same-repository write deploy key is not a contents-only sandbox: z.ai is
+  a trusted operational principal outside protected `main`, and unexplained
+  Actions/API activity requires immediate key revocation.
+- **Actions storage** (`.github/workflows/quota-report.yml`): read-only weekly
+  quota and stale-reference reporting. Artifact/log retention is seven days;
+  cache deletion remains a maintainer-only, exact-ID operation after the ref is
+  revalidated as absent. See
+  [GITHUB_ACTIONS_STORAGE_POLICY.md](docs/GITHUB_ACTIONS_STORAGE_POLICY.md).
 - **GitHub Actions mirror** (`.github/workflows/mirror-main-to-gitlab.yml`):
-  triggers on `workflow_run` of `CI` with `conclusion=success &&
-  event=push && head_branch=main`. Fast-forwards the validated SHA to
-  GitLab `main` with `-o ci.no_pipeline`. Uses the `gitlab-passive-mirror`
-  environment with `GITLAB_MIRROR_SSH_PRIVATE_KEY` secret and
+  triggers on `workflow_run` of `CI` with `conclusion=success`,
+  `head_branch=main`, and event `push` or an exact-SHA `workflow_dispatch`.
+  Fast-forwards the validated SHA to GitLab `main` with
+  `-o ci.no_pipeline`. Uses the `gitlab-passive-mirror` environment with
+  `GITLAB_MIRROR_SSH_PRIVATE_KEY` secret and
   `GITLAB_REPOSITORY_SSH_URL`, `GITLAB_KNOWN_HOSTS`,
   `GITLAB_MIRROR_KEY_FINGERPRINT`, and
   `GITLAB_ED25519_HOST_FINGERPRINT` variables.
@@ -483,8 +502,10 @@ Violating any of them is a regression:
    `github.event.workflow_run.head_sha`, not `main` implicitly.
 2. **fast-forward only** — the workflow verifies ancestry with
    `git merge-base --is-ancestor` before pushing.
-3. **main only** — the workflow triggers only when
-   `head_branch == 'main' && event == 'push'`.
+3. **main only** — the workflow triggers only when `head_branch == 'main'`
+   and the canonical CI event is `push` or an exact-SHA
+   `workflow_dispatch`. Dispatched runs must pass the canonical preflight and
+   still equal the live `main` ref before mirror credentials are materialized.
 4. **no GitLab pipelines** — the push uses `-o ci.no_pipeline`, and
    `.gitlab-ci.yml` enforces `workflow: rules: when never`.
 5. **no rollback** — if GitLab is already at a newer validated SHA, the

@@ -139,6 +139,10 @@ function runVerdict(envOverrides: Record<string, string>): VerdictResult {
     POST_VERIFY_RESULT: "success",
     CLEANUP_OUTCOME: "success",
     JOB_STATUS: "success",
+    // Native push is the historical default for this verdict matrix. Tests
+    // can override both fields to exercise the exact-main dispatch branch.
+    RUN_EVENT: "push",
+    DISPATCH_REVALIDATION_OUTCOME: "skipped",
     ...envOverrides,
   };
 
@@ -469,5 +473,40 @@ describe("R169 SIG Phase B verdict runtime — summary content", () => {
   it("summary always contains TRUSTED_VERIFIER_SHA", () => {
     const r = runVerdict({});
     expect(r.summary).toContain("15a732d91984e5b4ffa29b4e129ac0d6316c9fca");
+  });
+});
+
+describe("R169 SIG Phase B verdict runtime - trigger/main binding", () => {
+  it("exact workflow_dispatch revalidation permits SUCCESS", () => {
+    const r = runVerdict({
+      RUN_EVENT: "workflow_dispatch",
+      DISPATCH_REVALIDATION_OUTCOME: "success",
+      GITHUB_MAIN_SHA: TARGET_SHA,
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.verdict).toBe("SUCCESS");
+  });
+
+  it("failed workflow_dispatch revalidation is rejected", () => {
+    const r = runVerdict({
+      RUN_EVENT: "workflow_dispatch",
+      DISPATCH_REVALIDATION_OUTCOME: "failed",
+      GITHUB_MAIN_SHA: TARGET_SHA,
+    });
+
+    expect(r.exitCode).toBe(1);
+    expect(r.verdict).toBe("FAILED");
+  });
+
+  it("workflow_dispatch is rejected when main moved", () => {
+    const r = runVerdict({
+      RUN_EVENT: "workflow_dispatch",
+      DISPATCH_REVALIDATION_OUTCOME: "success",
+      GITHUB_MAIN_SHA: GITHUB_MAIN_NEWER,
+    });
+
+    expect(r.exitCode).toBe(1);
+    expect(r.verdict).toBe("FAILED");
   });
 });

@@ -1,0 +1,193 @@
+name: GLM pull request broker
+
+# GLM receives only a repository-scoped SSH deploy key. This workflow converts
+# a v2/glm/** checkpoint push into a PR without storing an API credential in
+# z.ai. It never checks out or executes branch-controlled code while its token
+# can write pull requests.
+
+on:
+  push:
+    branches:
+      - "v2/glm/**"
+
+permissions: {}
+
+concurrency:
+  group: glm-pr-broker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  broker:
+    name: Open or refresh the GLM pull request
+    if: >-
+      github.repository == 'Cheurteenyt/codebase-mirror' &&
+      github.ref_type == 'branch' &&
+      startsWith(github.ref_name, 'v2/glm/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Open or refresh the pull request through the GitHub API
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          GH_SERVER_URL: ${{ github.server_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_REF_NAME: ${{ github.ref_name }}
+          GH_HEAD_SHA: ${{ github.sha }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          API_VERSION = "2026-03-10"
+          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_PR_AUTHOR = "github-actions[bot]"
+          BRANCH_PATTERN = re.compile(
+              r"^v2/glm/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$"
+          )
+
+          token = os.environ["GH_TOKEN"]
+          api_url = os.environ["GH_API_URL"].rstrip("/")
+          server_url = os.environ["GH_SERVER_URL"].rstrip("/")
+          repository = os.environ["GH_REPOSITORY"]
+          branch = os.environ["GH_REF_NAME"]
+          head_sha = os.environ["GH_HEAD_SHA"]
+          run_id = os.environ["GH_RUN_ID"]
+
+          def fail(message):
+              print(f"::error::{message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          if repository != EXPECTED_REPOSITORY:
+              fail("This broker is bound to Cheurteenyt/codebase-mirror.")
+          if not BRANCH_PATTERN.fullmatch(branch):
+              fail("The pushed branch does not satisfy the v2/glm/** contract.")
+          if ".." in branch or "//" in branch or branch.endswith(("/", ".")):
+              fail("The pushed branch contains a forbidden ref-name sequence.")
+          if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+              fail("The push event does not contain an exact commit SHA.")
+
+          owner, _ = repository.split("/", 1)
+
+          def request(method, path, payload=None):
+              body = None
+              if payload is not None:
+                  body = json.dumps(payload, separators=(",", ":")).encode()
+              req = urllib.request.Request(
+                  f"{api_url}{path}",
+                  data=body,
+                  method=method,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                      "X-GitHub-Api-Version": API_VERSION,
+                      "User-Agent": "codebase-mirror-glm-pr-broker",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      raw = response.read()
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", "replace")[:1000]
+                  fail(f"GitHub API {method} {path} failed ({exc.code}): {detail}")
+              except urllib.error.URLError as exc:
+                  fail(f"GitHub API {method} {path} failed: {exc.reason}")
+              return json.loads(raw) if raw else None
+
+          query = urllib.parse.urlencode(
+              {
+                  "state": "open",
+                  "base": "main",
+                  "head": f"{owner}:{branch}",
+                  "per_page": "10",
+              }
+          )
+          pulls = request("GET", f"/repos/{repository}/pulls?{query}")
+          if len(pulls) > 1:
+              fail("More than one open PR targets main from this branch.")
+
+          workflow_url = f"{server_url}/{repository}/actions/runs/{run_id}"
+          pull_body = f"""## GLM checkpoint integration
+
+          This PR is maintained automatically from `{branch}`.
+
+          - Latest pushed head: `{head_sha}`
+          - Broker run: {workflow_url}
+          - Base branch: `main`
+
+          The Actions bot can open this PR but cannot satisfy its CODEOWNER
+          review. `Cheurteenyt` must authorize the exact head, then separately
+          approve the `glm-merge-gate` environment to release the supported
+          squash-and-dispatch job.
+
+          See `docs/GLM_GITHUB_OPERATIONS.md` for the complete trust model.
+          """
+          title_tail = branch.removeprefix("v2/glm/").replace("/", " / ")
+          title = f"GLM: {title_tail}"
+
+          if not pulls:
+              pull = request(
+                  "POST",
+                  f"/repos/{repository}/pulls",
+                  {
+                      "title": title,
+                      "head": branch,
+                      "base": "main",
+                      "body": pull_body,
+                      "draft": False,
+                      "maintainer_can_modify": True,
+                  },
+              )
+              operation = "opened"
+          else:
+              pull = pulls[0]
+              checks = {
+                  "base": pull["base"]["ref"] == "main",
+                  "head": pull["head"]["ref"] == branch,
+                  "repository": pull["head"]["repo"]["full_name"] == repository,
+                  "author": pull["user"]["login"] == EXPECTED_PR_AUTHOR,
+              }
+              failed = [name for name, ok in checks.items() if not ok]
+              if failed:
+                  fail("Existing PR identity mismatch: " + ", ".join(failed))
+
+              # Never replace newer evidence with an older concurrent run.
+              if pull["head"]["sha"] != head_sha:
+                  print("A newer branch head superseded this broker run.")
+                  raise SystemExit(0)
+
+              pull = request(
+                  "PATCH",
+                  f"/repos/{repository}/pulls/{pull['number']}",
+                  {"title": title, "body": pull_body, "base": "main"},
+              )
+              operation = "refreshed"
+
+          if pull["head"]["sha"] != head_sha:
+              fail("The PR head does not match the pushed SHA.")
+          if pull["user"]["login"] != EXPECTED_PR_AUTHOR:
+              fail("The PR author is not github-actions[bot].")
+
+          pull_url = pull["html_url"]
+          print(f"PR #{pull['number']} {operation}: {pull_url}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## GLM pull request broker\n\n")
+              summary.write(f"- Operation: `{operation}`\n")
+              summary.write(f"- Pull request: [#{pull['number']}]({pull_url})\n")
+              summary.write(f"- Exact head: `{head_sha}`\n")
+              summary.write("- Branch code executed with write token: `no`\n")
+          PY

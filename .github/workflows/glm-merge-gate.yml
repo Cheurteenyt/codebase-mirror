@@ -1,0 +1,552 @@
+name: GLM merge gate
+
+# A successful v2/glm/** push CI is necessary but never sufficient. The
+# read-only job below binds it to the bot-authored PR and an unchanged control
+# plane. A second job receives write permissions only after the owner reviews
+# the PR and approves the protected glm-merge-gate environment.
+# The exact CODEOWNER review is the enforceable code-authorization boundary.
+# The environment protects this canonical job but is not an exclusive merge
+# credential against another same-repository branch workflow token.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches:
+      - "v2/glm/**"
+
+permissions: {}
+
+concurrency:
+  # A pull_request CI completion must not cancel the authoritative push gate.
+  group: >-
+    glm-merge-gate-${{ github.event.workflow_run.event }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Qualify exact CI, PR, and control plane
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'v2/glm/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      candidate_sha: ${{ steps.qualify.outputs.candidate_sha }}
+      pr_number: ${{ steps.qualify.outputs.pr_number }}
+
+    steps:
+      - name: Validate exact candidate and protected paths
+        id: qualify
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          GH_SERVER_URL: ${{ github.server_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+        run: |
+          set -euo pipefail
+
+          # No checkout occurs. Pull-request-controlled values enter only as
+          # data through environment variables and API responses.
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          API_VERSION = "2026-03-10"
+          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_WORKFLOW_PATH = ".github/workflows/ci.yml"
+          EXPECTED_PR_AUTHOR = "github-actions[bot]"
+          BRANCH_PATTERN = re.compile(
+              r"^v2/glm/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$"
+          )
+
+          token = os.environ["GH_TOKEN"]
+          api_url = os.environ["GH_API_URL"].rstrip("/")
+          server_url = os.environ["GH_SERVER_URL"].rstrip("/")
+          repository = os.environ["GH_REPOSITORY"]
+          run_id = os.environ["RUN_ID"]
+          event = os.environ["RUN_EVENT"]
+          conclusion = os.environ["RUN_CONCLUSION"]
+          branch = os.environ["RUN_HEAD_BRANCH"]
+          candidate_sha = os.environ["RUN_HEAD_SHA"]
+          head_repository = os.environ["RUN_HEAD_REPOSITORY"]
+          workflow_id = os.environ["RUN_WORKFLOW_ID"]
+
+          def fail(message):
+              print(f"::error::{message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          if repository != EXPECTED_REPOSITORY or head_repository != repository:
+              fail("Only same-repository runs for Cheurteenyt/codebase-mirror qualify.")
+          if event != "push" or conclusion != "success":
+              fail("Only a successful branch-push CI run qualifies.")
+          if not BRANCH_PATTERN.fullmatch(branch):
+              fail("The CI head branch does not satisfy the v2/glm/** contract.")
+          if ".." in branch or "//" in branch or branch.endswith(("/", ".")):
+              fail("The CI head branch contains a forbidden ref-name sequence.")
+          if not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
+              fail("The CI run is not tied to an exact 40-character head SHA.")
+          if not run_id.isdecimal() or not workflow_id.isdecimal():
+              fail("The workflow_run identifiers are malformed.")
+
+          owner, _ = repository.split("/", 1)
+
+          def request(method, path, payload=None):
+              body = None
+              if payload is not None:
+                  body = json.dumps(payload, separators=(",", ":")).encode()
+              req = urllib.request.Request(
+                  f"{api_url}{path}",
+                  data=body,
+                  method=method,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                      "X-GitHub-Api-Version": API_VERSION,
+                      "User-Agent": "codebase-mirror-glm-merge-qualifier",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      raw = response.read()
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", "replace")[:1000]
+                  fail(f"GitHub API {method} {path} failed ({exc.code}): {detail}")
+              except urllib.error.URLError as exc:
+                  fail(f"GitHub API {method} {path} failed: {exc.reason}")
+              return json.loads(raw) if raw else None
+
+          run = request("GET", f"/repos/{repository}/actions/runs/{run_id}")
+          canonical_ci = request(
+              "GET", f"/repos/{repository}/actions/workflows/ci.yml"
+          )
+          run_path = run["path"].split("@", 1)[0]
+          run_head_repository = run.get("head_repository") or {}
+          run_checks = {
+              "id": str(run["id"]) == run_id,
+              "workflow_id": (
+                  str(run["workflow_id"]) == workflow_id
+                  and run["workflow_id"] == canonical_ci["id"]
+              ),
+              "path": run_path == EXPECTED_WORKFLOW_PATH,
+              "event": run["event"] == "push",
+              "status": run["status"] == "completed",
+              "conclusion": run["conclusion"] == "success",
+              "branch": run["head_branch"] == branch,
+              "sha": run["head_sha"] == candidate_sha,
+              "repository": run_head_repository.get("full_name") == repository,
+          }
+          failed_run_checks = [name for name, ok in run_checks.items() if not ok]
+          if failed_run_checks:
+              fail("CI workflow identity mismatch: " + ", ".join(failed_run_checks))
+
+          query = urllib.parse.urlencode(
+              {
+                  "state": "open",
+                  "base": "main",
+                  "head": f"{owner}:{branch}",
+                  "per_page": "10",
+              }
+          )
+          pulls = []
+          for attempt in range(1, 13):
+              pulls = request("GET", f"/repos/{repository}/pulls?{query}")
+              if len(pulls) > 1:
+                  fail("More than one open PR targets main from the CI head branch.")
+              if len(pulls) == 1:
+                  break
+              if attempt < 12:
+                  time.sleep(5)
+          else:
+              fail("The PR broker did not expose one open PR within 60 seconds.")
+          pull = pulls[0]
+          pr_checks = {
+              "open": pull["state"] == "open" and pull.get("merged_at") is None,
+              "ready": not pull["draft"],
+              "base": pull["base"]["ref"] == "main",
+              "head_branch": pull["head"]["ref"] == branch,
+              "head_sha": pull["head"]["sha"] == candidate_sha,
+              "head_repository": pull["head"]["repo"]["full_name"] == repository,
+              "author": pull["user"]["login"] == EXPECTED_PR_AUTHOR,
+          }
+          failed_pr_checks = [name for name, ok in pr_checks.items() if not ok]
+          if failed_pr_checks:
+              fail("PR eligibility mismatch: " + ", ".join(failed_pr_checks))
+
+          def is_protected(path):
+              return (
+                  path == ".gitmodules"
+                  or path == "AGENTS.md"
+                  or path.endswith("/AGENTS.md")
+                  or path.startswith(".github/")
+                  or path.startswith("scripts/ci/")
+              )
+
+          def protected_tree(commit_sha):
+              commit = request(
+                  "GET", f"/repos/{repository}/git/commits/{commit_sha}"
+              )
+              tree_identity = commit.get("tree") or {}
+              tree_sha = tree_identity.get("sha", "")
+              if commit.get("sha") != commit_sha or not re.fullmatch(
+                  r"[0-9a-f]{40}", tree_sha
+              ):
+                  fail("Git commit did not resolve to one exact tree SHA.")
+              tree = request(
+                  "GET", f"/repos/{repository}/git/trees/{tree_sha}?recursive=1"
+              )
+              if tree.get("truncated"):
+                  fail("Git tree response was truncated; refusing protected-path check.")
+              return {
+                  item["path"]: (item["mode"], item["type"], item["sha"])
+                  for item in tree["tree"]
+                  if is_protected(item["path"])
+              }
+
+          base_sha = pull["base"]["sha"]
+          if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+              fail("The PR base is not an exact commit SHA.")
+          base_control_plane = protected_tree(base_sha)
+          head_control_plane = protected_tree(candidate_sha)
+          if base_control_plane != head_control_plane:
+              changed = sorted(
+                  set(base_control_plane).symmetric_difference(head_control_plane)
+                  | {
+                      path
+                      for path in set(base_control_plane) & set(head_control_plane)
+                      if base_control_plane[path] != head_control_plane[path]
+                  }
+              )
+              fail("GLM PR changes protected control-plane paths: " + ", ".join(changed))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"candidate_sha={candidate_sha}\n")
+              output.write(f"pr_number={pull['number']}\n")
+
+          pull_url = pull["html_url"]
+          run_url = f"{server_url}/{repository}/actions/runs/{run_id}"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## GLM merge qualification\n\n")
+              summary.write(f"- Pull request: [#{pull['number']}]({pull_url})\n")
+              summary.write(f"- Successful push CI: [{run_id}]({run_url})\n")
+              summary.write(f"- Exact candidate: `{candidate_sha}`\n")
+              summary.write("- Owner review: required before environment approval\n")
+              summary.write("- Protected control-plane changes: `none`\n")
+              summary.write("- Privileged branch code executed: `no`\n")
+          PY
+
+  merge:
+    name: Owner-approved squash merge and exact dispatch
+    needs: qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment:
+      name: glm-merge-gate
+      url: https://github.com/${{ github.repository }}/pull/${{ needs.qualify.outputs.pr_number }}
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Revalidate, squash merge, and dispatch exact main checks
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.qualify.outputs.pr_number }}
+          CANDIDATE_SHA: ${{ needs.qualify.outputs.candidate_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+
+          # The approved job runs only repository-owned inline code. It never
+          # checks out the PR, restores its cache, or executes its artifacts.
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          API_VERSION = "2026-03-10"
+          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_WORKFLOW_PATH = ".github/workflows/ci.yml"
+          EXPECTED_PR_AUTHOR = "github-actions[bot]"
+          EXPECTED_REVIEWER = "Cheurteenyt"
+          BRANCH_PATTERN = re.compile(
+              r"^v2/glm/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$"
+          )
+          DECISIVE_REVIEW_STATES = {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}
+
+          token = os.environ["GH_TOKEN"]
+          api_url = os.environ["GH_API_URL"].rstrip("/")
+          repository = os.environ["GH_REPOSITORY"]
+          pr_number = os.environ["PR_NUMBER"]
+          candidate_sha = os.environ["CANDIDATE_SHA"]
+          run_id = os.environ["RUN_ID"]
+          branch = os.environ["RUN_HEAD_BRANCH"]
+
+          def fail(message):
+              print(f"::error::{message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          if repository != EXPECTED_REPOSITORY:
+              fail("The merge gate is bound to Cheurteenyt/codebase-mirror.")
+          if not pr_number.isdecimal() or not run_id.isdecimal():
+              fail("The validated PR or workflow run ID is malformed.")
+          if not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
+              fail("The validated candidate is not an exact commit SHA.")
+          if not BRANCH_PATTERN.fullmatch(branch):
+              fail("The validated head branch no longer satisfies v2/glm/**.")
+
+          def request(method, path, payload=None):
+              body = None
+              if payload is not None:
+                  body = json.dumps(payload, separators=(",", ":")).encode()
+              req = urllib.request.Request(
+                  f"{api_url}{path}",
+                  data=body,
+                  method=method,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                      "X-GitHub-Api-Version": API_VERSION,
+                      "User-Agent": "codebase-mirror-glm-merge-gate",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      raw = response.read()
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", "replace")[:1000]
+                  fail(f"GitHub API {method} {path} failed ({exc.code}): {detail}")
+              except urllib.error.URLError as exc:
+                  fail(f"GitHub API {method} {path} failed: {exc.reason}")
+              return json.loads(raw) if raw else None
+
+          def require_owner_approval():
+              reviews = []
+              for page in range(1, 11):
+                  batch = request(
+                      "GET",
+                      f"/repos/{repository}/pulls/{pr_number}/reviews"
+                      f"?per_page=100&page={page}",
+                  )
+                  reviews.extend(batch)
+                  if len(batch) < 100:
+                      break
+              else:
+                  fail("Review history exceeds the fail-closed pagination limit.")
+              decisive = [
+                  review
+                  for review in reviews
+                  if (review.get("user") or {}).get("login", "").casefold()
+                  == EXPECTED_REVIEWER.casefold()
+                  and review.get("state", "").upper() in DECISIVE_REVIEW_STATES
+              ]
+              if not decisive:
+                  fail("Cheurteenyt has not submitted a decisive PR review.")
+              latest = max(decisive, key=lambda review: int(review["id"]))
+              if latest.get("state", "").upper() != "APPROVED":
+                  fail("The latest decisive Cheurteenyt review is not APPROVED.")
+              if latest.get("commit_id") != candidate_sha:
+                  fail("The Cheurteenyt approval is stale for this candidate SHA.")
+              if not latest.get("submitted_at"):
+                  fail("The owner approval has no submission timestamp.")
+              return latest
+
+          # Re-read every mutable object after environment approval.
+          run = request("GET", f"/repos/{repository}/actions/runs/{run_id}")
+          canonical_ci = request(
+              "GET", f"/repos/{repository}/actions/workflows/ci.yml"
+          )
+          pull = request("GET", f"/repos/{repository}/pulls/{pr_number}")
+          run_path = run["path"].split("@", 1)[0]
+          run_head_repository = run.get("head_repository") or {}
+          post_approval_checks = {
+              "workflow": (
+                  run["workflow_id"] == canonical_ci["id"]
+                  and run_path == EXPECTED_WORKFLOW_PATH
+              ),
+              "run_success": (
+                  run["status"] == "completed"
+                  and run["conclusion"] == "success"
+                  and run["event"] == "push"
+              ),
+              "run_sha": run["head_sha"] == candidate_sha,
+              "run_branch": run["head_branch"] == branch,
+              "run_repository": run_head_repository.get("full_name") == repository,
+              "open": (
+                  pull["state"] == "open"
+                  and not pull.get("merged", False)
+                  and pull.get("merged_at") is None
+              ),
+              "ready": not pull["draft"],
+              "base": pull["base"]["ref"] == "main",
+              "head_branch": pull["head"]["ref"] == branch,
+              "head_sha": pull["head"]["sha"] == candidate_sha,
+              "head_repository": pull["head"]["repo"]["full_name"] == repository,
+              "author": pull["user"]["login"] == EXPECTED_PR_AUTHOR,
+          }
+          failed_checks = [
+              name for name, ok in post_approval_checks.items() if not ok
+          ]
+          if failed_checks:
+              fail("Post-approval state changed: " + ", ".join(failed_checks))
+
+          review = require_owner_approval()
+
+          def is_protected(path):
+              return (
+                  path == ".gitmodules"
+                  or path == "AGENTS.md"
+                  or path.endswith("/AGENTS.md")
+                  or path.startswith(".github/")
+                  or path.startswith("scripts/ci/")
+              )
+
+          def protected_tree(commit_sha):
+              commit = request(
+                  "GET", f"/repos/{repository}/git/commits/{commit_sha}"
+              )
+              tree_identity = commit.get("tree") or {}
+              tree_sha = tree_identity.get("sha", "")
+              if commit.get("sha") != commit_sha or not re.fullmatch(
+                  r"[0-9a-f]{40}", tree_sha
+              ):
+                  fail("Post-approval commit did not resolve to one exact tree SHA.")
+              tree = request(
+                  "GET", f"/repos/{repository}/git/trees/{tree_sha}?recursive=1"
+              )
+              if tree.get("truncated"):
+                  fail("Post-approval Git tree response was truncated.")
+              return {
+                  item["path"]: (item["mode"], item["type"], item["sha"])
+                  for item in tree["tree"]
+                  if is_protected(item["path"])
+              }
+
+          base_sha = pull["base"]["sha"]
+          if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+              fail("The post-approval PR base is not an exact commit SHA.")
+          base_control_plane = protected_tree(base_sha)
+          head_control_plane = protected_tree(candidate_sha)
+          if base_control_plane != head_control_plane:
+              changed = sorted(
+                  set(base_control_plane).symmetric_difference(head_control_plane)
+                  | {
+                      path
+                      for path in set(base_control_plane) & set(head_control_plane)
+                      if base_control_plane[path] != head_control_plane[path]
+                  }
+              )
+              fail(
+                  "Post-approval protected control plane changed: "
+                  + ", ".join(changed)
+              )
+
+          # Ensure both exact-SHA dispatch targets exist before the irreversible
+          # merge. Their workflow_dispatch input contracts are protected above.
+          for workflow_file, expected_path in (
+              ("ci.yml", ".github/workflows/ci.yml"),
+              ("codeql.yml", ".github/workflows/codeql.yml"),
+          ):
+              workflow = request(
+                  "GET", f"/repos/{repository}/actions/workflows/{workflow_file}"
+              )
+              if workflow.get("state") != "active" or workflow.get("path") != expected_path:
+                  fail(f"Dispatch target is unavailable or unexpected: {workflow_file}")
+
+          # Never derive immutable history from mutable PR metadata. A branch
+          # workflow with pull-request write access could otherwise rewrite the
+          # title after the exact-head code review without invalidating it.
+          merge_title = (
+              f"GLM: {branch.removeprefix('v2/glm/')} (#{pr_number})"
+          )
+          result = request(
+              "PUT",
+              f"/repos/{repository}/pulls/{pr_number}/merge",
+              {
+                  "sha": candidate_sha,
+                  "merge_method": "squash",
+                  "commit_title": merge_title,
+                  "commit_message": (
+                      "Owner-reviewed GLM integration.\n\n"
+                      f"Validated push CI run: {run_id}\n"
+                      f"Owner review ID: {review['id']}\n"
+                      f"Exact PR head: {candidate_sha}"
+                  ),
+              },
+          )
+          if result.get("merged") is not True:
+              fail("GitHub did not confirm the squash merge.")
+          merge_sha = result.get("sha", "")
+          if not re.fullmatch(r"[0-9a-f]{40}", merge_sha):
+              fail("GitHub returned an invalid squash merge SHA.")
+
+          # GITHUB_TOKEN merge events do not trigger ordinary push workflows.
+          # Wait until the authoritative main ref exposes exactly the merge
+          # result before dispatching CI and CodeQL with that immutable SHA.
+          main_sha = ""
+          for attempt in range(1, 11):
+              main_ref = request("GET", f"/repos/{repository}/git/ref/heads/main")
+              main_sha = (main_ref.get("object") or {}).get("sha", "")
+              if main_sha == merge_sha:
+                  break
+              if main_sha and main_sha != base_sha:
+                  fail("main moved to an unexpected SHA after squash merge.")
+              if attempt < 10:
+                  time.sleep(1)
+          else:
+              fail("main did not expose the exact squash SHA before dispatch.")
+
+          dispatch = {"ref": "main", "inputs": {"expected_sha": merge_sha}}
+          request(
+              "POST",
+              f"/repos/{repository}/actions/workflows/ci.yml/dispatches",
+              dispatch,
+          )
+          request(
+              "POST",
+              f"/repos/{repository}/actions/workflows/codeql.yml/dispatches",
+              dispatch,
+          )
+
+          print(f"Squash-merged PR #{pr_number} as {merge_sha}; exact checks dispatched")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Owner-approved GLM integration\n\n")
+              summary.write(f"- Pull request: `#{pr_number}`\n")
+              summary.write(f"- Exact approved head: `{candidate_sha}`\n")
+              summary.write(f"- Owner review ID: `{review['id']}`\n")
+              summary.write(f"- Squash commit / observed main: `{merge_sha}`\n")
+              summary.write("- CI dispatch expected SHA: exact squash commit\n")
+              summary.write("- CodeQL dispatch expected SHA: exact squash commit\n")
+              summary.write("- Branch code executed with write token: `no`\n")
+          PY

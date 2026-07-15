@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a reproducible defect in Codebase Memory.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not include credentials, private source code, or sensitive logs.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Package version or full Git commit SHA where the problem occurs.
+      placeholder: 0.75.0 or 5d6eadb16551...
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - V2 indexer or CLI
+        - Graph UI
+        - MCP server
+        - Obsidian synchronization
+        - V1 reference engine
+        - Packaging or Docker
+        - CI or repository automation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Node.js version, installation method, and relevant runtime details.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest deterministic sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Add minimal logs or screenshots after removing secrets and private project data.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I removed credentials, personal data, and private source code.
+          required: true
+        - label: This is not a private security report.
+          required: true

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/codebase-memory-logo.png" alt="Codebase Memory project logo" width="240">
+</p>
+
 # Codebase Memory V2
 
 > **Hybrid code intelligence** — native WASM indexer (112 languages) + human memory graph + Obsidian vault sync.

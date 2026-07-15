@@ -1,6 +1,6 @@
 # Documentation Index
 
-> **Last verified:** 0.74.0 / R168.2
+> **Last verified:** 0.75.0 / R169
 
 ## Current Documentation
 
@@ -23,6 +23,8 @@
 | [RELEASE_POLICY.md](RELEASE_POLICY.md) | Release governance: internal rounds, package versions, GitHub Releases |
 | [REPOSITORY_GOVERNANCE.md](REPOSITORY_GOVERNANCE.md) | GitHub settings: ruleset, environment, security, verification checklist |
 | [AI_COLLABORATION_PROTOCOL.md](AI_COLLABORATION_PROTOCOL.md) | External AI audits, implementation handoffs, branch checkpoints, and reset recovery |
+| [GLM_GITHUB_OPERATIONS.md](GLM_GITHUB_OPERATIONS.md) | Secure GLM 5.2 SSH checkpoints, automatic PR broker, and owner-approved squash merge |
+| [GITHUB_ACTIONS_STORAGE_POLICY.md](GITHUB_ACTIONS_STORAGE_POLICY.md) | Actions cache/artifact retention, quota reporting, thresholds, and safe cleanup procedure |
 
 ## Historical Documentation
 

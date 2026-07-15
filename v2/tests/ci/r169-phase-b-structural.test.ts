@@ -421,8 +421,10 @@ describe("R169 SIG Phase B — cleanup step (SIG-R169-Phase-B-CLEANUP)", () => {
 describe("R169 SIG Phase B — permissions and security (SIG-R169-Phase-B-PERMS)", () => {
   const workflow = readWorkflow();
 
-  it("permissions remain contents: read only", () => {
-    expect(workflow).toMatch(/permissions:\s*\n\s*contents:\s*read/);
+  it("permissions remain actions: read and contents: read only", () => {
+    expect(workflow).toMatch(
+      /permissions:\s*\n\s*actions:\s*read\s*\n\s*contents:\s*read/,
+    );
   });
 
   it("no new secrets referenced (only existing GITLAB_MIRROR_SSH_PRIVATE_KEY)", () => {

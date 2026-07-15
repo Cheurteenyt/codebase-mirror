@@ -17,10 +17,11 @@ name: Mirror validated GitHub main to GitLab
 #   2. Checkout pinned verifier + mirror runtime
 #   3. Verify signature (fail-closed JSON wrapper)
 #   4. Checkout TARGET_SHA (only if gate passed)
-#   5. Materialize SSH key (only if gate passed)
-#   6. Run the pinned mirror state machine from the trusted checkout
-#   7. Cleanup (always, id: cleanup)
-#   8. Final verdict + summary (always, LAST step, exits 1 on FAILED)
+#   5. Revalidate dispatched main immediately before credentials
+#   6. Materialize SSH key (only if gate passed)
+#   7. Run the pinned mirror state machine from the trusted checkout
+#   8. Cleanup (always, id: cleanup)
+#   9. Final verdict + summary (always, LAST step, exits 1 on FAILED)
 #
 # The cleanup runs BEFORE the final verdict so the verdict can require
 # steps.cleanup.outcome == success. The final verdict is the LAST step
@@ -47,6 +48,7 @@ on:
     branches: [main]
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -66,7 +68,8 @@ jobs:
     name: Mirror validated main
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
+      (github.event.workflow_run.event == 'push' ||
+       github.event.workflow_run.event == 'workflow_dispatch') &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
 
@@ -84,6 +87,17 @@ jobs:
       # ── Step 1: Validate workflow_run event identity ────────────────
       - name: Validate event identity
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
         run: |
           set -euo pipefail
 
@@ -119,6 +133,139 @@ jobs:
             echo "::error::TRUSTED_VERIFIER_SHA is not a valid 40-char hex SHA: $TRUSTED_VERIFIER_SHA"
             exit 1
           fi
+
+          # Re-read both the triggering run and the canonical workflow from
+          # GitHub. For workflow_dispatch, successful completion of the
+          # exact-SHA preflight plus live main parity is mandatory.
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+
+          API_VERSION = "2026-03-10"
+          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_WORKFLOW_NAME = "CI"
+          EXPECTED_WORKFLOW_PATH = ".github/workflows/ci.yml"
+          EXPECTED_PREFLIGHT_NAME = "Exact main SHA preflight"
+          SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
+
+          token = os.environ["GH_TOKEN"]
+          api_url = os.environ["GH_API_URL"].rstrip("/")
+          repository = os.environ["GH_REPOSITORY"]
+          run_id = os.environ["RUN_ID"]
+          event = os.environ["RUN_EVENT"]
+          conclusion = os.environ["RUN_CONCLUSION"]
+          branch = os.environ["RUN_HEAD_BRANCH"]
+          target_sha = os.environ["TARGET_SHA"]
+          payload_sha = os.environ["RUN_HEAD_SHA"]
+          head_repository = os.environ["RUN_HEAD_REPOSITORY"]
+          workflow_id = os.environ["RUN_WORKFLOW_ID"]
+
+          def fail(message):
+              print(f"::error::{message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          def request(path):
+              req = urllib.request.Request(
+                  f"{api_url}{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": API_VERSION,
+                      "User-Agent": "codebase-mirror-exact-ci-mirror",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", "replace")[:1000]
+                  fail(f"GitHub API GET {path} failed ({exc.code}): {detail}")
+              except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                  fail(f"GitHub API GET {path} failed: {exc}")
+
+          if repository != EXPECTED_REPOSITORY or head_repository != repository:
+              fail("The mirror is bound to same-repository codebase-mirror runs.")
+          if event not in {"push", "workflow_dispatch"}:
+              fail(f"Unsupported canonical CI event: {event}")
+          if conclusion != "success" or branch != "main":
+              fail("The canonical CI run must be a successful main run.")
+          if not SHA_PATTERN.fullmatch(target_sha) or payload_sha != target_sha:
+              fail("The workflow_run payload is not bound to one exact target SHA.")
+          if not run_id.isdecimal() or not workflow_id.isdecimal():
+              fail("The workflow_run identifiers are malformed.")
+
+          run = request(f"/repos/{repository}/actions/runs/{run_id}")
+          canonical_ci = request(
+              f"/repos/{repository}/actions/workflows/ci.yml"
+          )
+          run_path = str(run.get("path") or "").split("@", 1)[0]
+          run_head_repository = run.get("head_repository") or {}
+          run_repository = run.get("repository") or {}
+          checks = {
+              "run_id": str(run.get("id")) == run_id,
+              "workflow_id": (
+                  str(run.get("workflow_id")) == workflow_id
+                  and run.get("workflow_id") == canonical_ci.get("id")
+              ),
+              "workflow_name": canonical_ci.get("name") == EXPECTED_WORKFLOW_NAME,
+              "workflow_path": (
+                  canonical_ci.get("path") == EXPECTED_WORKFLOW_PATH
+                  and run_path == EXPECTED_WORKFLOW_PATH
+              ),
+              "workflow_active": canonical_ci.get("state") == "active",
+              "event": run.get("event") == event,
+              "status": run.get("status") == "completed",
+              "conclusion": run.get("conclusion") == "success",
+              "branch": run.get("head_branch") == "main",
+              "sha": run.get("head_sha") == target_sha,
+              "repository": run_repository.get("full_name") == repository,
+              "head_repository": run_head_repository.get("full_name") == repository,
+          }
+          failures = [name for name, passed in checks.items() if not passed]
+          if failures:
+              fail("Canonical CI workflow identity mismatch: " + ", ".join(failures))
+
+          if event == "workflow_dispatch":
+              jobs = request(
+                  f"/repos/{repository}/actions/runs/{run_id}/jobs"
+                  "?filter=latest&per_page=100"
+              )
+              job_list = jobs.get("jobs") or []
+              if jobs.get("total_count") != len(job_list) or len(job_list) > 100:
+                  fail("The dispatched CI job list is incomplete or inconsistent.")
+              exact_preflights = [
+                  job for job in job_list
+                  if job.get("name") == EXPECTED_PREFLIGHT_NAME
+              ]
+              if len(exact_preflights) != 1:
+                  fail("The dispatched CI run lacks one canonical exact-SHA preflight.")
+              preflight = exact_preflights[0]
+              if (
+                  preflight.get("status") != "completed"
+                  or preflight.get("conclusion") != "success"
+                  or preflight.get("head_sha") != target_sha
+              ):
+                  fail("The dispatched CI exact-SHA preflight did not validate target SHA.")
+
+              main_ref = request(
+                  f"/repos/{repository}/git/ref/heads/main"
+              )
+              main_object = main_ref.get("object") or {}
+              if (
+                  main_ref.get("ref") != "refs/heads/main"
+                  or main_object.get("type") != "commit"
+                  or main_object.get("sha") != target_sha
+              ):
+                  fail("Dispatched CI target is no longer the exact live main ref.")
+
+          print(
+              f"Canonical {event} CI run {run_id} verified for exact SHA {target_sha}."
+          )
+          PY
 
       # ── Step 2: Checkout trusted signature verifier (PINNED SHA) ────
       # SIG-R169 Phase B: Load the verifier and runtime from the immutable
@@ -283,7 +430,64 @@ jobs:
           persist-credentials: false
           path: target
 
-      # ── Step 5: Materialize SSH key + known_hosts ────────────────────
+      # ── Step 5: Revalidate dispatched main before credentials ────────
+      # Signature verification can retry. Close that time-of-check window
+      # before any GitLab secret is materialized, and fail if main moved.
+      - name: Revalidate dispatched main before credentials
+        id: dispatch_main_revalidation
+        if: github.event.workflow_run.event == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          API_VERSION = "2026-03-10"
+          repository = os.environ["GH_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          request = urllib.request.Request(
+              f"{os.environ['GH_API_URL'].rstrip('/')}/repos/{repository}/git/ref/heads/main",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": API_VERSION,
+                  "User-Agent": "codebase-mirror-pre-credential-main-check",
+              },
+          )
+
+          def fail(message):
+              print(f"::error::{message}", file=sys.stderr)
+              raise SystemExit(1)
+
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  main_ref = json.load(response)
+          except urllib.error.HTTPError as exc:
+              detail = exc.read().decode("utf-8", "replace")[:1000]
+              fail(f"GitHub main-ref API failed ({exc.code}): {detail}")
+          except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+              fail(f"GitHub main-ref API failed: {exc}")
+
+          main_object = main_ref.get("object") or {}
+          if (
+              main_ref.get("ref") != "refs/heads/main"
+              or main_object.get("type") != "commit"
+              or main_object.get("sha") != target_sha
+          ):
+              fail("Live main moved away from the dispatched exact target SHA.")
+          print(f"Dispatched main remains exact before credentials: {target_sha}")
+          PY
+
+      # ── Step 6: Materialize SSH key + known_hosts ────────────────────
       - name: Materialize SSH key and known_hosts
         id: materialize
         shell: bash
@@ -311,7 +515,7 @@ jobs:
           echo "ssh_key_file=$HOME/.ssh/gitlab_mirror_ed25519" >> "$GITHUB_OUTPUT"
           echo "known_hosts_file=$HOME/.ssh/known_hosts" >> "$GITHUB_OUTPUT"
 
-      # ── Step 6: Run PINNED mirror state machine ──────────────────────
+      # ── Step 7: Run PINNED mirror state machine ──────────────────────
       # The target checkout is only Git data. No script supplied by
       # TARGET_SHA is executed with the GitLab credential available.
       - name: Run pinned mirror state machine
@@ -338,7 +542,7 @@ jobs:
             exit "$SCRIPT_EXIT"
           fi
 
-      # ── Step 7: Cleanup (always, BEFORE final verdict) ───────────────
+      # ── Step 8: Cleanup (always, BEFORE final verdict) ───────────────
       # SIG-R169-Phase-B-CLEANUP: Cleanup runs BEFORE the final verdict
       # so the verdict can require steps.cleanup.outcome == success.
       # The final verdict is the LAST step and exits 1 on FAILED.
@@ -355,7 +559,7 @@ jobs:
             "${RUNNER_TEMP:-/tmp}/mirror-outputs.txt" \
             "${RUNNER_TEMP:-/tmp}/github-signature-outputs.json"
 
-      # ── Step 8: Final verdict + summary (always, LAST step) ──────────
+      # ── Step 9: Final verdict + summary (always, LAST step) ──────────
       # SIG-R169-Phase-B-FINAL: This step computes the effective verdict
       # and EXITS 1 on FAILED. The job goes red if the effective state
       # is FAILED, not just if an earlier step failed.
@@ -392,6 +596,9 @@ jobs:
           PUSH_ATTEMPTED: ${{ steps.mirror.outputs.push_attempted }}
           PUSH_COMPLETED: ${{ steps.mirror.outputs.push_completed }}
           POST_VERIFY_RESULT: ${{ steps.mirror.outputs.post_verify_result }}
+          # Trigger and exact-main revalidation
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          DISPATCH_REVALIDATION_OUTCOME: ${{ steps.dispatch_main_revalidation.outcome }}
           # Cleanup outcome
           CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
           JOB_STATUS: ${{ job.status }}
@@ -414,6 +621,20 @@ jobs:
             EXACT_PARITY="false"
           fi
 
+          # Native push runs retain the established descendant-aware
+          # concurrency semantics. GITHUB_TOKEN dispatch runs are stricter:
+          # the pre-credential check must have run successfully and the fresh
+          # main ref returned by the pinned runtime must still equal TARGET_SHA.
+          TRIGGER_MAIN_OK="false"
+          if [ "${RUN_EVENT:-}" = "push" ]; then
+            TRIGGER_MAIN_OK="true"
+          elif [ "${RUN_EVENT:-}" = "workflow_dispatch" ] \
+             && [ "${DISPATCH_REVALIDATION_OUTCOME:-}" = "success" ] \
+             && [ -n "${GITHUB_MAIN_SHA:-}" ] \
+             && [ "${GITHUB_MAIN_SHA}" = "${TARGET_SHA}" ]; then
+            TRIGGER_MAIN_OK="true"
+          fi
+
           # ── Determine operational verdict (SIG-R169-Phase-B-CONC) ──
           #
           # SUCCESS: exact target parity (mirrored or already-mirrored)
@@ -429,6 +650,7 @@ jobs:
           #   - ERROR_CATEGORY == none (or empty)
           #   - ERROR_PHASE == none (or empty)
           #   - GITHUB_MAIN_SHA non-empty
+          #   - dispatch pre-credential and final main parity, when dispatched
           #   - JOB_STATUS == success
           #   - CLEANUP_OUTCOME == success
           #
@@ -450,6 +672,7 @@ jobs:
              && [ -z "${ERROR_CATEGORY:-}" -o "${ERROR_CATEGORY:-}" = "none" ] \
              && [ -z "${ERROR_PHASE:-}" -o "${ERROR_PHASE:-}" = "none" ] \
              && [ -n "${GITHUB_MAIN_SHA:-}" ] \
+             && [ "${TRIGGER_MAIN_OK:-}" = "true" ] \
              && [ "${JOB_STATUS:-}" = "success" ] \
              && [ "${CLEANUP_OUTCOME:-}" = "success" ]; then
             MIRROR_INVARIANTS_OK="true"
@@ -529,10 +752,13 @@ jobs:
             echo "### Mirror result"
             echo
             echo "- Final result: \`${FINAL_RESULT:-not-run}\`"
+            echo "- Trigger event: \`${RUN_EVENT:-unknown}\`"
             echo "- Job status: \`$JOB_STATUS\`"
             echo "- Observed GitLab SHA: \`${OBSERVED_SHA:-unknown}\`"
             echo "- Re-read GitHub SHA: \`${GITHUB_MAIN_SHA:-unknown}\`"
             echo "- Exact target parity: \`$EXACT_PARITY\`"
+            echo "- Dispatch pre-credential check: \`${DISPATCH_REVALIDATION_OUTCOME:-not-applicable}\`"
+            echo "- Trigger/main invariant: \`$TRIGGER_MAIN_OK\`"
             echo "- Error category: \`${ERROR_CATEGORY:-none}\`"
             echo "- Error phase: \`${ERROR_PHASE:-none}\`"
             echo

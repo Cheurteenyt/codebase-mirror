@@ -37,18 +37,59 @@ GitHub Actions validates the pushed SHA.
 | Role | Responsibilities | Must not do |
 |------|------------------|-------------|
 | External web auditor | Inspect an exact SHA, identify evidence-backed findings, produce a new Markdown report | Claim to have edited files, silently rewrite an imported report, or declare CI green |
-| Implementation agent | Verify findings, implement minimal fixes, run local tests, maintain the handoff, commit and push checkpoints | Trust findings blindly, leave important work only local, or expose credentials |
-| Human maintainer | Transfer reports, register or revoke scoped SSH keys, open the single PR when desired, make product decisions | Put a private key in chat, a report, a commit, or a PR |
+| Implementation agent | Verify findings, implement minimal fixes, run local tests, maintain the handoff, commit and push checkpoints | Trust findings blindly, leave important work only local, expose credentials, or keep a GitHub API token in a reset-prone environment |
+| Human maintainer | Transfer reports, register or revoke scoped SSH keys, review gated integrations, and make product decisions | Put a private key in chat, a report, a commit, or a PR |
 | Integration reviewer | Compare the pushed diff, audit report, handoff, and CI; accept, reject, or defer findings | Mark a finding closed without a pushed commit and behavioral evidence |
 | GitHub Actions | Provide the authoritative validation result for pushed SHAs | Mirror feature branches to GitLab |
 
 The integration reviewer may be the maintainer, Codex, or another independent
 reviewer. No particular AI product is required by the protocol.
 
+### 3.1 Automated GLM GitHub profile
+
+GLM 5.2 sessions running in z.ai use the dedicated profile documented in
+`GLM_GITHUB_OPERATIONS.md`. GLM receives only a repository-scoped SSH deploy
+key and pushes `v2/glm/**` checkpoints. GitHub Actions opens the PR with a
+short-lived `GITHUB_TOKEN`; after exact-SHA branch-push CI succeeds, a separate
+`workflow_run` job provides the supported squash path after `Cheurteenyt`
+submits an `APPROVED` CODEOWNER review on that exact SHA and separately
+approves the protected `glm-merge-gate` environment.
+
+No PAT, GitHub App private key, merge credential, environment secret, or
+GitLab mirror credential is stored in z.ai or in the merge environment. The
+broker's Actions identity may open the PR but cannot satisfy the required
+`@Cheurteenyt` CODEOWNER review. Every new push dismisses the native approval,
+and the gate independently compares the owner review's `commit_id` with the
+candidate SHA. The privileged merge job never checks out or executes
+branch-controlled code, and the gate refuses to integrate any GLM change to
+the automated control-plane paths.
+
+This is a code-authorization boundary, not a full GitHub API sandbox. A write deploy
+key can push a branch workflow that requests wider ephemeral `GITHUB_TOKEN`
+permissions. The z.ai session and deploy key are therefore trusted for
+repository operations outside `main`; unexpected cache, run, ref, release, or
+API activity requires immediate key revocation. Isolating those side effects
+requires a separate staging repository or a contents-only GitHub App.
+
+The exact owner CODEOWNER review, stale-review dismissal, required checks,
+resolved conversations, and squash-only rule are the enforceable `main`
+boundary. After that exact head is approved, a branch workflow can technically
+request enough permission to call the merge API. Direct GLM merge remains
+unsupported and incident-worthy because it bypasses the repository-owned
+post-merge dispatch path. The environment is an operational confirmation for
+that supported path, not an exclusive merge authorization.
+
+Because a `GITHUB_TOKEN` merge suppresses the ordinary `push` workflow chain,
+the gate first proves that `main` equals the exact squash SHA, then dispatches
+CI and CodeQL with that SHA as mandatory input. The passive mirror consumes
+the successful exact-SHA CI dispatch.
+
 ## 4. One-round lifecycle
 
-At rest, the remote contains only `main`. During a round, use exactly one
-branch named `v2/r<n>-<short-name>` and one Pull Request.
+At rest, the remote contains only `main`. During a round, use exactly one work
+branch and one Pull Request. The standard branch form is
+`v2/r<n>-<short-name>`; the automated GLM profile must instead use
+`v2/glm/r<n>-<short-name>` so its broker and gated merge policy apply.
 
 1. Resolve the current baseline from `origin/main`; do not reuse a baseline
    copied from an older report.
@@ -59,7 +100,13 @@ branch named `v2/r<n>-<short-name>` and one Pull Request.
 4. Push the first checkpoint. Pushes to `v2/**` trigger the complete CI even
    when no PR exists. The latest pushed SHA must be green; older pending runs
    may be replaced by a newer checkpoint.
-5. Optionally open the single PR as a draft early. Keeping it until the end
+5. Under the automated GLM profile, the PR broker opens or refreshes the
+   single ready PR without a token in z.ai. Its merge gate consumes the
+   successful branch-push CI run and does not depend on the PR-opening event
+   starting another workflow. The owner reviews and approves the exact head,
+   then separately releases the supported merge job through its environment.
+   Under the standard profile,
+   optionally open the single PR as a draft early. Keeping it until the end
    provides a durable discussion and review location. If it is opened late,
    branch-push CI still protects the earlier checkpoints.
 6. Preflight each external report for repository identity, required metadata,
@@ -72,13 +119,17 @@ branch named `v2/r<n>-<short-name>` and one Pull Request.
 8. Run the final audit against the last code SHA. Import that report only in a
    trailing documentation commit, then archive the completed handoff under
    `docs/history/round-reports/` and remove `CURRENT_HANDOFF.md`.
-9. Squash-merge the PR, verify CI on `main`, verify the GitLab mirror at the
-   exact merge SHA, and delete the work branch.
+9. Squash-merge the PR, verify dispatched CI and CodeQL on the exact `main`
+   squash SHA, verify the GitLab mirror at that SHA, and delete the work branch.
 
-An open PR causes both branch-push and PR validation runs. This deliberate
-duplication is limited to the PR phase and keeps the required PR checks
-unambiguous. Do not add path filters or duplicate workflows with the same job
-names.
+An open PR causes both branch-push and PR validation runs. For PRs created or
+updated by the GLM broker's `GITHUB_TOKEN`, GitHub creates the PR workflow runs
+in an approval-required state. After reviewing the exact diff, the owner must
+select **Approve workflows to run** and wait for those duplicate checks before
+merge. The push CI remains the merge gate's qualification source. Under the
+standard human-created PR profile, the duplicate PR checks normally start
+without this extra approval. Do not add path filters or duplicate workflows
+with the same job names.
 
 ## 5. External audit contract
 
@@ -199,6 +250,12 @@ GitHub.
 
 - Never commit or paste a private key, token, key path, runner address, or
   environment-specific secret.
+- Never store a GitHub PAT or API-capable credential in a reset-prone
+  implementation environment. The GLM profile uses SSH only for push and keeps
+  the supported PR/merge orchestration in owner-controlled GitHub Actions.
+  This does not make a same-repository write deploy key contents-only: a pushed
+  branch workflow can request an ephemeral GitHub token, so the deploy-key
+  holder remains a trusted operational principal.
 - The implementation agent never receives the GitLab mirror private key.
 - A newly observed SSH host key is not trustworthy merely because a connection
   returned it. Verify the GitHub host fingerprint through a separate trusted

@@ -373,9 +373,13 @@ describe("R168 — Mirror runtime: remote behind (fast-forward)", () => {
     const sha2 = env.commit("R166");
     env.pushToGithub();
 
-    const { exitCode, outputs } = env.runMirror(sha2);
+    const result = env.runMirror(sha2);
+    const { exitCode, outputs } = result;
 
-    expect(exitCode).toBe(0);
+    expect(
+      exitCode,
+      `stdout:\n${result.stdout}\nstderr:\n${result.stderr}\noutputs:\n${JSON.stringify(outputs, null, 2)}`,
+    ).toBe(0);
     expect(outputs.final_result).toBe("mirrored");
     expect(outputs.observed_sha).toBe(sha2);
     expect(outputs.push_attempted).toBe("true");

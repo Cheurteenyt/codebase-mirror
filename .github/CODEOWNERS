@@ -1,0 +1,8 @@
+# Default owner and security-sensitive repository surfaces.
+* @Cheurteenyt
+
+/.github/ @Cheurteenyt
+/scripts/ci/ @Cheurteenyt
+/scripts/security/ @Cheurteenyt
+/SECURITY.md @Cheurteenyt
+/docs/AI_COLLABORATION_PROTOCOL.md @Cheurteenyt

@@ -124,17 +124,27 @@ describe("R166 — mirror-main-to-gitlab workflow contract", () => {
     expect(parsedMirrorWorkflow.on.workflow_run.branches).toEqual(["main"]);
   });
 
-  it("only fires when CI conclusion is success on push to main from same repository", () => {
+  it("only fires for successful canonical main push or exact-dispatch CI", () => {
     expect(mirror).toContain("github.event.workflow_run.conclusion == 'success'");
     expect(mirror).toContain("github.event.workflow_run.event == 'push'");
+    expect(mirror).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
     expect(mirror).toContain("github.event.workflow_run.head_branch == 'main'");
     expect(mirror).toContain(
       "github.event.workflow_run.head_repository.full_name == github.repository",
     );
   });
 
-  it("uses contents:read only (least privilege)", () => {
-    expect(mirror).toMatch(/permissions:\s*\n\s*contents:\s*read/);
+  it("uses actions:read and contents:read only (least privilege)", () => {
+    expect(parsedMirrorWorkflow.permissions).toEqual({
+      actions: "read",
+      contents: "read",
+    });
+  });
+
+  it("requires the canonical exact-SHA preflight for dispatched CI", () => {
+    expect(mirror).toContain('EXPECTED_PREFLIGHT_NAME = "Exact main SHA preflight"');
+    expect(mirror).toContain('event not in {"push", "workflow_dispatch"}');
+    expect(mirror).toContain("Dispatched CI target is no longer the exact live main ref.");
   });
 
   it("uses persist-credentials: false on checkout", () => {
@@ -431,8 +441,10 @@ describe("R167 — invariants preserved from R166", () => {
     expect(mirror).toContain("-o ci.no_pipeline");
   });
 
-  it("workflow still uses contents:read only", () => {
-    expect(mirror).toMatch(/permissions:\s*\n\s*contents:\s*read/);
+  it("workflow still uses only actions:read and contents:read", () => {
+    expect(mirror).toMatch(
+      /permissions:\s*\n\s*actions:\s*read\s*\n\s*contents:\s*read/,
+    );
   });
 
   it("workflow still uses persist-credentials: false", () => {
@@ -464,9 +476,10 @@ describe("R167 — invariants preserved from R166", () => {
     expect(mirror).toContain("DIVERGENCE");
   });
 
-  it("workflow still has the same workflow_run trigger filter", () => {
+  it("workflow retains the hardened push and exact-dispatch trigger filter", () => {
     expect(mirror).toContain("github.event.workflow_run.conclusion == 'success'");
     expect(mirror).toContain("github.event.workflow_run.event == 'push'");
+    expect(mirror).toContain("github.event.workflow_run.event == 'workflow_dispatch'");
     expect(mirror).toContain("github.event.workflow_run.head_branch == 'main'");
     expect(mirror).toContain(
       "github.event.workflow_run.head_repository.full_name == github.repository",

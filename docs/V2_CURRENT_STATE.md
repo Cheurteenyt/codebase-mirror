@@ -529,10 +529,12 @@ repository and GitLab a passive main-only mirror.
     creator for Graph UI changes)
 - **New mirror workflow created**:
   `.github/workflows/mirror-main-to-gitlab.yml` — triggers on
-  `workflow_run` of `CI` with `conclusion=success && event=push &&
-  head_branch=main && head_repository=github.repository`. Fast-forward
-  only, `-o ci.no_pipeline`, fails closed on divergence, no force-push,
-  no rollback. Removes SSH material at the end.
+  `workflow_run` of `CI` with `conclusion=success`, `head_branch=main`,
+  `head_repository=github.repository`, and event `push` or an exact-SHA
+  `workflow_dispatch`. The dispatch path is the R169 extension used after a
+  gated GLM `GITHUB_TOKEN` squash merge. Fast-forward only,
+  `-o ci.no_pipeline`, fails closed on divergence, no force-push, no rollback.
+  Removes SSH material at the end.
 - **Documentation rewritten**: `CONTRIBUTING.md`, `MAINTAINERS_GUIDE.md`,
   `docs/GITHUB_GITLAB_BRANCH_BRIDGE.md`, `docs/V2_CURRENT_STATE.md`.
 - **Regression tests added**:

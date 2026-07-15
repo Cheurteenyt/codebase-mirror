@@ -26,9 +26,9 @@
    merge into GitHub main
               │
               ▼
-   CI workflow on push/main
+   CI workflow on push/main, or exact-SHA dispatch after a gated GLM merge
               │
-              ▼  (workflow_run, conclusion=success, event=push, head_branch=main)
+              ▼  (workflow_run, success, event=push|workflow_dispatch, main)
    mirror-main-to-gitlab workflow
               │
               ▼  (fast-forward only, -o ci.no_pipeline)
@@ -83,7 +83,8 @@ after the new dedicated key is verified working on a probe branch.
 The `mirror-main-to-gitlab` workflow evaluates the following states when
 it runs. The state is determined by comparing three SHAs:
 
-- `TARGET_SHA` — the SHA validated by CI on push/main
+- `TARGET_SHA` — the exact `main` SHA validated by canonical CI, from a
+  native push or the gated GLM `workflow_dispatch`
 - `CURRENT_GITHUB_MAIN` — `origin/main` at mirror time
 - `REMOTE_SHA` — `gitlab/main` at mirror time
 
@@ -197,7 +198,8 @@ If the mirror workflow is broken or GitLab is severely divergent:
 4. Manually advance GitLab `main` to the current GitHub `main` SHA via
    an administrator action (one-time fast-forward SSH push).
 5. Re-enable the workflow.
-6. Trigger a CI run on `main` to fire a new `workflow_run` event.
+6. Trigger CI on `main` to fire a new `workflow_run` event. For a manual
+   dispatch, provide the current full lowercase `main` SHA as `expected_sha`.
 
 The rollback must never put GitLab back as source of truth.
 
@@ -946,7 +948,7 @@ Phase B adds three test files:
   MIRROR_INVARIANTS_OK common requirement, push coherence per verdict,
   executable verdict (exit 1 on FAILED, no FAILED path leaves job green),
   cleanup step (id, if:always, outcome referenced), permissions
-  (contents:read only, no new secrets).
+  (`actions:read` + `contents:read` only, no new secrets).
 
 - `v2/tests/ci/r169-phase-b-wrapper.test.ts` — 29 wrapper validation tests.
   **Extracts the REAL Python wrapper code from the workflow YAML** and
