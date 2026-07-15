@@ -3,6 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson, errorMessage, parseJsonBody } from '../helpers.js';
+import { isValidProjectName } from '../project-store-registry.js';
 import type { RouteContext } from '../types.js';
 
 /**
@@ -95,11 +96,15 @@ export async function routeAdrPost(
   const title = typeof body.title === 'string' ? body.title : `ADR-${Date.now().toString(36)}`;
   let adrProject = project;
   if (typeof body.project === 'string') {
-    if (!/^[a-zA-Z0-9_-]+$/.test(body.project) || body.project.startsWith('-')) {
+    if (!isValidProjectName(body.project)) {
       sendJson(res, 400, { error: 'Invalid project name in body' });
       return;
     }
-    adrProject = body.project;
+    if (ctx.resolveProjectName(body.project) !== project) {
+      sendJson(res, 409, { error: 'Body project must match the routed project' });
+      return;
+    }
+    adrProject = project;
   }
   try {
     const existing = ctx.humanStore.listNodes(adrProject, { label: 'ADR', limit: 500 })

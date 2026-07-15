@@ -36,7 +36,9 @@ export abstract class BaseTool implements ToolHandler {
   }
 
   protected json(obj: unknown) {
-    return this.text(JSON.stringify(obj, null, 2));
+    // MCP payloads are consumed as structured JSON, so indentation only adds
+    // transport bytes and model tokens without carrying information.
+    return this.text(JSON.stringify(obj));
   }
 
   protected error(message: string) {

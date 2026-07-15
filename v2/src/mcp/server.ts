@@ -3,7 +3,7 @@
 // We don't depend on @modelcontextprotocol/sdk to keep deps minimal.
 
 import { createInterface, Interface } from 'node:readline';
-import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { HumanMemoryStore } from '../human/store.js';
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { ToolHandler, ALL_TOOLS, TOOL_CLASSES } from './tools/index.js';
@@ -39,21 +39,32 @@ const JSONRPC_ERROR_CODES = {
 
 // MCP_MAX_LINE_LENGTH imported from constants.ts
 
-// Read version from package.json at runtime for single source of truth.
-let SERVER_VERSION: string;
-try {
-  const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'));
-  SERVER_VERSION = pkg.version || '0.2.3';
-} catch {
-  SERVER_VERSION = '0.2.3 (fallback)';
-  process.stderr.write('[cbm-v2 mcp] warning: could not read package.json version\n');
+// Read version from package.json at runtime for a fail-closed single source of
+// truth. A fabricated fallback version makes protocol diagnostics actively
+// misleading when an artifact is incomplete.
+const require = createRequire(import.meta.url);
+const packageJson = require('../../package.json') as { version?: unknown };
+if (typeof packageJson.version !== 'string' || packageJson.version.length === 0) {
+  throw new Error('Invalid package.json: a non-empty version is required');
 }
+const SERVER_VERSION = packageJson.version;
+
+const CURRENT_PROTOCOL_VERSION = '2025-11-25';
+const ANNOTATED_PROTOCOL_VERSIONS = new Set([
+  '2025-11-25',
+  '2025-06-18',
+]);
+const SUPPORTED_PROTOCOL_VERSIONS = new Set([
+  ...ANNOTATED_PROTOCOL_VERSIONS,
+  '2024-11-05',
+]);
 
 export class McpServer {
   private rl: Interface;
   private handlers: Map<string, ToolHandler & { definition: any }>;
   private pending: Set<Promise<void>> = new Set();
   private initialized = false;
+  private negotiatedProtocolVersion: string | undefined;
 
   constructor(private opts: McpServerOptions) {
     this.rl = createInterface({ input: process.stdin, terminal: false, crlfDelay: Infinity });
@@ -121,19 +132,14 @@ export class McpServer {
       return;
     }
 
-    // Handle batch requests (array of requests).
+    // MCP removed JSON-RPC batching in 2025-06-18. This compact server does
+    // not implement the optional legacy 2025-03-26 batch response shape
+    // either; in particular, initialize must never appear in a batch.
     if (Array.isArray(parsed)) {
-      if (parsed.length === 0) {
-        this.sendResponse(null, {
-          code: JSONRPC_ERROR_CODES.INVALID_REQUEST,
-          message: 'Invalid Request: batch array is empty',
-        });
-        return;
-      }
-      // Process each item sequentially (MCP doesn't strictly require parallel).
-      for (const item of parsed) {
-        await this.handleLine(JSON.stringify(item));
-      }
+      this.sendResponse(null, {
+        code: JSONRPC_ERROR_CODES.INVALID_REQUEST,
+        message: 'Invalid Request: JSON-RPC batching is not supported',
+      });
       return;
     }
 
@@ -158,6 +164,14 @@ export class McpServer {
 
     // Handle notifications.
     if (req.method === 'notifications/initialized') {
+      // The initialized notification only completes an initialize handshake;
+      // it must never create one. Without this guard, a client could send the
+      // notification first and immediately gain access to tools/call without
+      // negotiating a protocol version or receiving server capabilities.
+      if (this.negotiatedProtocolVersion === undefined) {
+        process.stderr.write('[cbm-v2 mcp] ignoring notifications/initialized received before initialize\n');
+        return;
+      }
       this.initialized = true;
       return; // no response
     }
@@ -174,8 +188,15 @@ export class McpServer {
 
     // Handle requests.
     if (req.method === 'initialize') {
+      const requestedVersion = typeof req.params?.protocolVersion === 'string'
+        ? req.params.protocolVersion
+        : CURRENT_PROTOCOL_VERSION;
+      const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.has(requestedVersion)
+        ? requestedVersion
+        : CURRENT_PROTOCOL_VERSION;
+      this.negotiatedProtocolVersion = protocolVersion;
       this.sendResult(req.id, {
-        protocolVersion: '2024-11-05',
+        protocolVersion,
         capabilities: {
           tools: { listChanged: false },
         },
@@ -193,10 +214,13 @@ export class McpServer {
     }
 
     if (req.method === 'tools/list') {
+      const includeAnnotations = this.negotiatedProtocolVersion === undefined
+        || ANNOTATED_PROTOCOL_VERSIONS.has(this.negotiatedProtocolVersion);
       const tools = ALL_TOOLS.map((t) => ({
         name: t.name,
         description: t.description,
         inputSchema: t.inputSchema,
+        ...(includeAnnotations ? { annotations: t.annotations } : {}),
       }));
       this.sendResult(req.id, { tools });
       return;

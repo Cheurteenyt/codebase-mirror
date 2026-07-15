@@ -84,7 +84,7 @@ Total: 5+ calls, ~4600 tokens
 Agent: prepare_edit_context(file_path="src/auth/login.ts")
 → V2 returns: code nodes, dependencies, bugs, ADRs, refactors,
   conventions, blast radius, risk score, graph freshness, recommendation
-Total: 1 call, ~1500 tokens (-67%)
+Total: 1 call, ~1500 tokens (-67% historical v0.15.9 estimate; not a measured tokenizer result)
 ```
 
 ### Smart Recommendations
@@ -94,7 +94,7 @@ Total: 1 call, ~1500 tokens (-67%)
 ```json
 {
   "recommendations": [
-    "Refresh the code graph: 47 files modified. Run cbm index_repository.",
+    "Refresh the code graph: 47 files modified. Run cbm-v2 index --project <name> --root <path>.",
     "2 open bug(s) — review before making changes.",
     "Documentation coverage is 35% — 8 critical modules undocumented."
   ]

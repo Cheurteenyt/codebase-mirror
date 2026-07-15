@@ -18,10 +18,12 @@ on:
 permissions: {}
 
 concurrency:
-  # A pull_request CI completion must not cancel the authoritative push gate.
+  # Once the privileged job has started, it may already have performed the
+  # irreversible squash merge. Never let a later CI completion cancel the
+  # post-merge exact-SHA dispatches; same-branch runs queue instead.
   group: >-
     glm-merge-gate-${{ github.event.workflow_run.event }}-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   qualify:

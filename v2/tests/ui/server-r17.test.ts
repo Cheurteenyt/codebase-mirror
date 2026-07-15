@@ -11,13 +11,20 @@ const TEST_PROJECT = 'r17-test-' + Date.now().toString(36);
 let server: UiServer;
 let port: number;
 let baseUrl: string;
+let csrfToken: string;
 
 function fetchJson(path: string, options?: { method?: string; body?: unknown }): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const url = `${baseUrl}${path}`;
     const opts: RequestInit = {
       method: options?.method ?? 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      headers: options?.method === 'POST'
+        ? {
+            'Content-Type': 'application/json',
+            'Sec-Fetch-Site': 'none',
+            'X-CBM-CSRF': csrfToken,
+          }
+        : { 'Content-Type': 'application/json' },
     };
     if (options?.body !== undefined) {
       opts.body = JSON.stringify(options.body);
@@ -32,18 +39,19 @@ function fetchJson(path: string, options?: { method?: string; body?: unknown }):
 }
 
 describe('R17: UiServer new endpoints', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     // Find a free port by trying a high random port.
     port = 9800 + Math.floor(Math.random() * 100);
     server = new UiServer({ project: TEST_PROJECT, port });
-    server.start();
+    await server.start();
     baseUrl = `http://127.0.0.1:${port}`;
-    // Wait a moment for the server to start.
-    return new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 300));
+    const bootstrap = await fetch(`${baseUrl}/api/bootstrap`).then((res) => res.json());
+    csrfToken = bootstrap.csrf_token;
   });
 
-  afterAll(() => {
-    server.stop();
+  afterAll(async () => {
+    await server.stop();
     // Clean up the test human DB.
     const dbPath = defaultHumanDbPath(TEST_PROJECT);
     if (existsSync(dbPath)) {
@@ -107,7 +115,11 @@ describe('R17: UiServer new endpoints', () => {
       // Send raw invalid JSON
       const res = await fetch(`${baseUrl}/api/adr`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Sec-Fetch-Site': 'none',
+          'X-CBM-CSRF': csrfToken,
+        },
         body: 'not json',
       });
       const body = await res.json().catch(() => ({}));
@@ -263,23 +275,23 @@ describe('R17: UiServer new endpoints', () => {
     });
   });
 
-  describe('POST /api/process-kill', () => {
-    it('rejects killing the UI server itself', async () => {
+  describe('owned process termination', () => {
+    it('removes the arbitrary PID endpoint', async () => {
       const res = await fetchJson('/api/process-kill', {
         method: 'POST',
         body: { pid: process.pid },
       });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain('Cannot kill the UI server');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toContain('Unknown API endpoint');
     });
 
-    it('rejects invalid pid', async () => {
-      const res = await fetchJson('/api/process-kill', {
+    it('rejects an unknown index job ID', async () => {
+      const res = await fetchJson('/api/index-jobs/not-owned/terminate', {
         method: 'POST',
-        body: { pid: -1 },
+        body: {},
       });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain('positive number');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toContain('not found');
     });
   });
 
@@ -313,8 +325,8 @@ describe('R17: UiServer new endpoints', () => {
         method: 'POST',
         body: { name: TEST_PROJECT },
       });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toContain('Cannot delete the currently active project');
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain('open store');
     });
   });
 

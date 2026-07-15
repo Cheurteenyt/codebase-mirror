@@ -1,6 +1,6 @@
 // graph-ui/src/components/ProjectCard.test.tsx
 // R46 (F6): regression test for the corrupt-state disable gate.
-// When project.status === "corrupt", the View Graph button must be disabled
+// When project.status === "corrupt", the Open project button must be disabled
 // and clicking it must NOT call onSelect.
 
 import { describe, it, expect, vi } from "vitest";
@@ -18,12 +18,12 @@ const base: Project = {
 };
 
 describe("ProjectCard corrupt-state gate", () => {
-  it("disables View Graph button and shows warning when status is 'corrupt'", () => {
+  it("disables Open project button and shows warning when status is 'corrupt'", () => {
     const onSelect = vi.fn();
     const { getByRole, getByText } = render(
       <ProjectCard project={{ ...base, status: "corrupt" }} onSelect={onSelect} />,
     );
-    const btn = getByRole("button", { name: "View Graph" }) as HTMLButtonElement;
+    const btn = getByRole("button", { name: "Open project" }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(getByText(/corrupt/i)).toBeTruthy();
     fireEvent.click(btn);
@@ -35,7 +35,7 @@ describe("ProjectCard corrupt-state gate", () => {
     const { getByRole } = render(
       <ProjectCard project={base} onSelect={onSelect} />,
     );
-    fireEvent.click(getByRole("button", { name: "View Graph" }));
+    fireEvent.click(getByRole("button", { name: "Open project" }));
     expect(onSelect).toHaveBeenCalledWith("demo");
   });
 });

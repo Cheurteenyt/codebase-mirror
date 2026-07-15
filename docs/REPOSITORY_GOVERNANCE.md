@@ -1,7 +1,7 @@
 # Repository Governance — Codebase Memory V2
 
 > **Status:** current
-> **Last verified:** 0.75.0 / R169
+> **Last verified:** 0.76.0 / 2026-07-15 audit
 
 This document is the source of truth for GitHub repository settings that
 are NOT visible in the Git repository itself. It covers branch protection,
@@ -37,12 +37,12 @@ settings freeze protocol.
 | Require conversation resolution | ON | All conversations must be resolved before merge |
 | Allowed merge method | Squash only | Linear history + clean commit messages |
 | Require status checks | ON | CI must pass before merge |
-| Required checks | `Backend (v2)`, `Frontend (graph-ui)`, `npm pack + install + CLI smoke`, `Docker build + CLI + non-root smoke` | All four always-run CI jobs must be green |
+| Required checks | `Backend (v2)`, `Frontend (graph-ui)`, `npm pack + install + CLI smoke`, `Docker build + CLI + non-root smoke` | Four branch-protected checks; the additional Windows smoke must also be green before merge |
 | Require branches up to date | ON | PR branch must be rebased on latest `main` |
 | Block force pushes | ON | No `--force` to `main` |
 | Require deployments to succeed | OFF | A `workflow_run` deployment resolves from `main`, not the candidate SHA; it would not add the promised GLM boundary |
 | Require signed commits | OFF | Not yet configured |
-| Require code scanning | OFF (observe first) | Pinned CodeQL workflow is active but is not a required check until stable |
+| Require code scanning | OFF (observe first) | Successful CodeQL PR and push runs have been observed, but the checks are not promoted until they remain stable |
 | Require code quality | OFF (deferred) | Not yet configured |
 | Restrict code coverage | OFF (deferred) | Not yet configured |
 | Automatic Copilot code review | OFF | Not configured |
@@ -54,8 +54,8 @@ settings freeze protocol.
 | `Mirror validated main` | `workflow_run` on CI success | No (post-merge) | Runs after merge to main |
 | `gitlab-passive-mirror` | Environment deployment | No (post-merge) | Mirror deployment record |
 | `Repository Health Report` | Weekly schedule | No | Informational only |
-| `CodeQL / Analyze (javascript-typescript)` | PR/main/schedule | No | Observe alerts before making it required |
-| `CodeQL / Analyze (python)` | PR/main/schedule | No | Observe alerts before making it required |
+| `CodeQL / Analyze (javascript-typescript)` | PR/main/schedule | No | Successful runs observed; keep non-required until the baseline is stable |
+| `CodeQL / Analyze (python)` | PR/main/schedule | No | Successful runs observed; keep non-required until the baseline is stable |
 | `GLM merge gate` | Successful exact-SHA GLM branch CI | No | Owner-reviewed integration orchestrator, not a status-check bypass |
 
 ## 3. Settings → General → Pull Requests
@@ -189,13 +189,13 @@ that promise.
 
 | Setting | Status | Proof |
 |---------|--------|-------|
-| Dependabot version updates | DISABLED BY POLICY | `.github/dependabot.yml` sets `open-pull-requests-limit: 0` for every ecosystem so scheduled version PRs do not create persistent branches |
+| Dependabot version updates | ACTIVE, BOUNDED | Grouped weekly minor/patch PRs for GitHub Actions, V2, Graph UI, and Docker; semver-major updates are ignored; per-ecosystem limits prevent update floods |
 | Dependency graph / vulnerability alerts | ACTIVE | Vulnerability-alert API enabled |
 | Dependabot security updates | ACTIVE | Repository security settings API |
 | Secret scanning | ACTIVE | Repository security settings API; zero open alerts at last audit |
 | Push protection | ACTIVE | Repository security settings API |
 | Private vulnerability reporting | ACTIVE | Private-reporting API |
-| CodeQL | CONFIGURED | Pinned workflow for JavaScript/TypeScript and Python; first runs must be observed before ruleset promotion |
+| CodeQL | CONFIGURED, RUNS OBSERVED | Pinned workflow for JavaScript/TypeScript and Python; successful PR and push runs were observed on 2026-07-15 |
 
 ### Not enabled or not promoted
 
@@ -203,18 +203,21 @@ that promise.
 |---------|--------|------|
 | Secret scanning non-provider patterns | OFF | Optional; evaluate after baseline stabilization |
 | Secret validity checks | OFF | Optional; evaluate after baseline stabilization |
-| CodeQL required-check rule | DEFERRED | Promote only after stable successful runs and exact check names are observed |
+| CodeQL required-check rule | DEFERRED | Promote only after successful runs remain stable and the intended ruleset check names are confirmed |
 | Copilot Autofix | NOT VERIFIED | Evaluate only after CodeQL has produced a stable baseline |
 
-Five Dependabot alerts still referenced versions older than the committed
-lockfile during the last audit. Do not dismiss them as fixed until GitHub has
-recomputed the dependency graph or the current manifest evidence has been
-reviewed again.
+The 2026-07-15 GitHub API recheck reported **zero open Dependabot alerts** and
+zero open code-scanning alerts. Successful CodeQL runs were observed for both a
+pull request (run `29406001523`) and the push of
+`9453537d837960e6d3d8c62075fe36a95b34e423` (run `29406107533`). These remote
+observations describe the committed GitHub baseline; they do not validate
+uncommitted working-tree changes.
 
-Setting `open-pull-requests-limit: 0` disables scheduled version updates only.
-Dependabot security updates remain enabled and may create a temporary PR when a
-new vulnerable dependency is detected. After the security fix is merged or
-closed, branch deletion must return the repository to `main` only.
+Scheduled version updates are grouped and bounded, with semver-major updates
+explicitly ignored. Major dependency changes remain manual migrations, while
+security updates can still create an urgent
+temporary PR. Dependabot branches are deleted after merge or closure so the
+repository returns to its `main`-only persistent-branch policy.
 
 ### Deferred
 
@@ -288,8 +291,9 @@ Direct push to `main` is NOT the normal workflow. In an emergency:
 
 Auto-merge is enabled at the repository level but must be used carefully:
 
-- Do NOT activate auto-merge until all four always-run CI jobs are green
-- Auto-merge is appropriate only while all four checks remain required
+- Do NOT activate auto-merge until all five validation jobs are green
+- Auto-merge is appropriate only while the four protected-branch checks remain
+  required and the Windows smoke is also green
   and stable
 - Never use `Merge without waiting for requirements to be met` outside
   a documented break-glass
@@ -323,7 +327,8 @@ After any modification to GitHub repository settings:
 [ ] Variable `GITLAB_MIRROR_KEY_FINGERPRINT` present
 [ ] Variable `GITLAB_ED25519_HOST_FINGERPRINT` present
 [ ] No self-hosted runners configured
-[ ] Dependabot security updates active; scheduled version PR limit remains zero
+[ ] Dependabot security updates active; scheduled version PRs remain grouped and bounded; open alerts rechecked
+[ ] CodeQL PR and push runs observed; required-check promotion remains explicitly deferred
 [ ] Default `GITHUB_TOKEN` permission read-only
 [ ] Actions PR creation is enabled only while Code Owner review is required
 [ ] Bot-created PR workflow runs are approved only after exact-diff review

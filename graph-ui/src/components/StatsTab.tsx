@@ -1,11 +1,6 @@
-// graph-ui/src/components/StatsTab.tsx
-// V2: Project list with health dots, ADR button, and create-index modal.
-// Adapted from V1 to use V2 API client.
-
+import { FolderSearch, RefreshCw, Sparkles } from "lucide-react";
 import { useProjects } from "../hooks/useProjects";
 import { ProjectCard } from "./ProjectCard";
-
-
 
 interface StatsTabProps {
   onSelectProject: (project: string) => void;
@@ -15,64 +10,46 @@ export function StatsTab({ onSelectProject }: StatsTabProps) {
   const { projects, loading, error, refresh } = useProjects();
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="w-8 h-8 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin" />
-      </div>
-    );
+    return <div className="grid h-full place-items-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-300/20 border-t-cyan-300" /></div>;
   }
 
-  // R43 (M5): error state had no retry button — dead-end UI. The Refresh
-  // button only appeared in the success branch, so an initial-fetch failure
-  // required switching tabs to recover. Now the error branch has a Retry.
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <p className="text-red-400 text-sm mb-3">{error}</p>
-          <button
-            onClick={refresh}
-            className="px-4 py-2 rounded-lg bg-white/[0.04] text-foreground/60 hover:bg-white/[0.08] text-[12px]"
-          >
-            Retry
-          </button>
+      <div className="grid h-full place-items-center p-6">
+        <div className="rounded-2xl border border-red-400/20 bg-red-950/20 p-6 text-center">
+          <p className="mb-4 text-sm text-red-200">{error}</p>
+          <button onClick={refresh} className="rounded-xl border border-white/10 bg-white/[0.06] px-4 py-2 text-[12px] text-slate-200">Retry</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full overflow-auto p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-[14px] font-semibold text-foreground/60 uppercase tracking-wider">
-          Projects ({projects.length})
-        </h2>
-        <button
-          onClick={refresh}
-          className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]"
-        >
-          Refresh
-        </button>
-      </div>
+    <div className="h-full overflow-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <div className="mx-auto max-w-[1320px]">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-cyan-300/75"><Sparkles className="h-3 w-3" />Workspace intelligence</div>
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl">Choose a codebase</h1>
+            <p className="mt-1.5 text-[12px] text-slate-400">Open a project dashboard before exploring its graph.</p>
+          </div>
+          <button onClick={refresh} className="flex w-fit items-center gap-2 rounded-xl border border-white/[0.09] bg-white/[0.04] px-3.5 py-2 text-[11px] text-slate-300 transition hover:bg-white/[0.08]"><RefreshCw className="h-3.5 w-3.5" />Refresh projects</button>
+        </div>
 
-      {projects.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20">
-          <p className="text-foreground/30 text-sm mb-2">No projects indexed</p>
-          <p className="text-foreground/20 text-[12px]">
-            Run <code className="text-primary/60">cbm index_repository</code> to build a code graph
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {projects.map((p) => (
-            <ProjectCard
-              key={p.name}
-              project={p}
-              onSelect={() => onSelectProject(p.name)}
-            />
-          ))}
-        </div>
-      )}
+        {projects.length === 0 ? (
+          <div className="grid min-h-[360px] place-items-center rounded-3xl border border-dashed border-white/10 bg-white/[0.015] p-8 text-center">
+            <div>
+              <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl border border-white/10 bg-white/[0.04] text-slate-400"><FolderSearch className="h-5 w-5" /></span>
+              <p className="text-sm font-medium text-slate-200">No projects indexed</p>
+              <p className="mt-2 text-[11px] text-slate-500">Run <code className="rounded bg-cyan-300/[0.08] px-1.5 py-1 text-cyan-200">cbm-v2 index</code> to build your first graph.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {projects.map((project) => <ProjectCard key={project.name} project={project} onSelect={() => onSelectProject(project.name)} />)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

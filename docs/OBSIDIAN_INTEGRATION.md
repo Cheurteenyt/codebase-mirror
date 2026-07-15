@@ -332,6 +332,11 @@ Sync双向 :
 1. **Export** : DB → vault (avec préservation HUMAN NOTES)
 2. **Import** : vault → DB (avec merge par `obsidian_path`)
 
+Les chemins relatifs du vault sont des identifiants portables utilisant `/`
+(par exemple `ADR/decision.md`). Sous Windows, `walkVault` normalise les
+séparateurs natifs avant la validation et la comparaison : une note imbriquée
+n'est donc pas confondue avec un chemin contenant un backslash interdit.
+
 Flags :
 - `--dry-run` : preview les changements sans write
 - `--direction export` : seulement DB → vault

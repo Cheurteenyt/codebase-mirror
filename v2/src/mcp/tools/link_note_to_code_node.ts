@@ -9,6 +9,13 @@ export class LinkNoteToCodeNodeTool extends BaseTool {
     return {
       name: 'link_note_to_code_node',
       description: 'Create an edge between an existing human note and a code node (or another human node). Useful when a note already exists and you want to attach it to additional code symbols. Validates that both source note and target code node exist.',
+      annotations: {
+        title: 'Link note to code node',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
       inputSchema: {
         type: 'object',
         properties: {

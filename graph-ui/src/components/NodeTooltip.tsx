@@ -20,21 +20,23 @@ export function NodeTooltip({ node, x = 0, y = 0 }: NodeTooltipProps) {
   // Measured size of the tooltip — used to decide whether to flip the offset.
   // Falls back to a conservative estimate (220×64) before the first measurement.
   const [size, setSize] = useState({ w: 220, h: 64 });
+  const [bounds, setBounds] = useState({ w: 1920, h: 1080 });
 
   useLayoutEffect(() => {
     if (ref.current) {
       const r = ref.current.getBoundingClientRect();
       if (r.width > 0 && r.height > 0) setSize({ w: r.width, h: r.height });
+      const parent = ref.current.parentElement?.getBoundingClientRect();
+      if (parent && parent.width > 0 && parent.height > 0) {
+        setBounds({ w: parent.width, h: parent.height });
+      }
     }
   }, [node.name, node.label, node.file_path, node.risk_score, node.notes_count]);
 
   const OFFSET = 12;
   const MARGIN = 8; // keep at least 8px from the viewport edge
-  const vw = typeof window !== "undefined" ? window.innerWidth : 1920;
-  const vh = typeof window !== "undefined" ? window.innerHeight : 1080;
-
-  const flipX = x + OFFSET + size.w > vw - MARGIN;
-  const flipY = y + OFFSET + size.h > vh - MARGIN;
+  const flipX = x + OFFSET + size.w > bounds.w - MARGIN;
+  const flipY = y + OFFSET + size.h > bounds.h - MARGIN;
 
   const left = flipX ? x - OFFSET - size.w : x + OFFSET;
   const top = flipY ? y - OFFSET - size.h : y + OFFSET;

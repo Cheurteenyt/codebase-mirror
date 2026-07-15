@@ -5,10 +5,13 @@
 //   cbm-v2 index --project my-app --root ./src
 //   cbm-v2 index --project my-app --root ./src --incremental
 //   cbm-v2 index --project my-app --root ./src --dry-run
+//   cbm-v2 index --project my-app --root ./src --workers 0
+//   cbm-v2 index --project my-app --root ./src --discovery-mode fast
 
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { indexProjectWasm } from '../../indexer/indexer.js';
-import { resolve } from 'node:path';
+import type { DiscoveryMode } from '../../indexer/wasm-extractor.js';
+import { basename, resolve } from 'node:path';
 
 export function registerIndexCommand(program: Command): void {
   program
@@ -18,6 +21,8 @@ export function registerIndexCommand(program: Command): void {
     .option('--root <path>', 'Root directory to index (default: current directory)')
     .option('--incremental', 'Skip files whose content hash has not changed')
     .option('--dry-run', 'Report what would be indexed without writing to DB')
+    .option('--workers <count>', 'Number of worker threads (0 = single-threaded; default: auto)', parseWorkerCount)
+    .option('--discovery-mode <mode>', 'Discovery coverage: full (default) or fast (non-incremental only)', parseDiscoveryMode, 'full')
     .option('--allow-partial', 'R82: exit 0 even if some files fail extraction (default: exit 1 on any error)')
     .action(async (opts) => {
       const project = opts.project || deriveProjectName();
@@ -28,6 +33,7 @@ export function registerIndexCommand(program: Command): void {
       console.log(`Project: ${project}`);
       console.log(`Root:    ${rootPath}`);
       console.log(`Mode:    ${opts.dryRun ? 'dry-run' : opts.incremental ? 'incremental' : 'full'}`);
+      console.log(`Discovery: ${opts.discoveryMode ?? 'full'}`);
       console.log(`Engine:  web-tree-sitter (WASM, 112 languages)`);
       console.log();
 
@@ -38,6 +44,8 @@ export function registerIndexCommand(program: Command): void {
           incremental: opts.incremental ?? false,
           dryRun: opts.dryRun ?? false,
           useWasm: true,
+          workers: opts.workers,
+          discoveryMode: opts.discoveryMode,
         });
 
         console.log(`Result:`);
@@ -268,8 +276,21 @@ export function registerIndexCommand(program: Command): void {
     });
 }
 
-function deriveProjectName(): string {
-  // Simple: use current directory name
-  const cwd = process.cwd();
-  return cwd.split('/').pop() || 'unnamed-project';
+function parseWorkerCount(value: string): number {
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new InvalidArgumentError('Worker count must be a non-negative integer.');
+  }
+  return count;
+}
+
+function parseDiscoveryMode(value: string): DiscoveryMode {
+  if (value !== 'full' && value !== 'fast') {
+    throw new InvalidArgumentError('Discovery mode must be either "full" or "fast".');
+  }
+  return value;
+}
+
+export function deriveProjectName(): string {
+  return basename(process.cwd()) || 'unnamed-project';
 }

@@ -8,15 +8,15 @@
 //  4.  No confidence intervals → bootstrap 95% CI for the median
 //  5.  No significance test → Mann-Whitney U (two-sided) reported with p-value
 //  6.  No effect size → Cliff's delta (non-parametric)
-//  7.  No memory measurement → peak RSS captured for both engines via /usr/bin/time -v
-//  8.  No baseline → measures `true` and `node -e ''` to establish spawn noise floor
+//  7.  No memory measurement → peak RSS captured for both engines by the portable runner
+//  8.  No baseline → measures `V1 --version` and `node -e ''` spawn noise floors
 //  9.  No verification of binaries → verifies V1 binary exists + V2 dist is fresh
 // 10.  Strict alternation → randomized order (seeded PRNG) to break cache coupling
 // 11.  Fragile regex parsing of V2 stdout → reads SQLite DB directly for V2
 // 12.  DB files accumulate in ~/.cache → cleaned after each iteration
-// 13.  No GC control → V2 invoked with --expose-gc and --gc-interval=100
-// 14.  Single-thread vs parallel path confusion → runs BOTH small (42-file) and
-//      large (400+ file) workloads to expose both code paths
+// 13.  Shell-dependent process launch → argument arrays on Windows and POSIX
+// 14.  Single-thread vs parallel path confusion → expected V2 mode is explicit
+//      and every measured run is rejected when the observed mode differs
 //
 // Usage:
 //   npx tsx scripts/rigorous-benchmark-r78.ts
@@ -25,13 +25,18 @@
 //   - Console summary
 //   - JSON results file: scripts/rigorous-benchmark-r78-results.json
 
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, statSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import {
+  findExecutableOnPath,
+  parseV2ParallelMode,
+  resolveBenchmarkResultsPath,
+  validateWorkloadCompleteness,
+} from './rigorous-benchmark-r78-helpers.js';
 
 // ── Configuration (R83: portable paths via import.meta.url + env vars) ─
 
@@ -39,19 +44,28 @@ const HERE = dirname(fileURLToPath(import.meta.url));   // v2/scripts/
 const V2_ROOT = resolve(HERE, '..');                       // v2/
 const REPO_ROOT = resolve(V2_ROOT, '..');                  // cbm-r19/
 
-// R84: auto-detect V1 binary — env var > which > repo-relative > fail
+// Auto-detect V1 without invoking a platform shell: env > repo-relative > PATH.
 function detectV1Binary(): string {
-  if (process.env.CBM_V1_BINARY) return process.env.CBM_V1_BINARY;
-  // Try repo-relative path
-  const repoRelative = resolve(REPO_ROOT, '..', 'codebase-memory-mcp', 'build', 'c', 'codebase-memory-mcp');
-  if (existsSync(repoRelative)) return repoRelative;
-  // Try PATH
-  try {
-    const which = execSync('which codebase-memory-mcp 2>/dev/null || which cbm 2>/dev/null', { encoding: 'utf-8' }).trim();
-    if (which) return which;
-  } catch {}
-  // Fallback to original path (will fail with clear message if not found)
-  return '/home/z/my-project/work/codebase-memory-mcp/build/c/codebase-memory-mcp';
+  if (process.env.CBM_V1_BINARY) return resolve(process.env.CBM_V1_BINARY);
+
+  const binaryName = process.platform === 'win32'
+    ? 'codebase-memory-mcp.exe'
+    : 'codebase-memory-mcp';
+  const repoCandidates = [
+    resolve(REPO_ROOT, 'v1-reference', 'build', 'c', binaryName),
+    resolve(REPO_ROOT, '..', 'codebase-memory-mcp', 'build', 'c', binaryName),
+  ];
+  for (const candidate of repoCandidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  for (const command of ['codebase-memory-mcp', 'cbm']) {
+    const candidate = findExecutableOnPath(command);
+    if (candidate) return candidate;
+  }
+
+  // Deterministic repository-relative fallback for the preflight error.
+  return repoCandidates[0];
 }
 
 const V1_BINARY = detectV1Binary();
@@ -60,16 +74,57 @@ const V2_SRC = process.env.CBM_V2_SRC ?? resolve(V2_ROOT, 'src');
 const SMALL_TARGET = process.env.CBM_BENCH_SMALL ?? resolve(V2_ROOT, 'src');
 const LARGE_TARGET = process.env.CBM_BENCH_LARGE ?? resolve(REPO_ROOT, 'v1-reference/src');
 const RUNNER_PY = process.env.CBM_BENCH_RUNNER ?? resolve(V2_ROOT, 'scripts/r78-runner.py');
+const RESULTS_PATH = resolveBenchmarkResultsPath(HERE, process.env.CBM_BENCH_RESULTS);
 
 const WARMUP = process.env.R78_SMOKE ? 1 : 5;
 const ITERATIONS = process.env.R78_SMOKE ? 2 : 30;
 const RANDOM_SEED = 0xC0DE_BEEF; // deterministic seed (valid hex)
 
+function envBoolean(name: string, fallback: boolean): boolean {
+  const value = process.env[name];
+  if (value === undefined) return fallback;
+  if (value === '1' || value.toLowerCase() === 'true') return true;
+  if (value === '0' || value.toLowerCase() === 'false') return false;
+  throw new Error(`${name} must be true/false or 1/0, got: ${value}`);
+}
+
 // ── Verification ───────────────────────────────────────────────────────
 
 function fail(msg: string): never {
-  console.error('FATAL: ' + msg);
-  process.exit(1);
+  throw new Error(msg);
+}
+
+interface PythonCommand {
+  executable: string;
+  prefixArgs: string[];
+}
+
+let pythonCommand: PythonCommand | null = null;
+
+function detectPythonCommand(): PythonCommand | null {
+  const configured = process.env.CBM_BENCH_PYTHON;
+  const candidates: Array<{ command: string; prefixArgs: string[] }> = configured
+    ? [{ command: configured, prefixArgs: [] }]
+    : [
+        { command: 'python3', prefixArgs: [] },
+        { command: 'python', prefixArgs: [] },
+        { command: 'py', prefixArgs: ['-3'] },
+      ];
+
+  for (const candidate of candidates) {
+    const executable = findExecutableOnPath(candidate.command)
+      ?? (existsSync(candidate.command) ? resolve(candidate.command) : null);
+    if (!executable) continue;
+    const probe = spawnSync(executable, [...candidate.prefixArgs, '--version'], {
+      encoding: 'utf-8',
+      windowsHide: true,
+      timeout: 10_000,
+    });
+    if (!probe.error && probe.status === 0) {
+      return { executable, prefixArgs: candidate.prefixArgs };
+    }
+  }
+  return null;
 }
 
 function walkTs(dir: string): string[] {
@@ -98,7 +153,10 @@ function verifyEnvironment(): void {
   if (!existsSync(SMALL_TARGET)) fail(`Small target not found: ${SMALL_TARGET}`);
   if (!existsSync(LARGE_TARGET)) fail(`Large target not found: ${LARGE_TARGET}`);
   if (!existsSync(RUNNER_PY)) fail(`Runner script not found: ${RUNNER_PY}`);
-  try { execSync('python3 --version', { stdio: 'pipe' }); } catch { fail('python3 required'); }
+  pythonCommand = detectPythonCommand();
+  if (!pythonCommand) {
+    fail('Python 3 required (set CBM_BENCH_PYTHON to an explicit executable)');
+  }
 }
 
 // ── Seeded PRNG (Mulberry32) for deterministic randomization ───────────
@@ -216,7 +274,15 @@ interface RunResult {
   nodes: number;
   edges: number;
   files: number;
+  parallel: boolean | null;
   errors: string[];
+}
+
+interface RunnerResult {
+  wall_ms: number;
+  peak_rss_kb: number;
+  exit_code: number;
+  error?: string;
 }
 
 const TMP = mkdtempSync(join(tmpdir(), 'cbm-r78-'));
@@ -228,97 +294,171 @@ function ensureDirs(): void {
   try { mkdirSync(join(CACHE_DIR, 'codebase-memory-mcp'), { recursive: true }); } catch {}
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function invokeRunner(
+  stdoutFile: string,
+  stderrFile: string,
+  command: string[],
+  timeout = 60_000,
+): RunnerResult {
+  if (!pythonCommand) throw new Error('Python runner was not initialized');
+  const invocation = spawnSync(
+    pythonCommand.executable,
+    [
+      ...pythonCommand.prefixArgs,
+      RUNNER_PY,
+      stdoutFile,
+      stderrFile,
+      `XDG_CACHE_HOME=${CACHE_DIR}`,
+      `CBM_RUN_TIMEOUT_MS=${timeout}`,
+      '--',
+      ...command,
+    ],
+    {
+      encoding: 'utf-8',
+      // The runner owns the workload process group and gets time to terminate
+      // descendants before this outer guard stops the Python wrapper.
+      timeout: timeout + 10_000,
+      windowsHide: true,
+      env: { ...process.env, XDG_CACHE_HOME: CACHE_DIR },
+      maxBuffer: 1024 * 1024,
+    },
+  );
+  if (invocation.error) throw invocation.error;
+  if (invocation.status !== 0) {
+    throw new Error(
+      `runner exited ${invocation.status}: ${(invocation.stderr || '').trim() || 'no stderr'}`,
+    );
+  }
+  let parsed: RunnerResult;
+  try {
+    parsed = JSON.parse((invocation.stdout || '').trim()) as RunnerResult;
+  } catch {
+    throw new Error(`runner returned invalid JSON: ${(invocation.stdout || '').trim()}`);
+  }
+  if (![parsed.wall_ms, parsed.peak_rss_kb, parsed.exit_code].every(Number.isFinite)) {
+    throw new Error(`runner returned incomplete metrics: ${JSON.stringify(parsed)}`);
+  }
+  return parsed;
+}
+
+function readGraphCounts(projectName: string): { nodes: number; edges: number; files: number } {
+  const dbPath = join(CACHE_DIR, 'codebase-memory-mcp', `${projectName}.db`);
+  if (!existsSync(dbPath)) throw new Error(`db not found: ${dbPath}`);
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const nodes = (db.prepare('SELECT COUNT(*) AS c FROM nodes WHERE project = ?')
+      .get(projectName) as { c: number }).c;
+    const edges = (db.prepare('SELECT COUNT(*) AS c FROM edges WHERE project = ?')
+      .get(projectName) as { c: number }).c;
+    const files = (db.prepare('SELECT COUNT(*) AS c FROM file_hashes WHERE project = ?')
+      .get(projectName) as { c: number }).c;
+    return { nodes, edges, files };
+  } finally {
+    db.close();
+  }
+}
+
 function runV1(target: string, projectName: string): RunResult {
   const stdoutFile = join(TMP, `v1-${projectName}.stdout`);
   const stderrFile = join(TMP, `v1-${projectName}.stderr`);
-  let runnerOut: string;
+  let r: RunnerResult;
   try {
-    runnerOut = execSync(
-      `python3 "${RUNNER_PY}" "${stdoutFile}" "${stderrFile}" XDG_CACHE_HOME=${CACHE_DIR} -- "${V1_BINARY}" cli index_repository --repo-path "${target}" --name "${projectName}" --mode fast`,
-      { encoding: 'utf-8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, XDG_CACHE_HOME: CACHE_DIR } }
-    );
-  } catch (e: any) {
-    return { wallMs: NaN, peakRssKb: 0, nodes: 0, edges: 0, files: 0, errors: [e.message] };
+    r = invokeRunner(stdoutFile, stderrFile, [
+      V1_BINARY,
+      'cli',
+      'index_repository',
+      '--repo-path',
+      target,
+      '--name',
+      projectName,
+      '--mode',
+      'fast',
+    ]);
+  } catch (error: unknown) {
+    return { wallMs: NaN, peakRssKb: 0, nodes: 0, edges: 0, files: 0, parallel: null, errors: [errorMessage(error)] };
   }
-  const r = JSON.parse(runnerOut);
   const wallMs = r.wall_ms as number;
   const peakRssKb = r.peak_rss_kb as number;
   if (r.exit_code !== 0) {
-    return { wallMs, peakRssKb, nodes: 0, edges: 0, files: 0, errors: [`exit_code=${r.exit_code}`] };
+    return { wallMs, peakRssKb, nodes: 0, edges: 0, files: 0, parallel: null, errors: [`exit_code=${r.exit_code}${r.error ? ` (${r.error})` : ''}`] };
   }
 
   let nodes = 0, edges = 0, files = 0;
   try {
-    const out = readFileSync(stdoutFile, 'utf-8');
-    // V1 emits JSON with "nodes":N and "edges":N somewhere in it. Use two separate
-    // regexes to be robust to field ordering and nested objects.
-    const nm = out.match(/"nodes":\s*(\d+)/);
-    const em = out.match(/"edges":\s*(\d+)/);
-    if (nm) nodes = parseInt(nm[1]);
-    if (em) edges = parseInt(em[1]);
-  } catch {}
+    ({ nodes, edges, files } = readGraphCounts(projectName));
+  } catch (error: unknown) {
+    return {
+      wallMs, peakRssKb, nodes: 0, edges: 0, files: 0, parallel: null,
+      errors: [`db read failed: ${errorMessage(error)}`],
+    };
+  }
 
-  return { wallMs, peakRssKb, nodes, edges, files, errors: [] };
+  return { wallMs, peakRssKb, nodes, edges, files, parallel: null, errors: [] };
 }
 
 function runV2(target: string, projectName: string): RunResult {
   const stdoutFile = join(TMP, `v2-${projectName}.stdout`);
   const stderrFile = join(TMP, `v2-${projectName}.stderr`);
-  let runnerOut: string;
+  let r: RunnerResult;
   try {
-    runnerOut = execSync(
-      `python3 "${RUNNER_PY}" "${stdoutFile}" "${stderrFile}" XDG_CACHE_HOME=${CACHE_DIR} -- node "${V2_DIST}" index --project "${projectName}" --root "${target}"`,
-      { encoding: 'utf-8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, XDG_CACHE_HOME: CACHE_DIR } }
-    );
-  } catch (e: any) {
-    return { wallMs: NaN, peakRssKb: 0, nodes: 0, edges: 0, files: 0, errors: [e.message] };
+    r = invokeRunner(stdoutFile, stderrFile, [
+      process.execPath,
+      V2_DIST,
+      'index',
+      '--project',
+      projectName,
+      '--root',
+      target,
+      '--discovery-mode',
+      'fast',
+    ]);
+  } catch (error: unknown) {
+    return { wallMs: NaN, peakRssKb: 0, nodes: 0, edges: 0, files: 0, parallel: null, errors: [errorMessage(error)] };
   }
-  const r = JSON.parse(runnerOut);
   const wallMs = r.wall_ms as number;
   const peakRssKb = r.peak_rss_kb as number;
   if (r.exit_code !== 0) {
-    return { wallMs, peakRssKb, nodes: 0, edges: 0, files: 0, errors: [`exit_code=${r.exit_code}`] };
+    return { wallMs, peakRssKb, nodes: 0, edges: 0, files: 0, parallel: null, errors: [`exit_code=${r.exit_code}${r.error ? ` (${r.error})` : ''}`] };
   }
 
   // Authoritative counts from SQLite
   let nodes = 0, edges = 0, files = 0;
-  const v2DbPath = join(CACHE_DIR, 'codebase-memory-mcp', `${projectName}.db`);
-  if (existsSync(v2DbPath)) {
-    try {
-      const db = new Database(v2DbPath, { readonly: true, fileMustExist: true });
-      const n = db.prepare('SELECT COUNT(*) AS c FROM nodes').get() as { c: number };
-      const e = db.prepare('SELECT COUNT(*) AS c FROM edges').get() as { c: number };
-      nodes = n.c; edges = e.c;
-      db.close();
-    } catch (e: any) {
-      return { wallMs, peakRssKb, nodes: 0, edges: 0, files: 0, errors: [`db read failed: ${e.message}`] };
-    }
-  } else {
-    return { wallMs, peakRssKb, nodes: 0, edges: 0, files: 0, errors: [`db not found: ${v2DbPath}`] };
+  try {
+    ({ nodes, edges, files } = readGraphCounts(projectName));
+  } catch (error: unknown) {
+    return {
+      wallMs, peakRssKb, nodes: 0, edges: 0, files: 0, parallel: null,
+      errors: [`db read failed: ${errorMessage(error)}`],
+    };
   }
 
+  let parallel: boolean | null = null;
   try {
     const out = readFileSync(stdoutFile, 'utf-8');
-    const fm = out.match(/Files indexed:\s+(\d+)/);
-    if (fm) files = parseInt(fm[1]);
+    parallel = parseV2ParallelMode(out);
   } catch {}
 
-  return { wallMs, peakRssKb, nodes, edges, files, errors: [] };
+  return { wallMs, peakRssKb, nodes, edges, files, parallel, errors: [] };
 }
 
-function runNullC(): number {
-  // Use Python runner for fair comparison (it spawns the command as a child too)
-  const tmpOut = join(TMP, 'null-c.stdout');
-  const tmpErr = join(TMP, 'null-c.stderr');
-  const out = execSync(`python3 "${RUNNER_PY}" "${tmpOut}" "${tmpErr}" -- true`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-  return JSON.parse(out).wall_ms as number;
+function runV1StartupBaseline(): number {
+  const tmpOut = join(TMP, 'baseline-v1.stdout');
+  const tmpErr = join(TMP, 'baseline-v1.stderr');
+  const result = invokeRunner(tmpOut, tmpErr, [V1_BINARY, '--version']);
+  if (result.exit_code !== 0) throw new Error(`V1 --version exited ${result.exit_code}`);
+  return result.wall_ms;
 }
 
-function runNullNode(): number {
-  const tmpOut = join(TMP, 'null-node.stdout');
-  const tmpErr = join(TMP, 'null-node.stderr');
-  const out = execSync(`python3 "${RUNNER_PY}" "${tmpOut}" "${tmpErr}" -- node -e ""`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-  return JSON.parse(out).wall_ms as number;
+function runNodeStartupBaseline(): number {
+  const tmpOut = join(TMP, 'baseline-node.stdout');
+  const tmpErr = join(TMP, 'baseline-node.stderr');
+  const result = invokeRunner(tmpOut, tmpErr, [process.execPath, '-e', '']);
+  if (result.exit_code !== 0) throw new Error(`node -e exited ${result.exit_code}`);
+  return result.wall_ms;
 }
 
 function cleanupProjectDb(projectName: string): void {
@@ -354,6 +494,8 @@ function main() {
 
   verifyEnvironment();
   ensureDirs();
+  const smallExpectParallel = envBoolean('CBM_BENCH_SMALL_EXPECT_PARALLEL', true);
+  const largeExpectParallel = envBoolean('CBM_BENCH_LARGE_EXPECT_PARALLEL', true);
   console.log(`  Work directory: ${TMP}`);
   console.log(`  V1 binary:      ${V1_BINARY}`);
   console.log(`  V2 dist:        ${V2_DIST}`);
@@ -365,28 +507,42 @@ function main() {
   console.log('─'.repeat(80));
   console.log('  Step 1 — Spawn baselines (noise floor)');
   console.log('─'.repeat(80));
-  const baselinesC: number[] = [];
+  const baselinesV1: number[] = [];
   const baselinesNode: number[] = [];
-  for (let i = 0; i < 20; i++) baselinesC.push(runNullC());
-  for (let i = 0; i < 20; i++) baselinesNode.push(runNullNode());
-  const baselineC = describe(baselinesC);
+  for (let i = 0; i < 20; i++) baselinesV1.push(runV1StartupBaseline());
+  for (let i = 0; i < 20; i++) baselinesNode.push(runNodeStartupBaseline());
+  const baselineV1 = describe(baselinesV1);
   const baselineNode = describe(baselinesNode);
-  console.log(`  spawn 'true'         : p50=${fmt(baselineC.p50, 2)}ms  mean=${fmt(baselineC.mean, 2)}ms  CV=${fmt(baselineC.cvPct, 1)}%`);
+  console.log(`  spawn 'V1 --version' : p50=${fmt(baselineV1.p50, 2)}ms  mean=${fmt(baselineV1.mean, 2)}ms  CV=${fmt(baselineV1.cvPct, 1)}%`);
   console.log(`  spawn 'node -e ""'   : p50=${fmt(baselineNode.p50, 2)}ms  mean=${fmt(baselineNode.mean, 2)}ms  CV=${fmt(baselineNode.cvPct, 1)}%`);
-  console.log(`  → V2 wall time includes ~${fmt(baselineNode.p50, 1)}ms of pure Node startup (V1 doesn't pay this).`);
+  console.log(`  → Baselines execute each runtime's own minimal version/no-op path.`);
   console.log();
 
   // ── Run benchmark on each workload ──────────────────────────────────
   const workloads = [
-    { name: 'SMALL', desc: '42 files, V2 single-thread path', target: SMALL_TARGET, expectParallel: false },
-    { name: 'LARGE', desc: '~120 files, V2 parallel path', target: LARGE_TARGET, expectParallel: true },
+    { name: 'SMALL', desc: 'V2 source workload', target: SMALL_TARGET, expectParallel: smallExpectParallel },
+    { name: 'LARGE', desc: 'V1 reference source workload', target: LARGE_TARGET, expectParallel: largeExpectParallel },
   ];
+
+  const benchmarkErrors: string[] = [];
 
   const allResults: any = {
     timestamp: new Date().toISOString(),
-    config: { WARMUP, ITERATIONS, RANDOM_SEED, V1_BINARY, V2_DIST, SMALL_TARGET, LARGE_TARGET },
-    baselines: { spawnTrue: baselineC, spawnNodeEmpty: baselineNode },
+    config: {
+      WARMUP,
+      ITERATIONS,
+      RANDOM_SEED,
+      V1_BINARY,
+      V2_DIST,
+      SMALL_TARGET,
+      LARGE_TARGET,
+      SMALL_EXPECT_PARALLEL: smallExpectParallel,
+      LARGE_EXPECT_PARALLEL: largeExpectParallel,
+      discoveryMode: 'fast',
+    },
+    baselines: { spawnV1Version: baselineV1, spawnNodeEmpty: baselineNode },
     workloads: [] as any[],
+    errors: benchmarkErrors,
   };
 
   for (const wl of workloads) {
@@ -418,13 +574,28 @@ function main() {
 
     for (const run of runs) {
       progressIdx++;
-      const projectName = `r78-${wl.name.toLowerCase()}-${run.engine.toLowerCase()}-${run.idx}-${run.isWarmup ? 'w' : 'm'}-${createHash('md5').update(`${run.engine}${run.idx}${Math.random()}`).digest('hex').slice(0, 6)}`;
+      const projectName = `r78-${wl.name.toLowerCase()}-${run.engine.toLowerCase()}-${run.idx}-${run.isWarmup ? 'w' : 'm'}`;
       process.stdout.write(`  [${progressIdx.toString().padStart(3)}/${total}] ${run.engine} ${run.isWarmup ? '(warmup)' : '(measured)'} ... `);
       const result = run.engine === 'V1' ? runV1(wl.target, projectName) : runV2(wl.target, projectName);
+      if (
+        run.engine === 'V2'
+        && result.errors.length === 0
+        && result.parallel !== wl.expectParallel
+      ) {
+        result.errors.push(
+          result.parallel === null
+            ? `execution mode could not be parsed (expected parallel=${wl.expectParallel})`
+            : `parallel=${result.parallel}, expected ${wl.expectParallel}`,
+        );
+      }
       if (result.errors.length > 0) {
         console.log(`ERROR: ${result.errors[0]}`);
+        benchmarkErrors.push(
+          `${wl.name}/${run.engine}/${run.isWarmup ? 'warmup' : 'measured'}-${run.idx}: ${result.errors[0]}`,
+        );
       } else {
-        console.log(`${fmt(result.wallMs, 0)}ms  nodes=${result.nodes}  edges=${result.edges}  RSS=${(result.peakRssKb / 1024).toFixed(0)}MB`);
+        const mode = run.engine === 'V2' ? `  parallel=${result.parallel}` : '';
+        console.log(`${fmt(result.wallMs, 0)}ms  nodes=${result.nodes}  edges=${result.edges}  RSS=${(result.peakRssKb / 1024).toFixed(0)}MB${mode}`);
       }
       if (!run.isWarmup && result.errors.length === 0) {
         if (run.engine === 'V1') v1Measured.push(result);
@@ -433,8 +604,19 @@ function main() {
       cleanupProjectDb(projectName);
     }
 
-    if (v1Measured.length < 5 || v2Measured.length < 5) {
-      console.log(`  ⚠ Too few successful runs (V1=${v1Measured.length}, V2=${v2Measured.length}) — skipping analysis`);
+    const completenessErrors = validateWorkloadCompleteness({
+      workload: wl.name,
+      expectedRuns: ITERATIONS,
+      expectParallel: wl.expectParallel,
+      v1: v1Measured,
+      v2: v2Measured,
+    });
+    if (completenessErrors.length > 0) {
+      for (const error of completenessErrors) {
+        console.error(`  ✗ ${error}`);
+        benchmarkErrors.push(error);
+      }
+      console.error('  Analysis refused: workload evidence is incomplete or unstable.');
       continue;
     }
 
@@ -487,14 +669,14 @@ function main() {
     console.log(`    Effect size:     Cliff's δ=${fmt(delta, 3)}  (${deltaMag})`);
     console.log();
 
-    const v1Extracted = v1Times.map(t => t - baselineC.p50);
+    const v1Extracted = v1Times.map(t => t - baselineV1.p50);
     const v2Extracted = v2Times.map(t => t - baselineNode.p50);
     const v1ExStats = describe(v1Extracted);
     const v2ExStats = describe(v2Extracted);
     console.log('  Extraction-only estimate (wall - baseline spawn):');
     console.log(`    V1: p50=${fmt(v1ExStats.p50, 1)}ms  (95% CI: [${fmt(v1ExStats.ci95Low, 1)}, ${fmt(v1ExStats.ci95High, 1)}])`);
     console.log(`    V2: p50=${fmt(v2ExStats.p50, 1)}ms  (95% CI: [${fmt(v2ExStats.ci95Low, 1)}, ${fmt(v2ExStats.ci95High, 1)}])`);
-    console.log(`    Note: V1 baseline is 'spawn true' (${fmt(baselineC.p50, 1)}ms).`);
+    console.log(`    Note: V1 baseline is 'spawn V1 --version' (${fmt(baselineV1.p50, 1)}ms).`);
     console.log(`          V2 baseline is 'spawn node -e \"\"' (${fmt(baselineNode.p50, 1)}ms) — UNDERESTIMATES`);
     console.log(`          V2's startup cost because WASM init + grammar load only happen when indexer runs.`);
     console.log();
@@ -502,19 +684,40 @@ function main() {
     allResults.workloads.push({
       name: wl.name, desc: wl.desc, target: wl.target, expectParallel: wl.expectParallel,
       v1: { time: v1TimeStats, rss: v1RssStats, nodes: v1NodeCounts, edges: v1EdgeCounts, rawTimes: v1Times },
-      v2: { time: v2TimeStats, rss: v2RssStats, nodes: v2NodeCounts, edges: v2EdgeCounts, rawTimes: v2Times },
+      v2: {
+        time: v2TimeStats,
+        rss: v2RssStats,
+        nodes: v2NodeCounts,
+        edges: v2EdgeCounts,
+        files: [...new Set(v2Measured.map(r => r.files))],
+        parallel: [...new Set(v2Measured.map(r => r.parallel))],
+        rawTimes: v2Times,
+      },
       mannWhitney: mwu, cliffsDelta: delta,
       extractionOnly: { v1: v1ExStats, v2: v2ExStats },
     });
   }
 
-  const resultsPath = '/home/z/my-project/work/cbm-r19/v2/scripts/rigorous-benchmark-r78-results.json';
-  writeFileSync(resultsPath, JSON.stringify(allResults, null, 2));
+  writeFileSync(RESULTS_PATH, JSON.stringify(allResults, null, 2));
   console.log('─'.repeat(80));
-  console.log(`  Full JSON results: ${resultsPath}`);
+  console.log(`  Full JSON results: ${RESULTS_PATH}`);
   console.log('─'.repeat(80));
 
-  try { rmSync(TMP, { recursive: true, force: true }); } catch {}
+  if (benchmarkErrors.length > 0 || allResults.workloads.length !== workloads.length) {
+    throw new Error(
+      `benchmark incomplete: ${benchmarkErrors.length} error(s), `
+      + `${allResults.workloads.length}/${workloads.length} workloads analysed`,
+    );
+  }
+
+  console.log('  BENCHMARK PASSED — every workload produced complete, stable evidence');
 }
 
-main();
+try {
+  main();
+} catch (error: unknown) {
+  console.error(`FATAL: ${errorMessage(error)}`);
+  process.exitCode = 1;
+} finally {
+  try { rmSync(TMP, { recursive: true, force: true }); } catch {}
+}

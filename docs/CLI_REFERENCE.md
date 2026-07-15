@@ -2,7 +2,8 @@
 
 > See `v2/package.json` and `v2/CHANGELOG.md` for the authoritative version.
 
-All commands are available via `cbm-v2` (or `node dist/cli/index.js` before global install).
+All commands require Node.js >=22.12.0 and are available via `cbm-v2` (or
+`node dist/cli/index.js` before global install).
 
 ## Core Commands
 
@@ -19,16 +20,30 @@ cbm-v2 index --project my-app --root /path/to/repo --incremental
 # Dry-run (preview what would be indexed without writing to DB)
 cbm-v2 index --project my-app --root /path/to/repo --dry-run
 
-# Allow partial extraction errors to exit 0 (CI: log but don't fail)
-cbm-v2 index --project my-app --root /path/to/repo --allow-partial
+# Explicit reduced-coverage discovery (benchmarks/speed-sensitive workflows)
+cbm-v2 index --project my-app --root /path/to/repo --discovery-mode fast
+
 ```
 
 **Options:**
 - `--project <name>` — Project name (required)
 - `--root <path>` — Root directory to index (default: current directory)
 - `--incremental` — Skip unchanged files (fast). Without this flag, a full re-index is performed.
+- `--discovery-mode <full|fast>` — `full` is the correctness-first default and
+  includes supported files under hidden application directories, docs, tests,
+  scripts, tools, and migrations (except explicit VCS/cache/vendor policy
+  directories). `fast` applies the reduced V1-compatible skip policy for
+  generated, documentation, fixture, build, and test-artifact names. It does
+  not blanket-exclude directories named `test` or `tests`, so structurally
+  relevant helpers can remain visible. Fast mode must be selected explicitly
+  and is rejected with `--incremental`: an omitted file cannot be updated or
+  safely classified as deleted. Use a fast full rebuild or a full-coverage
+  incremental pass.
 - `--dry-run` — Discover files and detect languages without writing to the DB. R153: warnings are now shown in dry-run. R155: dry-run with errors shows "Dry-run failed" instead of "Dry-run complete".
-- `--allow-partial` — Exit 0 even if some files fail extraction (default: exit 1 on any error).
+- `--allow-partial` — Let the explicitly non-fatal `PARTIAL` outcome exit 0 for
+  a deliberately tolerant interactive run. CI should keep the strict default;
+  do not add this flag merely to hide a failing gate. It never masks `FAILED`
+  or `STALE`.
 
 **Behavior:**
 - **Discovery completeness lock**: if discovery encounters errors (subtree EACCES, fatal symlink errors), the existing graph is preserved. The index returns errors in `IndexResult.errors` and sets `crossFileCallsStale=true`. Use `--incremental` to retry when the filesystem is healthy.
@@ -62,7 +77,7 @@ Run diagnostics to verify the setup.
 cbm-v2 doctor --project my-app
 ```
 
-Checks: Node.js version (≥18.6), config file, human DB, code graph DB, vault path writability.
+Checks: Node.js version (≥22.12.0), config file, human DB, code graph DB, vault path writability.
 
 ### `cbm-v2 stats`
 Show a pretty statistics dashboard.
@@ -95,7 +110,32 @@ Start the graph UI web server (2D d3-force canvas, dashboard, filters).
 cbm-v2 ui --project my-app                     # http://127.0.0.1:9749
 cbm-v2 ui --project my-app --port 8080         # custom port
 cbm-v2 ui --project my-app --graph-ui-path /custom/dist  # custom UI build
+cbm-v2 ui --project my-app --dev-origin http://localhost:5173  # explicit Vite proxy
+cbm-v2 ui --project my-app --allowed-root /srv/repos /mnt/work  # additional browse/index roots
 ```
+
+`--dev-origin <origin>` adds one explicit trusted development proxy origin to
+the UI server's Host/Origin checks. Leave it unset in production; same-origin
+localhost access is the default security boundary.
+
+`--allowed-root <paths...>` grants the Control tab access to one or more
+additional local repository trees. The user's home directory is always
+allowed, and an indexed project's canonical `root_path` is allowed while that
+project is selected. Browse and index requests are canonicalized before the
+containment check, so symlinks cannot escape the configured roots and a missing
+configured root grants no access. Quote paths containing spaces. Keep the
+allowlist narrow because it controls which local directories the loopback UI
+may enumerate and submit to the indexer.
+
+When the UI or MCP reports a missing or stale graph, the complete V2 refresh
+command is:
+
+```bash
+cbm-v2 index --project <name> --root <path>
+```
+
+The historical V1 command `index_repository` belongs to the separately run V1
+C engine; it is not a `cbm-v2` subcommand.
 
 The UI has 4 tabs:
 - **Dashboard** (default when a project is selected): KPIs, graph freshness, recommendations
@@ -114,7 +154,9 @@ cbm-v2 watch --project my-app --debounce 1000             # 1s debounce (default
 cbm-v2 watch --project my-app --no-backup --no-auto-modules
 ```
 
-The watch daemon uses Node.js `fs.watch` (recursive, Node 18+) to monitor the vault directory. When a `.md` file is created, modified, or deleted:
+The watch daemon uses Node.js `fs.watch` (recursive, under the supported Node
+22.12+ runtime) to monitor the vault directory. When a `.md` file is created,
+modified, or deleted:
 
 1. **Debounce**: waits 500ms (configurable) for the file system to settle
 2. **Import**: runs `importVault` to pull vault changes into the DB
@@ -198,6 +240,12 @@ cbm-v2 obsidian sync --project my-app --direction import
 cbm-v2 obsidian sync --project my-app --no-backup --no-auto-modules
 cbm-v2 obsidian sync --project my-app --min-degree 30
 ```
+
+Vault-relative paths are persisted as portable forward-slash identifiers (for
+example `ADR/decision.md`) on every platform. On Windows, `walkVault` converts
+the native separators before lookup and validation, so nested notes use the
+same `obsidian_path` identity as Linux/macOS and are not rejected as backslash
+traversal attempts.
 
 ### `cbm-v2 obsidian export` / `import`
 One-shot export (DB → vault) or import (vault → DB).

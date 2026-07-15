@@ -19,6 +19,7 @@
 //   });
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getSecurityBootstrap } from "../api/client";
 
 export interface WsNotification {
   type: string;
@@ -63,14 +64,32 @@ export function useWebSocket(
   const callbackRef = useRef(onNotification);
   useEffect(() => { callbackRef.current = onNotification; }, [onNotification]);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!project || !mountedRef.current) return;
+
+    // Reserve a generation before awaiting bootstrap. A project change or
+    // unmount increments the counter and prevents the stale continuation from
+    // creating a socket after the credential request resolves.
+    const gen = ++wsGenRef.current;
+    let csrfToken: string;
+    try {
+      // A reconnect can follow a server restart. The runtime-only credential
+      // changes on every start, so bypass the cached bootstrap after the first
+      // failed/closed connection attempt.
+      csrfToken = (
+        await getSecurityBootstrap(reconnectAttemptRef.current > 0)
+      ).csrf_token;
+    } catch {
+      if (wsGenRef.current === gen && mountedRef.current) scheduleReconnect();
+      return;
+    }
+    if (wsGenRef.current !== gen || !mountedRef.current) return;
 
     // Build WebSocket URL from the current page URL.
     // R26: use /ws path so Vite dev server can proxy it separately from HMR.
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/ws`;
+    const wsUrl = `${protocol}//${host}/ws?csrf=${encodeURIComponent(csrfToken)}`;
 
     let ws: WebSocket;
     try {
@@ -81,9 +100,6 @@ export function useWebSocket(
       return;
     }
 
-    // R40: capture the current generation. All callbacks below close over
-    // `gen` and compare against wsGenRef.current to detect staleness.
-    const gen = ++wsGenRef.current;
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -182,21 +198,37 @@ export function useWebSocket(
     const delay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
     reconnectAttemptRef.current++;
     reconnectTimerRef.current = setTimeout(() => {
-      if (mountedRef.current) connect();
+      reconnectTimerRef.current = null;
+      if (mountedRef.current) void connect();
     }, delay);
   }, [connect]);
 
   const reconnect = useCallback(() => {
     reconnectAttemptRef.current = 0;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     if (wsRef.current) {
       try { wsRef.current.close(); } catch { /* ignore */ }
     }
-    connect();
+    // A synchronous/mock close handler, or a browser that dispatches `close`
+    // immediately, can schedule a timer while handling the manual close.
+    // Manual reconnect owns the next attempt, so cancel that timer as well.
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    void connect();
   }, [connect]);
 
   useEffect(() => {
     mountedRef.current = true;
-    connect();
+    // A project change (including pausing a hidden tab with project=null)
+    // invalidates the previous connection immediately. Its stale onclose is
+    // intentionally ignored by the generation guard, so reset state here.
+    setConnected(false);
+    void connect();
     return () => {
       mountedRef.current = false;
       // R40: increment the generation to invalidate any in-flight callbacks
@@ -206,7 +238,10 @@ export function useWebSocket(
       // connection that leaks cross-project events into the current view).
       wsGenRef.current++;
       stopPing();
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       if (wsRef.current) {
         try { wsRef.current.close(); } catch { /* ignore */ }
       }

@@ -3,9 +3,8 @@
 
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { BULK_CHUNK_SIZE } from '../constants.js';
+import { resolveProjectStoragePath } from '../storage/project-path.js';
 
 export interface CodeNode {
   id: number;
@@ -132,9 +131,25 @@ interface ProjectRow {
   project: string;
 }
 
+interface ProjectRootRow {
+  root_path: string | null;
+}
+
+/** Normalize either Windows or POSIX separators for portable DB searches. */
+function normalizePathForSearch(value: string): string {
+  return value
+    .replace(/\\/g, '/')
+    .replace(/\/{2,}/g, '/')
+    .replace(/^(?:\.\/)+/, '');
+}
+
+/** Escape a literal value for a LIKE expression using backslash as ESCAPE. */
+function escapeLike(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
+}
+
 export function defaultCodeDbPath(project: string): string {
-  const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
-  return join(cacheDir, 'codebase-memory-mcp', `${project}.db`);
+  return resolveProjectStoragePath(project, '.db');
 }
 
 export class CodeGraphReader {
@@ -153,28 +168,35 @@ export class CodeGraphReader {
       throw new Error(
         `Code graph DB not found at: ${dbPath}\n` +
         `Possible fixes:\n` +
-        `  1. Run 'cbm index_repository' in the project root to build the code graph\n` +
+        `  1. Run 'cbm-v2 index --project <name> --root <path>' to build the code graph\n` +
         `  2. Pass --project <name> to specify the project (DB is at $XDG_CACHE_HOME/codebase-memory-mcp/<project>.db)\n` +
         `  3. Verify the project name matches what was indexed (case-sensitive)\n` +
         `  4. Set XDG_CACHE_HOME to point to a non-default cache directory if configured`
       );
     }
     this.db = new Database(dbPath, { readonly: true, fileMustExist: true });
-    // Set busy_timeout to handle concurrent writes from V1 engine gracefully.
-    this.db.pragma('busy_timeout = 5000');
-    // R20: performance PRAGMAs for the read-only code graph connection.
-    // temp_store=MEMORY avoids disk I/O for sorting/grouping in bulk queries.
-    // cache_size=-65536 gives 64MB page cache (default 2MB is too small for
-    // getBulkEdges/getBulkNodeDegrees on large graphs).
-    this.db.pragma('temp_store = MEMORY');
-    this.db.pragma('cache_size = -65536');
-    // NOTE: do NOT set `journal_mode = WAL` on a readonly connection — it's a no-op or error.
-    // V1 sets WAL when it opens the DB for writing; the readonly reader inherits it.
-    // R59: prepare hot-path statements once. These two single-row lookups are
-    // called on every MCP tool invocation — preparing them here means each call
-    // is just .get(params) with no SQL compilation or cache lookup.
-    this.stmtGetNodeById = this.db.prepare('SELECT * FROM nodes WHERE id = ?');
-    this.stmtFindNodeByQName = this.db.prepare('SELECT * FROM nodes WHERE project = ? AND qualified_name = ?');
+    try {
+      // Set busy_timeout to handle concurrent writes from V1 engine gracefully.
+      this.db.pragma('busy_timeout = 5000');
+      // R20: performance PRAGMAs for the read-only code graph connection.
+      // temp_store=MEMORY avoids disk I/O for sorting/grouping in bulk queries.
+      // cache_size=-65536 gives 64MB page cache (default 2MB is too small for
+      // getBulkEdges/getBulkNodeDegrees on large graphs).
+      this.db.pragma('temp_store = MEMORY');
+      this.db.pragma('cache_size = -65536');
+      // NOTE: do NOT set `journal_mode = WAL` on a readonly connection — it's a no-op or error.
+      // V1 sets WAL when it opens the DB for writing; the readonly reader inherits it.
+      // R59: prepare hot-path statements once. These two single-row lookups are
+      // called on every MCP tool invocation — preparing them here means each call
+      // is just .get(params) with no SQL compilation or cache lookup.
+      this.stmtGetNodeById = this.db.prepare('SELECT * FROM nodes WHERE id = ?');
+      this.stmtFindNodeByQName = this.db.prepare('SELECT * FROM nodes WHERE project = ? AND qualified_name = ?');
+    } catch (error: unknown) {
+      // Constructor failures must not leak the native SQLite handle. On
+      // Windows, even an invalid open DB would otherwise block cleanup.
+      try { this.db.close(); } catch { /* preserve the original error */ }
+      throw error;
+    }
   }
 
   close(): void {
@@ -343,34 +365,85 @@ export class CodeGraphReader {
 
   /**
    * Bulk-fetch in-degree and out-degree SEPARATELY for many node IDs.
-   * Returns Map<nodeId, {in: number, out: number}>. Used by prepare_edit_context
-   * to report accurate callers_count and callees_count without the per-direction
-   * cap imposed by getNeighbors (which limits results to 50 per direction).
+   * Returns Map<nodeId, {in: number, out: number}>. An optional edge type lets
+   * callers distinguish semantic CALLS from structural graph relationships
+   * without the per-direction cap imposed by getNeighbors.
    */
-  getBulkNodeDegreesSplit(nodeIds: number[]): Map<number, { in: number; out: number }> {
+  getBulkNodeDegreesSplit(
+    nodeIds: number[],
+    edgeType?: string,
+  ): Map<number, { in: number; out: number }> {
     const result = new Map<number, { in: number; out: number }>();
     if (nodeIds.length === 0) return result;
     for (const id of nodeIds) result.set(id, { in: 0, out: 0 });
     for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
       const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
       const placeholders = chunk.map(() => '?').join(',');
+      const typeFilter = edgeType ? ' AND type = ?' : '';
+      const params: Array<number | string> = edgeType ? [...chunk, edgeType] : chunk;
       try {
         const outRows = this.db
-          .prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${placeholders}) GROUP BY source_id`)
-          .all(...chunk) as DegreeCountRow[];
+          .prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${placeholders})${typeFilter} GROUP BY source_id`)
+          .all(...params) as DegreeCountRow[];
         for (const r of outRows) {
           const entry = result.get(r.id);
           if (entry) entry.out = r.c;
         }
         const inRows = this.db
-          .prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${placeholders}) GROUP BY target_id`)
-          .all(...chunk) as DegreeCountRow[];
+          .prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${placeholders})${typeFilter} GROUP BY target_id`)
+          .all(...params) as DegreeCountRow[];
         for (const r of inRows) {
           const entry = result.get(r.id);
           if (entry) entry.in = r.c;
         }
       } catch {
         // ignore — return zeros for this chunk
+      }
+    }
+    return result;
+  }
+
+  /** Return the indexed repository root when the V1/V2 projects table exposes it. */
+  getProjectRoot(project: string): string | undefined {
+    try {
+      const row = this.db
+        .prepare('SELECT root_path FROM projects WHERE name = ? LIMIT 1')
+        .get(project) as ProjectRootRow | undefined;
+      const root = row?.root_path?.trim();
+      return root || undefined;
+    } catch {
+      // Legacy/minimal code databases may not contain the projects table.
+      return undefined;
+    }
+  }
+
+  /**
+   * Count incoming edges of one semantic type for a set of nodes.
+   *
+   * A node's generic in-degree includes structural CONTAINS/IMPORTS edges and
+   * therefore cannot be used to decide whether a callable has callers. Keeping
+   * this query separate also preserves the all-edge semantics of
+   * getBulkNodeDegreesSplit(), which is used by MCP context preparation.
+   */
+  getBulkIncomingEdgeCounts(nodeIds: number[], edgeType: string): Map<number, number> {
+    const result = new Map<number, number>();
+    if (nodeIds.length === 0) return result;
+    for (const id of nodeIds) result.set(id, 0);
+    for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
+      const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        const rows = this.db
+          .prepare(
+            `SELECT target_id AS id, COUNT(*) AS c
+             FROM edges
+             WHERE type = ? AND target_id IN (${placeholders})
+             GROUP BY target_id`,
+          )
+          .all(edgeType, ...chunk) as DegreeCountRow[];
+        for (const row of rows) result.set(row.id, row.c);
+      } catch {
+        // Preserve the bulk-reader convention: unavailable counts remain zero.
       }
     }
     return result;
@@ -402,8 +475,8 @@ export class CodeGraphReader {
   }
 
   /**
-   * Bulk-fetch ALL edges for a set of node IDs (both directions) in at most
-   * 2 chunked queries. Returns deduplicated edges with source/target IDs.
+   * Bulk-fetch all internal edges for a set of node IDs with source-side
+   * chunked queries. Directional caps reuse the returned rows in memory.
    * Used by /api/layout to eliminate the N+1 pattern of calling getNeighbors
    * per node (2000 nodes × 1 query = 2000 queries → 2 queries).
    *
@@ -418,6 +491,26 @@ export class CodeGraphReader {
     const nodeIdSet = new Set(nodeIds);
     const seenEdgeKeys = new Set<string>();
     const result: Array<{ source: number; target: number; type: string }> = [];
+    const visibleRows: EdgeTripleRow[] = [];
+    const perNodeOutCount = new Map<number, number>();
+    const perNodeInCount = new Map<number, number>();
+
+    const tryPush = (row: EdgeTripleRow, nodeSide: 'source' | 'target') => {
+      const source = row.source_id;
+      const target = row.target_id;
+      if (!nodeIdSet.has(source) || !nodeIdSet.has(target)) return;
+      const key = `${source}-${target}-${row.type}`;
+      if (seenEdgeKeys.has(key)) return;
+      if (limitPerNode > 0) {
+        const cap = nodeSide === 'source' ? perNodeOutCount : perNodeInCount;
+        const node = nodeSide === 'source' ? source : target;
+        const current = cap.get(node) ?? 0;
+        if (current >= limitPerNode) return;
+        cap.set(node, current + 1);
+      }
+      seenEdgeKeys.add(key);
+      result.push({ source, target, type: row.type });
+    };
 
     for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
       const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
@@ -429,40 +522,19 @@ export class CodeGraphReader {
             `SELECT source_id, target_id, type FROM edges WHERE source_id IN (${placeholders}) ORDER BY id ASC`,
           )
           .all(...chunk) as EdgeTripleRow[];
-        // In-edges: chunk nodes are targets.
-        const inRows = this.db
-          .prepare(
-            `SELECT source_id, target_id, type FROM edges WHERE target_id IN (${placeholders}) ORDER BY id ASC`,
-          )
-          .all(...chunk) as EdgeTripleRow[];
-
-        // Merge and dedup. If limitPerNode > 0, cap per (node, direction).
-        const perNodeOutCount = new Map<number, number>();
-        const perNodeInCount = new Map<number, number>();
-
-        const tryPush = (row: EdgeTripleRow, nodeSide: 'source' | 'target') => {
-          const s = row.source_id;
-          const t = row.target_id;
-          // Only keep edges where BOTH endpoints are in the visible set.
-          if (!nodeIdSet.has(s) || !nodeIdSet.has(t)) return;
-          const key = `${s}-${t}-${row.type}`;
-          if (seenEdgeKeys.has(key)) return;
-          if (limitPerNode > 0) {
-            const cap = nodeSide === 'source' ? perNodeOutCount : perNodeInCount;
-            const node = nodeSide === 'source' ? s : t;
-            const cur = cap.get(node) ?? 0;
-            if (cur >= limitPerNode) return;
-            cap.set(node, cur + 1);
-          }
-          seenEdgeKeys.add(key);
-          result.push({ source: s, target: t, type: row.type });
-        };
-
-        for (const row of outRows) tryPush(row, 'source');
-        for (const row of inRows) tryPush(row, 'target');
+        for (const row of outRows) {
+          if (!nodeIdSet.has(row.target_id)) continue;
+          visibleRows.push(row);
+          tryPush(row, 'source');
+        }
       } catch {
         // ignore — return partial results for this chunk
       }
+    }
+    // Reuse the same rows for the incoming-direction cap. An internal edge
+    // always has a visible source, so no target-side SQL scan is needed.
+    if (limitPerNode > 0) {
+      for (const row of visibleRows) tryPush(row, 'target');
     }
     return result;
   }
@@ -482,11 +554,13 @@ export class CodeGraphReader {
    * @param nodeIds      the nodes to fetch neighbors for
    * @param direction    'in' (callers), 'out' (callees), or 'both'
    * @param limitPerNode cap on edges per node per direction (default 50)
+   * @param edgeType     optional exact semantic edge type (for example CALLS)
    */
   getBulkNeighbors(
     nodeIds: number[],
     direction: 'in' | 'out' | 'both' = 'both',
     limitPerNode = 50,
+    edgeType?: string,
   ): Map<number, { edge: CodeEdge; node: CodeNode }[]> {
     const result = new Map<number, { edge: CodeEdge; node: CodeNode }[]>();
     if (nodeIds.length === 0) return result;
@@ -515,16 +589,18 @@ export class CodeGraphReader {
     for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
       const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
       const placeholders = chunk.map(() => '?').join(',');
+      const typeFilter = edgeType ? ' AND e.type = ?' : '';
+      const params: Array<number | string> = edgeType ? [...chunk, edgeType] : chunk;
       try {
         if (direction === 'out' || direction === 'both') {
           // Out-edges: chunk nodes are sources; neighbor is target.
           const outRows = this.db
             .prepare(
               `SELECT ${EDGE_COLS} FROM edges e
-               WHERE e.source_id IN (${placeholders})
+               WHERE e.source_id IN (${placeholders})${typeFilter}
                ORDER BY e.id ASC`,
             )
-            .all(...chunk) as BulkEdgeRow[];
+            .all(...params) as BulkEdgeRow[];
           for (const row of outRows) {
             const anchorId = row.source_id;
             const cnt = outCount.get(anchorId) ?? 0;
@@ -543,10 +619,10 @@ export class CodeGraphReader {
           const inRows = this.db
             .prepare(
               `SELECT ${EDGE_COLS} FROM edges e
-               WHERE e.target_id IN (${placeholders})
+               WHERE e.target_id IN (${placeholders})${typeFilter}
                ORDER BY e.id ASC`,
             )
-            .all(...chunk) as BulkEdgeRow[];
+            .all(...params) as BulkEdgeRow[];
           for (const row of inRows) {
             const anchorId = row.target_id;
             const cnt = inCount.get(anchorId) ?? 0;
@@ -579,21 +655,74 @@ export class CodeGraphReader {
     return result;
   }
 
+  /** Return exact distinct incoming-neighbor labels without loading full nodes. */
+  getBulkIncomingNeighborLabels(nodeIds: number[], edgeType: string): Map<number, string> {
+    const result = new Map<number, string>();
+    const uniqueIds = [...new Set(nodeIds.filter(Number.isSafeInteger))];
+    for (let i = 0; i < uniqueIds.length; i += BULK_CHUNK_SIZE) {
+      const chunk = uniqueIds.slice(i, i + BULK_CHUNK_SIZE);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        const rows = this.db.prepare(
+          `SELECT DISTINCT n.id, n.label
+           FROM edges e
+           JOIN nodes n ON n.id = e.source_id
+           WHERE e.target_id IN (${placeholders}) AND e.type = ?`,
+        ).all(...chunk, edgeType) as Array<{ id: number; label: string }>;
+        for (const row of rows) result.set(row.id, row.label);
+      } catch {
+        // Legacy/minimal graph: preserve partial-result reader semantics.
+      }
+    }
+    return result;
+  }
+
   /**
    * Find nodes by file path substring (used by prepare_edit_context).
+   *
+   * Both the query and stored paths are compared with `/` separators. This is
+   * intentionally independent of the host OS: a graph indexed on Windows can
+   * be queried with `src/auth.ts`, and a POSIX graph with `src\\auth.ts`.
+   * Absolute queries are made project-relative when the projects table has a
+   * root_path, which lets MCP callers pass the absolute paths they receive from
+   * editor or workspace integrations.
    */
   findNodesByFilePath(project: string, filePathSubstr: string, limit = 50): CodeNode[] {
-    const escaped = filePathSubstr.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
-    const likePattern = `%${escaped}%`;
+    const safeLimit = Math.max(0, Math.min(10000, Math.floor(limit)));
+    if (safeLimit === 0) return [];
+
+    const normalizedQuery = normalizePathForSearch(filePathSubstr);
+    if (normalizedQuery.length === 0) return [];
+
+    const searchTerms = [normalizedQuery];
+    try {
+      const root = this.getProjectRoot(project);
+      if (root) {
+        const normalizedRoot = normalizePathForSearch(root).replace(/\/+$/, '');
+        const rootPrefix = `${normalizedRoot}/`;
+        if (normalizedQuery.toLowerCase().startsWith(rootPrefix.toLowerCase())) {
+          const relativeQuery = normalizedQuery.slice(rootPrefix.length);
+          if (relativeQuery.length > 0) searchTerms.unshift(relativeQuery);
+        }
+      }
+    } catch {
+      // Legacy/minimal V1 databases may not expose projects.root_path. The
+      // normalized full query remains valid and preserves prior behavior.
+    }
+
+    const uniqueTerms = [...new Set(searchTerms)];
+    const pathExpression = `REPLACE(file_path, CHAR(92), '/')`;
+    const conditions = uniqueTerms.map(() => `${pathExpression} LIKE ? ESCAPE '\\'`).join(' OR ');
+    const likePatterns = uniqueTerms.map(term => `%${escapeLike(term)}%`);
     return (
       this.db
         .prepare(
           `SELECT * FROM nodes
-           WHERE project = ? AND file_path LIKE ? ESCAPE '\\'
+           WHERE project = ? AND (${conditions})
            ORDER BY id ASC
            LIMIT ?`
         )
-        .all(project, likePattern, limit) as CodeNodeRow[]
+        .all(project, ...likePatterns, safeLimit) as CodeNodeRow[]
     ).map(deserializeCodeNode);
   }
 
@@ -719,21 +848,113 @@ export class CodeGraphReader {
   }
 
   /**
-   * Find modules by name (case-insensitive substring).
+   * Return the most connected nodes for one label.
+   *
+   * The Graph UI uses this as a building block for a balanced overview. The
+   * old overview selected the first N node ids, which made large projects
+   * appear to contain only whichever directory happened to be indexed first.
+   * Ranking within every label keeps the sample deterministic while retaining
+   * the nodes that carry the most structural information.
    */
+  listNodesByLabelRanked(project: string, label: string, limit: number): CodeNode[] {
+    const safeLimit = Math.max(0, Math.min(10000, Math.floor(limit)));
+    if (safeLimit === 0) return [];
+
+    const rows = this.db
+      .prepare(
+        `SELECT n.*
+         FROM nodes n
+         WHERE n.project = ? AND n.label = ?
+         ORDER BY (
+           (SELECT COUNT(*) FROM edges outgoing WHERE outgoing.source_id = n.id) +
+           (SELECT COUNT(*) FROM edges incoming WHERE incoming.target_id = n.id)
+         ) DESC, n.id ASC
+         LIMIT ?`
+      )
+      .all(project, label, safeLimit) as CodeNodeRow[];
+    return rows.map(deserializeCodeNode);
+  }
+
+  /** Return callable candidates with no incoming edge for dead-code sampling. */
+  listNodesWithoutIncoming(project: string, labels: string[], limit: number): CodeNode[] {
+    const safeLimit = Math.max(0, Math.min(10000, Math.floor(limit)));
+    if (safeLimit === 0 || labels.length === 0) return [];
+    const placeholders = labels.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(
+        `SELECT n.*
+         FROM nodes n
+         WHERE n.project = ?
+           AND n.label IN (${placeholders})
+           AND NOT EXISTS (
+             SELECT 1 FROM edges incoming
+             WHERE incoming.target_id = n.id AND incoming.type = 'CALLS'
+           )
+         ORDER BY
+           CASE
+             WHEN LOWER(REPLACE(n.file_path, CHAR(92), '/')) LIKE '%/test/%'
+               OR LOWER(REPLACE(n.file_path, CHAR(92), '/')) LIKE '%/tests/%'
+               OR LOWER(REPLACE(n.file_path, CHAR(92), '/')) LIKE '%/__tests__/%'
+               OR LOWER(REPLACE(n.file_path, CHAR(92), '/')) LIKE 'test/%'
+               OR LOWER(REPLACE(n.file_path, CHAR(92), '/')) LIKE 'tests/%'
+               OR LOWER(REPLACE(n.file_path, CHAR(92), '/')) LIKE '__tests__/%'
+               OR LOWER(REPLACE(n.file_path, CHAR(92), '/')) LIKE '%.test.%'
+               OR LOWER(REPLACE(n.file_path, CHAR(92), '/')) LIKE '%.spec.%'
+             THEN 1 ELSE 0
+           END ASC,
+           CASE
+             WHEN json_valid(n.properties_json) THEN
+               CASE
+                 WHEN COALESCE(json_extract(n.properties_json, '$.is_exported'), 0) IN (1, 'true')
+                   OR COALESCE(json_extract(n.properties_json, '$.exported'), 0) IN (1, 'true')
+                 THEN 1 ELSE 0
+               END
+             ELSE 0
+           END ASC,
+           n.id ASC
+         LIMIT ?`
+      )
+      .all(project, ...labels, safeLimit) as CodeNodeRow[];
+    return rows.map(deserializeCodeNode);
+  }
+
+  /**
+   * Find code nodes by a name, qualified name, or portable file-path
+   * substring. Labels are parameters rather than SQL fragments, so callers
+   * can implement explicit fallback orders without loading the graph in JS.
+   */
+  findNodesByNameOrPath(
+    project: string,
+    namePattern: string,
+    labels: readonly string[],
+    limit = 50,
+  ): CodeNode[] {
+    const safeLimit = Math.max(0, Math.min(10000, Math.floor(limit)));
+    if (safeLimit === 0 || labels.length === 0 || namePattern.length === 0) return [];
+
+    const placeholders = labels.map(() => '?').join(',');
+    const rawPattern = `%${escapeLike(namePattern)}%`;
+    const portablePattern = `%${escapeLike(normalizePathForSearch(namePattern))}%`;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM nodes
+         WHERE project = ?
+           AND label IN (${placeholders})
+           AND (
+             name LIKE ? ESCAPE '\\'
+             OR REPLACE(qualified_name, CHAR(92), '/') LIKE ? ESCAPE '\\'
+             OR REPLACE(file_path, CHAR(92), '/') LIKE ? ESCAPE '\\'
+           )
+         ORDER BY id ASC
+         LIMIT ?`
+      )
+      .all(project, ...labels, rawPattern, portablePattern, portablePattern, safeLimit) as CodeNodeRow[];
+    return rows.map(deserializeCodeNode);
+  }
+
+  /** Find modules by name, qualified name, or portable file path. */
   findModulesByName(project: string, namePattern: string, limit = 50): CodeNode[] {
-    // Escape backslash first (it's the ESCAPE char), then % and _.
-    const escaped = namePattern.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
-    const likePattern = `%${escaped}%`;
-    return (
-      this.db
-        .prepare(
-          `SELECT * FROM nodes
-           WHERE project = ? AND label = 'Module' AND name LIKE ? ESCAPE '\\'
-           LIMIT ?`
-        )
-        .all(project, likePattern, limit) as CodeNodeRow[]
-    ).map(deserializeCodeNode);
+    return this.findNodesByNameOrPath(project, namePattern, ['Module'], limit);
   }
 
   /**

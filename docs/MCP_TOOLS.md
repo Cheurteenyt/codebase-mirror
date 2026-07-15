@@ -1,6 +1,6 @@
 # MCP Tools Reference — Codebase Memory V2
 
-> Updated 2026-07-07 for version 0.15.9.
+> Updated 2026-07-15 for version 0.76.0.
 
 V2 exposes **7 MCP tools** via JSON-RPC 2.0 over stdio. This document describes each tool's input, output, and usage.
 
@@ -19,12 +19,32 @@ V2 exposes **7 MCP tools** via JSON-RPC 2.0 over stdio. This document describes 
 
 The server implements:
 - JSON-RPC 2.0 protocol (parse error -32700, invalid request -32600, method not found -32601, invalid params -32602, internal error -32603)
-- Batch request support
+- MCP `2025-11-25` by default, with negotiated compatibility for `2025-06-18`
+  and `2024-11-05`
+- No JSON-RPC batch extension; current MCP revisions removed batching, and
+  legacy initialization is always handled as an individual request
 - Notification handling (no response for requests without `id`)
-- `initialize` / `notifications/initialized` handshake
+- Strict `initialize` / `notifications/initialized` handshake: an early
+  `notifications/initialized` notification is ignored, and `tools/call`
+  returns JSON-RPC `-32600` until a standalone `initialize` request has been
+  negotiated and a subsequent initialized notification has been received
 - `ping` keepalive
 - `tools/list` and `tools/call` methods
 - 10MB max line length (configurable via `MCP_MAX_LINE_LENGTH`)
+
+For MCP 2025 revisions, every listed tool includes the [standard MCP behavioral hints](https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations). The five query
+tools are marked read-only, idempotent, non-destructive, and closed-world. The
+two human-memory writers are marked additive, non-idempotent, non-destructive,
+and closed-world. These fields are advisory hints, not an authorization or
+trust boundary: clients should only use them to inform tool policy when they
+trust this server's definitions. They are omitted when a legacy `2024-11-05`
+client negotiates that revision, because the schema did not yet define them.
+
+Tool results use compact JSON without changing the parsed response schema. Run
+`npm run bench:tokens -- --project <name>` to compare the actual compact string
+with a pretty serialization reconstructed locally from the same parsed value.
+The reported reduction is JSON whitespace transport bytes, not measured model
+tokens and not a second MCP response mode.
 
 ## Tools
 
@@ -49,13 +69,20 @@ The server implements:
     "total_notes": 45,
     "adrs": 12,
     "bugs": 8,
+    "active_bugs": 2,
     "refactors": 5,
+    "active_refactors": 1,
     "human_edges": 67
   },
   "documentation_coverage": {
     "critical_modules_total": 20,
     "critical_modules_documented": 14,
-    "coverage_pct": 70.0
+    "coverage_pct": 70.0,
+    "scanned_modules": 120,
+    "module_scan_limit": 5000,
+    "scan_truncated": false,
+    "critical_counts_are_lower_bounds": false,
+    "coverage_is_partial": false
   },
   "graph_status": {
     "available": true,
@@ -66,8 +93,6 @@ The server implements:
     "age_seconds": 3600,
     "stale_files_count": 0,
     "stale_files_sample": [],
-    "total_nodes": 1542,
-    "total_edges": 4200,
     "recommendation": "FRESH"
   },
   "recommendations": [
@@ -76,11 +101,22 @@ The server implements:
 }
 ```
 
+`bugs` and `refactors` are historical totals across every status for backwards
+compatibility. `active_bugs` and `active_refactors` count only
+`status: "active"`; these active counts drive the open-bug and pending-refactor
+recommendations.
+
+Module coverage scans at most 5,000 modules. When more exist,
+`scan_truncated` and `coverage_is_partial` are `true`, while
+`critical_counts_are_lower_bounds` marks the observed critical counts as lower
+bounds. `coverage_pct` then describes only the scanned portion and must not be
+treated as whole-project coverage.
+
 **Performance**: Uses bulk fetches — `getBulkNodeDegrees` + `getBulkNotesByCbmNodeIds` (1 query for all modules, not N+1). R21: `getBulkNotesByCbmNodeIds` uses the `human_node_cbm_links` junction table with an indexed JOIN instead of `JSON_EACH`.
 
 ### 2. `get_module_context`
 
-**Purpose**: Full context of a module — code structure + human notes + ADRs + bugs + refactors.
+**Purpose**: Full context of a module, file, class, or interface — code structure + human notes + ADRs + bugs + refactors.
 
 **Input**:
 ```json
@@ -98,7 +134,14 @@ The server implements:
 
 **Output**: Module info, code neighbors (up to `max_nodes`), human notes (non-ADR/bug/refactor), ADRs, bugs, refactors, risk score, documentation coverage.
 
-**Error handling**: If no module matches, suggests similar module names (substring of the query).
+`max_nodes` is an integer bounded to `0..1000`; the response reports the exact
+neighbor total, returned count, and whether the list was truncated.
+
+**Resolution and errors**: Resolves `Module`, then `File`, then
+`Class`/`Interface`, so native V2 graphs without `Module` nodes work directly.
+`module_name` also accepts portable or absolute file paths. Ambiguous matches
+return candidate qualified names and paths instead of silently choosing one;
+missing matches suggest nearby context roots.
 
 ### 3. `get_undocumented_hotspots`
 
@@ -115,7 +158,21 @@ The server implements:
 
 `label` is optional — one of `Module`, `Route`, `Function`, `Class`, `Interface`. If omitted, all labels are included.
 
-**Output**: Coverage stats + list of undocumented critical nodes, sorted by `degree + complexity` descending.
+`limit` is an integer bounded to `0..200`.
+
+**Output**: Coverage stats + list of undocumented critical nodes, sorted by
+`degree + complexity` descending, with `total_hotspots`,
+`total_hotspots_is_lower_bound`, `returned_hotspots`, and `truncated`
+metadata. The underlying report probes up to 5,001 nodes for each of the five
+supported labels and analyzes at most 5,000 per label.
+`summary.scan_truncated`,
+`summary.counts_are_lower_bounds`, `summary.coverage_is_partial`,
+`summary.scan_limit_per_label`, and `summary.truncated_labels` describe the
+overall scan; every `by_label` entry also reports `scan_truncated` and
+`counts_are_lower_bounds`. `total_hotspots_is_lower_bound` applies this
+information to the requested label selection. This distinguishes a partial
+source scan from a complete scan whose returned hotspot list was merely
+shortened by `limit`.
 
 ### 4. `create_human_note`
 
@@ -192,6 +249,8 @@ The server implements:
 - Human search: LIKE on `title`, `body_markdown`, `tags`, `frontmatter_json`, `author` (excludes `deprecated` notes)
 - Results are interleaved (code, human, code, human...) for balanced presentation
 - If only one source is enabled, it gets the full limit
+- `limit` is an integer bounded to `1..200`, and the applied value is returned
+  as `limit_applied`
 
 **Output**: Balanced results with `rank`, `type` (`code` or `human`), and source-specific fields.
 
@@ -225,14 +284,21 @@ At least one of `file_path` or `symbol_name` is required.
   "found": true,
   "nodes_found": 5,
   "nodes_analyzed": 5,
+  "matches_truncated": false,
+  "analysis_truncated": false,
   "nodes": [
     {
       "node": { "id": 123, "label": "Function", "name": "login", "file_path": "...", "start_line": 10, "end_line": 50 },
       "dependencies": {
+        "relationship_type": "CALLS",
         "calls": [{ "type": "CALLS", "target": "Function:verifyPassword", "target_id": 124 }],
         "called_by": [{ "type": "CALLS", "source": "Route:POST /api/login", "source_id": 200 }],
         "callers_count": 3,
         "callees_count": 5,
+        "callers_returned": 3,
+        "callees_returned": 5,
+        "callers_truncated": false,
+        "callees_truncated": false,
         "actual_degree": 8
       },
       "human_notes": {
@@ -240,7 +306,9 @@ At least one of `file_path` or `symbol_name` is required.
         "adrs": [{ "id": 2, "title": "ADR-003: Use JWT", "status": "active", "body_excerpt": "..." }],
         "refactors": [],
         "conventions": [{ "id": 3, "title": "Always log auth events", "body_excerpt": "..." }],
-        "total_notes": 3
+        "total_notes": 3,
+        "notes_returned": 3,
+        "truncated": false
       },
       "risk": {
         "score": 0.72,
@@ -255,13 +323,16 @@ At least one of `file_path` or `symbol_name` is required.
     "total_dependent_nodes": 12,
     "affected_modules": 3,
     "affected_routes": 1,
-    "affected_functions": 8
+    "affected_functions": 8,
+    "scope_complete": true
   },
   "human_memory_summary": {
     "open_bugs": 1,
     "active_adrs": 1,
     "pending_refactors": 0,
-    "applicable_conventions": 1
+    "applicable_conventions": 1,
+    "returned_counts_are_lower_bounds": false,
+    "scope_complete": true
   },
   "risk_assessment": {
     "max_risk_score": 0.72,
@@ -277,7 +348,15 @@ At least one of `file_path` or `symbol_name` is required.
 }
 ```
 
-**Performance**: Uses bulk fetches — `getBulkNodeDegreesSplit` (accurate uncapped in/out degree), `getBulkNotesByCbmNodeIds`, and a single `getNodesByIds` for blast radius (previously 3 calls).
+**Performance and precision**: Uses bulk fetches — `getBulkNodeDegreesSplit`
+(accurate uncapped `CALLS` in/out degree), filtered bulk neighbors,
+`getBulkNotesByCbmNodeIds`, and a single `getNodesByIds` for blast radius.
+Structural `CONTAINS`/`IMPORTS` edges do not inflate caller/callee counts.
+For `File` and `Module` nodes, dependency and blast-radius traversal uses
+`IMPORTS`; callable nodes use `CALLS`. The truncation fields distinguish the
+50-match search cap, the 20-node analysis cap, the per-node 20-neighbor return
+cap, and the linked-note response cap. If analysis scope is partial,
+`scope_complete` is false and the tool does not issue a `SAFE TO EDIT` verdict.
 
 **Risk score formula** (R14 fix — dead code not penalized):
 ```
@@ -305,6 +384,8 @@ riskScore = min(degreeScore * 0.5 + complexityScore * 0.3 + documentationPenalty
 
 ## Error Handling
 
-All tools catch exceptions and return them as tool results with `isError: true` (not as JSON-RPC errors). This allows the agent to see the error message and decide how to proceed.
-
-Validation errors (missing required args, invalid enums) are thrown and caught by the MCP server, returning a JSON-RPC error with code `-32602` (invalid params) or `-32603` (internal error).
+Tool handlers catch domain and validation exceptions and return tool results
+with `isError: true`, allowing the caller to see the actionable message. The
+server reserves JSON-RPC `-32602` for an invalid `tools/call` envelope (for
+example, a missing string `params.name`) and `-32603` for an unexpected failure
+outside a tool's handled result path.

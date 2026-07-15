@@ -123,8 +123,9 @@ const projectDir = join(tmpDir, 'project');
 const parallelDir = join(tmpDir, 'parallel-project');
 const cacheDir = join(tmpDir, 'cache');
 mkdirSync(join(cacheDir, 'codebase-memory-mcp'), { recursive: true });
-// R90: support CBM_BENCH_SMOKE=1 for fast CI runs
-const SMOKE = process.env.CBM_BENCH_SMOKE === '1';
+// Keep the environment switch for existing callers; --smoke is portable across
+// npm's Windows and POSIX shells.
+const SMOKE = process.argv.includes('--smoke') || process.env.CBM_BENCH_SMOKE === '1';
 const FILE_COUNT = SMOKE ? 8 : 20; // small enough for single-thread
 const PARALLEL_FILE_COUNT = SMOKE ? 24 : 64; // >20 to force parallel path
 const projectName = 'r90bench';

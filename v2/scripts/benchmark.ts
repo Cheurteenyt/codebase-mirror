@@ -15,6 +15,7 @@
 
 import { HumanMemoryStore } from '../src/human/store.js';
 import { SwrCache } from '../src/intelligence/swr-cache.js';
+import { CodeGraphReader } from '../src/bridge/sqlite-ro.js';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -160,11 +161,15 @@ function runBenchmarks(): BenchResult[] {
   const results: BenchResult[] = [];
   const tmpDir = mkdtempSync(join(tmpdir(), 'cbm-bench-'));
   const codeDbPath = join(tmpDir, 'bench.db');
+  let humanStore: HumanMemoryStore | undefined;
+  let codeDb: Database.Database | undefined;
+  let codeReader: CodeGraphReader | undefined;
 
   try {
     createCodeGraphDB(codeDbPath);
-    const humanStore = createHumanStore();
-    const codeDb = new Database(codeDbPath, { readonly: true });
+    humanStore = createHumanStore();
+    codeDb = new Database(codeDbPath, { readonly: true });
+    codeReader = new CodeGraphReader(codeDbPath);
     codeDb.pragma('temp_store = MEMORY');
     codeDb.pragma('cache_size = -65536');
 
@@ -235,29 +240,20 @@ function runBenchmarks(): BenchResult[] {
 
     const chunk100 = Array.from({ length: 100 }, (_, i) => i + 1);
     const chunk500 = Array.from({ length: 500 }, (_, i) => i + 1);
-    const ph100 = chunk100.map(() => '?').join(',');
-    const ph500 = chunk500.map(() => '?').join(',');
-
-    const stmtBulkDeg100_src = codeDb.prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${ph100}) GROUP BY source_id`);
-    const stmtBulkDeg100_tgt = codeDb.prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${ph100}) GROUP BY source_id`);
-    const stmtBulkDeg500_src = codeDb.prepare(`SELECT source_id AS id, COUNT(*) AS c FROM edges WHERE source_id IN (${ph500}) GROUP BY source_id`);
-    const stmtBulkDeg500_tgt = codeDb.prepare(`SELECT target_id AS id, COUNT(*) AS c FROM edges WHERE target_id IN (${ph500}) GROUP BY source_id`);
-    const stmtBulkEdges100_out = codeDb.prepare(`SELECT source_id, target_id, type FROM edges WHERE source_id IN (${ph100}) ORDER BY id ASC`);
-    const stmtBulkEdges100_in = codeDb.prepare(`SELECT source_id, target_id, type FROM edges WHERE target_id IN (${ph100}) ORDER BY id ASC`);
 
     results.push(bench(
-      'getBulkNodeDegrees (100 nodes, 2 queries)', 'Bulk Queries', ITERATIONS_BULK,
-      () => { stmtBulkDeg100_src.all(...chunk100); stmtBulkDeg100_tgt.all(...chunk100); }
+      'getBulkNodeDegrees (100 nodes, production reader)', 'Bulk Queries', ITERATIONS_BULK,
+      () => codeReader.getBulkNodeDegrees(chunk100)
     ));
 
     results.push(bench(
-      'getBulkNodeDegrees (500 nodes, 2 queries)', 'Bulk Queries', 200,
-      () => { stmtBulkDeg500_src.all(...chunk500); stmtBulkDeg500_tgt.all(...chunk500); }
+      'getBulkNodeDegrees (500 nodes, production reader)', 'Bulk Queries', 200,
+      () => codeReader.getBulkNodeDegrees(chunk500)
     ));
 
     results.push(bench(
-      'getBulkEdges (100 nodes, 2 queries + dedup)', 'Bulk Queries', ITERATIONS_BULK,
-      () => { stmtBulkEdges100_out.all(...chunk100); stmtBulkEdges100_in.all(...chunk100); }
+      'getBulkEdges (100 nodes, production dedup)', 'Bulk Queries', ITERATIONS_BULK,
+      () => codeReader.getBulkEdges(chunk100)
     ));
 
     // ── 4. SWR cache (swr-cache.ts) ──────────────────────────────────
@@ -316,10 +312,10 @@ function runBenchmarks(): BenchResult[] {
       }
     ));
 
-    // Cleanup
-    humanStore.close();
-    codeDb.close();
   } finally {
+    try { codeReader?.close(); } catch {}
+    try { codeDb?.close(); } catch {}
+    try { humanStore?.close(); } catch {}
     rmSync(tmpDir, { recursive: true, force: true });
   }
 

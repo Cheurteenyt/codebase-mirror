@@ -112,6 +112,29 @@ describe('HumanMemoryStore', () => {
     expect(store.countNodes('test')).toBe(3);
   });
 
+  it('counts active nodes by label separately from historical totals', () => {
+    store.createNode({ project: 'test', label: 'BugNote', title: 'Open bug' });
+    store.createNode({
+      project: 'test', label: 'BugNote', title: 'Closed bug', status: 'deprecated',
+    });
+    store.createNode({
+      project: 'test', label: 'RefactorPlan', title: 'Reviewed plan', status: 'reviewed',
+    });
+    store.createNode({ project: 'test', label: 'ADR', title: 'Active ADR' });
+
+    expect(store.countNodesByLabel('test')).toMatchObject({
+      _total: 4,
+      BugNote: 2,
+      RefactorPlan: 1,
+      ADR: 1,
+    });
+    expect(store.countActiveNodesByLabel('test')).toEqual({
+      BugNote: 1,
+      ADR: 1,
+      _total: 2,
+    });
+  });
+
   it('cascades delete edges when node deleted', () => {
     const node = store.createNode({
       project: 'test',

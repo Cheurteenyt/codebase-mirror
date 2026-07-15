@@ -1,6 +1,12 @@
 # Token Economy — How V2 Saves API Tokens
 
 > Updated 2026-07-07 for version 0.15.9.
+>
+> **Historical estimate model:** the -67% to -87% figures below are scenario
+> estimates from the v0.15.9-era workflow model, not measurements of the current
+> MCP transport or a model tokenizer. The 2026-07-15 compact-vs-pretty benchmark
+> is separate and measures only JSON whitespace bytes; see
+> [PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md](PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md).
 
 V2 is designed to **minimize the number of API calls and tokens** an AI agent needs to understand and modify a codebase.
 
@@ -101,9 +107,10 @@ Rounds 13-15 systematically eliminated N+1 query patterns. A single MCP call now
 
 R21 replaced the `JSON_EACH(cbm_node_ids)` pattern with a normalized junction table `human_node_cbm_links`. The old pattern scanned every row's JSON array; the new pattern uses an indexed B-tree JOIN for O(log n) reverse lookups. For a project with 5000 modules, `getBulkNotesByCbmNodeIds` went from ~2.5M operations to ~5000 index lookups (-80% to -95%).
 
-## Estimated Monthly Savings
+## Historical Estimated Monthly Savings
 
-Assuming an agent makes 100 edits/month on a mid-size project:
+The original v0.15.9 model assumed an agent makes 100 edits/month on a mid-size
+project; these values were not remeasured for the current package:
 
 | Metric | Without V2 | With V2 | Monthly Savings |
 |---|---|---|---|
@@ -120,7 +127,7 @@ For a team of 10 developers: **~$41/month, ~$492/year**.
 1. **Always call `prepare_edit_context` before editing** — it's the single most token-efficient call
 2. **Call `get_project_overview` first** — it tells you if data is stale and what needs attention
 3. **Use `search_code_and_memory` for exploration** — unified search saves a round-trip
-4. **Create notes via `create_human_note`** — one call instead of file write + sync + edge creation
+4. **Create notes via `create_human_note`** — one DB call can create and link the note; run Obsidian sync separately when vault output is required
 5. **Check `graph_status.freshness_label`** — if STALE or worse, recommend re-indexing before trusting the data
 6. **Respect the `recommendation` field** — it tells you "SAFE TO EDIT" or "PROCEED WITH CAUTION" with specific warnings
 7. **Use `blast_radius` to gauge impact** — if `affected_routes > 0`, your edit could break HTTP endpoints

@@ -45,6 +45,14 @@ export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
   total_nodes: number;
+  returned_nodes?: number;
+  truncated?: boolean;
+  sampling?: {
+    strategy: string;
+    node_limit: number;
+    available_by_label: Record<string, number>;
+    returned_by_label: Record<string, number>;
+  };
 }
 
 // ── Project Types ────────────────────────────────────────────────
@@ -90,8 +98,12 @@ export interface HumanNote {
 export interface HumanMemorySummary {
   total_notes: number;
   adrs: number;
+  /** Historical BugNote total, including reviewed/deprecated notes. */
   bugs: number;
+  active_bugs: number;
+  /** Historical RefactorPlan total, including reviewed/deprecated notes. */
   refactors: number;
+  active_refactors: number;
   conventions: number;
 }
 
@@ -127,6 +139,11 @@ export interface DashboardData {
     critical_modules_total: number;
     critical_modules_documented: number;
     coverage_pct: number | null;
+    scanned_modules: number;
+    module_scan_limit: number;
+    scan_truncated: boolean;
+    critical_counts_are_lower_bounds: boolean;
+    coverage_is_partial: boolean;
   };
   graph_status: GraphStatus;
   recommendations: string[];

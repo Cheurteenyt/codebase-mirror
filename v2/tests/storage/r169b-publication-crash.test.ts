@@ -80,6 +80,7 @@ import {
   FIXTURE_ROOT_FINGERPRINT,
 } from "../helpers/r169b-publisher-fixtures.js";
 import { readOptionalGenerationManifest, parseGenerationManifest } from "../../src/storage/generation-validation.js";
+import { CURRENT_DISCOVERY_POLICY_VERSION } from "../../src/indexer/schema.js";
 
 let cacheRoot: string;
 
@@ -581,7 +582,7 @@ describe("R169B-STEP3 — CAS-R169B-A1-18: catalog immutability", () => {
         sizeBytes: 999999,
         rootFingerprint: FIXTURE_ROOT_FINGERPRINT,
         extractorSemanticsVersion: 8,
-        discoveryPolicyVersion: 2,
+        discoveryPolicyVersion: CURRENT_DISCOVERY_POLICY_VERSION,
         firstPublishedAt: "2025-01-01T00:00:00.000Z",
         lastSeenAt: "2025-01-02T00:00:00.000Z",
         pinned: false,

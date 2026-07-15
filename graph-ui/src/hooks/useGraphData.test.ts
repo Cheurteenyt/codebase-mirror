@@ -121,4 +121,61 @@ describe("R44 (Part C): useGraphData — C1 regression test", () => {
     expect(result.current.error).toBeNull();
     expect(result.current.data).toEqual(mockData);
   });
+
+  it("shows initial loading feedback again when retrying after the first request failed", async () => {
+    const { api } = await import("../api/client");
+    (api.getLayout as any).mockRejectedValueOnce(new Error("Network error"));
+
+    const { result } = renderHook(() => useGraphData());
+    await act(async () => {
+      await result.current.fetchOverview("my-project");
+    });
+    expect(result.current.data).toBeNull();
+    expect(result.current.loading).toBe(false);
+
+    let resolveRetry!: (value: unknown) => void;
+    const retry = new Promise((resolve) => { resolveRetry = resolve; });
+    (api.getLayout as any).mockReturnValueOnce(retry);
+
+    let request!: Promise<void>;
+    act(() => {
+      request = result.current.fetchOverview("my-project");
+    });
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      resolveRetry({ nodes: [], edges: [], total_nodes: 0 });
+      await request;
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.data).not.toBeNull();
+  });
+
+  it("shows loading when returning to a previously loaded project after another project failed", async () => {
+    const { api } = await import("../api/client");
+    const projectA = { nodes: [], edges: [], total_nodes: 0 };
+    (api.getLayout as any)
+      .mockResolvedValueOnce(projectA)
+      .mockRejectedValueOnce(new Error("project b unavailable"));
+
+    const { result } = renderHook(() => useGraphData());
+    await act(async () => { await result.current.fetchOverview("a"); });
+    await act(async () => { await result.current.fetchOverview("b"); });
+    expect(result.current.data).toBeNull();
+
+    let resolveReturn!: (value: unknown) => void;
+    const returning = new Promise((resolve) => { resolveReturn = resolve; });
+    (api.getLayout as any).mockReturnValueOnce(returning);
+
+    let request!: Promise<void>;
+    act(() => { request = result.current.fetchOverview("a"); });
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      resolveReturn(projectA);
+      await request;
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.data).toEqual(projectA);
+  });
 });

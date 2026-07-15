@@ -3,13 +3,13 @@
 // and what files changed since the last index.
 //
 // R36: added TTL cache (30s) for getGraphStatus. This function runs
-// execSync('git log ...') which is expensive (50-200ms). With the cache,
+// execFileSync('git', ['log', ...]) which is expensive (50-200ms). With the cache,
 // repeated calls within 30s return instantly. The cache is invalidated
 // when the DB mutation notification arrives (via invalidateGraphStatusCache).
 
 import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { existsSync, statSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { SwrCache } from './swr-cache.js';
 import Database from 'better-sqlite3';
@@ -52,6 +52,34 @@ const NON_CODE_EXTENSIONS = new Set([
   'md', 'json', 'lock', 'yml', 'yaml', 'txt', 'gitignore', 'toml',
   'map', 'd.ts', 'license', 'env', 'dockerignore', 'editorconfig',
 ]);
+
+function isCodePath(filePath: string): boolean {
+  const lastDot = filePath.lastIndexOf('.');
+  if (lastDot === -1 || lastDot === 0) return false;
+  const ext = filePath.substring(lastDot + 1).toLowerCase();
+  if (ext === 'ts' && filePath.toLowerCase().endsWith('.d.ts')) return false;
+  return !NON_CODE_EXTENSIONS.has(ext);
+}
+
+function parsePorcelainPaths(output: string): string[] {
+  const records = output.split('\0');
+  const paths: string[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record || record.length < 4) continue;
+    const status = record.slice(0, 2);
+    paths.push(record.slice(3));
+    // In porcelain v1 -z, rename/copy records carry the second path in the
+    // next NUL-delimited field. Include both sides so an indexed old path is
+    // not missed when the new path is untracked by the graph.
+    if (status.includes('R') || status.includes('C')) {
+      const secondPath = records[index + 1];
+      if (secondPath) paths.push(secondPath);
+      index += 1;
+    }
+  }
+  return paths;
+}
 
 export interface GraphStatus {
   available: boolean;
@@ -157,7 +185,7 @@ function computeGraphStatus(
   };
 
   if (!codeReader) {
-    status.recommendation = 'Code graph not available. Run "cbm index_repository" to build it.';
+    status.recommendation = 'Code graph not available. Run "cbm-v2 index --project <name> --root <path>" to build it.';
     return status;
   }
 
@@ -265,33 +293,63 @@ function computeGraphStatus(
   // detect ALL files modified since the last time the graph was actually
   // trustworthy.
   const gitSinceDate = status.last_indexed ? new Date(status.last_indexed) : dbMtime;
+  let gitFreshnessCheckFailed = false;
   if (gitSinceDate && existsSync(join(projectRoot, '.git'))) {
     try {
       const unixTs = Math.floor(gitSinceDate.getTime() / 1000);
-      const gitResult = execSync(
-        `git log --name-only --pretty=format: --since="@${unixTs}" --diff-filter=ACMRTUXB 2>/dev/null | sort -u | grep -v '^$' | head -100`,
-        { cwd: projectRoot, encoding: 'utf-8', timeout: 5000 }
-      ).trim();
+      const gitResult = execFileSync(
+        'git',
+        [
+          'log',
+          '--name-only',
+          '--pretty=format:',
+          `--since=@${unixTs}`,
+          '--diff-filter=ACDMRTUXB',
+        ],
+        {
+          cwd: projectRoot,
+          encoding: 'utf-8',
+          timeout: 5000,
+          maxBuffer: 2 * 1024 * 1024,
+          shell: false,
+        }
+      );
 
-      if (gitResult) {
-        const changedFiles = gitResult.split('\n').filter((f) => f.length > 0);
-        const codeFiles = changedFiles.filter((f) => {
-          // Skip dotfiles (no real extension) and known non-code extensions.
-          const lastDot = f.lastIndexOf('.');
-          if (lastDot === -1 || lastDot === 0) return false; // no extension or dotfile
-          const ext = f.substring(lastDot + 1).toLowerCase();
-          // CRITICAL: also skip .d.ts files (TypeScript declaration files).
-          // The simple last-extension check would see "ts" and treat them as code,
-          // but .d.ts files are generated/declaration files that don't affect the
-          // code graph's structural accuracy.
-          if (ext === 'ts' && f.endsWith('.d.ts')) return false;
-          return !NON_CODE_EXTENSIONS.has(ext);
-        });
-        status.stale_files_count = codeFiles.length;
-        status.stale_files_sample = codeFiles.slice(0, 10);
-      }
+      // `git log` cannot see working-tree changes. Read porcelain status too,
+      // then only flag existing dirty/untracked files whose mtime is newer
+      // than the successful index. A deleted/renamed-away path is stale only
+      // when that exact file still exists in the graph.
+      const worktreeResult = execFileSync(
+        'git',
+        ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+        {
+          cwd: projectRoot,
+          encoding: 'utf-8',
+          timeout: 5000,
+          maxBuffer: 2 * 1024 * 1024,
+          shell: false,
+        },
+      );
+      const dirtyAfterIndex = parsePorcelainPaths(worktreeResult).filter((filePath) => {
+        const absolutePath = join(projectRoot, filePath);
+        if (existsSync(absolutePath)) {
+          return statSync(absolutePath).mtimeMs > gitSinceDate.getTime();
+        }
+        return codeReader.findNodesByFilePath(project, filePath, 50)
+          .some((node) => node.file_path.replace(/\\/gu, '/') === filePath.replace(/\\/gu, '/'));
+      });
+      const changedFiles = [...new Set([
+        ...gitResult.split(/\r?\n/).filter((filePath) => filePath.length > 0),
+        ...dirtyAfterIndex,
+      ])];
+      const codeFiles = changedFiles.filter(isCodePath).sort();
+      status.stale_files_count = codeFiles.length;
+      status.stale_files_sample = codeFiles.slice(0, 10);
     } catch {
-      // git not available or not a git repo — fall back to age-only check below.
+      // Fail closed: an unavailable, timed-out, or oversized Git query means
+      // we cannot prove that the graph matches the working tree. Never turn
+      // that uncertainty into a misleading FRESH status.
+      gitFreshnessCheckFailed = true;
     }
   }
 
@@ -310,6 +368,9 @@ function computeGraphStatus(
   } else if (status.stale_files_count > 0) {
     status.stale = true;
     status.stale_reason = `${status.stale_files_count} source file(s) modified since last index`;
+  } else if (gitFreshnessCheckFailed) {
+    status.stale = true;
+    status.stale_reason = 'Unable to verify source changes since last index (Git history query failed)';
   } else if (status.age_seconds !== null && status.age_seconds > 3600) {
     status.stale = true;
     status.stale_reason = `Code graph is ${Math.floor(status.age_seconds / 3600)}h old`;

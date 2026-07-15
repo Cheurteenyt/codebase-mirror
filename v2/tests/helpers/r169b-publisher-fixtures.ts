@@ -20,6 +20,7 @@ import {
   initIndexerSchema,
   updateProjectStats,
   computeRootFingerprint,
+  CURRENT_DISCOVERY_POLICY_VERSION,
 } from "../../src/indexer/schema.js";
 import {
   cbmCacheDir,
@@ -91,7 +92,7 @@ export interface CreateStagingDbOptions {
   readonly noSuccessfulIndex?: boolean;
   /** If true, set extractor_semantics_version=7 (causes STAGING_DB_STATE_INVALID). */
   readonly wrongSemantics?: number;
-  /** If true, set discovery_policy_version=1 (causes STAGING_DB_STATE_INVALID). */
+  /** Override discovery_policy_version (non-current values cause STAGING_DB_STATE_INVALID). */
   readonly wrongDiscovery?: number;
   /** If true, insert a second project row (causes STAGING_DB_PROJECT_MISMATCH). */
   readonly secondProjectRow?: string;
@@ -181,7 +182,7 @@ export function createValidStagingDb(
     options.wrongSemantics ?? 8, // extractorSemanticsVersion
     options.withLastError ?? null, // indexError
     true, // aliasHistoryInitialized
-    options.wrongDiscovery ?? 2, // discoveryPolicyVersion
+    options.wrongDiscovery ?? CURRENT_DISCOVERY_POLICY_VERSION,
     options.nullRootFingerprint ? null : rootFingerprint,
   );
 
@@ -200,7 +201,8 @@ export function createValidStagingDb(
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       options.secondProjectRow, "/other/root", new Date().toISOString(), 0, 0, 0, 1, 8,
-      new Date().toISOString(), new Date().toISOString(), null, 1, 2, "/other/root:1:2",
+      new Date().toISOString(), new Date().toISOString(), null, 1,
+      CURRENT_DISCOVERY_POLICY_VERSION, "/other/root:1:2",
     );
   }
 

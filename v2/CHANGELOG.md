@@ -1,6 +1,142 @@
 # Changelog — Codebase Memory V2
 
-## Unreleased — R169B-STEP10 (2026-07-14) Durable Generation Publisher — Step 10: Bloc B Completion + Bloc C Crash Harness (GPT 5.6 Final Integration Gate)
+## 0.76.0 — performance, precision, UI, and update readiness (2026-07-15)
+
+### Performance and token efficiency
+
+- Restored complete discovery as the default while retaining an explicit
+  `--discovery-mode fast` full-rebuild mode; discovery policy version 3
+  prevents silent cache reuse across the corrected coverage boundary. Fast
+  discovery is rejected with incremental indexing before any database access,
+  preventing omitted source families from being deleted or certified stale.
+- Compact every MCP JSON result without changing its parsed schema. The new
+  `bench:tokens` command compares the actual compact payload with a pretty
+  serialization reconstructed locally from the same parsed value; it measures
+  JSON whitespace transport bytes, not tokenizer output.
+- Added behavioral annotations to all seven MCP tools, bounded high-volume
+  numeric inputs, portable module/file resolution, explicit ambiguity errors,
+  and honest match/analysis truncation metadata.
+- `prepare_edit_context` now computes callers, callees, degree, risk, and blast
+  radius from `CALLS` edges only instead of inflating them with structural
+  `CONTAINS` and `IMPORTS` edges.
+- Graph overview sampling is deterministic and balanced by label and degree,
+  reserves capacity for dead-code candidates, and returns exact sampling and
+  truncation metadata. The UI requests at most 1,000 overview nodes.
+
+### Graph UI quality and runtime behavior
+
+- Lazy-load the Graph and Control routes, pause dashboard/graph WebSocket work
+  while hidden, and revalidate when a warm tab becomes visible again.
+- Preserve graph simulation objects and settled positions by node ID, avoid
+  reheating identical/subset data, and fit/reset against the real graph bounds.
+- Size collision and hit-testing consistently, keep the canvas mounted through
+  empty filters, expose shown/total sampling state, and improve responsive
+  navigation, project cards, dashboards, statistics, focus, and ARIA panels.
+- Stack graph actions below the HUD on narrow screens to prevent the deterministic
+  390px overlap found during the final independent review.
+
+### Update and distribution readiness
+
+- Require Node.js 22.12.0 or newer, test the exact floor on Linux and Windows,
+  and use Node 24 LTS for development and Docker. Both packages declare
+  `packageManager: npm@10.9.0` as an authoring/Corepack hint, not a runtime
+  constraint; npm 10 and npm 11 are compatible with the v3 lockfiles.
+- Re-enabled bounded grouped Dependabot minor/patch updates for GitHub Actions,
+  V2, Graph UI, and Docker. Applied the safe in-range dependency patches while
+  leaving breaking majors as deliberate migrations.
+- The package and Docker CI jobs now launch the embedded UI over HTTP from the
+  final artifact, including an arbitrary working directory for the npm package.
+- Added an explicit Graph UI typecheck script and a reliable cross-platform V1/V2
+  benchmark harness that fails closed on incomplete runs.
+
+### Final lifecycle hardening
+
+- Terminate complete owned indexer process trees (POSIX process groups and
+  Windows `taskkill /T /F`) and wait for their cleanup within the shutdown budget.
+- Bound HTTP/WebSocket shutdown globally, escalate non-cooperative peers, and
+  close project-health readers in `finally` on every error path.
+
+### CONF-R169-001, 002 and 008 — project-store correctness
+
+- Route each UI request through a bounded per-project store registry instead
+  of reusing the startup project's physical SQLite handles.
+- Open code and human handles lazily, require both physical partitions before
+  treating logical names as aliases, revalidate aliases after path replacement,
+  and block deletion while a request lease is in flight.
+- Refresh the code reader atomically after a successful first index and only
+  announce completion after the resulting graph can be opened.
+- Refuse project deletion by canonical path/file identity, including
+  case-insensitive aliases of an open store.
+
+### CONF-R169-003 and 005 — owned index process lifecycle
+
+- Removed the arbitrary-PID `/api/process-kill` mutation. Index jobs retain
+  their own `ChildProcess` handle and expose only
+  `/api/index-jobs/<jobId>/terminate`.
+- Ignore unused stdout, retain only a bounded stderr tail, limit concurrent and
+  duplicate jobs, enforce a timeout, and terminate/kill owned children during
+  asynchronous server shutdown.
+- Finalize from the direct child's `exit` event if a descendant keeps a pipe
+  open, and prevent a partially received index POST from spawning after server
+  shutdown has begun.
+- Launch the packaged/source V2 indexer directly instead of assuming the
+  legacy `cbm` executable is installed.
+
+### CONF-R169-004 — localhost HTTP and WebSocket boundary
+
+- Added exact Host and Origin validation, JSON-only mutations, a runtime
+  256-bit CSRF/WebSocket credential, Sec-Fetch-Site checks, WebSocket payload
+  and message-rate limits, and browser hardening headers.
+- The frontend now bootstraps and retries runtime credentials, including a
+  forced refresh when reconnecting after a server restart.
+
+### CONF-R169-006 — exact-SHA post-merge governance
+
+- Made the merge gate non-cancellable once running and added an idempotent,
+  repository-owned watchdog that checks and dispatches missing CI/CodeQL runs
+  only for the current exact `main` SHA.
+
+### Cross-platform update verification
+
+- Replaced POSIX-only environment assignment in both smoke benchmark npm
+  scripts with the portable `--smoke` option while preserving the old
+  environment switch for existing callers.
+- Added focused Windows regression coverage for worker URLs, project storage
+  paths, MCP graph status, and update-verification commands.
+- The native indexer now creates its DB parent on a fresh installation instead
+  of depending on a human-memory store having run first.
+- Git freshness queries are bounded natively and fail closed as `STALE` on Git
+  errors/timeouts instead of silently certifying a graph as fresh.
+
+### CONF-R169-007 — documentation authority
+
+- R169B is merged on `main` at
+  `15a732d91984e5b4ffa29b4e129ac0d6316c9fca`; it is no longer described
+  as planned, pending merge, or an active product path.
+- The **MERGED / INACTIVE** boundary is now explicit: R169B provides reserve,
+  prepare/WAL/validate, fd copy+hash, temp fsync, no-clobber link, metadata,
+  manifest, CAS, GC, and recovery primitives, with storage/concurrency/crash
+  tests and a publication benchmark. No production indexer or reader calls
+  those primitives.
+- The active product boundary is unchanged: `indexProjectWasm`, UI, CLI,
+  MCP, and readers still use the legacy `<project>.db` through
+  `defaultCodeDbPath`; full product publication remains non-atomic.
+- R169C indexer integration, R169D reader/lifecycle cutover, and R169E
+  integrated crash/concurrency/performance/activation gating are future work.
+- Corrected the publisher protocol in the canonical docs: staging is not
+  renamed into `generations/`; the publisher copies+hashes through fds into
+  an exclusive temp, fsyncs it, and creates the final entry with a
+  no-clobber `link` before metadata/manifest/CAS completion.
+- Corrected repository-maintenance documentation and configuration: Dependabot
+  scheduled version updates are grouped, weekly, and bounded per ecosystem;
+  repository-level security updates remain enabled.
+- Added `tests/ci/r169-canonical-documentation.test.ts` to lock the four
+  canonical documents against stale R169B merge/status, promotion, and
+  historical step-header claims.
+
+---
+
+## 0.75.0 — R169B implementation history: final integration gate (2026-07-14)
 
 **R169B remains FOUNDATION / INACTIVE.** This step implements the Bloc B
 completion (B3 GC proof under lock + B4 CAS layout leaf module) and the
@@ -90,7 +226,7 @@ for all new Bloc B behaviors and the long-overdue documentation rewrite.
 
 ---
 
-## Unreleased — R169B-STEP9 (2026-07-14) Durable Generation Publisher — Step 9: No-Carry Foundation Closure (GPT 5.6 Pass 7 Audit)
+## 0.75.0 — R169B implementation history: no-carry foundation closure (2026-07-14)
 
 **R169B remains FOUNDATION / INACTIVE.** This step addresses the 20 findings
 (1 P0 + 14 P1 + 5 P2) raised by the GPT 5.6 Pass 7 audit of R169B-STEP8.
@@ -186,7 +322,7 @@ MODIFIED:
 
 ---
 
-## Unreleased — R169B-STEP8 (2026-07-14) Durable Generation Publisher — Step 8: Final Foundation Closure (GPT 5.6 Pass 6 Audit)
+## 0.75.0 — R169B implementation history: final foundation closure (2026-07-14)
 
 **R169B remains FOUNDATION / INACTIVE.** This step addresses the 18 findings
 (1 P0 + 12 P1 + 5 P2) raised by the GPT 5.6 Pass 6 audit of R169B-STEP7. No
@@ -277,7 +413,7 @@ MODIFIED:
 
 ---
 
-## Unreleased — R169B-STEP7 (2026-07-14) Durable Generation Publisher — Step 7: Recovery Completion, Real Fault Evidence, Concurrency, Documentation and Performance Closure (GPT 5.6 Pass 5 Audit)
+## 0.75.0 — R169B implementation history: recovery, fault, concurrency, documentation, and performance closure (2026-07-14)
 
 **R169B remains FOUNDATION / INACTIVE.** This step addresses the 17 findings
 (12 P1 + 5 P2) raised by the GPT 5.6 Pass 5 audit of R169B-STEP6. No
@@ -371,7 +507,7 @@ MODIFIED:
 - Publication benchmark: clean.
 - Umask matrix (0022 / 0000 / 0027): all R169 tests pass.
 
-### Honest limitations (R169B-STEP7)
+### Historical limitations after the recovery/concurrency increment
 
 - R169B is FOUNDATION / INACTIVE — no production code calls the publisher.
 - Orphan DBs in `generations/` that are not in the catalog are NOT swept.
@@ -386,7 +522,7 @@ MODIFIED:
 
 ---
 
-## Unreleased — R169B-STEP6 (2026-07-14) Durable Generation Publisher — Step 6: Deterministic Recovery, Real Crash Evidence, CAS/Metadata Hardening, Documentation and Performance Closure (GPT 5.6 Pass 4 Audit)
+## 0.75.0 — R169B implementation history: deterministic recovery and CAS/metadata hardening (2026-07-14)
 
 **R169B remains FOUNDATION / INACTIVE.** This step addresses the 17 findings
 (12 P1 + 5 P2) raised by the GPT 5.6 Pass 4 audit of R169B-STEP5. No
@@ -495,7 +631,7 @@ MODIFIED:
 - Publication benchmark: clean.
 - Umask matrix (0022 / 0000 / 0027): all R169 tests pass.
 
-### Honest limitations (R169B-STEP6)
+### Historical limitations after the deterministic-recovery increment
 
 - R169B is FOUNDATION / INACTIVE — no production code calls the publisher.
 - Orphan DBs in `generations/` that are not in the catalog are NOT swept.
@@ -509,7 +645,7 @@ MODIFIED:
 
 ---
 
-## Unreleased — R169B-STEP5 (2026-07-14) Durable Generation Publisher — Step 5: Recovery, Evidence, Metadata, CAS and Documentation Closure (GPT 5.6 Pass 3 Audit)
+## 0.75.0 — R169B implementation history: recovery, metadata, CAS, and documentation closure (2026-07-14)
 
 **R169B remains FOUNDATION / INACTIVE.** This step closes the 16 findings
 (11 P1 + 5 P2) raised by the GPT 5.6 Pass 3 audit of R169B-STEP4. No
@@ -627,7 +763,7 @@ MODIFIED:
 - Publication benchmark: clean.
 - Umask matrix (0022 / 0000 / 0027): all R169 tests pass.
 
-### Honest limitations (R169B-STEP5)
+### Historical limitations after the recovery/metadata increment
 
 - R169B is FOUNDATION / INACTIVE — no production code calls the publisher.
 - The `PublisherOps` fault-injection harness exists but is NOT wired
@@ -645,7 +781,7 @@ MODIFIED:
 
 ---
 
-## Unreleased — R169B-STEP4 (2026-07-14) Durable Generation Publisher — Step 4: Immutability, Real Crash Harness and GC/CAS Closure (GPT 5.6 Pass 2 Audit)
+## 0.75.0 — R169B implementation history: immutability, crash harness, and GC/CAS closure (2026-07-14)
 
 **R169B remains FOUNDATION / INACTIVE.** This step closes the 19 findings
 (2 P0, 9 P1, 8 P2) raised by the GPT 5.6 Pass 2 audit of R169B-STEP3. No
@@ -835,7 +971,7 @@ MODIFIED:
 
 ---
 
-## Unreleased — R169B-STEP3 (2026-07-14) Durable Generation Publisher — Step 3: Correctness Closure (GPT 5.6 Pass 1 Audit)
+## 0.75.0 — R169B implementation history: correctness closure (2026-07-14)
 
 **R169B remains FOUNDATION / INACTIVE.** This step closes the 22 findings
 (P0/P1/P2) raised by the GPT 5.6 Pass 1 audit of R169B-STEP2. No production
@@ -1038,7 +1174,7 @@ MODIFIED:
 
 ---
 
-## 0.75.0 — R169B-STEP1 (2026-07-13) Durable Generation Publisher — Step 1: Module Cycle Break + R169B Type/Warning Taxonomy + Doc Fixes
+## 0.75.0 — R169B implementation history: module split, taxonomy, and documentation fixes (2026-07-13)
 
 **R169B remains FOUNDATION / INACTIVE.** This step does NOT activate
 any production code path. It (1) breaks the R169A module cycle between
@@ -1199,7 +1335,7 @@ Fixed contradictions in the R169A documentation across four files:
     `LEGACY_SOURCE_OPEN_FAILED` are part of the historical narrative
     (they describe the R169A-FIX-R2 rename) and are retained.
 
-### What R169B-STEP1 does NOT deliver
+### Historical scope exclusions after the first R169B increment
 
 - The R169B publisher primitives themselves (staging, validation, CAS,
   GC) — those land in subsequent R169B steps.

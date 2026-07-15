@@ -14,14 +14,14 @@ export function ControlTab() {
   const [jobs, setJobs] = useState<Array<{ id: string; status: string; error?: string; started_at: string; project: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [killError, setKillError] = useState<string | null>(null);
+  const [terminateError, setTerminateError] = useState<string | null>(null);
   // R47 (M1): replaced mountedRef with AbortController for real network
   // cancellation. The old mountedRef prevented setState on unmounted but
   // the 3 API requests still ran to completion (each spawning ps aux on
   // the server). Now the fetch is cancelled at the network level.
   const abortRef = useRef<AbortController | null>(null);
   // R47 (L3): track the kill-refresh timer so it can be cleaned up on unmount.
-  const killTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const terminateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -67,26 +67,22 @@ export function ControlTab() {
     return () => {
       abortRef.current?.abort(); // R48 (#2): abort current, not stale closure
       clearInterval(interval);
-      // R47 (L3): clean up the kill-refresh timer.
-      if (killTimerRef.current) clearTimeout(killTimerRef.current);
+      // Clean up the delayed post-termination refresh.
+      if (terminateTimerRef.current) clearTimeout(terminateTimerRef.current);
     };
   }, [refresh]);
 
-  // R43 (M3): confirmation gate on process-kill. Killing a process is
-  // irreversible — a misclick on the small Kill button shouldn't terminate
-  // a long-running index job without consent.
-  const handleKill = async (pid: number) => {
-    if (!window.confirm(`Kill process ${pid}? This cannot be undone.`)) return;
-    setKillError(null);
+  // Only server-owned running index jobs are terminable, by job ID.
+  const handleTerminate = async (jobId: string) => {
+    if (!window.confirm(`Terminate index job ${jobId}?`)) return;
+    setTerminateError(null);
     try {
-      await api.killProcess(pid);
-      // R47 (L3): track the timer so it's cleaned up on unmount.
-      // R48 (#6): clear any previous kill timer to prevent double-refresh
-      // when rapidly killing multiple processes.
-      if (killTimerRef.current) clearTimeout(killTimerRef.current);
-      killTimerRef.current = setTimeout(() => refresh(abortRef.current?.signal), 500);
+      await api.terminateIndexJob(jobId);
+      // Replace any pending delayed refresh after a termination request.
+      if (terminateTimerRef.current) clearTimeout(terminateTimerRef.current);
+      terminateTimerRef.current = setTimeout(() => refresh(abortRef.current?.signal), 500);
     } catch (e) {
-      setKillError(e instanceof Error ? e.message : "Failed to kill process");
+      setTerminateError(e instanceof Error ? e.message : "Failed to terminate index job");
     }
   };
 
@@ -122,9 +118,9 @@ export function ControlTab() {
         </button>
       </div>
 
-      {killError && (
+      {terminateError && (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-[12px] text-red-400">
-          {killError}
+          {terminateError}
         </div>
       )}
 
@@ -156,6 +152,14 @@ export function ControlTab() {
                 </span>
                 <span className="text-foreground/40 truncate">{job.project}</span>
                 <span className="text-foreground/20 ml-auto">{job.started_at}</span>
+                {job.status === 'running' && (
+                  <button
+                    onClick={() => handleTerminate(job.id)}
+                    className="px-2 py-0.5 rounded text-red-400/60 hover:bg-red-500/10 hover:text-red-400 text-[10px]"
+                  >
+                    Terminate
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -178,14 +182,6 @@ export function ControlTab() {
                 <span className="text-foreground/30 tabular-nums w-14">{p.cpu.toFixed(1)}%</span>
                 <span className="text-foreground/30 tabular-nums w-20">{formatBytes(p.rss_mb * 1024 * 1024)}</span>
                 <span className="text-foreground/50 truncate flex-1">{p.command}</span>
-                {!p.is_self && (
-                  <button
-                    onClick={() => handleKill(p.pid)}
-                    className="px-2 py-0.5 rounded text-red-400/60 hover:bg-red-500/10 hover:text-red-400 text-[10px]"
-                  >
-                    Kill
-                  </button>
-                )}
               </div>
             ))}
           </div>

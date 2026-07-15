@@ -241,8 +241,8 @@ describe('R155: Atomic State + Fingerprint v2 + Special File Safety', () => {
     expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
   });
 
-  it('regression: CURRENT_DISCOVERY_POLICY_VERSION is 2 (R155)', () => {
-    expect(CURRENT_DISCOVERY_POLICY_VERSION).toBe(2);
+  it('regression: CURRENT_DISCOVERY_POLICY_VERSION is 3 (coverage modes)', () => {
+    expect(CURRENT_DISCOVERY_POLICY_VERSION).toBe(3);
   });
 
   it('regression: alias_history survives full reindex with atomic commit', async () => {

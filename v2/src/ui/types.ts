@@ -4,21 +4,37 @@
 // the full UiServer class.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { ChildProcess } from 'node:child_process';
 import type { HumanMemoryStore } from '../human/store.js';
 import type { CodeGraphReader } from '../bridge/sqlite-ro.js';
 
-/**
- * Index job tracking entry. R17: in-memory, keyed by job ID (string).
- * R51 (SEC-8): childPid is cleared to undefined when the process exits,
- * so a recycled PID can't be killed via /api/process-kill.
- */
+/** Internal index job state. Child handles and timers never enter API DTOs. */
+export type IndexJobStatus =
+  | 'pending'
+  | 'running'
+  | 'terminating'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out';
+
 export interface IndexJob {
   id: string;
-  status: string;
+  status: IndexJobStatus;
   error?: string;
   started_at: string;
   project: string;
-  childPid?: number;
+  rootPath: string;
+  child?: ChildProcess;
+  stderrTail: string;
+  timeoutTimer?: NodeJS.Timeout;
+  forceKillTimer?: NodeJS.Timeout;
+  exitDrainTimer?: NodeJS.Timeout;
+  terminationReason?: 'requested' | 'timeout' | 'shutdown';
+  treeKillInProgress?: boolean;
+  treeKillPromise?: Promise<void>;
+  treeKiller?: ChildProcess;
+  treeKillTimeout?: NodeJS.Timeout;
 }
 
 /**
@@ -53,6 +69,16 @@ export interface RouteContext {
   port: number;
   graphUiPath: string;
   indexJobs: Map<string, IndexJob>;
+  refreshCodeReader: (project: string) => CodeGraphReader;
+  resolveProjectName: (project: string) => string;
+  isProjectStoreOpen: (project: string) => boolean;
+  getAllowedRoots: () => string[];
+  indexJobTimeoutMs: number;
+  indexJobTerminationGraceMs: number;
+  maxConcurrentIndexJobs: number;
+  maxConcurrentIndexJobsPerProject: number;
+  isStopping: () => boolean;
+  getIndexerLaunch: (rootPath: string, project: string) => { command: string; args: string[] };
   logBuffer: string[];
   log: (line: string) => void;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;

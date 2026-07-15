@@ -1,8 +1,13 @@
 # V2 Architecture — Codebase Memory V2
 
-> **Status:** FOUNDATION / INACTIVE (R169A) — R169A is merged and remains FOUNDATION / INACTIVE. No production path uses the generation store.
-> **Last verified:** 0.75.0 / R169A — generation store foundation is merged and remains FOUNDATION / INACTIVE.
-> Current behavior (indexer, readers, UI, MCP, CLI) is unchanged from R168.1 and still uses the legacy `<project>.db` path. R169A is merged — no production code path calls it. `DATA-CARRY-01` (P1) remains OPEN until R169E (after crash matrix + concurrency + performance + activation).
+> **Last verified:** 2026-07-15 at 0.76.0. R169A and R169B are merged;
+> R169B is on `main` at
+> `15a732d91984e5b4ffa29b4e129ac0d6316c9fca`.
+> **Activation boundary:** the generation-store resolver, publisher, CAS,
+> GC, and recovery primitives are MERGED / INACTIVE. The production indexer,
+> readers, UI, MCP, and CLI still write or open the legacy `<project>.db`
+> through `defaultCodeDbPath`. R169C+ integration/activation is future work,
+> so `DATA-CARRY-01` remains open.
 
 ## 1. System Context
 
@@ -15,16 +20,17 @@ Codebase Memory V2 is a hybrid code intelligence system that combines:
   memory CRUD.
 - A **web-based graph UI** (React/Vite) served by the V2 backend.
 
-The V1 C engine is retained as a **reference and fallback** for languages
-not yet covered by the WASM indexer, but V2 is fully autonomous for
-TypeScript/JavaScript projects.
+The V1 C engine is retained as a **reference and optional separate database
+producer**. V2 never launches V1 as a fallback. If an operator runs V1
+separately, `CodeGraphReader` can consume the compatible `<project>.db` it
+produced.
 
 ## 2. Monorepo Components
 
 ```
 v2/             Core: CLI, indexer, MCP, human memory, UI server
 graph-ui/       Frontend: React/Vite graph visualization
-v1-reference/   Historical C engine (reference + fallback)
+v1-reference/   Historical C engine (reference + separate DB producer)
 scripts/ci/     Infrastructure automation (mirror state machine)
 docs/           Documentation
 ```
@@ -46,16 +52,17 @@ Key modules:
 - `v2/src/indexer/indexer.ts` — orchestrator: full/incremental, parallel workers
 - `v2/src/indexer/schema.ts` — SQLite schema, `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8`
 
-## 4. V1 C Engine — Fallback/Reference
+## 4. V1 C Engine — Separate Producer/Reference
 
-The V1 C engine (`v1-reference/`) is retained for:
-- Languages not yet supported by the WASM indexer
+The V1 C engine (`v1-reference/`) can be run separately for:
+- Its 158-language coverage and V1-grade precision
 - Performance comparison benchmarks
 - Historical reference
 
-V2 detects V1 (presence of `<project>.db`) and can use it as a read-only
-code graph source via the bridge module. V2 can also write the code graph
-independently of V1.
+V2 detects only the resulting `<project>.db`, not a V1 executable, and can
+use that database as a read-only code graph source via the bridge module.
+There is no automatic V1 invocation or indexer handoff. V2 can instead write
+the code graph independently with its native indexer.
 
 ## 5. SQLite Code Graph
 
@@ -68,7 +75,7 @@ The code graph is stored in a SQLite database (`<project>.db`) with:
 - `alias_history` — historical alias targets for protection
 
 Schema version: `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8`
-Discovery policy version: `CURRENT_DISCOVERY_POLICY_VERSION = 2`
+Discovery policy version: `CURRENT_DISCOVERY_POLICY_VERSION = 3`
 
 ## 6. Human Memory Graph
 
@@ -85,33 +92,51 @@ V2 syncs human memory to/from Obsidian vaults:
 - **Importer**: reads Obsidian files back into the human memory graph
 - **Wikilinks**: resolves `[[note]]` references
 - **Path safety**: validates against path traversal attacks
+- **Portable identity**: vault traversal normalizes relative paths to `/`
+  before persisting or comparing `obsidian_path`, including on Windows
 
 ## 8. MCP Server
 
-The MCP (Model Context Protocol) server exposes 7 tools:
+The MCP (Model Context Protocol) server exposes these 7 tools:
 
-1. `search_code` — search the code graph
-2. `get_node` — get a specific code node
-3. `get_edges` — get call relationships
-4. `list_projects` — list indexed projects
-5. `add_note` — add a human memory note
-6. `list_notes` — list human memory notes
-7. `sync_obsidian` — sync with Obsidian vault
+1. `get_project_overview` — summarize graph, human-memory, coverage, and freshness state
+2. `get_module_context` — return code and human context for one module or file
+3. `get_undocumented_hotspots` — rank critical code nodes without documentation
+4. `create_human_note` — create a human-memory note and optionally link code nodes
+5. `link_note_to_code_node` — link an existing note to an existing code node
+6. `search_code_and_memory` — search the code graph and human memory together
+7. `prepare_edit_context` — assemble dependency, risk, freshness, and note context before editing
+
+Obsidian synchronization is a separate CLI/watch responsibility; none of the
+seven MCP tools is a vault-sync command.
+The stdio server negotiates MCP `2025-11-25`, `2025-06-18`, or legacy
+`2024-11-05`, rejects JSON-RPC batches, and keeps `tools/call` closed until a
+standalone initialize request is followed by `notifications/initialized`.
+Bounded coverage responses label partial scans and lower-bound counts instead
+of presenting the sampled portion as exact project-wide state.
 
 ## 9. Graph UI
 
 A React/Vite application (`graph-ui/`) served by the V2 backend:
 
-- **Force-directed graph** visualization (d3-force)
-- **Real-time updates** via WebSocket
-- **Project switcher** with health indicators
-- **Human memory** tab (notes, ADRs)
-- **Index status** with stale/recovery info
+- **Dashboard** — project KPIs, graph freshness, and recommendations
+- **Graph** — force-directed d3 visualization, filters, sidebar, and node details
+- **Projects** — project selector with graph counts and health indicators
+- **Control** — system information, logs, and owned index-job controls
+- **Real-time updates** via WebSocket where the active view requires them
 
 The UI is built and embedded in the npm package at `dist/ui/`. Runtime
 resolution uses `import.meta.url` so it works from any working directory.
+The loopback server keeps an idle LRU budget of four project-store entries;
+code and human SQLite connections use 64 MiB and 8 MiB page-cache ceilings.
+Control browsing/indexing is confined to the user's home directory, the
+selected project's canonical indexed root, and explicit
+`ui --allowed-root <paths...>` additions.
+Shutdown has one global deadline across transports, stores, and owned indexers;
+on Windows, `taskkill /T` uses the remaining deadline after escalation rather
+than a separate 250 ms cutoff that could orphan descendants.
 
-## 10. Publication (current state + R169 target)
+## 10. Publication: active product versus merged primitives
 
 ### Current state
 
@@ -126,7 +151,22 @@ A crash between steps can leave a partial graph. The `stale` flag and
 `alias_history` table provide some protection, but the publication is
 not atomic.
 
-### R169 target (Atomic Generation Publication)
+### Merged R169A/R169B primitives (inactive)
+
+R169A provides the path, manifest, fail-closed resolver, and atomic JSON
+foundation. R169B provides reserve, prepare/WAL finalization, validation,
+fd-based copy+hash promotion, temp fsync, no-clobber `link`, metadata,
+manifest, CAS, GC, and recovery primitives. The publication entry point is
+`publishPreparedGeneration`; it is independently tested but has no
+production indexer caller.
+
+The DB promotion is not a rename from `tmp/`. It copies and hashes the
+authenticated staging fd into an exclusively created temp in
+`generations/`, fsyncs that fd, then links the temp to the final generation
+name without clobbering. Metadata and DB are verified before the manifest
+is atomically replaced.
+
+### Future activated contract
 
 ```
 reader sees:
@@ -136,7 +176,9 @@ reader sees:
   never a partial publication
 ```
 
-Architecture: generation DB + manifest + atomic rename + fsync + GC.
+Architecture: immutable generation DB + atomic manifest replacement + CAS +
+authenticated GC/recovery. R169C integrates the indexer, R169D cuts over
+readers/lifecycle, and R169E performs the integrated activation gates.
 
 ## 11. CI / Mirror
 
@@ -166,24 +208,28 @@ See [RELEASE_POLICY.md](RELEASE_POLICY.md) for release governance.
 
 - SSH credentials: dedicated GitLab mirror key (not shared with GitHub)
 - GitHub Actions: actions pinned by immutable SHA
-- Dependabot: github-actions ecosystem, weekly PRs
+- Dependabot opens bounded, grouped weekly minor/patch updates for GitHub
+  Actions, backend, Graph UI, and Docker; semver-major version updates are
+  ignored and remain deliberate migrations; every update still passes normal PR CI
 - Branch protection: `main` protected, fast-forward only for mirror
 
 ## 14. Limitations
 
-- No atomic generation publication (R169 target)
+- Product publication remains non-atomic because the merged R169A/R169B
+  generation primitives are not on the production path
 - No project lease/fencing (R170 target)
-- Node.js requirement: `>=20.0.0` (from `v2/package.json`). CI uses Node 20. No Node 22/24 matrix is certified.
+- Node.js requirement: `>=22.12.0` (from `v2/package.json`). CI verifies the
+  exact floor on Linux and Windows; development and Docker use Node 24 LTS.
 - No GitHub Release yet (pre-release after R169 + R170)
 - Repository name `codebase-mirror` is misleading (rename deferred)
-## 15. R169A — Generation Store Target Architecture (FOUNDATION / INACTIVE)
+## 15. R169 Generation Store Architecture (MERGED / INACTIVE)
 
-> **Status: FOUNDATION / INACTIVE — R169A is merged. No production path uses the generation store.**
-> The target architecture documented in this section is **not active**.
-> The foundation code is merged, tested, but no production code path
-> calls it. The indexer still writes to the legacy `<project>.db` path;
-> readers still open the legacy DB directly. This section describes the
-> target, not the current behavior. `DATA-CARRY-01` (P1) remains OPEN
+> **Status: R169A and R169B are merged; R169B is on `main` at
+> `15a732d91984e5b4ffa29b4e129ac0d6316c9fca`. No production path uses
+> the generation store.** The indexer still writes to the legacy
+> `<project>.db` path and readers still open that DB directly. This
+> section distinguishes the merged primitive contract from future product
+> activation. `DATA-CARRY-01` (P1) remains open
 > until R169E (after crash matrix + concurrency + performance +
 > activation).
 
@@ -245,34 +291,45 @@ The exact key set is enforced: missing or extra keys →
 `CURRENT_GENERATION_MANIFEST_VERSION = 1` is exported from
 `v2/src/indexer/schema.ts`.
 
-### 15.4 State machine
+### 15.4 Publisher primitive state machine
 
 ```
-START → BUILD_STAGING → VALIDATE → FINALIZE → CAS → MANIFEST → FINAL_STATE
+RESERVE → POPULATE → PREPARE/WAL → VALIDATE → PROMOTE → VERIFY → MANIFEST → CAS COMMIT
 ```
 
-- **BUILD_STAGING:** write `generations/generation-<uuid>.db` into
-  `tmp/` (not yet visible to readers).
+- **RESERVE / POPULATE:** exclusively create
+  `tmp/generation-<uuid>.db`; the future R169C caller populates it.
 - **VALIDATE:** open the staging DB, run consistency checks (row counts,
   sha256, schema version, root fingerprint).
-- **FINALIZE:** `fsync` the staging DB file.
-- **CAS:** `rename` the staging DB from `tmp/` to `generations/`
-  (atomic on POSIX).
-- **MANIFEST:** write `active-generation.json` atomically.
-- **FINAL_STATE:** the new generation is live; the old generation is
-  now stale and will be collected by GC.
+- **PREPARE/WAL:** checkpoint/truncate WAL, switch to DELETE journal,
+  reject sidecars, fsync, validate, and seal the prepared token.
+- **PROMOTE:** copy+hash through authenticated fds into an exclusively
+  created temp in `generations/`; fsync it; no-clobber
+  `link(temp, final)`; verify identity; fsync the directory; perform
+  identity-checked cleanup.
+- **VERIFY / MANIFEST:** atomically write metadata, verify the DB and
+  metadata, then atomically replace `active-generation.json`.
+- **CAS COMMIT:** update catalog, active ID, and publication history under
+  `BEGIN IMMEDIATE`, then commit.
 
 The DB is **fully written and fsynced** before the manifest is touched.
-The manifest swap is the **only** visible mutation to readers.
+The manifest swap is the **only** generation-selection mutation visible to
+future cut-over readers. This state machine is merged but not called by the
+production indexer.
 
 ### 15.5 Durability ordering
 
+For JSON metadata and manifest replacement, the internal atomic writer uses:
+
 ```
-fsync file  →  rename  →  fsync dir
+fsync temp file  →  rename temp to target  →  fsync target directory
 ```
 
-Implemented in `writeJsonAtomically(targetPath, value)` in
-`v2/src/storage/generation-store.ts`. Any deviation breaks the
+It is implemented in
+`v2/src/storage/internal/generation-store-io.ts`. DB promotion has a
+separate ordering: fd copy+hash → temp fd verification/fsync → no-clobber
+`link(temp, final)` → final identity verification → fsync `generations/`.
+Any deviation breaks the
 durability contract: `rename` before `fsync file` can leave the target
 empty on crash; `fsync dir` before `rename` is useless; skipping
 `fsync file` can lose file content on crash even if the rename
@@ -351,8 +408,8 @@ from the public facade, and receives a canonical-payload `Buffer`
 (not a JSON-serializable value). The ONLY public writer in R169A is
 `writeIndexStateAtomically(project, state, options?)`. The
 low-level `writeJsonAtomically(targetPath, payload: Buffer, ...)` is
-also internal and not exported. R169B will own the first public
-publication API (`publishPreparedGeneration`).
+also internal and not exported. R169B owns the first public publication
+API, `publishPreparedGeneration`.
 
 The wrapper:
 
@@ -452,18 +509,16 @@ same security invariants as the generation path:
 
 For ordinary project names with the real cache root, this produces the
 same path as `defaultCodeDbPath` in `v2/src/bridge/sqlite-ro.ts`, so
-back-compat is preserved on the happy path. Migration to generation-
-only operation happens across the validated R169A→R169E roadmap:
+back-compat is preserved on the happy path. Migration to generation-only
+operation follows the validated R169A→R169E roadmap:
 
 - **R169A** — Generation Store Contract + Resolver Foundation
-  (this round; merged, FOUNDATION / INACTIVE).
+  (merged / inactive).
 - **R169B** — Durable Staging Publisher + Validator + fsync + CAS + GC
-  primitives. Implement independent publisher primitives and test
-  harnesses — NO production indexer caller.
-- **R169C** — Indexer Integration + Outcome Contract. Wire those
-  primitives into `indexProjectWasm` and outcome paths.
-- **R169D** — Reader Cutover + Legacy Migration + Project Lifecycle.
-- **R169E** — Crash Matrix + Performance + Activation + Version
+  and recovery primitives (merged / inactive; no production indexer caller).
+- **R169C** — Future indexer integration + outcome contract.
+- **R169D** — Future reader cutover + legacy migration + lifecycle.
+- **R169E** — Future integrated crash matrix + performance + activation
   (and the formal close-out of `DATA-CARRY-01` after crash matrix +
   concurrency + performance + activation have all passed).
 
@@ -507,31 +562,31 @@ aware writer (§15.5.4), and layout durability (§15.5.5).
 ### 15.9 GC policy
 
 **Keep the active generation plus the two most recent previous
-generations.** Older generations are deleted. `tmp/` is swept on every
-GC pass for orphan files older than a threshold (default 1 hour). GC is
-best-effort and never deletes the active generation. GC is **not**
-enabled in R169A.
+generations.** R169B implements CAS-backed plan/apply GC, explicit pinning,
+identity/hash proof before deletion, Model-A locking across deletion, temp
+sweeping, and interrupted-delete/orphan recovery. These primitives are
+merged / inactive; the production indexer does not schedule them.
 
 ### 15.10 Recovery
 
-Fail closed and stay closed. No silent fallback, no `--force-legacy`
-flag, no `CBM_IGNORE_GENERATION_STORE=1` escape hatch. A manifest that
-fails validation must be repaired or deleted before reads succeed for
-that project.
+The resolver fails closed: no silent fallback, `--force-legacy` flag, or
+`CBM_IGNORE_GENERATION_STORE=1` escape hatch. R169B also implements
+CAS/manifest reconciliation and orphan recovery primitives. Production
+reader use and lifecycle recovery remain part of R169D.
 
 ### 15.11 Crash matrix (C01–C20)
 
-Twenty crash points are enumerated in
+Twenty activation crash points are enumerated in
 [ATOMIC_GENERATION_PUBLICATION.md](ATOMIC_GENERATION_PUBLICATION.md)
-§ 12. The common property: a crash never leaves the reader seeing a
-partial publication. The reader sees either the previous complete
-snapshot or the new complete snapshot, depending on whether the
-manifest rename (C12) survived.
+§ 12. R169B already contains targeted fault-injection, child-process
+crash, concurrency, and publisher/GC race evidence for the primitives.
+The complete matrix against integrated indexer and readers remains the
+future R169E activation gate.
 
 ### 15.12 Performance contract
 
-**Zero overhead when unused.** No production code imports
-`generation-store.js` at startup. No `fsync`, `mkdir`, or `lstat` runs
+**Zero hot-path overhead while unused.** No production code imports the
+publisher/GC path at startup. No generation-store `fsync`, `mkdir`, or `lstat` runs
 on the hot path. The legacy `defaultCodeDbPath` is unchanged and
 remains the only path used by the indexer, readers, UI, MCP, and CLI.
 Verified by the `R169A — No production behavior change` test block in
@@ -539,7 +594,8 @@ Verified by the `R169A — No production behavior change` test block in
 
 ### 15.13 R170 boundary (lease / fencing)
 
-R169A is single-host only. R170 will add multi-host lease / fencing:
+The R169A/R169B primitive contract is single-host only. R170 will add
+multi-host lease / fencing:
 the indexer acquires a lease with a fencing token; the writer checks
 the token and refuses to publish if it is stale. Fencing token is
 required for publication authorization. The token may live in a
@@ -555,18 +611,18 @@ where operational state (including lease) lives.
 
 ### 15.14 Activation plan
 
-The validated R169A→R169E roadmap. Each round activates one piece with
-its own tests and audit. `DATA-CARRY-01` (P1) closes **only** at the
+The validated R169A→R169E roadmap distinguishes merged foundations from
+future product work. `DATA-CARRY-01` (P1) closes **only** at the
 end of R169E, after the crash matrix (C01–C20), concurrency analysis,
 performance verification, and activation gating have all passed.
 
 | Round | Scope | Status |
 |-------|-------|--------|
-| R169A | Generation Store Contract + Resolver Foundation (path helpers, manifest V1 types, resolver, atomic JSON writer, plus the eight contracts from R169A-FIX pass 1 + pass 2: canonical `dbFile`, symlink chain security, directory fsync → `ATOMIC_DURABILITY_UNKNOWN`, legacy validation, trust root symlink bypass, project-aware writer, layout durability, manifest size bound + immutable key authority) | **R169A is merged — FOUNDATION / INACTIVE. No production path uses the generation store.** |
-| R169B | Durable Staging Publisher + Validator + fsync + CAS + GC primitives (independent primitives + test harnesses — NO production indexer caller) | planned |
-| R169C | Indexer Integration + Outcome Contract (wire primitives into `indexProjectWasm` and outcome paths) | planned |
-| R169D | Reader Cutover + Legacy Migration + Project Lifecycle | planned |
-| R169E | Crash Matrix + Performance + Activation + Version (and `DATA-CARRY-01` close — only after crash matrix + concurrency + performance + activation) | planned |
+| R169A | Generation Store Contract + Resolver Foundation (paths, manifest V1, resolver, atomic JSON writer, validation/security contracts) | **merged / inactive** |
+| R169B | Durable Publisher + Validator + fd copy/hash + temp fsync/link + metadata + manifest + CAS + GC/recovery primitives and test harnesses | **merged / inactive** (`15a732d91984e5b4ffa29b4e129ac0d6316c9fca`) |
+| R169C | Indexer Integration + Outcome Contract | future |
+| R169D | Reader Cutover + Legacy Migration + Project Lifecycle | future |
+| R169E | Integrated Crash Matrix + Performance + Activation + Version (`DATA-CARRY-01` closure gate) | future |
 | R170  | Multi-host lease / fencing | out of scope |
 
 ### 15.15 See also
@@ -576,9 +632,11 @@ performance verification, and activation gating have all passed.
   machine, durability ordering, reader contract, legacy migration,
   failure taxonomy, GC policy, recovery, crash matrix C01–C20,
   performance contract, R170 boundary).
-- [V2_CURRENT_STATE.md](V2_CURRENT_STATE.md) — R169A section
-  (foundation implemented as a candidate, inactive, pending review,
-  publication NOT active).
-- `v2/src/storage/generation-store.ts` — implementation.
+- [V2_CURRENT_STATE.md](V2_CURRENT_STATE.md) — authoritative active legacy
+  product versus merged/inactive generation-store boundary.
+- `v2/src/storage/generation-store.ts` — resolver/foundation implementation.
+- `v2/src/storage/generation-publisher.ts` — publisher implementation.
+- `v2/src/storage/generation-gc.ts` — GC/recovery implementation.
 - `v2/src/storage/generation-types.ts` — types and error codes.
-- `v2/tests/storage/r169a-generation-store.test.ts` — test matrix.
+- `v2/tests/storage/r169a-generation-store.test.ts` and
+  `v2/tests/storage/r169b-*.test.ts` — foundation and primitive evidence.

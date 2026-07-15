@@ -2,7 +2,7 @@
 # Provides a containerized cbm-v2 CLI + MCP server + Graph UI.
 
 # ── Stage 1: Build graph-ui ────────────────────────────────────────
-FROM node:20-slim AS ui-builder
+FROM node:24-bookworm-slim AS ui-builder
 WORKDIR /graph-ui
 COPY graph-ui/package.json graph-ui/package-lock.json ./
 RUN npm ci
@@ -10,8 +10,8 @@ COPY graph-ui/ ./
 RUN npm run build
 
 # ── Stage 2: Build v2 backend ──────────────────────────────────────
-# node:20 (full) includes build tools for native modules (better-sqlite3)
-FROM node:20 AS builder
+# The full Node 24 LTS image includes build tools for native modules (better-sqlite3).
+FROM node:24-bookworm AS builder
 WORKDIR /app
 COPY v2/package.json v2/package-lock.json ./
 RUN npm ci
@@ -21,12 +21,12 @@ COPY --from=ui-builder /graph-ui/dist ./dist/ui
 RUN npm prune --omit=dev && npm cache clean --force
 
 # ── Stage 3: Runtime ───────────────────────────────────────────────
-FROM node:20-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
 COPY v2/package.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-# node:20-slim already has a 'node' user with UID 1000 — use it
+# node:24-bookworm-slim already has a 'node' user with UID 1000 — use it
 # instead of creating a new user (useradd -u 1000 fails: UID already taken)
 RUN mkdir -p /home/node/.cache/codebase-memory-mcp \
  && chown -R node:node /home/node/.cache

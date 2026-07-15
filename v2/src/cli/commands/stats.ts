@@ -128,7 +128,8 @@ function printPrettyStats(stats: Record<string, unknown>): void {
   } else {
     console.log('  ┌─ Code Graph (V1) ──────────────────────────────┐');
     console.log('  │ ⚠️  Code graph not available                    │');
-    console.log('  │    Run "cbm index_repository" to build it       │');
+    console.log('  │    Run "cbm-v2 index --project <name>"          │');
+    console.log('  │      "--root <path>" to build it                 │');
     console.log('  └─────────────────────────────────────────────────┘');
   }
   console.log('');

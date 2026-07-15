@@ -113,8 +113,14 @@ export const CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8;
  *     cold-start lock applies until a successful v2 run repopulates the
  *     history with the new fingerprint format and stamps rows with the new
  *     run-id scheme.
+ *   - 3: Discovery coverage modes. The old V2 walker applied V1's fast-only
+ *     directory exclusions unconditionally, so full indexes silently omitted
+ *     docs, scripts, tools, tests, and migrations. Policy v3 separates
+ *     `full` (correctness-first default) from explicit `fast` discovery. A
+ *     successful v3 run must rediscover the selected coverage before the DB
+ *     is stamped current.
  */
-export const CURRENT_DISCOVERY_POLICY_VERSION = 2;
+export const CURRENT_DISCOVERY_POLICY_VERSION = 3;
 
 /**
  * R169: Generation manifest format version.

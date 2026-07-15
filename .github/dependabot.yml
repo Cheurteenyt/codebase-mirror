@@ -1,7 +1,6 @@
-# Dependabot security-update configuration (R169).
-# Scheduled version-update PRs are disabled to keep `main` as the only
-# persistent branch. Repository-level Dependabot security updates remain
-# enabled and use GitHub's separate security-update PR limit.
+# Low-noise dependency maintenance: weekly minor/patch updates only; semver
+# majors are ignored and remain deliberate migrations. Dependabot branches are
+# temporary and all updates still pass normal pull-request CI before merge.
 
 version: 2
 
@@ -12,7 +11,16 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 2
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "ci(deps)"
       include: "scope"
@@ -30,7 +38,7 @@ updates:
       day: "monday"
       time: "02:00"
       timezone: "Etc/UTC"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 4
     versioning-strategy: "increase-if-necessary"
     groups:
       production-minor-and-patch:
@@ -43,6 +51,10 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
@@ -60,7 +72,7 @@ updates:
       day: "monday"
       time: "03:00"
       timezone: "Etc/UTC"
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 4
     versioning-strategy: "increase-if-necessary"
     groups:
       production-minor-and-patch:
@@ -73,11 +85,37 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
     labels:
       - "dependencies"
       - "javascript"
+    reviewers:
+      - "Cheurteenyt"
+
+  # Docker build/runtime image refreshes within the declared Node 24 LTS line.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
     reviewers:
       - "Cheurteenyt"

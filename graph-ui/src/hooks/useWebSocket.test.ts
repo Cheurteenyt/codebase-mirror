@@ -4,7 +4,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+
+vi.mock("../api/client", () => ({
+  getSecurityBootstrap: vi.fn().mockResolvedValue({ csrf_token: "test-token" }),
+}));
+
 import { useWebSocket } from "./useWebSocket";
+import { getSecurityBootstrap } from "../api/client";
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -43,6 +49,8 @@ class MockWebSocket {
 describe("R45 (F3): useWebSocket — R40 generation counter (zombie-connection race)", () => {
   beforeEach(() => {
     MockWebSocket.instances = [];
+    vi.mocked(getSecurityBootstrap).mockReset();
+    vi.mocked(getSecurityBootstrap).mockResolvedValue({ csrf_token: "test-token" });
     vi.stubGlobal("WebSocket", MockWebSocket);
     vi.useFakeTimers();
   });
@@ -51,18 +59,21 @@ describe("R45 (F3): useWebSocket — R40 generation counter (zombie-connection r
     vi.useRealTimers();
   });
 
-  it("stale socket's onclose does NOT scheduleReconnect after project change", () => {
+  it("stale socket's onclose does NOT scheduleReconnect after project change", async () => {
     const notify = vi.fn();
     const { rerender, unmount } = renderHook(
       ({ project }) => useWebSocket(project, notify),
       { initialProps: { project: "a" } },
     );
+    await act(async () => { await Promise.resolve(); });
     const socketA = MockWebSocket.instances[0]!;
+    expect(socketA.url).toContain("/ws?csrf=test-token");
     act(() => socketA.fireOpen());
     expect(socketA.sent).toContainEqual(JSON.stringify({ type: "subscribe", project: "a" }));
 
     // Switch to project B — increments wsGenRef and creates socket B.
     rerender({ project: "b" });
+    await act(async () => { await Promise.resolve(); });
     const socketB = MockWebSocket.instances[1]!;
     act(() => socketB.fireOpen());
     expect(socketB.sent).toContainEqual(JSON.stringify({ type: "subscribe", project: "b" }));
@@ -95,16 +106,18 @@ describe("R45 (F3): useWebSocket — R40 generation counter (zombie-connection r
     unmount();
   });
 
-  it("stale socket's onmessage does NOT deliver notifications after project change", () => {
+  it("stale socket's onmessage does NOT deliver notifications after project change", async () => {
     const notify = vi.fn();
     const { rerender } = renderHook(
       ({ project }) => useWebSocket(project, notify),
       { initialProps: { project: "a" } },
     );
+    await act(async () => { await Promise.resolve(); });
     const socketA = MockWebSocket.instances[0]!;
     act(() => socketA.fireOpen());
 
     rerender({ project: "b" });
+    await act(async () => { await Promise.resolve(); });
     const socketB = MockWebSocket.instances[1]!;
     act(() => socketB.fireOpen());
 
@@ -120,5 +133,66 @@ describe("R45 (F3): useWebSocket — R40 generation counter (zombie-connection r
 
     // The hook's onNotification callback must NOT have been called.
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("marks the connection inactive when a warm tab pauses its subscription", async () => {
+    const { result, rerender, unmount } = renderHook(
+      ({ project }: { project: string | null }) => useWebSocket(project),
+      { initialProps: { project: "a" as string | null } },
+    );
+    await act(async () => { await Promise.resolve(); });
+    const socket = MockWebSocket.instances[0]!;
+    act(() => socket.fireOpen());
+    expect(result.current.connected).toBe(true);
+
+    rerender({ project: null });
+    expect(result.current.connected).toBe(false);
+    await act(async () => { await Promise.resolve(); });
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    unmount();
+  });
+
+  it("refreshes the runtime credential before reconnecting after a rejected socket", async () => {
+    vi.mocked(getSecurityBootstrap).mockImplementation(async (forceRefresh = false) => ({
+      csrf_token: forceRefresh ? "fresh-token" : "stale-token",
+    }));
+
+    const { unmount } = renderHook(() => useWebSocket("a"));
+    await act(async () => { await Promise.resolve(); });
+    const rejectedSocket = MockWebSocket.instances[0]!;
+    expect(rejectedSocket.url).toContain("csrf=stale-token");
+
+    act(() => rejectedSocket.fireClose());
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getSecurityBootstrap).toHaveBeenLastCalledWith(true);
+    expect(MockWebSocket.instances[1]!.url).toContain("csrf=fresh-token");
+    unmount();
+  });
+
+  it("cancels an already scheduled retry when reconnecting manually", async () => {
+    const { result, unmount } = renderHook(() => useWebSocket("a"));
+    await act(async () => { await Promise.resolve(); });
+    const first = MockWebSocket.instances[0]!;
+
+    act(() => first.fireClose()); // schedules the automatic 1s retry
+    act(() => result.current.reconnect());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    });
+    expect(MockWebSocket.instances).toHaveLength(2);
+    unmount();
   });
 });

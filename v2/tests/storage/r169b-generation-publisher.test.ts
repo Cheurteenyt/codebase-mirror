@@ -70,7 +70,11 @@ import {
   FIXTURE_ROOT_FINGERPRINT,
   type CreateStagingDbOptions,
 } from "../helpers/r169b-publisher-fixtures.js";
-import { initIndexerSchema, updateProjectStats } from "../../src/indexer/schema.js";
+import {
+  initIndexerSchema,
+  updateProjectStats,
+  CURRENT_DISCOVERY_POLICY_VERSION,
+} from "../../src/indexer/schema.js";
 
 // ─── Test setup ──────────────────────────────────────────────────────────
 
@@ -245,7 +249,10 @@ describe("R169B-STEP2 publisher — prepareGenerationForPublication (validation)
     const reservation = reserveGenerationStaging(FIXTURE_PROJECT_NAME, { cacheRoot });
     const db = new Database(reservation.stagingPath, { fileMustExist: false });
     initIndexerSchema(db);
-    updateProjectStats(db, "other-project", "/root", 0, 0, false, true, 8, null, true, 2, FIXTURE_ROOT_FINGERPRINT);
+    updateProjectStats(
+      db, "other-project", "/root", 0, 0, false, true, 8, null, true,
+      CURRENT_DISCOVERY_POLICY_VERSION, FIXTURE_ROOT_FINGERPRINT,
+    );
     db.close();
         try {
       prepareGenerationForPublication(reservation);
@@ -311,8 +318,10 @@ describe("R169B-STEP2 publisher — prepareGenerationForPublication (validation)
     }
   });
 
-  it("rejects discovery_policy_version != 2 (STAGING_DB_STATE_INVALID)", () => {
-    const { reservation } = reserveAndPopulateValid({ wrongDiscovery: 1 });
+  it("rejects a non-current discovery_policy_version (STAGING_DB_STATE_INVALID)", () => {
+    const { reservation } = reserveAndPopulateValid({
+      wrongDiscovery: CURRENT_DISCOVERY_POLICY_VERSION - 1,
+    });
         try {
       prepareGenerationForPublication(reservation);
       expect.fail("expected call to throw GenerationStoreError with code STAGING_DB_STATE_INVALID");
@@ -416,12 +425,12 @@ describe("R169B-STEP2 publisher — prepareGenerationForPublication (hash + re-s
     expect(prepared.manifest.dbFile).toBe(`generations/generation-${prepared.generationId}.db`);
   });
 
-  it("the manifest has formatVersion=1, semantics=8, discovery=2, rootFingerprint from DB", () => {
+  it("the manifest has formatVersion=1, semantics=8, current discovery policy, and DB rootFingerprint", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
     expect(prepared.manifest.formatVersion).toBe(1);
     expect(prepared.manifest.extractorSemanticsVersion).toBe(8);
-    expect(prepared.manifest.discoveryPolicyVersion).toBe(2);
+    expect(prepared.manifest.discoveryPolicyVersion).toBe(CURRENT_DISCOVERY_POLICY_VERSION);
     expect(prepared.manifest.rootFingerprint).toBe(FIXTURE_ROOT_FINGERPRINT);
   });
 

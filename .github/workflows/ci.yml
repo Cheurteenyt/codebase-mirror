@@ -60,7 +60,7 @@ concurrency:
 # R52: least-privilege — the default GITHUB_TOKEN has write permissions
 # we don't need. Restrict to read-only for all jobs.
 # The schedule-only quota report lives in quota-report.yml with its own
-# `actions: read` permission. All four CI jobs remain contents-read only.
+# `actions: read` permission. All five validation jobs remain contents-read only.
 permissions:
   contents: read
 
@@ -176,7 +176,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: '20'
+          node-version: '22.12.0'
           cache: 'npm'
           cache-dependency-path: v2/package-lock.json
 
@@ -184,7 +184,7 @@ jobs:
         run: npm ci
 
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
       - name: Build
         run: npm run build
@@ -225,6 +225,67 @@ jobs:
       - name: Publication benchmark invariants
         run: npm run bench:publication:smoke
 
+  windows-smoke:
+    name: Windows smoke (v2)
+    needs: preflight
+    runs-on: windows-latest
+    if: github.event_name != 'schedule'
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22.12.0'
+          cache: 'npm'
+          cache-dependency-path: v2/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Targeted Windows product tests
+        run: >-
+          npx vitest run
+          tests/indexer/discovery-mode.test.ts
+          tests/indexer/windows-worker-url.test.ts
+          tests/intelligence/graph-status.test.ts
+          tests/mcp/server.test.ts
+          tests/round27-bug8-rename.test.ts
+          tests/round29-watch.test.ts
+          tests/storage/project-path.test.ts
+          tests/ci/windows-update-readiness.test.ts
+
+      - name: UI lifecycle and security regressions (Windows)
+        run: >-
+          npx vitest run
+          tests/ui/ui-allowed-roots.test.ts
+          tests/ui/ui-bounded-shutdown.test.ts
+          tests/ui/ui-index-child-backpressure.test.ts
+          tests/ui/ui-index-child-ownership.test.ts
+          tests/ui/ui-localhost-origin-security.test.ts
+          tests/ui/ui-project-delete-identity.test.ts
+          tests/ui/ui-project-health-reader-close.test.ts
+          tests/ui/ui-project-registry-review-regressions.test.ts
+          tests/ui/ui-project-store-routing.test.ts
+          tests/ui/ui-reader-refresh-after-index.test.ts
+          tests/ui/ui-start-bind.test.ts
+          tests/ui/ui-static-cache-policy.test.ts
+          tests/ui/ui-websocket-origin-security.test.ts
+
+      - name: Incremental benchmark invariants
+        run: npm run bench:incremental:smoke
+
   # ── Frontend (graph-ui): typecheck + build + test ──────────────
   frontend:
     name: Frontend (graph-ui)
@@ -242,7 +303,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: '20'
+          node-version: '22.12.0'
           cache: 'npm'
           cache-dependency-path: graph-ui/package-lock.json
 
@@ -272,7 +333,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: "20"
+          node-version: "22.12.0"
           cache: npm
           cache-dependency-path: v2/package-lock.json
 
@@ -338,6 +399,36 @@ jobs:
           /tmp/cbm-install/node_modules/.bin/cbm-v2 --version
           /tmp/cbm-install/node_modules/.bin/cbm-v2 --help
 
+      - name: Embedded UI HTTP smoke from arbitrary cwd
+        working-directory: /tmp
+        shell: bash
+        run: |
+          UI_LOG="$RUNNER_TEMP/cbm-packed-ui.log"
+          /tmp/cbm-install/node_modules/.bin/cbm-v2 \
+            ui --project package-smoke --port 19749 >"$UI_LOG" 2>&1 &
+          UI_PID=$!
+          cleanup() {
+            kill "$UI_PID" 2>/dev/null || true
+            wait "$UI_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          READY=0
+          for _ in $(seq 1 40); do
+            if curl --fail --silent http://127.0.0.1:19749/ >/dev/null; then
+              READY=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$READY" -ne 1 ]; then
+            cat "$UI_LOG" >&2
+            exit 1
+          fi
+          curl --fail --silent http://127.0.0.1:19749/ | grep -F 'id="root"'
+          curl --fail --silent http://127.0.0.1:19749/api/bootstrap \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const x=JSON.parse(s);if(typeof x.csrf_token!=='string'||x.csrf_token.length<32)process.exit(1)})"
+
   # ── Docker: image + CLI + non-root smoke ───────────────────────
   docker-smoke:
     name: Docker build + CLI + non-root smoke
@@ -373,6 +464,33 @@ jobs:
         run: |
           docker run --rm --entrypoint sh cbm-v2:test -c 'test -f /app/dist/ui/index.html && echo "UI index.html present"'
 
+      - name: UI HTTP smoke inside runtime image
+        shell: bash
+        run: |
+          NAME="cbm-v2-ui-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm -f "$NAME" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --rm -d --name "$NAME" cbm-v2:test \
+            ui --project docker-smoke --port 9749 >/dev/null
+
+          READY=0
+          for _ in $(seq 1 40); do
+            if docker exec "$NAME" node -e \
+              "fetch('http://127.0.0.1:9749/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"; then
+              READY=1
+              break
+            fi
+            sleep 0.25
+          done
+          if [ "$READY" -ne 1 ]; then
+            docker logs "$NAME" >&2
+            exit 1
+          fi
+          docker exec "$NAME" node -e \
+            "Promise.all([fetch('http://127.0.0.1:9749/').then(r=>r.text()),fetch('http://127.0.0.1:9749/api/bootstrap').then(r=>r.json())]).then(([html,b])=>{if(!html.includes('id=\"root\"')||typeof b.csrf_token!=='string'||b.csrf_token.length<32)process.exit(1)}).catch(()=>process.exit(1))"
+
 # R112: removed quota-report job from this workflow.
 # Previously, quota-report had `if: github.event_name == 'schedule'` which
 # caused it to be SKIPPED on every push/PR. GitHub Actions reports skipped
@@ -380,5 +498,5 @@ jobs:
 # when backend/frontend passed.
 # Fix: quota-report now lives in its own schedule-only workflow file
 # (.github/workflows/quota-report.yml). This way, push/PR pipelines only
-# contain the four validation jobs — no schedule-only skipped job and no
+# contain the five validation jobs — no schedule-only skipped job and no
 # false error annotations.

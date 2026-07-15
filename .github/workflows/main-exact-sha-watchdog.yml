@@ -1,0 +1,309 @@
+name: Main exact-SHA watchdog
+
+# A GITHUB_TOKEN squash merge does not emit an ordinary push workflow. The GLM
+# gate dispatches CI and CodeQL explicitly, but a runner/platform interruption
+# can still happen after the irreversible merge. This repository-owned
+# watchdog repairs only missing validations for the current main SHA. It never
+# checks out or executes repository code and never performs a merge.
+
+on:
+  workflow_run:
+    workflows: ["GLM merge gate"]
+    types: [completed]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions: {}
+
+concurrency:
+  group: main-exact-sha-watchdog
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Recover missing exact-main validations
+    if: github.repository == 'Cheurteenyt/codebase-mirror'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Inspect current main and dispatch only missing checks
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_API_URL: ${{ github.api_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          node <<'NODE'
+          const API_VERSION = "2026-03-10";
+          const EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror";
+          const EXPECTED_TRIGGER_PATH = ".github/workflows/glm-merge-gate.yml";
+          const SHA_PATTERN = /^[0-9a-f]{40}$/;
+          const SETTLE_ATTEMPTS = 4;
+          const SETTLE_DELAY_MS = 2000;
+          const ACK_ATTEMPTS = 10;
+          const TARGETS = [
+            { file: "ci.yml", path: ".github/workflows/ci.yml", label: "CI" },
+            { file: "codeql.yml", path: ".github/workflows/codeql.yml", label: "CodeQL" },
+          ];
+          const RETRYABLE_CONCLUSIONS = new Set([
+            "cancelled",
+            "stale",
+            "startup_failure",
+          ]);
+
+          const token = process.env.GH_TOKEN ?? "";
+          const apiUrl = (process.env.GH_API_URL ?? "").replace(/\/$/, "");
+          const repository = process.env.GH_REPOSITORY ?? "";
+          const eventName = process.env.EVENT_NAME ?? "";
+          const triggerRunId = process.env.TRIGGER_RUN_ID ?? "";
+
+          function fail(message) {
+            throw new Error(message);
+          }
+
+          function delay(milliseconds) {
+            return new Promise((resolve) => setTimeout(resolve, milliseconds));
+          }
+
+          async function request(method, path, payload = undefined) {
+            let response;
+            try {
+              response = await fetch(`${apiUrl}${path}`, {
+                method,
+                headers: {
+                  Accept: "application/vnd.github+json",
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                  "X-GitHub-Api-Version": API_VERSION,
+                  "User-Agent": "codebase-mirror-main-exact-sha-watchdog",
+                },
+                body: payload === undefined ? undefined : JSON.stringify(payload),
+                signal: AbortSignal.timeout(30_000),
+              });
+            } catch (error) {
+              fail(`GitHub API ${method} ${path} failed: ${error}`);
+            }
+            const raw = await response.text();
+            if (!response.ok) {
+              fail(
+                `GitHub API ${method} ${path} failed (${response.status}): ` +
+                  raw.slice(0, 1000),
+              );
+            }
+            if (!raw) return null;
+            try {
+              return JSON.parse(raw);
+            } catch (error) {
+              fail(`GitHub API ${method} ${path} returned invalid JSON: ${error}`);
+            }
+          }
+
+          function workflowPath(run) {
+            return typeof run.path === "string" ? run.path.split("@", 1)[0] : "";
+          }
+
+          async function validateTrigger() {
+            if (!new Set(["workflow_run", "workflow_dispatch", "schedule"]).has(eventName)) {
+              fail(`Unexpected watchdog event: ${eventName}`);
+            }
+            if (eventName !== "workflow_run") return;
+            if (!/^\d+$/.test(triggerRunId)) {
+              fail("The triggering GLM gate run ID is malformed.");
+            }
+            const run = await request(
+              "GET",
+              `/repos/${repository}/actions/runs/${triggerRunId}`,
+            );
+            const runRepository = run.repository ?? {};
+            if (
+              String(run.id) !== triggerRunId ||
+              workflowPath(run) !== EXPECTED_TRIGGER_PATH ||
+              run.status !== "completed" ||
+              runRepository.full_name !== repository
+            ) {
+              fail("The workflow_run trigger is not the completed canonical GLM merge gate.");
+            }
+          }
+
+          async function readMainSha() {
+            const mainRef = await request(
+              "GET",
+              `/repos/${repository}/git/ref/heads/main`,
+            );
+            const object = mainRef.object ?? {};
+            if (
+              mainRef.ref !== "refs/heads/main" ||
+              object.type !== "commit" ||
+              !SHA_PATTERN.test(object.sha ?? "")
+            ) {
+              fail("The live main ref did not resolve to one exact commit SHA.");
+            }
+            return object.sha;
+          }
+
+          async function validateTargets() {
+            for (const target of TARGETS) {
+              const workflow = await request(
+                "GET",
+                `/repos/${repository}/actions/workflows/${target.file}`,
+              );
+              if (
+                workflow.state !== "active" ||
+                workflow.path !== target.path ||
+                !Number.isSafeInteger(workflow.id)
+              ) {
+                fail(`Exact-SHA dispatch target is unavailable: ${target.file}`);
+              }
+            }
+          }
+
+          function isCoveringRun(run, target, mainSha) {
+            const runRepository = run.repository ?? {};
+            const exactIdentity =
+              runRepository.full_name === repository &&
+              workflowPath(run) === target.path &&
+              run.head_branch === "main" &&
+              run.head_sha === mainSha &&
+              new Set(["push", "workflow_dispatch"]).has(run.event);
+            if (!exactIdentity) return false;
+            if (run.status !== "completed") return true;
+            return !RETRYABLE_CONCLUSIONS.has(run.conclusion ?? "");
+          }
+
+          async function hasCoveringRun(target, mainSha) {
+            for (let page = 1; page <= 10; page += 1) {
+              const query = new URLSearchParams({
+                branch: "main",
+                head_sha: mainSha,
+                per_page: "100",
+                page: String(page),
+              });
+              const result = await request(
+                "GET",
+                `/repos/${repository}/actions/workflows/${target.file}/runs?${query}`,
+              );
+              if (!Array.isArray(result.workflow_runs)) {
+                fail(`Malformed workflow-runs response for ${target.file}`);
+              }
+              if (
+                result.workflow_runs.some((run) =>
+                  isCoveringRun(run, target, mainSha),
+                )
+              ) {
+                return true;
+              }
+              if (result.workflow_runs.length < 100) return false;
+            }
+            fail(`Exact-SHA run history exceeds the pagination limit for ${target.file}`);
+          }
+
+          async function waitForCoveringRun(target, mainSha, attempts, delayMs) {
+            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+              if (await hasCoveringRun(target, mainSha)) return true;
+              if (attempt < attempts) await delay(delayMs);
+            }
+            return false;
+          }
+
+          async function writeSummary(mainSha, results) {
+            const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+            if (!summaryPath) return;
+            const lines = [
+              "## Main exact-SHA watchdog",
+              "",
+              `- Observed main: \`${mainSha}\``,
+              ...results.map(({ label, action }) => `- ${label}: \`${action}\``),
+              "- Repository code checked out or executed: `no`",
+              "- Merge attempted: `no`",
+              "",
+            ];
+            await require("node:fs/promises").appendFile(
+              summaryPath,
+              lines.join("\n"),
+              "utf8",
+            );
+          }
+
+          async function main() {
+            if (repository !== EXPECTED_REPOSITORY) {
+              fail("This watchdog is bound to Cheurteenyt/codebase-mirror.");
+            }
+            if (!token || !apiUrl) fail("GitHub API environment is incomplete.");
+
+            await validateTrigger();
+            await validateTargets();
+            const mainSha = await readMainSha();
+            const results = [];
+
+            for (const target of TARGETS) {
+              const present = await waitForCoveringRun(
+                target,
+                mainSha,
+                SETTLE_ATTEMPTS,
+                SETTLE_DELAY_MS,
+              );
+              if (present) {
+                results.push({ label: target.label, action: "already-present" });
+                continue;
+              }
+
+              // Re-read immediately before each irreversible dispatch. If main
+              // moved, dispatching ref=main with the stale expected_sha would
+              // create only a failed preflight, not the intended validation.
+              const currentMainSha = await readMainSha();
+              if (currentMainSha !== mainSha) {
+                fail(`main advanced while recovering ${target.label}; refusing stale dispatch.`);
+              }
+
+              // One final query closes the normal API-registration race with a
+              // dispatch that the merge gate completed just before cancellation.
+              if (await hasCoveringRun(target, mainSha)) {
+                results.push({ label: target.label, action: "already-present" });
+                continue;
+              }
+
+              const dispatch = {
+                ref: "main",
+                inputs: { expected_sha: mainSha },
+              };
+              await request(
+                "POST",
+                `/repos/${repository}/actions/workflows/${target.file}/dispatches`,
+                dispatch,
+              );
+              results.push({ label: target.label, action: "dispatched" });
+
+              // A successful dispatch returns no run ID. Wait until the exact
+              // run becomes observable so a queued watchdog cannot mistake API
+              // propagation delay for a missing dispatch.
+              const acknowledged = await waitForCoveringRun(
+                target,
+                mainSha,
+                ACK_ATTEMPTS,
+                SETTLE_DELAY_MS,
+              );
+              if (!acknowledged) {
+                fail(`GitHub accepted ${target.label} dispatch but no exact-SHA run appeared.`);
+              }
+            }
+
+            await writeSummary(mainSha, results);
+            for (const result of results) {
+              console.log(`${result.label}: ${result.action} for ${mainSha}`);
+            }
+          }
+
+          main().catch((error) => {
+            console.error(`::error::${error instanceof Error ? error.message : error}`);
+            process.exitCode = 1;
+          });
+          NODE

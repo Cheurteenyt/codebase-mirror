@@ -307,7 +307,7 @@
 | `/api/index` | POST | Trigger a V1 index job (async) (R17) |
 | `/api/index-status` | GET | List index jobs (R17) |
 | `/api/processes` | GET | List running cbm/node processes (R17) |
-| `/api/process-kill` | POST | Kill a process by PID (R17) |
+| `/api/index-jobs/<jobId>/terminate` | POST | Terminate a running index job owned by this UI server |
 | `/api/logs` | GET | Recent log lines (R17) |
 
 ## SQLite Schema Migrations

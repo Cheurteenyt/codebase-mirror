@@ -60,8 +60,8 @@ Response:
 1. **Freeze all merges** to `main`. Open PRs can still be created and
    reviewed, but do not merge until CI returns.
 2. If local validation is required for an urgent fix:
-   - Reproduce all four CI jobs locally: backend, frontend, package smoke,
-     and Docker smoke
+   - Reproduce all five validation jobs locally: backend, Windows smoke,
+     frontend, package smoke, and Docker smoke
    - Document the local validation result in the PR description
    - A maintainer may approve an exception merge with explicit
      "merged without CI, locally validated" annotation

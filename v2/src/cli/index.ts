@@ -11,6 +11,7 @@ import { registerBackupCommand } from './commands/backup.js';
 import { registerDemoCommand } from './commands/demo.js';
 import { registerWatchCommand } from './commands/watch.js';
 import { registerIndexCommand } from './commands/index.js';
+import { isSupportedNodeVersion, MINIMUM_NODE_VERSION } from './node-version.js';
 import { McpServer } from '../mcp/server.js';
 import { UiServer } from '../ui/server.js';
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
@@ -68,19 +69,30 @@ program
   .option('--project <name>', 'Project name')
   .option('--port <n>', 'Port number (default: 9749)', '9749')
   .option('--graph-ui-path <path>', 'Path to graph-ui/dist directory')
-  .action((opts) => {
+  .option('--dev-origin <origin>', 'Explicit trusted development proxy origin (for example http://localhost:5173)')
+  .option('--allowed-root <paths...>', 'Additional local repository root(s) the Control UI may browse and index')
+  .action(async (opts) => {
     const config = loadConfig();
     const project = opts.project || config.projectName || deriveProjectName();
     const port = parseInt(opts.port, 10) || 9749;
     const graphUiPath = opts.graphUiPath;
+    const devOrigin = opts.devOrigin;
+    const allowedRoots = Array.isArray(opts.allowedRoot) ? opts.allowedRoot : [];
 
     console.log(`Starting Graph UI for project "${project}" on port ${port}...`);
-    const ui = new UiServer({ project, port, graphUiPath });
-    ui.start();
+    const ui = new UiServer({ project, port, graphUiPath, devOrigin, allowedRoots });
+    await ui.start();
 
     // Graceful shutdown
-    process.on('SIGINT', () => { ui.stop(); process.exit(0); });
-    process.on('SIGTERM', () => { ui.stop(); process.exit(0); });
+    let stopping = false;
+    const shutdown = async () => {
+      if (stopping) return;
+      stopping = true;
+      await ui.stop();
+      process.exit(0);
+    };
+    process.on('SIGINT', () => { void shutdown(); });
+    process.on('SIGTERM', () => { void shutdown(); });
   });
 
 program
@@ -123,11 +135,10 @@ program
 
     // 1. Node version.
     const nodeVersion = process.version;
-    const major = parseInt(nodeVersion.slice(1), 10);
-    if (major >= 18) {
+    if (isSupportedNodeVersion(nodeVersion)) {
       console.log(`✅ Node.js version: ${nodeVersion}`);
     } else {
-      console.log(`❌ Node.js version: ${nodeVersion} (require >= 18)`);
+      console.log(`❌ Node.js version: ${nodeVersion} (require >= ${MINIMUM_NODE_VERSION})`);
       allOk = false;
     }
 

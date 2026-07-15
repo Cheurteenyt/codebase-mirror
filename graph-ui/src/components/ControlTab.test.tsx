@@ -1,54 +1,52 @@
-// graph-ui/src/components/ControlTab.test.tsx
-// R46 (F4): regression test for the R43 kill-confirmation gate (M3).
-// A misclick on the small Kill button must NOT terminate a long-running index
-// job without consent. window.confirm must be called first.
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor, fireEvent } from "@testing-library/react";
-
-vi.mock("../api/client", () => ({
+vi.mock('../api/client', () => ({
+  ApiError: class ApiError extends Error {
+    constructor(public code: number, message: string) { super(message); }
+  },
   api: {
     getProcesses: vi.fn().mockResolvedValue({ processes: [] }),
     getLogs: vi.fn().mockResolvedValue({ lines: [] }),
     getIndexStatus: vi.fn().mockResolvedValue({ jobs: [] }),
-    killProcess: vi.fn().mockResolvedValue({ ok: true }),
+    terminateIndexJob: vi.fn().mockResolvedValue({ ok: true }),
   },
 }));
 
-import { ControlTab } from "./ControlTab";
+import { ControlTab } from './ControlTab';
 
-describe("R43 (M3): ControlTab kill confirmation gate", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("does NOT call killProcess when window.confirm is dismissed", async () => {
-    const { api } = await import("../api/client");
-    (api.getProcesses as any).mockResolvedValue({
-      processes: [
-        { pid: 1234, cpu: 1.2, rss_mb: 100, elapsed: "1m", command: "node", is_self: false },
-      ],
-    });
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-
-    const { findByText } = render(<ControlTab />);
-    const killBtn = await findByText("Kill");
-    fireEvent.click(killBtn);
-
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Kill process 1234"));
-    expect(api.killProcess).not.toHaveBeenCalled();
+describe('ControlTab owned index-job termination', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { api } = await import('../api/client');
+    (api.getProcesses as ReturnType<typeof vi.fn>).mockResolvedValue({ processes: [] });
+    (api.getLogs as ReturnType<typeof vi.fn>).mockResolvedValue({ lines: [] });
   });
 
-  it("calls killProcess when window.confirm is accepted", async () => {
-    const { api } = await import("../api/client");
-    (api.getProcesses as any).mockResolvedValue({
-      processes: [
-        { pid: 4321, cpu: 1.2, rss_mb: 100, elapsed: "1m", command: "node", is_self: false },
-      ],
+  it('does not terminate when confirmation is dismissed', async () => {
+    const { api } = await import('../api/client');
+    (api.getIndexStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      jobs: [{ id: 'idx-1234', status: 'running', started_at: 'now', project: 'demo' }],
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     const { findByText } = render(<ControlTab />);
-    fireEvent.click(await findByText("Kill"));
+    fireEvent.click(await findByText('Terminate'));
 
-    await waitFor(() => expect(api.killProcess).toHaveBeenCalledWith(4321));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining('idx-1234'));
+    expect(api.terminateIndexJob).not.toHaveBeenCalled();
+  });
+
+  it('terminates the job by ID after confirmation', async () => {
+    const { api } = await import('../api/client');
+    (api.getIndexStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      jobs: [{ id: 'idx-4321', status: 'running', started_at: 'now', project: 'demo' }],
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const { findByText } = render(<ControlTab />);
+    fireEvent.click(await findByText('Terminate'));
+
+    await waitFor(() => expect(api.terminateIndexJob).toHaveBeenCalledWith('idx-4321'));
   });
 });

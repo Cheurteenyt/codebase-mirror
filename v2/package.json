@@ -1,7 +1,8 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.75.0",
-  "description": "Codebase Memory V2 \u2014 hybrid code intelligence (native WASM indexer + human memory graph + Obsidian sync)",
+  "version": "0.76.0",
+  "packageManager": "npm@10.9.0",
+  "description": "Codebase Memory V2 — hybrid code intelligence (native WASM indexer + human memory graph + Obsidian sync)",
   "type": "module",
   "main": "dist/cli/index.js",
   "bin": {
@@ -18,13 +19,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run typecheck && npm test",
     "bench:incremental": "tsx scripts/incremental-benchmark-r87.ts",
-    "bench:incremental:smoke": "CBM_BENCH_SMOKE=1 tsx scripts/incremental-benchmark-r87.ts",
+    "bench:incremental:smoke": "tsx scripts/incremental-benchmark-r87.ts --smoke",
     "bench:precision": "tsx scripts/precision-benchmark-r112.ts --project precision-bench --root ./src --sample 50",
+    "bench:tokens": "tsx scripts/token-payload-benchmark.ts",
     "build:backend": "npm run clean && tsc -p tsconfig.json",
     "build:package": "node scripts/build-package.mjs",
     "prepack": "npm run build:package",
     "bench:publication": "tsx scripts/publication-benchmark-r169b.ts",
-    "bench:publication:smoke": "CBM_BENCH_SMOKE=1 tsx scripts/publication-benchmark-r169b.ts"
+    "bench:publication:smoke": "tsx scripts/publication-benchmark-r169b.ts --smoke"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",
@@ -45,7 +47,8 @@
     "vitest": "^4.1.10"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.12.0",
+    "npm": ">=10 <12"
   },
   "license": "MIT",
   "repository": {

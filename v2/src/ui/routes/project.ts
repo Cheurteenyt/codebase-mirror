@@ -2,13 +2,88 @@
 // R63: project management routes — list, health, delete.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { existsSync, statSync, readdirSync, unlinkSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { CodeGraphReader, defaultCodeDbPath } from '../../bridge/sqlite-ro.js';
 import { defaultHumanDbPath } from '../../human/store.js';
 import { sendJson, errorMessage, parseJsonBody } from '../helpers.js';
+import { isValidProjectName } from '../project-store-registry.js';
 import type { RouteContext } from '../types.js';
+
+interface ProjectDeletionResult {
+  deleted: boolean;
+  cleanupPending: boolean;
+}
+
+/**
+ * Move every SQLite file out of the live namespace before deleting any byte.
+ * If Windows rejects a rename because another process owns a handle, all
+ * earlier moves are rolled back, avoiding a half-deleted code/human pair.
+ */
+function deleteProjectStores(codeDbPath: string, humanDbPath: string): ProjectDeletionResult {
+  const candidates = [codeDbPath, humanDbPath]
+    .flatMap((path) => [path, `${path}-wal`, `${path}-shm`]);
+  const existing = candidates.filter((path) => existsSync(path));
+
+  // Validate the complete set before the first rename. Never remove a
+  // directory or another unexpected filesystem object through this endpoint.
+  for (const path of existing) {
+    const stat = lstatSync(path);
+    if (!stat.isFile() && !stat.isSymbolicLink()) {
+      throw new Error('Project storage contains a non-file entry');
+    }
+  }
+  if (existing.length === 0) return { deleted: false, cleanupPending: false };
+
+  const token = randomUUID();
+  const staged: Array<{ source: string; tombstone: string }> = [];
+  try {
+    for (const [index, source] of existing.entries()) {
+      const tombstone = `${source}.cbm-delete-${token}-${index}`;
+      renameSync(source, tombstone);
+      staged.push({ source, tombstone });
+    }
+  } catch (stageError: unknown) {
+    const rollbackErrors: unknown[] = [];
+    for (const entry of staged.reverse()) {
+      try {
+        if (!existsSync(entry.tombstone)) continue;
+        if (existsSync(entry.source)) {
+          throw new Error('Deletion rollback destination was recreated');
+        }
+        renameSync(entry.tombstone, entry.source);
+      } catch (rollbackError: unknown) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError([stageError, ...rollbackErrors], 'Project deletion staging and rollback failed');
+    }
+    throw stageError;
+  }
+
+  // The deletion is committed once all live names are staged. Cleanup is
+  // best-effort: an antivirus may briefly hold a tombstone on Windows, but it
+  // can no longer be mistaken for a usable project database.
+  let cleanupPending = false;
+  for (const { tombstone } of staged) {
+    try {
+      unlinkSync(tombstone);
+    } catch {
+      cleanupPending = true;
+    }
+  }
+  return { deleted: true, cleanupPending };
+}
 
 /**
  * GET /api/projects — list indexed projects with health info.
@@ -34,7 +109,7 @@ export async function routeProjects(
   if (existsSync(cbmDir)) {
     const files = readdirSync(cbmDir);
     for (const f of files) {
-      if (f.endsWith('.db') && !f.endsWith('.human.db') && !f.startsWith('_')) {
+      if (f.endsWith('.db') && !f.endsWith('.human.db') && f.toLowerCase() !== '_config.db') {
         const name = f.replace(/\.db$/, '');
         const dbPath = join(cbmDir, f);
         const stat = statSync(dbPath);
@@ -69,7 +144,7 @@ export async function routeProjects(
 
 /**
  * GET /api/project-health — check DB integrity.
- * R45 (F6/SEC4): validates name against regex to prevent path traversal.
+ * R45 (F6/SEC4): validates the cross-platform storage name to prevent path traversal.
  */
 export async function routeProjectHealth(
   ctx: RouteContext,
@@ -79,8 +154,8 @@ export async function routeProjectHealth(
   project: string,
 ): Promise<void> {
   const name = url.searchParams.get('name') ?? project;
-  if (!name || !/^[a-zA-Z0-9_-]+$/.test(name) || name.startsWith('-')) {
-    sendJson(res, 400, { error: 'Invalid project name (alphanumeric, dash, underscore only, no leading hyphen)' });
+  if (!isValidProjectName(name)) {
+    sendJson(res, 400, { error: 'Invalid project name for cross-platform storage' });
     return;
   }
   const dbPath = defaultCodeDbPath(name);
@@ -88,12 +163,12 @@ export async function routeProjectHealth(
     sendJson(res, 200, { name, status: 'missing', reason: 'DB file not found' });
     return;
   }
+  let reader: CodeGraphReader | undefined;
   try {
-    const reader = new CodeGraphReader(dbPath);
+    reader = new CodeGraphReader(dbPath);
     const nodes = reader.countNodes(name);
     const edges = reader.countEdges(name);
     const stat = statSync(dbPath);
-    reader.close();
     sendJson(res, 200, {
       name,
       status: 'healthy',
@@ -104,6 +179,8 @@ export async function routeProjectHealth(
   } catch (e: unknown) {
     ctx.log(`Project health check failed for name="${name}": ${errorMessage(e)}`);
     sendJson(res, 200, { name, status: 'corrupt', reason: 'Database health check failed' });
+  } finally {
+    reader?.close();
   }
 }
 
@@ -123,35 +200,27 @@ export async function routeProjectDelete(
     return;
   }
   const name = typeof body.name === 'string' ? body.name : '';
-  if (!name || !/^[a-zA-Z0-9_-]+$/.test(name) || name.startsWith('-')) {
-    sendJson(res, 400, { error: 'Invalid project name (alphanumeric, dash, underscore only)' });
+  if (!isValidProjectName(name)) {
+    sendJson(res, 400, { error: 'Invalid project name for cross-platform storage' });
     return;
   }
-  // Defense: refuse to delete the currently active project
-  if (name === ctx.project) {
-    sendJson(res, 400, { error: 'Cannot delete the currently active project. Stop the UI server first.' });
+  // Refuse deletion when either DB path resolves to a store currently owned
+  // by this server. This uses canonical path / file identity, not a
+  // case-sensitive logical project-name comparison.
+  if (ctx.isProjectStoreOpen(name)) {
+    sendJson(res, 409, { error: 'Cannot delete a project with an open store. Stop the UI server or close the project first.' });
     return;
   }
   const dbPath = defaultCodeDbPath(name);
   const humanDbPath = defaultHumanDbPath(name);
   try {
-    let deleted = false;
-    if (existsSync(dbPath)) {
-      unlinkSync(dbPath);
-      deleted = true;
-    }
-    if (existsSync(humanDbPath)) {
-      unlinkSync(humanDbPath);
-      deleted = true;
-    }
-    // Also clean up WAL/SHM files
-    for (const suffix of ['-wal', '-shm']) {
-      if (existsSync(dbPath + suffix)) unlinkSync(dbPath + suffix);
-      if (existsSync(humanDbPath + suffix)) unlinkSync(humanDbPath + suffix);
-    }
+    const { deleted, cleanupPending } = deleteProjectStores(dbPath, humanDbPath);
     ctx.log(`Project deleted: name="${name}" db=${dbPath}`);
+    if (cleanupPending) {
+      ctx.log(`Project deletion cleanup pending: name="${name}"`);
+    }
     // R45 (F8): omit db_path from the response — defense-in-depth info leak.
-    sendJson(res, 200, { success: true, name, deleted });
+    sendJson(res, 200, { success: true, name, deleted, cleanup_pending: cleanupPending });
   } catch (e: unknown) {
     ctx.log(`Failed to delete project name="${name}": ${errorMessage(e)}`);
     sendJson(res, 500, { error: 'Failed to delete project' });

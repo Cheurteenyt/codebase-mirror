@@ -141,6 +141,10 @@ import {
 import { openCasStore } from "./internal/generation-cas-store.js";
 import { PROD_PUBLISHER_OPS } from "./internal/generation-publisher-ops.js";
 import type { PublisherOps } from "./generation-types.js";
+import {
+  CURRENT_DISCOVERY_POLICY_VERSION,
+  CURRENT_EXTRACTOR_SEMANTICS_VERSION,
+} from "../indexer/schema.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 // ─── R169B-STEP10 (§12 POST-PUSH): Crash harness context isolation ──────
@@ -549,8 +553,8 @@ export function reserveGenerationStaging(
  *      expected project name.
  *  12. Validate root_fingerprint (cross-check with input.rootFingerprint
  *      if provided).
- *  13. Validate extractor_semantics_version == 8.
- *  14. Validate discovery_policy_version == 2.
+ *  13. Validate extractor_semantics_version against the current schema contract.
+ *  14. Validate discovery_policy_version against the current policy.
  *  15. Validate cross_file_calls_stale == 0.
  *  16. Validate last_index_error IS NULL.
  *  17. Validate last_successful_index_at IS NOT NULL.
@@ -993,26 +997,26 @@ export function prepareGenerationForPublication(
       );
     }
 
-    // 13. Validate extractor_semantics_version == 8.
+    // 13. Validate against the shared schema constant so future bumps remain publishable.
     extractorSemanticsVersion = projectRow.extractor_semantics_version;
-    if (extractorSemanticsVersion !== 8) {
+    if (extractorSemanticsVersion !== CURRENT_EXTRACTOR_SEMANTICS_VERSION) {
       throw new GenerationStoreError(
         "STAGING_DB_STATE_INVALID",
         phase,
         project,
-        `projects.extractor_semantics_version=${extractorSemanticsVersion} (expected 8)`,
+        `projects.extractor_semantics_version=${extractorSemanticsVersion} (expected ${CURRENT_EXTRACTOR_SEMANTICS_VERSION})`,
         generationId,
       );
     }
 
-    // 14. Validate discovery_policy_version == 2.
+    // 14. Validate discovery_policy_version against the current policy.
     discoveryPolicyVersion = projectRow.discovery_policy_version;
-    if (discoveryPolicyVersion !== 2) {
+    if (discoveryPolicyVersion !== CURRENT_DISCOVERY_POLICY_VERSION) {
       throw new GenerationStoreError(
         "STAGING_DB_STATE_INVALID",
         phase,
         project,
-        `projects.discovery_policy_version=${discoveryPolicyVersion} (expected 2)`,
+        `projects.discovery_policy_version=${discoveryPolicyVersion} (expected ${CURRENT_DISCOVERY_POLICY_VERSION})`,
         generationId,
       );
     }

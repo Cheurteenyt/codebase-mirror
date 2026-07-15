@@ -340,7 +340,7 @@ export function registerObsidianCommand(program: Command): void {
 
       try {
         if (!codeReader) {
-          console.error('Error: code graph not available. Run `cbm index_repository` first.');
+          console.error('Error: code graph not available. Run `cbm-v2 index --project <name> --root <path>` first.');
           process.exitCode = 1;
           return;
         }
@@ -406,7 +406,7 @@ export function registerObsidianCommand(program: Command): void {
 
       try {
         if (!codeReader) {
-          console.error('Error: code graph not available. Run `cbm index_repository` first.');
+          console.error('Error: code graph not available. Run `cbm-v2 index --project <name> --root <path>` first.');
           process.exitCode = 1;
           return;
         }

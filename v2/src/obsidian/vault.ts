@@ -197,7 +197,11 @@ export function* walkVaultIter(vaultPath: string): Generator<string> {
       } else if (stat.isFile() && extname(entry).toLowerCase() === '.md') {
         // Skip backup files and deleted files.
         if (entry.includes('.bak.') || entry.includes('.deleted.') || entry.includes('.conflict.')) continue;
-        yield relative(vaultPath, full);
+        // Vault paths are persisted, compared, and validated as portable
+        // forward-slash identifiers. node:path.relative() emits backslashes
+        // on Windows, which the traversal guard correctly rejects on the next
+        // read and used to make every nested note silently unimportable.
+        yield relative(vaultPath, full).split(sep).join('/');
       }
     }
   }

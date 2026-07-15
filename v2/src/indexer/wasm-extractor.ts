@@ -87,14 +87,25 @@ const EXT_TO_LANG: Record<string, string> = {
   '.dockerfile': 'dockerfile',
 };
 
-// R78: V1 (C) has ALWAYS_SKIP_DIRS + FAST_SKIP_DIRS that exclude ~60 directory
-// names in fast mode. V2 previously only excluded ~15, causing V2 to index
-// ~21% more files than V1 on the same project — making benchmarks unfair.
-// This set now matches V1's discover.c ALWAYS_SKIP_DIRS + FAST_SKIP_DIRS so
-// both engines index the same file set.
-// Source: v1-reference/src/discover/discover.c lines 31-55.
-const SKIP_DIRS = new Set([
-  // ── V1 ALWAYS_SKIP_DIRS (hardcoded, all modes) ─────────────────────
+/**
+ * Source-discovery coverage policy.
+ *
+ * `full` is the correctness-first default: it excludes only directories that
+ * cannot contribute project source (VCS metadata, dependency caches, build
+ * artifacts, and similar generated state).
+ *
+ * `fast` additionally excludes large, lower-priority source families such as
+ * docs, scripts, tools, tests, and migrations. It exists for explicitly
+ * latency-sensitive runs and V1 fast-mode benchmark parity.
+ */
+export type DiscoveryMode = 'full' | 'fast';
+
+// R78 originally merged V1's ALWAYS_SKIP_DIRS and FAST_SKIP_DIRS into one set,
+// which made the fast policy unconditional. That silently removed real source
+// directories (including this repository's own src/mcp/tools) from every V2
+// graph. Keep the two policies separate, matching V1's full-vs-fast contract.
+// Source: v1-reference/src/discover/discover.c lines 31-60, 339-355.
+const ALWAYS_SKIP_DIRS = new Set([
   // VCS
   '.git', '.hg', '.svn', '.worktrees',
   // IDE
@@ -115,7 +126,9 @@ const SKIP_DIRS = new Set([
   '.vercel', '.netlify', 'deploy', 'deployed',
   // Misc
   '.qdrant_code_embeddings', '.tmp', 'vendor', 'vendored',
-  // ── V1 FAST_SKIP_DIRS (skipped in fast/moderate mode) ──────────────
+]);
+
+const FAST_SKIP_DIRS = new Set([
   'generated', 'gen', 'auto-generated', 'fixtures', 'testdata', 'test_data',
   '__tests__', '__mocks__', '__snapshots__', '__fixtures__', '__test__',
   'docs', 'doc', 'documentation', 'examples', 'example', 'samples', 'sample',
@@ -124,6 +137,46 @@ const SKIP_DIRS = new Set([
   'locale', 'locales', 'i18n', 'l10n', 'scripts', 'tools', 'hack',
   'bin', 'build', 'out',
 ]);
+
+const FAST_SKIP_FILENAMES = new Set([
+  'LICENSE', 'LICENSE.txt', 'LICENSE.md', 'LICENSE-MIT', 'LICENSE-APACHE',
+  'LICENCE', 'LICENCE.txt', 'LICENCE.md', 'CHANGELOG', 'CHANGELOG.md',
+  'CHANGES.md', 'HISTORY', 'HISTORY.md', 'AUTHORS', 'AUTHORS.md',
+  'CONTRIBUTORS', 'CONTRIBUTORS.md', 'CODEOWNERS', 'go.sum', 'yarn.lock',
+  'pnpm-lock.yaml', 'Pipfile.lock', 'poetry.lock', 'Gemfile.lock', 'Cargo.lock',
+  'mix.lock', 'flake.lock', 'pubspec.lock', 'composer.lock', 'package-lock.json',
+  'configure', 'Makefile.in', 'config.guess', 'config.sub',
+  // V1 ignores these JSON configuration files in every mode. V2 full keeps
+  // them for correctness, while fast mirrors V1's benchmark corpus.
+  'package.json', 'tsconfig.json', 'jsconfig.json', 'openapi.json', 'swagger.json',
+  'jest.config.json', '.eslintrc.json', '.prettierrc.json', '.babelrc.json',
+  'angular.json', 'firebase.json', 'renovate.json', 'lerna.json', 'turbo.json',
+  'composer.json', 'tslint.json', '.stylelintrc.json', 'pnpm-lock.json',
+  'launch.json', 'settings.json', 'extensions.json', 'tasks.json',
+  'deno.json', 'biome.json', 'devcontainer.json', '.devcontainer.json',
+]);
+
+const FAST_FILE_PATTERNS = [
+  '.d.ts', '.bundle.', '.chunk.', '.generated.', '.pb.go', '_pb2.py', '.pb2.py',
+  '_grpc.pb.go', '_string.go', 'mock_', '_mock.', '_test_helpers.', '.stories.',
+  '.spec.', '.test.',
+];
+
+const FAST_IGNORED_SUFFIXES = [
+  '.map', '.min.js', '.min.css', '.pem', '.crt', '.key', '.cer', '.p12',
+  '.coverage', '.prof', '.patch', '.diff',
+];
+
+function shouldSkipDirectory(name: string, mode: DiscoveryMode): boolean {
+  return ALWAYS_SKIP_DIRS.has(name) || (mode === 'fast' && FAST_SKIP_DIRS.has(name));
+}
+
+function shouldSkipFile(name: string, mode: DiscoveryMode): boolean {
+  if (mode !== 'fast') return false;
+  return FAST_SKIP_FILENAMES.has(name)
+    || FAST_FILE_PATTERNS.some((pattern) => name.includes(pattern))
+    || FAST_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix));
+}
 
 /**
  * Detect language from file extension.
@@ -137,24 +190,25 @@ export function detectLanguage(filePath: string): string | null {
 
 /**
  * R141 (PERF-R141-01): Check whether a real target path passes ANY component
- * of SKIP_DIRS — not just the basename. Previously only `basename(realTarget)`
- * was checked, so an alias like `link -> node_modules/pkg/src` (basename=`src`)
- * bypassed the filter and let `node_modules/.../dep.ts` be indexed.
+ * excluded by the selected discovery mode — not just the basename. Previously
+ * only `basename(realTarget)` was checked, so an alias like
+ * `link -> node_modules/pkg/src` (basename=`src`) bypassed the filter and let
+ * `node_modules/.../dep.ts` be indexed.
  *
  * The check is performed against the canonical path relative to realRoot,
- * so a deep alias is rejected if any ancestor directory is in SKIP_DIRS or
- * starts with '.' (hidden directory).
+ * so a deep alias is rejected if any ancestor directory is excluded by the
+ * selected policy.
  *
  * `realRoot` is the resolved root. `realTarget` is the resolved target path
  * (already confirmed to be inside realRoot by isPathInside).
  */
-function hasSkippedComponent(realRoot: string, realTarget: string): boolean {
+function hasSkippedComponent(realRoot: string, realTarget: string, mode: DiscoveryMode): boolean {
   const rel = relative(realRoot, realTarget);
   if (rel === '') return false; // the root itself
   const components = rel.split(sep);
   for (const component of components) {
     if (component === '') continue;
-    if (SKIP_DIRS.has(component) || component.startsWith('.')) {
+    if (shouldSkipDirectory(component, mode)) {
       return true;
     }
   }
@@ -391,6 +445,7 @@ function fileIdentityKey(fullPath: string, language: string): string | null {
 export function discoverSourceFilesStructured(
   rootPath: string,
   canonicalRoot?: string,
+  mode: DiscoveryMode = 'full',
 ): DiscoveryResult {
   // R142 (PERF-R142-01, PATH-R142-01): If the caller already validated the
   // root via assertDiscoveryRoot and passed the canonical realpath, reuse
@@ -585,13 +640,13 @@ export function discoverSourceFilesStructured(
       }
 
       if (lst.isSymbolicLink()) {
-        // R143 (DISC-R143-01): Check SKIP_DIRS/hidden by ENTRY NAME before
+        // R143 (DISC-R143-01): Check the selected directory policy by ENTRY NAME before
         // realpathSync. A broken symlink named `node_modules-link` or
         // `.cache-link` should be skipped by policy WITHOUT calling
         // realpath (which would fail and make the entire discovery
         // incomplete). R142 called realpath first, so a single broken
         // symlink blocked the entire full index.
-        if (SKIP_DIRS.has(entry) || entry.startsWith('.')) {
+        if (shouldSkipDirectory(entry, mode)) {
           skippedPolicyPaths++;
           continue;
         }
@@ -672,11 +727,11 @@ export function discoverSourceFilesStructured(
           skippedExternalSymlinks++;
           continue; // External symlink — skip
         }
-        // R141 (PERF-R141-01): Check SKIP_DIRS against ALL components of the
+        // R141 (PERF-R141-01): Check the active policy against ALL components of the
         // canonical target path (relative to realRoot), not just basename.
         // Catches `link -> node_modules/pkg/src` (basename=`src` is fine,
         // but `node_modules` is in the path).
-        if (hasSkippedComponent(realRoot, realTarget)) {
+        if (hasSkippedComponent(realRoot, realTarget, mode)) {
           skippedPolicyPaths++;
           continue;
         }
@@ -758,6 +813,10 @@ export function discoverSourceFilesStructured(
           // R142 (IDX-R142-01): detect language BEFORE marking visited.
           // A non-code hardlink seen first would otherwise poison the
           // visitedFiles set and suppress the code hardlink.
+          if (shouldSkipFile(basename(realTarget), mode)) {
+            skippedPolicyPaths++;
+            continue;
+          }
           const lang = detectLanguage(realTarget);
           if (!lang) {
             continue; // unsupported extension — don't mark visited
@@ -792,7 +851,7 @@ export function discoverSourceFilesStructured(
           continue;
         }
       } else if (lst.isDirectory()) {
-        if (SKIP_DIRS.has(entry) || entry.startsWith('.')) {
+        if (shouldSkipDirectory(entry, mode)) {
           skippedPolicyPaths++;
           continue;
         }
@@ -838,6 +897,10 @@ export function discoverSourceFilesStructured(
         // this, two hardlinks to the same file would produce two File nodes
         // with different paths — same problem as file symlinks.
         // R142 (IDX-R142-01): detect language BEFORE marking visited.
+        if (shouldSkipFile(entry, mode)) {
+          skippedPolicyPaths++;
+          continue;
+        }
         const lang = detectLanguage(fullPath);
         if (!lang) {
           continue; // unsupported extension — don't mark visited
@@ -917,8 +980,8 @@ export function discoverSourceFilesStructured(
  *
  * R142: throws on root failure (same as R141).
  */
-export function discoverSourceFilesWasm(rootPath: string): string[] {
-  const result = discoverSourceFilesStructured(rootPath);
+export function discoverSourceFilesWasm(rootPath: string, mode: DiscoveryMode = 'full'): string[] {
+  const result = discoverSourceFilesStructured(rootPath, undefined, mode);
   if (!result.complete) {
     const sample = result.errors.slice(0, 5).map(e => `${e.path}: ${e.code}`).join('; ');
     throw new Error(

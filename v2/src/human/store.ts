@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveProjectStoragePath } from '../storage/project-path.js';
 import {
   HumanNode,
   HumanEdge,
@@ -139,8 +140,16 @@ function expandTilde(p: string): string {
 }
 
 export function defaultHumanDbPath(project: string): string {
-  const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
-  return join(cacheDir, 'codebase-memory-mcp', `${project}.human.db`);
+  return resolveProjectStoragePath(project, '.human.db');
+}
+
+interface CbmNodeCountRow {
+  cbm_node_id: number;
+  c: number;
+}
+
+interface CbmNodeLabelCountRow extends CbmNodeCountRow {
+  label: string;
 }
 
 export class HumanMemoryStore {
@@ -164,22 +173,28 @@ export class HumanMemoryStore {
     const dir = dirname(expanded);
     mkdirSync(dir, { recursive: true });
     this.db = new Database(expanded);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
-    // Set busy_timeout to handle concurrent writes from CLI/MCP/import gracefully.
-    this.db.pragma('busy_timeout = 5000');
-    // R20: performance PRAGMAs — temp_store=MEMORY avoids disk I/O for sorting
-    // and grouping; cache_size=-65536 gives 64MB page cache (default 2MB is too
-    // small for bulk operations like getBulkNotesByCbmNodeIds).
-    this.db.pragma('temp_store = MEMORY');
-    this.db.pragma('cache_size = -65536');
-    runMigrations(this.db);
-    // R58: prepare hot-path statements once. These are the 3 single-row lookups
-    // called on every MCP/UI/sync request — preparing them here means each call
-    // is just .get(params) with no SQL compilation or cache lookup.
-    this.stmtGetNodeById = this.db.prepare('SELECT * FROM human_nodes WHERE id = ?');
-    this.stmtGetNodeBySlug = this.db.prepare('SELECT * FROM human_nodes WHERE project = ? AND slug = ?');
-    this.stmtGetNodeByObsidianPath = this.db.prepare('SELECT * FROM human_nodes WHERE project = ? AND obsidian_path = ?');
+    try {
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('foreign_keys = ON');
+      // Set busy_timeout to handle concurrent writes from CLI/MCP/import gracefully.
+      this.db.pragma('busy_timeout = 5000');
+      // R20: performance PRAGMAs — temp_store=MEMORY avoids disk I/O for sorting
+      // and grouping. Human-memory rows are compact, so an 8 MiB page-cache
+      // budget preserves bulk-query locality without multiplying a 64 MiB
+      // allocation across every project visited by the UI.
+      this.db.pragma('temp_store = MEMORY');
+      this.db.pragma('cache_size = -8192');
+      runMigrations(this.db);
+      // R58: prepare hot-path statements once. These are the 3 single-row lookups
+      // called on every MCP/UI/sync request — preparing them here means each call
+      // is just .get(params) with no SQL compilation or cache lookup.
+      this.stmtGetNodeById = this.db.prepare('SELECT * FROM human_nodes WHERE id = ?');
+      this.stmtGetNodeBySlug = this.db.prepare('SELECT * FROM human_nodes WHERE project = ? AND slug = ?');
+      this.stmtGetNodeByObsidianPath = this.db.prepare('SELECT * FROM human_nodes WHERE project = ? AND obsidian_path = ?');
+    } catch (error: unknown) {
+      try { this.db.close(); } catch { /* preserve the original error */ }
+      throw error;
+    }
   }
 
   /**
@@ -215,6 +230,7 @@ export class HumanMemoryStore {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
     db.pragma('temp_store = MEMORY');
+    db.pragma('cache_size = -8192');
     // R58: prepare the same hot-path statements as the file-based constructor.
     // Uses `as any` to assign to private fields from a static method — the
     // alternative would be a private helper called by both constructors, but
@@ -464,6 +480,67 @@ export class HumanMemoryStore {
         } catch {
           // ignore — return empty arrays for this chunk
         }
+      }
+    }
+    return result;
+  }
+
+  /** Count every linked note without loading note bodies into memory. */
+  getBulkNoteCountsByCbmNodeIds(project: string, cbmNodeIds: number[]): Map<number, number> {
+    const result = new Map<number, number>();
+    if (cbmNodeIds.length === 0) return result;
+    const uniqueIds = [...new Set(cbmNodeIds.filter(Number.isSafeInteger))];
+    for (const id of uniqueIds) result.set(id, 0);
+
+    const CHUNK = 500;
+    for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+      const chunk = uniqueIds.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        const rows = this.db
+          .prepare(
+            `SELECT l.cbm_node_id, COUNT(*) AS c
+             FROM human_node_cbm_links l
+             JOIN human_nodes n ON n.id = l.human_node_id
+             WHERE n.project = ? AND l.cbm_node_id IN (${placeholders})
+             GROUP BY l.cbm_node_id`,
+          )
+          .all(project, ...chunk) as CbmNodeCountRow[];
+        for (const row of rows) result.set(Number(row.cbm_node_id), Number(row.c));
+      } catch {
+        // Preserve the bulk-read API's resilient behavior for legacy DBs.
+      }
+    }
+    return result;
+  }
+
+  /** Exact active-note counts by label, used for risk scoring without body loads. */
+  getBulkActiveNoteLabelCountsByCbmNodeIds(
+    project: string,
+    cbmNodeIds: number[],
+  ): Map<number, Record<string, number>> {
+    const result = new Map<number, Record<string, number>>();
+    const uniqueIds = [...new Set(cbmNodeIds.filter(Number.isSafeInteger))];
+    for (const id of uniqueIds) result.set(id, {});
+    const CHUNK = 500;
+    for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+      const chunk = uniqueIds.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      try {
+        const rows = this.db.prepare(
+          `SELECT l.cbm_node_id, n.label, COUNT(*) AS c
+           FROM human_node_cbm_links l
+           JOIN human_nodes n ON n.id = l.human_node_id
+           WHERE n.project = ? AND n.status = 'active'
+             AND l.cbm_node_id IN (${placeholders})
+           GROUP BY l.cbm_node_id, n.label`,
+        ).all(project, ...chunk) as CbmNodeLabelCountRow[];
+        for (const row of rows) {
+          const counts = result.get(Number(row.cbm_node_id));
+          if (counts) counts[row.label] = Number(row.c);
+        }
+      } catch {
+        // Legacy/malformed human DB: retain initialized zero-count records.
       }
     }
     return result;
@@ -838,6 +915,30 @@ export class HumanMemoryStore {
     const rows = this.db
       .prepare(
         `SELECT label, COUNT(*) AS c FROM human_nodes WHERE project = ? GROUP BY label`
+      )
+      .all(project) as LabelCountRow[];
+    const result: Record<string, number> = {};
+    let total = 0;
+    for (const row of rows) {
+      result[row.label] = row.c;
+      total += row.c;
+    }
+    result['_total'] = total;
+    return result;
+  }
+
+  /**
+   * Count only currently active notes grouped by label. Historical notes are
+   * intentionally excluded so callers do not describe reviewed/deprecated
+   * BugNotes as "open" or old RefactorPlans as "pending".
+   */
+  countActiveNodesByLabel(project: string): Record<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT label, COUNT(*) AS c
+         FROM human_nodes
+         WHERE project = ? AND status = 'active'
+         GROUP BY label`
       )
       .all(project) as LabelCountRow[];
     const result: Record<string, number> = {};

@@ -17,17 +17,16 @@ import Database from 'better-sqlite3';
 import { defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { initIndexerSchema, clearProjectData, updateProjectStats, CURRENT_EXTRACTOR_SEMANTICS_VERSION, CURRENT_DISCOVERY_POLICY_VERSION, loadAliasHistory, computeRootFingerprint, commitAliasStateAtomically } from './schema.js';
 import { discoverSourceFilesStructured, detectLanguage, extractFromFilesWasm, preloadGrammars } from './wasm-extractor.js';
-import type { DiscoveryResult } from './wasm-extractor.js';
+import type { DiscoveryMode, DiscoveryResult } from './wasm-extractor.js';
 import { replaceCallSitesForFiles, replaceImportsForFiles, replaceExportsForFiles, rebuildCrossFileCallsEdges, clearCrossFileCallEdges, isCallSitesInitialized } from './cross-file-resolver.js';
 import { assertDiscoveryRoot, DiscoveryRootError } from '../utils/safe-path.js';
 import { Worker } from 'node:worker_threads';
 import { cpus } from 'node:os';
-import { join, relative as nodeRelative, sep } from 'node:path';
+import { dirname, join, relative as nodeRelative, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import type { WorkerBatch, WorkerBatchResult } from './worker.js';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
-import { existsSync } from 'node:fs';
 
 /**
  * R161 (OBS-R161-03): Unified MAX_STALE_PATHS module-level constant.
@@ -56,6 +55,12 @@ export interface IndexOptions {
   useWasm?: boolean;
   /** Number of worker threads (0 = single-threaded). Default: auto (cpu count - 1). */
   workers?: number;
+  /**
+   * Source-discovery coverage. `full` is correctness-first and is the default.
+   * `fast` is intentionally incompatible with incremental indexing because an
+   * incremental run cannot safely update or delete source families it omits.
+   */
+  discoveryMode?: DiscoveryMode;
 }
 
 /**
@@ -613,6 +618,18 @@ function classifyStaleReason(params: {
 export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult> {
   const start = Date.now();
   const dbPath = defaultCodeDbPath(opts.project);
+  const discoveryMode = opts.discoveryMode ?? 'full';
+
+  // A fast incremental pass cannot distinguish "deleted" from "intentionally
+  // outside this discovery snapshot" for docs/tests/scripts/tools/etc. Merely
+  // preserving those rows would be just as unsafe: changed files in the
+  // omitted trees would remain stale while the project was certified fresh.
+  // Reject the combination before opening or creating the SQLite database.
+  if (opts.incremental && discoveryMode === 'fast') {
+    throw new Error(
+      'Fast discovery is incompatible with incremental indexing because excluded source families cannot be updated or safely deleted. Run a full fast index, or use --discovery-mode full with --incremental.',
+    );
+  }
   // R154 (PERF-R154-01) + R155 (CONC-R155-01): runId for alias_history GC.
   // R154 used Date.now() which can collide between concurrent indexers started
   // in the same millisecond. R155 uses randomUUID() — collision-proof.
@@ -657,7 +674,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     }
     let discovery: DiscoveryResult;
     try {
-      discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot);
+      discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot, discoveryMode);
     } catch (error) {
       const discoveryMsg = (error as Error).message;
       return {
@@ -761,6 +778,10 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
     };
   }
 
+  // A fresh CLI installation may not have opened HumanMemoryStore yet. The
+  // indexer owns creation of its database parent and must not depend on an
+  // unrelated subsystem having created the shared cache directory first.
+  mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   initIndexerSchema(db);
   // R79: Bug 9 fix — incremental mode preserves nodes/edges for unchanged files.
@@ -780,7 +801,7 @@ export async function indexProjectWasm(opts: IndexOptions): Promise<IndexResult>
   // incremental mode we do NOT compute deletedRelPaths.
   let discovery: DiscoveryResult;
   try {
-    discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot);
+    discovery = discoverSourceFilesStructured(opts.rootPath, canonicalRoot, discoveryMode);
   } catch (error) {
     // R141 (DATA-R141-01): discovery failed AFTER root validation — likely a
     // transient I/O error or a TOCTOU race. Do NOT clearProjectData.
@@ -2853,8 +2874,10 @@ async function indexParallel(
     return { nodes: 0, edges: 0, files: 0, skipped: totalSkipped, errors: [], languages, crossFileCallsResolved: false };
   }
 
-  // Dispatch batches to workers
-  const workerPath = join(new URL('.', import.meta.url).pathname, 'worker.js');
+  // Dispatch batches to workers. Pass the file URL directly: URL.pathname is
+  // not a native Windows path ("/D:/..."), and feeding it through node:path
+  // can make Worker resolve it as "D:\\D:\\...".
+  const workerUrl = new URL('./worker.js', import.meta.url);
   const results: WorkerBatchResult[] = [];
   const errors: Array<{ file: string; error: string }> = [];
   let batchIndex = 0;
@@ -2869,7 +2892,7 @@ async function indexParallel(
         if (!myBatch) break;
 
         try {
-          const result = await runWorker(workerPath, myBatch);
+          const result = await runWorker(workerUrl, myBatch);
           results.push(result);
         } catch (e: unknown) {
           const errMsg = e instanceof Error ? e.message : String(e);
@@ -3158,9 +3181,9 @@ async function indexParallel(
 /**
  * Run a single worker thread to process a batch of files.
  */
-function runWorker(workerPath: string, batch: WorkerBatch): Promise<WorkerBatchResult> {
+function runWorker(workerUrl: URL, batch: WorkerBatch): Promise<WorkerBatchResult> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(workerPath, { workerData: batch });
+    const worker = new Worker(workerUrl, { workerData: batch });
     worker.on('message', (result: WorkerBatchResult) => {
       worker.terminate();
       resolve(result);

@@ -4,7 +4,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useGraphData } from "../hooks/useGraphData";
-import { useWebSocket } from "../hooks/useWebSocket";
+import { useWebSocket, type WsNotification } from "../hooks/useWebSocket";
 import { GraphCanvas, type GraphCanvasHandle } from "./GraphCanvas";
 import { FilterPanel } from "./FilterPanel";
 import { Sidebar } from "./Sidebar";
@@ -13,7 +13,14 @@ import { NodeTooltip } from "./NodeTooltip";
 import { ResizeHandle } from "./ResizeHandle";
 import { ErrorBoundary } from "./ErrorBoundary";
 import type { GraphNode, GraphData } from "../lib/types";
+import { PanelLeftOpen, X } from "lucide-react";
 
+const LAYOUT_EVENTS = new Set([
+  "code_graph_changed",
+  "graph_reindexed",
+  "human_nodes_changed",
+  "cbm_links_changed",
+]);
 
 function loadWidth(key: string, fallback: number): number {
   try {
@@ -28,9 +35,10 @@ function saveWidth(key: string, value: number) {
 
 interface GraphTabProps {
   project: string | null;
+  active?: boolean;
 }
 
-export function GraphTab({ project }: GraphTabProps) {
+export function GraphTab({ project, active = true }: GraphTabProps) {
   const { data, loading, error, fetchOverview } = useGraphData();
   const [highlightedIds, setHighlightedIds] = useState<Set<number> | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -38,6 +46,7 @@ export function GraphTab({ project }: GraphTabProps) {
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const firstLoad = useRef(true);
+  const wsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // R41 (UI-9): imperative handle to the canvas — used by the "Reset view"
   // button to call canvasRef.current?.resetView() without lifting transformRef.
   const canvasRef = useRef<GraphCanvasHandle>(null);
@@ -47,6 +56,7 @@ export function GraphTab({ project }: GraphTabProps) {
   // 2000-node graph, out of scope for a single-round fix.
   const [leftWidth, setLeftWidth] = useState(() => loadWidth("cbm-left-w", 260));
   const [rightWidth, setRightWidth] = useState(() => loadWidth("cbm-right-w", 280));
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
 
   const [enabledLabels, setEnabledLabels] = useState<Set<string>>(new Set());
   const [enabledEdgeTypes, setEnabledEdgeTypes] = useState<Set<string>>(new Set());
@@ -143,19 +153,42 @@ export function GraphTab({ project }: GraphTabProps) {
       // next data load re-initializes everything from scratch.
       knownLabelsRef.current = new Set();
       knownEdgeTypesRef.current = new Set();
-      fetchOverview(project);
       setHighlightedIds(null);
       setSelectedPath(null);
       setSelectedNode(null);
     }
-  }, [project, fetchOverview]);
+  }, [project]);
+
+  // Fetch on first activation and revalidate after the warm graph has been
+  // hidden. While inactive, both network work and d3 animation are paused.
+  useEffect(() => {
+    if (project && active) void fetchOverview(project);
+  }, [active, project, fetchOverview]);
 
   // R25: WebSocket for real-time graph updates. When human_nodes change
   // (notes created/updated/deleted via CLI/MCP/sync), re-fetch the layout.
-  const handleGraphNotification = useCallback(() => {
-    if (project) fetchOverview(project);
+  const handleGraphNotification = useCallback((notification: WsNotification) => {
+    if (!project) return;
+    // Human-human edges and sync completion do not change the rendered code
+    // topology. Avoid transferring and simulating the full graph for them.
+    if (!LAYOUT_EVENTS.has(notification.event)) return;
+    // Coalesce mixed note/link notifications into one terminal refresh.
+    if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+    wsRefreshTimerRef.current = setTimeout(() => {
+      wsRefreshTimerRef.current = null;
+      void fetchOverview(project);
+    }, 350);
   }, [project, fetchOverview]);
-  useWebSocket(project, handleGraphNotification);
+  useWebSocket(active ? project : null, handleGraphNotification);
+  useEffect(() => {
+    if (!active && wsRefreshTimerRef.current) {
+      clearTimeout(wsRefreshTimerRef.current);
+      wsRefreshTimerRef.current = null;
+    }
+  }, [active]);
+  useEffect(() => () => {
+    if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+  }, []);
 
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
@@ -197,6 +230,14 @@ export function GraphTab({ project }: GraphTabProps) {
     setEnabledEdgeTypes(new Set(data.edges.map((e) => e.type)));
   }, [data]);
 
+  const resetFilters = useCallback(() => {
+    enableAll();
+    setDeadCodeView(false);
+    setShowOnlyDead(false);
+    setHideEntryPoints(false);
+    setHideTests(false);
+  }, [enableAll]);
+
   if (!project) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -221,7 +262,7 @@ export function GraphTab({ project }: GraphTabProps) {
     );
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center p-8">
@@ -246,12 +287,26 @@ export function GraphTab({ project }: GraphTabProps) {
   }
 
   return (
-    <div className="h-full flex">
+    <div className="relative h-full flex overflow-hidden">
+      {mobilePanelOpen && (
+        <button
+          className="absolute inset-0 z-20 bg-black/55 backdrop-blur-[2px] lg:hidden"
+          aria-label="Close graph filters"
+          onClick={() => setMobilePanelOpen(false)}
+        />
+      )}
       {/* Left sidebar */}
       <div
-        className="border-r border-border/30 flex flex-col h-full bg-[#0b1920]/90 backdrop-blur-md shrink-0"
+        className={`absolute inset-y-0 left-0 z-30 flex h-full max-w-[86vw] shrink-0 flex-col border-r border-white/10 bg-[#081720]/97 shadow-2xl backdrop-blur-xl transition-transform duration-200 lg:relative lg:z-auto lg:translate-x-0 lg:bg-[#0b1920]/90 lg:shadow-none ${mobilePanelOpen ? "translate-x-0" : "-translate-x-full"}`}
         style={{ width: leftWidth }}
       >
+        <button
+          className="absolute right-2 top-2 z-10 rounded-lg border border-white/10 bg-white/[0.05] p-1.5 text-slate-400 hover:text-slate-100 lg:hidden"
+          aria-label="Close graph filters"
+          onClick={() => setMobilePanelOpen(false)}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
         <FilterPanel
           data={data}
           enabledLabels={enabledLabels}
@@ -274,64 +329,91 @@ export function GraphTab({ project }: GraphTabProps) {
           selectedPath={selectedPath}
           onSelectPath={(path, ids) => {
             setSelectedPath(path);
-            setHighlightedIds(ids);
+            setHighlightedIds(ids.size > 0 ? ids : null);
+            if (ids.size > 0) setMobilePanelOpen(false);
           }}
         />
       </div>
-      <ResizeHandle
-        side="left"
-        onResize={(d) => {
-          setLeftWidth((w) => {
-            const nw = Math.max(150, Math.min(500, w + d));
-            saveWidth("cbm-left-w", nw);
-            return nw;
-          });
-        }}
-      />
+      <div className="hidden lg:contents">
+        <ResizeHandle
+          side="left"
+          onResize={(d) => {
+            setLeftWidth((w) => {
+              const nw = Math.max(150, Math.min(500, w + d));
+              saveWidth("cbm-left-w", nw);
+              return nw;
+            });
+          }}
+        />
+      </div>
 
       {/* Graph canvas */}
       <div className="flex-1 relative overflow-hidden">
+        <button
+          onClick={() => setMobilePanelOpen(true)}
+          className="absolute left-3 top-3 z-20 grid h-9 w-9 place-items-center rounded-xl border border-white/10 bg-[#081720]/85 text-slate-300 shadow-xl backdrop-blur-md lg:hidden"
+          aria-label="Open graph filters"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+        </button>
+        {/* Keep the canvas mounted even for an empty filtered subset. Its
+            simulation retains cached node objects/positions, so Reset Filters
+            can restore the settled graph without a cold re-layout. */}
+        <ErrorBoundary key={project}>
+          <GraphCanvas
+            ref={canvasRef}
+            data={filteredData}
+            active={active}
+            highlightedIds={highlightedIds}
+            deadCodeView={deadCodeView}
+            onNodeClick={handleNodeClick}
+            onNodeHover={(node, pos) => {
+              setHoveredNode(node);
+              if (pos) setTooltipPos(pos);
+            }}
+          />
+        </ErrorBoundary>
+
         {filteredData.nodes.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#06090f]/80 backdrop-blur-[1px]">
             <div className="text-center">
-              <p className="text-foreground/30 text-sm mb-3">All nodes filtered out</p>
-              <button onClick={enableAll} className="px-4 py-2 rounded-lg bg-primary/15 text-primary text-sm">
+              <p className="text-foreground/30 text-sm mb-3" aria-live="polite">All nodes filtered out</p>
+              <button onClick={resetFilters} className="px-4 py-2 rounded-lg bg-primary/15 text-primary text-sm">
                 Reset Filters
               </button>
             </div>
           </div>
         ) : (
           <>
-            {/* R43 (M2): key={project} forces a fresh ErrorBoundary on project
-                switch. Without it, an error rendering project A leaves the
-                boundary stuck in hasError state for project B until manual retry. */}
-            <ErrorBoundary key={project}>
-              <GraphCanvas
-                ref={canvasRef}
-                data={filteredData}
-                highlightedIds={highlightedIds}
-                deadCodeView={deadCodeView}
-                onNodeClick={handleNodeClick}
-                onNodeHover={(node, pos) => {
-                  setHoveredNode(node);
-                  if (pos) setTooltipPos(pos);
-                }}
-              />
-            </ErrorBoundary>
-
             {/* HUD */}
-            <div className="absolute top-4 left-4 text-[11px] text-foreground/30 pointer-events-none font-mono">
+            <div className="absolute left-14 top-3 rounded-lg border border-white/10 bg-[#071219]/80 px-3 py-2 text-[10px] text-foreground/65 pointer-events-none font-mono backdrop-blur-md lg:left-4 lg:top-4 lg:text-[11px]">
               <p>
-                {filteredData.nodes.length.toLocaleString()} nodes /{" "}
-                {filteredData.edges.length.toLocaleString()} edges
+                {filteredData.nodes.length.toLocaleString()} nodes shown /{" "}
+                {data.total_nodes.toLocaleString()} total
+              </p>
+              <p className="text-foreground/40 mt-0.5">
+                {filteredData.edges.length.toLocaleString()} visible edges
+                {data.truncated
+                  ? ` · ${data.sampling?.strategy === "balanced-degree-v1" ? "balanced degree sample" : (data.sampling?.strategy ?? "sampled")}`
+                  : " · complete graph"}
               </p>
               {highlightedIds && highlightedIds.size > 0 && (
                 <p className="text-cyan-400/50 mt-0.5">{highlightedIds.size} selected</p>
               )}
             </div>
 
+            {error && data && (
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-lg border border-amber-400/20 bg-amber-950/80 px-3 py-2 text-[11px] text-amber-200 shadow-xl backdrop-blur-md">
+                Refresh failed; keeping the last valid graph. {error}
+              </div>
+            )}
+
             {/* Actions */}
-            <div className="absolute top-4 right-4 flex gap-2">
+            <div
+              role="toolbar"
+              aria-label="Graph actions"
+              className="absolute right-3 top-20 z-20 flex flex-col items-end gap-1.5 lg:right-4 lg:top-4 lg:flex-row lg:items-center lg:gap-2"
+            >
               {highlightedIds && (
                 <button
                   onClick={() => {
@@ -369,18 +451,20 @@ export function GraphTab({ project }: GraphTabProps) {
       {/* Right detail panel */}
       {selectedNode && filteredData && (
         <>
-          <ResizeHandle
-            side="right"
-            onResize={(d) => {
-              setRightWidth((w) => {
-                const nw = Math.max(200, Math.min(500, w + d));
-                saveWidth("cbm-right-w", nw);
-                return nw;
-              });
-            }}
-          />
+          <div className="hidden lg:contents">
+            <ResizeHandle
+              side="right"
+              onResize={(d) => {
+                setRightWidth((w) => {
+                  const nw = Math.max(200, Math.min(500, w + d));
+                  saveWidth("cbm-right-w", nw);
+                  return nw;
+                });
+              }}
+            />
+          </div>
           <div
-            className="border-l border-border shrink-0 h-full overflow-hidden"
+            className="absolute inset-y-0 right-0 z-30 h-full max-w-[92vw] shrink-0 overflow-hidden border-l border-white/10 bg-[#081720]/98 shadow-2xl lg:relative lg:z-auto lg:bg-transparent lg:shadow-none"
             style={{ width: rightWidth }}
           >
             <NodeDetailPanel

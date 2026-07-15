@@ -27,9 +27,10 @@ npm run dev -- index --project my-app --root /path/to/repo
 
 ## Prerequisites
 
-- **Node.js** ≥ 18.6.0 (tested on 22, 24; see `v2/package.json` engines)
+- **Node.js** ≥ 22.12.0 (CI verifies the exact floor; `nvm use` selects Node 24 LTS)
+- **npm** 10 or 11. The `packageManager: npm@10.9.0` fields are repository-authoring/Corepack hints, not runtime constraints.
 - **Python 3** (for `better-sqlite3` native build, or use prebuild-install)
-- **Codebase Memory V1** (the C engine) — optional. V2 has a native WASM indexer (112 languages) and is partially autonomous for TS/JS. V1 is a fallback for other languages.
+- **Codebase Memory V1** (the C engine) — optional and run separately. V2 never invokes it as a fallback; it can read a compatible database that V1 produced in a separate run.
 
 ## Project Structure
 
@@ -151,7 +152,6 @@ runners and storage follow separate billing/limits.
 
 Known gaps:
 - No Windows/macOS matrix (PKG-CARRY-01)
-- Node 20 EOL in 2026
 
 See [MAINTAINERS_GUIDE.md](MAINTAINERS_GUIDE.md) for the full workflow and invariants.
 See [AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md) for
@@ -253,16 +253,41 @@ cd ../graph-ui && npx tsc --noEmit && npx vitest run
 All tests must pass with 0 regressions. A failed pipeline blocks merge.
 See `v2/CHANGELOG.md` for the current test count.
 
+## Dependency updates
+
+Dependabot opens grouped weekly minor/patch updates for GitHub Actions, the V2
+backend, Graph UI, and Docker, and ignores semver-major version updates. Major
+updates remain deliberate migrations because the
+native SQLite binding, Vite, TypeScript, and UI libraries can change runtime or
+build contracts. Before merging an update PR, run:
+
+```bash
+cd v2 && npm ci && npm audit && npm run typecheck && npm test
+cd ../graph-ui && npm ci && npm audit && npm run build && npm test
+```
+
+Lockfiles are authoritative and must be committed with dependency changes.
+`npm outdated` is informational: a newer major version is not automatically a
+safe update.
+
 See `MAINTAINERS_GUIDE.md` for the full workflow (SSH setup, deploy keys,
 branch protection, GitHub PR push options, etc.).
 
 ## Release Process
 
-1. Update `package.json` version
-2. Update `CHANGELOG.md` with the new version entry
-3. Run `npm run prepublishOnly` (typecheck + test)
-4. Create a tag: `git tag v0.X.0`
-5. Push: `git push origin v0.X.0`
+Public releases are not automated yet. Follow
+[`docs/RELEASE_POLICY.md`](docs/RELEASE_POLICY.md); do not create or push a tag
+until its full-CI, packed-install/UI, Docker/UI, release-note, and checksum
+gates have been completed on the exact release commit. At minimum:
+
+1. Update `v2/package.json`, its lockfile, and `v2/CHANGELOG.md`.
+2. Run the complete backend/frontend validation and smoke benchmarks.
+3. Build and install the npm tarball from a temporary directory; verify CLI
+   and UI behavior from an unrelated working directory.
+4. Build the Docker image without cache and verify CLI, non-root cache access,
+   and the UI HTTP endpoint.
+5. Create and push the immutable `v<version>` tag only after those gates pass.
+6. Publish release notes and checksums; never force-push a release tag.
 
 ## Questions?
 

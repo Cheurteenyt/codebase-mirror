@@ -13,7 +13,7 @@ body:
     attributes:
       label: Version or commit
       description: Package version or full Git commit SHA where the problem occurs.
-      placeholder: 0.75.0 or 5d6eadb16551...
+      placeholder: 0.76.0 or 5d6eadb16551...
     validations:
       required: true
   - type: dropdown

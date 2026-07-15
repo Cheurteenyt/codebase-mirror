@@ -9,6 +9,13 @@ export class CreateHumanNoteTool extends BaseTool {
     return {
       name: 'create_human_note',
       description: 'Create a human memory note (ADR, BugNote, RefactorPlan, Convention, etc.) and optionally link it to one or more code nodes in a single call. The note is stored in the human DB and will appear in the Obsidian vault after the next sync.',
+      annotations: {
+        title: 'Create human note',
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
       inputSchema: {
         type: 'object',
         properties: {

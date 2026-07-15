@@ -178,14 +178,13 @@ describe('R20: PRAGMA optimizations', () => {
     }
   });
 
-  it('sets a positive cache_size', () => {
+  it('bounds the human-memory page cache at 8 MiB', () => {
     const store = HumanMemoryStore.openMemory();
     try {
       const db = store.getRawDb();
       const cacheSize = db.pragma('cache_size', { simple: true });
-      // cache_size is negative when in KB (our -65536 = 64MB).
-      // Just verify it's set to something non-default (default is -2000).
-      expect(Math.abs(cacheSize)).toBeGreaterThan(2000);
+      // A negative SQLite cache_size is expressed in KiB.
+      expect(cacheSize).toBe(-8192);
     } finally {
       store.close();
     }

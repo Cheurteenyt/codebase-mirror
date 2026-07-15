@@ -15,14 +15,17 @@ const node = {
 
 describe("R40 (UI-12): NodeTooltip viewport flip", () => {
   beforeEach(() => {
-    // jsdom defaults to 1024×768; pin so the math is deterministic.
-    Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true });
-    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
-    // getBoundingClientRect is normally 0 in jsdom — stub a realistic size.
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
-      width: 220, height: 64, x: 0, y: 0, top: 0, left: 0, right: 220, bottom: 64,
-      toJSON: () => ({}),
-    } as DOMRect);
+    // getBoundingClientRect is normally 0 in jsdom. The tooltip measures both
+    // itself and its graph container, so mock their distinct real-world sizes.
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function () {
+      const isTooltip = (this as HTMLElement).classList?.contains("pointer-events-none");
+      const width = isTooltip ? 220 : 1000;
+      const height = isTooltip ? 64 : 800;
+      return {
+        width, height, x: 0, y: 0, top: 0, left: 0, right: width, bottom: height,
+        toJSON: () => ({}),
+      } as DOMRect;
+    });
   });
 
   it("flips X when tooltip would overflow the right viewport edge", () => {

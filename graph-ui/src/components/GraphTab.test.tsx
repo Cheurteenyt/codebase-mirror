@@ -5,21 +5,22 @@
 // useGraphData.loading (tested) → GraphTab conditional (THIS TEST) → GraphCanvas unmount (tested)
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 // Mock useGraphData to control loading state
 vi.mock("../hooks/useGraphData", () => ({
   useGraphData: vi.fn(),
-  GRAPH_RENDER_NODE_LIMIT: 2000,
+  GRAPH_RENDER_NODE_LIMIT: 1000,
 }));
 
 // Mock useWebSocket (no-op)
 vi.mock("../hooks/useWebSocket", () => ({
-  useWebSocket: () => ({ connected: false, lastEvent: null, reconnect: () => {} }),
+  useWebSocket: vi.fn(() => ({ connected: false, lastEvent: null, reconnect: () => {} })),
 }));
 
 import { GraphTab } from "./GraphTab";
 import { useGraphData } from "../hooks/useGraphData";
+import { useWebSocket } from "../hooks/useWebSocket";
 
 const mockData = {
   nodes: [
@@ -75,5 +76,79 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     // Spinner should be shown, NOT canvas
     const canvas = container.querySelector("canvas");
     expect(canvas).toBeNull();
+  });
+
+  it("pauses hidden network work and revalidates when the warm graph is shown again", () => {
+    const fetchOverview = vi.fn().mockResolvedValue(undefined);
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview,
+    });
+
+    const { rerender } = render(<GraphTab project="test-project" active={false} />);
+    expect(fetchOverview).not.toHaveBeenCalled();
+    expect(useWebSocket).toHaveBeenLastCalledWith(null, expect.any(Function));
+
+    rerender(<GraphTab project="test-project" active />);
+    expect(fetchOverview).toHaveBeenCalledTimes(1);
+    expect(fetchOverview).toHaveBeenCalledWith("test-project");
+    expect(useWebSocket).toHaveBeenLastCalledWith("test-project", expect.any(Function));
+  });
+
+  it("keeps the same canvas mounted when all nodes are filtered and restored", () => {
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    const { container } = render(<GraphTab project="test-project" />);
+    const canvas = container.querySelector("canvas");
+    expect(canvas).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "None" }));
+    expect(screen.getByText("All nodes filtered out")).toBeInTheDocument();
+    expect(container.querySelector("canvas")).toBe(canvas);
+    expect(canvas?.getAttribute("aria-label")).toContain("0 nodes");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset Filters" }));
+    expect(screen.queryByText("All nodes filtered out")).not.toBeInTheDocument();
+    expect(container.querySelector("canvas")).toBe(canvas);
+    expect(canvas?.getAttribute("aria-label")).toContain("1 nodes");
+  });
+
+  it("resets dead-code filters when they hide every node", () => {
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    render(<GraphTab project="test-project" />);
+    fireEvent.click(screen.getByRole("button", { name: "Show only dead code" }));
+    expect(screen.getByText("All nodes filtered out")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset Filters" }));
+    expect(screen.queryByText("All nodes filtered out")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show only dead code" })).toHaveClass("text-foreground/40");
+  });
+
+  it("stacks graph actions below the HUD on narrow screens", () => {
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    render(<GraphTab project="test-project" />);
+
+    const actions = screen.getByRole("toolbar", { name: "Graph actions" });
+    expect(actions).toHaveClass("top-20", "flex-col", "items-end");
+    expect(actions).toHaveClass("lg:top-4", "lg:flex-row", "lg:items-center");
   });
 });

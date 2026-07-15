@@ -8,7 +8,7 @@ dist/
 graph-ui/src/**/*.js
 graph-ui/src/**/*.js.map
 
-# Lockfiles (we use npm install, not npm ci, to avoid platform-specific lockfiles)
+# Lockfiles are committed; npm ci uses them for reproducible installs.
 
 # Test artifacts
 coverage/

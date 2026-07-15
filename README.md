@@ -5,7 +5,7 @@
 # Codebase Memory V2
 
 > **Hybrid code intelligence** — native WASM indexer (112 languages) + human memory graph + Obsidian vault sync.
-> V1 (C engine, 158 languages) is now a **fallback** for languages V2 doesn't cover natively.
+> V1 (C engine, 158 languages) remains an optional, separately run database producer and reference; V2 never launches it automatically.
 
 [![CI](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -18,9 +18,9 @@ Codebase Memory V2 is a **hybrid** code intelligence system:
 
 2. **Human memory graph** (V2) — ADRs, bug notes, refactor plans, conventions, legacy zone markers, risk assessments, activity journal — synced to an Obsidian-compatible Markdown vault.
 
-3. **V1 C engine** (fallback) — 158 languages via tree-sitter C. Used as a reference and fallback for languages V2 doesn't cover natively. V2 reads V1's SQLite DB transparently via `CodeGraphReader`.
+3. **V1 C engine** (separate producer/reference) — 158 languages via tree-sitter C. If an operator runs V1 separately, V2 can read the resulting compatible SQLite database via `CodeGraphReader`.
 
-V2 is **partially autonomous**: it can index TS/JS projects natively without V1, and falls back to V1 for other languages.
+V2 performs native indexing without invoking V1. It does not automatically fall back to V1, merge V1 and V2 output, or create a V1 database on demand.
 
 ## Current version
 
@@ -28,15 +28,20 @@ See `v2/package.json` and `v2/CHANGELOG.md` for the authoritative version, test 
 
 ## Quick start
 
+Requires Node.js >= 22.12.0. The repository's `.nvmrc` and `.node-version`
+select Node 24 LTS for development.
+
 ```bash
 cd v2
-npm install
+npm ci
+
+# Backend CLI + MCP server only
 npm run build
 npm test                    # see v2/CHANGELOG.md for current test count
 
 # Index a project natively (no V1 needed for TS/JS)
-cbm-v2 index --project my-app --root /path/to/repo
-cbm-v2 index --project my-app --root /path/to/repo --incremental   # fast incremental
+node dist/cli/index.js index --project my-app --root /path/to/repo
+node dist/cli/index.js index --project my-app --root /path/to/repo --incremental
 
 # Try the demo
 node dist/cli/index.js demo
@@ -47,9 +52,16 @@ node dist/cli/index.js init --project my-app
 # Run diagnostics
 node dist/cli/index.js doctor --project my-app
 
-# Start the graph UI (http://127.0.0.1:9749)
+# Build the complete package, including the Graph UI, before starting it
+npm run build:package
 node dist/cli/index.js ui --project my-app
+# Permit Control to browse/index a repository outside your home directory
+node dist/cli/index.js ui --project my-app --allowed-root /srv/repos
 ```
+
+`npm ci` installs dependencies but does not put this package's own `cbm-v2`
+binary on your `PATH`. Use `node dist/cli/index.js` from a source checkout, as
+above, or run `npm link` once if you prefer the shorter `cbm-v2` command.
 
 ## CLI reference
 
@@ -59,13 +71,14 @@ node dist/cli/index.js ui --project my-app
 |---|---|
 | `cbm-v2 index --project <p> --root <r>` | Index a project natively (WASM, 112 languages) |
 | `cbm-v2 index --project <p> --root <r> --incremental` | Fast incremental index (skip unchanged files) |
+| `cbm-v2 index --project <p> --root <r> --discovery-mode fast` | Explicit reduced-coverage full rebuild for benchmarks/speed-sensitive runs; incompatible with `--incremental` |
 | `cbm-v2 index --project <p> --root <r> --dry-run` | Preview without writing to DB |
 | `cbm-v2 init` | Initialize `.codebase-memory.json` configuration |
 | `cbm-v2 doctor` | Run diagnostics (Node version, DB, vault path) |
 | `cbm-v2 stats` | Show a pretty statistics dashboard |
 | `cbm-v2 demo` | Create a demo project with sample notes + vault |
 | `cbm-v2 mcp` | Run as MCP server (JSON-RPC over stdio) |
-| `cbm-v2 ui` | Start the graph UI web server (port 9749) |
+| `cbm-v2 ui [--allowed-root <paths...>]` | Start the graph UI web server (port 9749); optionally allow additional local browse/index roots |
 | `cbm-v2 watch` | Watch vault for changes and auto-sync (daemon) |
 
 ### Human memory commands
@@ -132,11 +145,26 @@ Add to your MCP client config (Claude Desktop, Cursor, Zed, etc.):
   "mcpServers": {
     "codebase-memory-v2": {
       "command": "node",
-      "args": ["/path/to/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
+      "args": ["/absolute/path/to/codebase-mirror/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
     }
   }
 }
 ```
+
+For Codex, add a local STDIO server to `~/.codex/config.toml` or to a trusted
+project's `.codex/config.toml` after running `npm run build`:
+
+```toml
+[mcp_servers.codebase_memory_v2]
+command = "node"
+args = ["/absolute/path/to/codebase-mirror/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
+```
+
+On Windows, the global file is `%USERPROFILE%\.codex\config.toml`. Use an
+absolute path with forward slashes, for example
+`D:/Mycodex/codebase-mirror/v2/dist/cli/index.js`, or escape each backslash in
+the TOML string. Restart Codex after editing the configuration, then use
+`codex mcp list` or `/mcp` to verify the connection.
 
 ## How it works
 
@@ -146,16 +174,16 @@ Add to your MCP client config (Claude Desktop, Cursor, Zed, etc.):
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │   ┌─────────────────────────┐  ┌──────────────────────────┐  │
-│   │  V2 Native Indexer      │  │  V1 C Engine (fallback)  │  │
+│   │  V2 Native Indexer      │  │  V1 C Engine (separate)  │  │
 │   │  tree-sitter WASM       │  │  tree-sitter C           │  │
 │   │  112 languages          │  │  158 languages           │  │
-│   │  cross-file resolver    │  │  reference/fallback      │  │
+│   │  cross-file resolver    │  │  DB producer/reference   │  │
 │   │  semantics v8           │  │                          │  │
 │   └───────────┬─────────────┘  └──────────┬───────────────┘  │
 │               │                           │                  │
 │               v                           v                  │
 │   ┌─────────────────────────────────────────────────────────┐│
-│   │  SQLite code graph (shared, V1-compatible schema)       ││
+│   │  SQLite code graph (produced by one indexer per run)    ││
 │   └─────────────────────────────────────────────────────────┘│
 │               │                                              │
 │               v                                              │
@@ -167,7 +195,7 @@ Add to your MCP client config (Claude Desktop, Cursor, Zed, etc.):
 │                                                              │
 │   Storage:                                                   │
 │   ~/.cache/codebase-memory-mcp/                              │
-│     <project>.db           ← code graph (V2 native or V1 C)  │
+│     <project>.db           ← code graph (V2 or separate V1)  │
 │     <project>.human.db     ← human memory (V2, TS)           │
 │   <repo>/.codebase-memory-vault/  ← Obsidian vault (MD)      │
 │   <repo>/.codebase-memory.json    ← project config           │
@@ -193,8 +221,8 @@ V2 includes a **native code indexer** that does NOT require the V1 C binary:
 ### Limitations
 
 - V2 native indexer is most precise on **TypeScript/JavaScript**. Other languages (Python, Go, Rust, etc.) are parsed structurally but without cross-file resolution.
-- For full 158-language support with V1-grade precision, use the V1 C binary as a fallback.
-- Graph UI is capped at ~2000 nodes for performance. Use filters and the dashboard for large projects.
+- For V1's 158-language coverage and precision, run the V1 C binary separately to produce the project database before opening it from V2.
+- Graph UI is capped at 1,000 nodes for predictable transfer and simulation cost. Use filters and the dashboard for large projects.
 
 ## Human memory node types
 
@@ -264,9 +292,21 @@ The V2 graph UI replaces V1's 3D Three.js scene with a cleaner 2D d3-force canva
 - **Control tab**: System info
 
 ```bash
-cbm-v2 ui --project my-app          # http://127.0.0.1:9749
+# From v2/ in a source checkout
+npm run build:package
+node dist/cli/index.js ui --project my-app
+
+# Or, after npm link / a global install
 cbm-v2 ui --project my-app --port 8080
+# Add repositories outside the user's home directory to the Control allowlist
+cbm-v2 ui --project my-app --allowed-root /srv/repos /mnt/work
 ```
+
+Open `http://127.0.0.1:9749/` for the project selector, or go directly to
+`http://127.0.0.1:9749/?tab=graph&project=my-app` for the interactive graph.
+The home directory and the selected project's indexed root are allowed by
+default. Additional Control-tab browse/index roots must be granted explicitly
+with `--allowed-root`; paths are canonicalized before containment checks.
 
 ## Docker
 
@@ -279,7 +319,7 @@ docker run --rm cbm-v2 --help
 docker run --rm cbm-v2 demo
 
 # Run MCP server (mount cache volume)
-docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --project my-app
+docker run --rm -i -v cbm-cache:/home/node/.cache/codebase-memory-mcp cbm-v2 mcp --project my-app
 ```
 
 ## Documentation
@@ -295,7 +335,8 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 - [MCP Tools](docs/MCP_TOOLS.md) — All 7 MCP tools with input/output examples
 - [CLI Reference](docs/CLI_REFERENCE.md) — All CLI commands including `cbm-v2 index`
 - [Intelligence Layer](docs/INTELLIGENCE.md) — Graph awareness + prepare_edit_context
-- [Token Economy](docs/TOKEN_ECONOMY.md) — How V2 saves API tokens (-67% to -87%)
+- [Token Economy](docs/TOKEN_ECONOMY.md) — Historical v0.15.9 workflow estimates (-67% to -87%), not a current transport benchmark
+- [Performance, Token, and UI Audit](docs/PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md) — Current compact-vs-pretty whitespace transport measurement
 
 ### Project
 - [Contributing](CONTRIBUTING.md) — How to contribute

@@ -35,6 +35,11 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<CliR
   });
 }
 
+function createBrokenSymlink(linkPath: string): void {
+  const missingTarget = join(dirname(linkPath), '.missing-symlink-target');
+  symlinkSync(missingTarget, linkPath, process.platform === 'win32' ? 'junction' : undefined);
+}
+
 describe('R153: CLI process tests (TEST-R153-04)', () => {
   let tmpDir: string, projectDir: string, cacheDir: string, projectName: string;
 
@@ -64,7 +69,7 @@ describe('R153: CLI process tests (TEST-R153-04)', () => {
 
   it('TEST-R153-04b: index with broken symlink (no history) → exit 0, SUCCESS_WITH_WARNINGS', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
-    symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
+    createBrokenSymlink(join(projectDir, 'broken.ts'));
     const result = await runCli(
       ['index', '--project', projectName, '--root', projectDir,],
       { XDG_CACHE_HOME: cacheDir },
@@ -78,7 +83,7 @@ describe('R153: CLI process tests (TEST-R153-04)', () => {
 
   it('TEST-R153-04c: dry-run shows warnings even without DB writes', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
-    symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
+    createBrokenSymlink(join(projectDir, 'broken.ts'));
     const result = await runCli(
       ['index', '--project', projectName, '--root', projectDir, '--dry-run', ],
       { XDG_CACHE_HOME: cacheDir },
@@ -107,7 +112,7 @@ describe('R153: CLI process tests (TEST-R153-04)', () => {
 
   it('TEST-R153-04e: warnings printed BEFORE success banner (ordering)', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
-    symlinkSync('/nonexistent', join(projectDir, 'broken.ts'));
+    createBrokenSymlink(join(projectDir, 'broken.ts'));
     const result = await runCli(
       ['index', '--project', projectName, '--root', projectDir,],
       { XDG_CACHE_HOME: cacheDir },
@@ -126,7 +131,7 @@ describe('R153: CLI process tests (TEST-R153-04)', () => {
     // hidden count (10 - samplePaths.length for ENOENT), not 10 - 5.
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     for (let i = 0; i < 10; i++) {
-      symlinkSync('/nonexistent', join(projectDir, `broken${i}.ts`));
+      createBrokenSymlink(join(projectDir, `broken${i}.ts`));
     }
     const result = await runCli(
       ['index', '--project', projectName, '--root', projectDir,],
@@ -163,5 +168,68 @@ describe('R153: CLI process tests (TEST-R153-04)', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toContain('Dry-run failed');
     expect(result.stdout).not.toContain('Dry-run complete');
+  });
+
+  it('defaults the CLI to full discovery coverage', async () => {
+    writeFileSync(join(projectDir, 'a.ts'), 'export const a = 1;\n');
+    mkdirSync(join(projectDir, 'scripts'), { recursive: true });
+    writeFileSync(join(projectDir, 'scripts', 'generate.ts'), 'export const generate = true;\n');
+
+    const result = await runCli(
+      ['index', '--project', projectName, '--root', projectDir, '--dry-run'],
+      { XDG_CACHE_HOME: cacheDir },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Discovery: full');
+    expect(result.stdout).toMatch(/Files indexed:\s+2/);
+  });
+
+  it('derives a portable default project name from the current directory', async () => {
+    writeFileSync(join(projectDir, 'a.ts'), 'export const a = 1;\n');
+    const result = await runCli(
+      ['index', '--root', projectDir, '--dry-run'],
+      { XDG_CACHE_HOME: cacheDir },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/Project:\s+v2\b/);
+    expect(result.stderr).not.toContain('Invalid project name');
+  });
+
+  it('accepts explicit fast discovery coverage', async () => {
+    writeFileSync(join(projectDir, 'a.ts'), 'export const a = 1;\n');
+    mkdirSync(join(projectDir, 'scripts'), { recursive: true });
+    writeFileSync(join(projectDir, 'scripts', 'generate.ts'), 'export const generate = true;\n');
+
+    const result = await runCli(
+      ['index', '--project', projectName, '--root', projectDir, '--dry-run', '--discovery-mode', 'fast'],
+      { XDG_CACHE_HOME: cacheDir },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Discovery: fast');
+    expect(result.stdout).toMatch(/Files indexed:\s+1/);
+  });
+
+  it('rejects unsupported discovery modes before indexing', async () => {
+    const result = await runCli([
+      'index', '--project', projectName, '--root', projectDir, '--discovery-mode', 'turbo',
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Discovery mode must be either "full" or "fast".');
+  });
+
+  it('rejects fast discovery with incremental indexing before database mutation', async () => {
+    writeFileSync(join(projectDir, 'a.ts'), 'export const a = 1;\n');
+
+    const result = await runCli([
+      'index', '--project', projectName, '--root', projectDir,
+      '--incremental', '--discovery-mode', 'fast',
+    ], { XDG_CACHE_HOME: cacheDir });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Fast discovery is incompatible with incremental indexing');
   });
 });

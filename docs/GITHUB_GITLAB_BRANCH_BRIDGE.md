@@ -42,7 +42,8 @@
 - **Canonical repository** for source code, branches, tags, issues, PRs.
 - **Primary CI** runs on GitHub Actions (`ci.yml`): backend typecheck + build
   + tests + benchmarks, frontend typecheck + build + tests, npm package
-  smoke, and Docker smoke. All four jobs always run.
+  smoke, Docker smoke, and the Windows V2 smoke. All five validation jobs
+  always run.
 - **Reviews and merges** happen on GitHub PRs.
 - **Mirror trigger** lives on GitHub (`mirror-main-to-gitlab.yml`).
 

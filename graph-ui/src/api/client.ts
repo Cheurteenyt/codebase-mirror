@@ -80,6 +80,25 @@ async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
   }
 }
 
+export interface SecurityBootstrap {
+  csrf_token: string;
+}
+
+let securityBootstrapPromise: Promise<SecurityBootstrap> | null = null;
+
+/** Fetch and cache the runtime-only same-origin CSRF/WebSocket credential. */
+export function getSecurityBootstrap(forceRefresh = false): Promise<SecurityBootstrap> {
+  if (forceRefresh) securityBootstrapPromise = null;
+  if (!securityBootstrapPromise) {
+    securityBootstrapPromise = fetchJson<SecurityBootstrap>(`${API_BASE}/api/bootstrap`)
+      .catch((error: unknown) => {
+        securityBootstrapPromise = null;
+        throw error;
+      });
+  }
+  return securityBootstrapPromise;
+}
+
 /**
  * POST JSON with timeout and optional external cancellation.
  * Same error semantics as fetchJson.
@@ -94,12 +113,24 @@ async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}):
     else signal.addEventListener("abort", onExternalAbort, { once: true });
   }
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    const send = async (forceRefresh = false) => {
+      const bootstrap = await getSecurityBootstrap(forceRefresh);
+      return fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CBM-CSRF": bootstrap.csrf_token,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    };
+
+    let res = await send();
+    if (res.status === 403) {
+      const rejectedBody = await res.clone().json().catch(() => ({}));
+      if (rejectedBody.error === "Invalid CSRF token") res = await send(true);
+    }
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({ error: res.statusText }));
       throw new ApiError(res.status, errBody.error ?? `HTTP ${res.status}`);
@@ -171,7 +202,11 @@ export const api = {
     ),
 
   saveAdr: (project: string, content: string, opts?: FetchOptions) =>
-    postJson(`${API_BASE}/api/adr`, { project, content }, opts),
+    postJson(
+      `${API_BASE}/api/adr?project=${encodeURIComponent(project)}`,
+      { project, content },
+      opts,
+    ),
 
   // ── Indexing ──────────────────────────────────────────────────
   triggerIndex: (rootPath: string, projectName: string, opts?: FetchOptions) =>
@@ -180,6 +215,13 @@ export const api = {
   getIndexStatus: (opts?: FetchOptions) =>
     fetchJson<{ jobs: Array<{ id: string; status: string; error?: string; started_at: string; project: string }> }>(
       `${API_BASE}/api/index-status`,
+      opts,
+    ),
+
+  terminateIndexJob: (jobId: string, opts?: FetchOptions) =>
+    postJson(
+      `${API_BASE}/api/index-jobs/${encodeURIComponent(jobId)}/terminate`,
+      {},
       opts,
     ),
 
@@ -206,6 +248,4 @@ export const api = {
       opts,
     ),
 
-  killProcess: (pid: number, opts?: FetchOptions) =>
-    postJson(`${API_BASE}/api/process-kill`, { pid }, opts),
 };

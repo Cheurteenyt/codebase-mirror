@@ -41,6 +41,7 @@ import {
   type GenerationManifestV1,
   type CasGenerationCatalogEntry,
 } from "../../src/storage/generation-types.js";
+import { CURRENT_DISCOVERY_POLICY_VERSION } from "../../src/indexer/schema.js";
 
 const PROJECT = "r169b-cas-test-project";
 
@@ -82,7 +83,7 @@ function validManifest(overrides: Partial<GenerationManifestV1> = {}): Generatio
     createdAt: "2026-07-13T00:00:00.000Z",
     rootFingerprint: "/canonical/root:1:2",
     extractorSemanticsVersion: 8,
-    discoveryPolicyVersion: 2,
+    discoveryPolicyVersion: CURRENT_DISCOVERY_POLICY_VERSION,
     nodeCount: 1,
     edgeCount: 2,
     fileCount: 3,
@@ -100,7 +101,7 @@ function validCatalogEntry(overrides: Partial<CasGenerationCatalogEntry> = {}): 
     sizeBytes: 100,
     rootFingerprint: "/canonical/root:1:2",
     extractorSemanticsVersion: 8,
-    discoveryPolicyVersion: 2,
+    discoveryPolicyVersion: CURRENT_DISCOVERY_POLICY_VERSION,
     firstPublishedAt: "2026-07-13T00:00:00.000Z",
     lastSeenAt: "2026-07-13T00:00:00.000Z",
     pinned: false,
@@ -339,7 +340,7 @@ describe("R169B-STEP2 CAS — dedup candidate", () => {
       sizeBytes: 200,
       rootFingerprint: "/canonical/root:9:9",
       extractorSemanticsVersion: 8,
-      discoveryPolicyVersion: 2,
+      discoveryPolicyVersion: CURRENT_DISCOVERY_POLICY_VERSION,
     });
     cas.beginImmediate();
     cas.upsertGenerationCatalog(entry);
@@ -350,7 +351,7 @@ describe("R169B-STEP2 CAS — dedup candidate", () => {
       200,
       "/canonical/root:9:9",
       8,
-      2,
+      CURRENT_DISCOVERY_POLICY_VERSION,
     );
     expect(dedup).toBeDefined();
     expect(dedup?.generationId).toBe(entry.generationId);
@@ -367,7 +368,7 @@ describe("R169B-STEP2 CAS — dedup candidate", () => {
       100,
       "/canonical/root:1:2",
       8,
-      2,
+      CURRENT_DISCOVERY_POLICY_VERSION,
     );
     expect(dedup).toBeUndefined();
     cas.close();
@@ -378,7 +379,9 @@ describe("R169B-STEP2 CAS — dedup candidate", () => {
     cas.beginImmediate();
     cas.upsertGenerationCatalog(validCatalogEntry({ sizeBytes: 100 }));
     cas.commit();
-    const dedup = cas.findDedupCandidate("a".repeat(64), 999, "/canonical/root:1:2", 8, 2);
+    const dedup = cas.findDedupCandidate(
+      "a".repeat(64), 999, "/canonical/root:1:2", 8, CURRENT_DISCOVERY_POLICY_VERSION,
+    );
     expect(dedup).toBeUndefined();
     cas.close();
   });
@@ -388,7 +391,9 @@ describe("R169B-STEP2 CAS — dedup candidate", () => {
     cas.beginImmediate();
     cas.upsertGenerationCatalog(validCatalogEntry({ rootFingerprint: "/canonical/root:1:2" }));
     cas.commit();
-    const dedup = cas.findDedupCandidate("a".repeat(64), 100, "/different/root:3:4", 8, 2);
+    const dedup = cas.findDedupCandidate(
+      "a".repeat(64), 100, "/different/root:3:4", 8, CURRENT_DISCOVERY_POLICY_VERSION,
+    );
     expect(dedup).toBeUndefined();
     cas.close();
   });
@@ -398,7 +403,9 @@ describe("R169B-STEP2 CAS — dedup candidate", () => {
     cas.beginImmediate();
     cas.upsertGenerationCatalog(validCatalogEntry({ extractorSemanticsVersion: 8 }));
     cas.commit();
-    const dedup = cas.findDedupCandidate("a".repeat(64), 100, "/canonical/root:1:2", 7, 2);
+    const dedup = cas.findDedupCandidate(
+      "a".repeat(64), 100, "/canonical/root:1:2", 7, CURRENT_DISCOVERY_POLICY_VERSION,
+    );
     expect(dedup).toBeUndefined();
     cas.close();
   });
@@ -406,9 +413,13 @@ describe("R169B-STEP2 CAS — dedup candidate", () => {
   it("findDedupCandidate returns undefined when discoveryPolicyVersion differs", () => {
     const cas = openCasStore(PROJECT, cacheRoot);
     cas.beginImmediate();
-    cas.upsertGenerationCatalog(validCatalogEntry({ discoveryPolicyVersion: 2 }));
+    cas.upsertGenerationCatalog(validCatalogEntry({
+      discoveryPolicyVersion: CURRENT_DISCOVERY_POLICY_VERSION,
+    }));
     cas.commit();
-    const dedup = cas.findDedupCandidate("a".repeat(64), 100, "/canonical/root:1:2", 8, 1);
+    const dedup = cas.findDedupCandidate(
+      "a".repeat(64), 100, "/canonical/root:1:2", 8, CURRENT_DISCOVERY_POLICY_VERSION - 1,
+    );
     expect(dedup).toBeUndefined();
     cas.close();
   });
@@ -418,7 +429,9 @@ describe("R169B-STEP2 CAS — dedup candidate", () => {
     cas.beginImmediate();
     cas.upsertGenerationCatalog(validCatalogEntry({ status: "DELETED" }));
     cas.commit();
-    const dedup = cas.findDedupCandidate("a".repeat(64), 100, "/canonical/root:1:2", 8, 2);
+    const dedup = cas.findDedupCandidate(
+      "a".repeat(64), 100, "/canonical/root:1:2", 8, CURRENT_DISCOVERY_POLICY_VERSION,
+    );
     expect(dedup).toBeUndefined();
     cas.close();
   });
@@ -594,7 +607,12 @@ describe("R169B-STEP2 CAS — schema invariants", () => {
     const db = new Database(casPath());
     expect(() => {
       db.prepare("INSERT INTO generation_catalog (generation_id, project, sha256, size_bytes, root_fingerprint, extractor_semantics_version, discovery_policy_version, first_published_at, last_seen_at, pinned, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run("g1", PROJECT, "a".repeat(64), 1, "/r:1:2", 8, 2, "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", 0, "INVALID_STATUS");
+        .run(
+          "g1", PROJECT, "a".repeat(64), 1, "/r:1:2", 8,
+          CURRENT_DISCOVERY_POLICY_VERSION,
+          "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", 0,
+          "INVALID_STATUS",
+        );
     }).toThrow();
     db.close();
   });

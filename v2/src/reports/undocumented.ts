@@ -24,7 +24,21 @@ export interface UndocumentedReport {
   documented_nodes: number;
   undocumented_nodes: number;
   coverage_pct: number;
-  by_label: Record<string, { total: number; documented: number; undocumented: number }>;
+  /** True when at least one label had more nodes than the bounded scan. */
+  scan_truncated: boolean;
+  /** Observed counts are lower bounds whenever scan_truncated is true. */
+  counts_are_lower_bounds: boolean;
+  /** Coverage is calculated from the scanned sample, not the complete label. */
+  coverage_is_partial: boolean;
+  scan_limit_per_label: number;
+  truncated_labels: string[];
+  by_label: Record<string, {
+    total: number;
+    documented: number;
+    undocumented: number;
+    scan_truncated: boolean;
+    counts_are_lower_bounds: boolean;
+  }>;
   undocumented_critical: UndocumentedNode[];
   undocumented_routes: UndocumentedNode[];
   undocumented_modules: UndocumentedNode[];
@@ -36,7 +50,7 @@ export function computeUndocumentedReport(
   humanStore: HumanMemoryStore
 ): UndocumentedReport {
   const labelsToCheck = ['Module', 'Route', 'Function', 'Class', 'Interface'];
-  const byLabel: Record<string, { total: number; documented: number; undocumented: number }> = {};
+  const byLabel: UndocumentedReport['by_label'] = {};
   const undocumentedCritical: UndocumentedNode[] = [];
   const undocumentedRoutes: UndocumentedNode[] = [];
   const undocumentedModules: UndocumentedNode[] = [];
@@ -44,10 +58,23 @@ export function computeUndocumentedReport(
   let totalNodes = 0;
   let documentedNodes = 0;
   let undocumentedNodes = 0;
+  const truncatedLabels: string[] = [];
 
   for (const label of labelsToCheck) {
-    byLabel[label] = { total: 0, documented: 0, undocumented: 0 };
-    const nodes = codeReader.listNodes(project, { label, limit: MAX_NODES_PER_LABEL });
+    const nodeProbe = codeReader.listNodes(project, {
+      label,
+      limit: MAX_NODES_PER_LABEL + 1,
+    });
+    const labelScanTruncated = nodeProbe.length > MAX_NODES_PER_LABEL;
+    const nodes = nodeProbe.slice(0, MAX_NODES_PER_LABEL);
+    if (labelScanTruncated) truncatedLabels.push(label);
+    byLabel[label] = {
+      total: 0,
+      documented: 0,
+      undocumented: 0,
+      scan_truncated: labelScanTruncated,
+      counts_are_lower_bounds: labelScanTruncated,
+    };
 
     // Bulk-fetch degrees and notes for all nodes of this label.
     const ids = nodes.map((n) => n.id);
@@ -99,10 +126,15 @@ export function computeUndocumentedReport(
     documented_nodes: documentedNodes,
     undocumented_nodes: undocumentedNodes,
     coverage_pct: totalNodes > 0 ? (documentedNodes / totalNodes) * 100 : 0,
+    scan_truncated: truncatedLabels.length > 0,
+    counts_are_lower_bounds: truncatedLabels.length > 0,
+    coverage_is_partial: truncatedLabels.length > 0,
+    scan_limit_per_label: MAX_NODES_PER_LABEL,
+    truncated_labels: truncatedLabels,
     by_label: byLabel,
-    undocumented_critical: undocumentedCritical.slice(0, 50),
-    undocumented_routes: undocumentedRoutes.slice(0, 50),
-    undocumented_modules: undocumentedModules.slice(0, 50),
+    undocumented_critical: undocumentedCritical,
+    undocumented_routes: undocumentedRoutes,
+    undocumented_modules: undocumentedModules,
   };
 }
 
@@ -111,6 +143,9 @@ export function renderUndocumentedReportMarkdown(report: UndocumentedReport): st
   lines.push(`# Undocumented Hotspots Report — ${report.project}`);
   lines.push('');
   lines.push(`> Generated on ${report.generated_at}`);
+  if (report.scan_truncated) {
+    lines.push(`> Warning: the ${report.truncated_labels.join(', ')} scan(s) exceeded ${report.scan_limit_per_label} nodes. Counts are lower bounds and coverage is partial.`);
+  }
   lines.push('');
   lines.push('## Documentation coverage');
   lines.push('');
@@ -137,7 +172,7 @@ export function renderUndocumentedReportMarkdown(report: UndocumentedReport): st
   } else {
     lines.push('| Module | Degree | File |');
     lines.push('|---|---|---|');
-    for (const m of report.undocumented_modules) {
+    for (const m of report.undocumented_modules.slice(0, 50)) {
       lines.push(`| ${escapeMarkdownTableCell(m.name)} | ${m.degree} | \`${escapeMarkdownTableCell(m.file_path)}\` |`);
     }
   }
@@ -149,7 +184,7 @@ export function renderUndocumentedReportMarkdown(report: UndocumentedReport): st
   } else {
     lines.push('| Route | Degree | File |');
     lines.push('|---|---|---|');
-    for (const r of report.undocumented_routes) {
+    for (const r of report.undocumented_routes.slice(0, 50)) {
       lines.push(`| ${escapeMarkdownTableCell(r.name)} | ${r.degree} | \`${escapeMarkdownTableCell(r.file_path)}\` |`);
     }
   }
@@ -161,7 +196,7 @@ export function renderUndocumentedReportMarkdown(report: UndocumentedReport): st
   } else {
     lines.push('| Label | Name | Degree | Complexity | File |');
     lines.push('|---|---|---|---|---|');
-    for (const n of report.undocumented_critical) {
+    for (const n of report.undocumented_critical.slice(0, 50)) {
       lines.push(`| ${escapeMarkdownTableCell(n.label)} | ${escapeMarkdownTableCell(n.name)} | ${n.degree} | ${n.complexity} | \`${escapeMarkdownTableCell(n.file_path)}\` |`);
     }
   }

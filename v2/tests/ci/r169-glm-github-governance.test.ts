@@ -19,6 +19,7 @@ function read(relativePath: string): string {
 
 const broker = read(".github/workflows/glm-pr-broker.yml");
 const gate = read(".github/workflows/glm-merge-gate.yml");
+const watchdog = read(".github/workflows/main-exact-sha-watchdog.yml");
 const ci = read(".github/workflows/ci.yml");
 const codeql = read(".github/workflows/codeql.yml");
 const codeowners = read(".github/CODEOWNERS");
@@ -108,6 +109,62 @@ describe("R169 GLM merge gate", () => {
     expect(gate).toContain("actions/workflows/ci.yml/dispatches");
     expect(gate).toContain("actions/workflows/codeql.yml/dispatches");
   });
+
+  it("cannot be cancelled after the irreversible squash merge", () => {
+    expect(gate).toMatch(
+      /concurrency:[\s\S]*?group:[\s\S]*?glm-merge-gate-[\s\S]*?cancel-in-progress: false/,
+    );
+    expect(gate).not.toMatch(
+      /concurrency:[\s\S]*?glm-merge-gate-[\s\S]*?cancel-in-progress: true/,
+    );
+  });
+});
+
+describe("R169 post-merge exact-SHA watchdog", () => {
+  it("runs after every completed gate and has a scheduled/manual recovery path", () => {
+    expect(watchdog).toContain('workflows: ["GLM merge gate"]');
+    expect(watchdog).toContain("types: [completed]");
+    expect(watchdog).toContain("workflow_dispatch:");
+    expect(watchdog).toContain("schedule:");
+    expect(watchdog).toContain('cron: "17 * * * *"');
+  });
+
+  it("serializes recovery without cancellation", () => {
+    expect(watchdog).toMatch(
+      /group: main-exact-sha-watchdog\s+cancel-in-progress: false/,
+    );
+  });
+
+  it("uses repository-owned inline code and never checks out, executes branch code, or merges", () => {
+    expect(watchdog).toContain("permissions: {}\n");
+    expect(watchdog).toMatch(/permissions:\s+actions: write\s+contents: read/);
+    expect(watchdog).not.toContain("actions/checkout");
+    expect(watchdog).not.toMatch(/^\s*uses:/m);
+    expect(watchdog).not.toContain("secrets.");
+    expect(watchdog).not.toContain("/pulls/${");
+    expect(watchdog).not.toContain('"merge_method"');
+  });
+
+  it("binds observation and dispatch to the exact live main SHA", () => {
+    expect(watchdog).toContain('mainRef.ref !== "refs/heads/main"');
+    expect(watchdog).toContain('object.type !== "commit"');
+    expect(watchdog).toContain("head_sha: mainSha");
+    expect(watchdog).toContain('run.head_branch === "main"');
+    expect(watchdog).toContain('run.head_sha === mainSha');
+    expect(watchdog).toContain('ref: "main"');
+    expect(watchdog).toContain("inputs: { expected_sha: mainSha }");
+    expect(watchdog).toContain("currentMainSha !== mainSha");
+  });
+
+  it("dispatches only absent CI or CodeQL runs and waits for API acknowledgement", () => {
+    expect(watchdog).toContain('{ file: "ci.yml", path: ".github/workflows/ci.yml"');
+    expect(watchdog).toContain('{ file: "codeql.yml", path: ".github/workflows/codeql.yml"');
+    expect(watchdog).toContain("isCoveringRun(run, target, mainSha)");
+    expect(watchdog).toContain("if (present)");
+    expect(watchdog).toContain('action: "already-present"');
+    expect(watchdog).toContain('action: "dispatched"');
+    expect(watchdog).toContain("ACK_ATTEMPTS");
+  });
 });
 
 describe("R169 native authorization and exact-main recovery", () => {
@@ -151,10 +208,13 @@ describe("R169 Actions storage observability", () => {
     expect(storagePolicy).toContain("`ACTIONS_CACHE_LIMIT_GB`");
   });
 
-  it("disables branch-producing version PRs without disabling security updates", () => {
-    expect(dependabot.match(/open-pull-requests-limit: 0/g)).toHaveLength(3);
-    expect(dependabot).toContain(
-      "Repository-level Dependabot security updates remain",
-    );
+  it("enables bounded grouped version updates for every maintained ecosystem", () => {
+    const limits = [...dependabot.matchAll(/open-pull-requests-limit:\s*(\d+)/g)]
+      .map((match) => Number(match[1]));
+    expect(limits).toEqual([2, 4, 4, 2]);
+    expect(limits.every((limit) => limit > 0)).toBe(true);
+    expect(dependabot).toContain('package-ecosystem: "docker"');
+    expect(dependabot).toContain("production-minor-and-patch");
+    expect(dependabot).toContain("actions-minor-and-patch");
   });
 });

@@ -61,7 +61,7 @@ export function registerReportCommand(program: Command): void {
       const project = opts.project || deriveProjectName();
       const outcome = withProjectStores(project, (humanStore, codeReader) => {
         if (!codeReader) {
-          throw new Error('code graph not available — run "cbm index_repository" first');
+          throw new Error('code graph not available — run "cbm-v2 index --project <name> --root <path>" first');
         }
         return computeHotspotsReport(project, codeReader, humanStore, {
           minDegree: (() => { const n = parseInt(opts.minDegree, 10); return Number.isFinite(n) ? n : 20; })(),
@@ -90,7 +90,7 @@ export function registerReportCommand(program: Command): void {
       const project = opts.project || deriveProjectName();
       const outcome = withProjectStores(project, (humanStore, codeReader) => {
         if (!codeReader) {
-          throw new Error('code graph not available — run "cbm index_repository" first');
+          throw new Error('code graph not available — run "cbm-v2 index --project <name> --root <path>" first');
         }
         return computeUndocumentedReport(project, codeReader, humanStore);
       });
@@ -117,7 +117,7 @@ export function registerReportCommand(program: Command): void {
       const project = opts.project || deriveProjectName();
       const outcome = withProjectStores(project, (humanStore, codeReader) => {
         if (!codeReader) {
-          throw new Error('code graph not available — run "cbm index_repository" first');
+          throw new Error('code graph not available — run "cbm-v2 index --project <name> --root <path>" first');
         }
         return computeRiskReport(project, codeReader, humanStore, {
           limit: (() => { const n = parseInt(opts.limit, 10); return Number.isFinite(n) ? n : 200; })(),

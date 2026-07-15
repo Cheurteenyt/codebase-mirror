@@ -2257,6 +2257,7 @@ describe("R169A — Source inspection: legacy path consumers (section 18G)", () 
     "src/cli/commands/report.ts",
     "src/cli/commands/human.ts",
     "src/intelligence/graph-status.ts",
+    "src/ui/project-store-registry.ts",
     "src/ui/routes/project.ts",
     "src/ui/server.ts",
   ];
@@ -2269,7 +2270,7 @@ describe("R169A — Source inspection: legacy path consumers (section 18G)", () 
       const content = readFileSync(file, "utf-8");
       if (content.includes("defaultCodeDbPath")) {
         // Normalize to a repo-relative path starting with "src/".
-        const rel = relative(REPO_SRC, file);
+        const rel = relative(REPO_SRC, file).replaceAll('\\', '/');
         actualFiles.push(rel);
       }
     }

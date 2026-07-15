@@ -28,8 +28,10 @@ describe('CodeGraphReader — getNeighbors column collision regression', () => {
         project TEXT, source_id INTEGER, target_id INTEGER,
         type TEXT, properties_json TEXT
       );
-      CREATE TABLE projects (name TEXT);
+      CREATE TABLE projects (name TEXT, root_path TEXT);
     `);
+    db.prepare('INSERT INTO projects (name, root_path) VALUES (?, ?)')
+      .run('test', 'C:\\Work\\Project');
 
     const insertNode = db.prepare(
       'INSERT INTO nodes (id, project, label, name, qualified_name, file_path, start_line, end_line, properties_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -37,6 +39,8 @@ describe('CodeGraphReader — getNeighbors column collision regression', () => {
     insertNode.run(10, 'test', 'Function', 'login', 'test.login', 'src/auth.ts', 1, 50, '{"complexity": 5}');
     insertNode.run(20, 'test', 'Function', 'validateToken', 'test.validateToken', 'src/auth.ts', 51, 80, '{"complexity": 3}');
     insertNode.run(30, 'test', 'Function', 'handleRequest', 'test.handleRequest', 'src/server.ts', 1, 100, '{"complexity": 8}');
+    insertNode.run(40, 'test', 'File', 'auth.ts', 'test::src/auth/auth.ts', 'src/auth/auth.ts', 1, 100, '{}');
+    insertNode.run(50, 'test', 'File', 'invoice.ts', 'test::src\\billing\\invoice.ts', 'src\\billing\\invoice.ts', 1, 100, '{}');
 
     const insertEdge = db.prepare(
       'INSERT INTO edges (id, project, source_id, target_id, type, properties_json) VALUES (?, ?, ?, ?, ?, ?)'
@@ -93,5 +97,68 @@ describe('CodeGraphReader — getNeighbors column collision regression', () => {
     expect(reader.getNodeDegree(20)).toBe(1);
     expect(reader.getNodeDegree(30)).toBe(1);
     expect(reader.getNodeDegree(999)).toBe(0);
+  });
+
+  it('returns the indexed project root for project-aware freshness checks', () => {
+    expect(reader.getProjectRoot('test')).toBe('C:\\Work\\Project');
+    expect(reader.getProjectRoot('missing')).toBeUndefined();
+  });
+
+  it('bulk-fetches every internal edge without a redundant target-side scan', () => {
+    expect(reader.getBulkEdges([10, 20, 30], 20)).toEqual([
+      { source: 10, target: 20, type: 'CALLS' },
+      { source: 30, target: 10, type: 'CALLS' },
+    ]);
+    expect(reader.getBulkEdges([10, 20], 20)).toEqual([
+      { source: 10, target: 20, type: 'CALLS' },
+    ]);
+  });
+
+  it('can count callers/callees without structural edges inflating them', () => {
+    reader.close();
+    const db = new Database(dbPath);
+    db.prepare(
+      `INSERT INTO edges (id, project, source_id, target_id, type, properties_json)
+       VALUES (3, 'test', 40, 10, 'CONTAINS', '{}')`,
+    ).run();
+    db.close();
+    reader = new CodeGraphReader(dbPath);
+
+    expect(reader.getBulkNodeDegreesSplit([10]).get(10)).toEqual({ in: 2, out: 1 });
+    expect(reader.getBulkNodeDegreesSplit([10], 'CALLS').get(10)).toEqual({ in: 1, out: 1 });
+    expect(reader.getBulkNeighbors([10], 'both', 50, 'CALLS').get(10)).toHaveLength(2);
+  });
+
+  it('deprioritizes test files rooted directly at test directories before LIMIT', () => {
+    reader.close();
+    const db = new Database(dbPath);
+    const insertNode = db.prepare(
+      `INSERT INTO nodes (id, project, label, name, qualified_name, file_path, start_line, end_line, properties_json)
+       VALUES (?, 'test', 'Function', ?, ?, ?, 1, 2, '{}')`,
+    );
+    for (let index = 0; index < 6; index += 1) {
+      insertNode.run(100 + index, `root-test-${index}`, `test.root-${index}`, `tests/root-${index}.ts`);
+    }
+    insertNode.run(200, 'production-dead', 'test.production-dead', 'src/production-dead.ts');
+    db.close();
+    reader = new CodeGraphReader(dbPath);
+
+    expect(reader.listNodesWithoutIncoming('test', ['Function'], 2).map((node) => node.name))
+      .toEqual(['handleRequest', 'production-dead']);
+  });
+
+  it('finds POSIX-stored paths with Windows separators and vice versa', () => {
+    expect(reader.findNodesByFilePath('test', 'src\\auth\\auth.ts').map(node => node.id)).toEqual([40]);
+    expect(reader.findNodesByFilePath('test', 'src/billing/invoice.ts').map(node => node.id)).toEqual([50]);
+  });
+
+  it('resolves an absolute Windows query against a project-relative stored path', () => {
+    const matches = reader.findNodesByFilePath('test', 'c:\\work\\project\\src\\auth\\auth.ts');
+    expect(matches.map(node => node.id)).toEqual([40]);
+  });
+
+  it('supports portable path matching when filtering context-root labels', () => {
+    const matches = reader.findNodesByNameOrPath('test', 'src/billing/invoice.ts', ['File']);
+    expect(matches.map(node => node.id)).toEqual([50]);
   });
 });

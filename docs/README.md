@@ -1,6 +1,6 @@
 # Documentation Index
 
-> **Last verified:** 0.75.0 / R169
+> **Last verified:** 0.76.0 / 2026-07-15 audit
 
 ## Current Documentation
 
@@ -10,6 +10,7 @@
 | [V2 Architecture](V2_ARCHITECTURE.md) | System architecture (R168.3 rewrite — current): components, indexer, graph, CLI/MCP/UI, publication |
 | [CLI_REFERENCE.md](CLI_REFERENCE.md) | Complete CLI command reference |
 | [MCP_TOOLS.md](MCP_TOOLS.md) | MCP server tools documentation |
+| [PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md](PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md) | Measured performance, transfer, token, and responsive UI audit |
 | [INTELLIGENCE.md](INTELLIGENCE.md) | Graph status, freshness, SWR cache |
 | [OBSIDIAN_INTEGRATION.md](OBSIDIAN_INTEGRATION.md) | Obsidian vault sync, frontmatter, wikilinks |
 | [HUMAN_MEMORY_GRAPH_SCHEMA.md](HUMAN_MEMORY_GRAPH_SCHEMA.md) | Human memory graph database schema |

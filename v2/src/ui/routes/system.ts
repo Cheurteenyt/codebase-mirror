@@ -6,11 +6,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { execSync } from 'node:child_process';
 import { existsSync, statSync, readdirSync } from 'node:fs';
-import { resolve, sep, dirname } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { safeRealpath } from '../../utils/safe-path.js';
-import { sendJson, errorMessage, parseJsonBody } from '../helpers.js';
+import { sendJson, errorMessage } from '../helpers.js';
 import type { RouteContext } from '../types.js';
+import { canonicalAllowedRoots, isAllowedFilesystemPath } from '../allowed-roots.js';
 
 /**
  * GET /api/browse — list directories under the user's home directory.
@@ -28,6 +29,7 @@ export async function routeBrowse(
 ): Promise<void> {
   const queryPath = url.searchParams.get('path');
   const home = homedir();
+  const allowedRoots = canonicalAllowedRoots(ctx.getAllowedRoots());
   let targetPath: string;
   if (queryPath) {
     targetPath = resolve(queryPath);
@@ -40,8 +42,8 @@ export async function routeBrowse(
   // doesn't exist yet is still checked against home, then the existsSync
   // check below returns 404.
   const realTargetPath = safeRealpath(targetPath);
-  if (!realTargetPath.startsWith(home + sep) && realTargetPath !== home) {
-    sendJson(res, 403, { error: 'Browse is restricted to the user home directory' });
+  if (!isAllowedFilesystemPath(realTargetPath, allowedRoots)) {
+    sendJson(res, 403, { error: 'Browse is restricted to the home directory or configured/indexed repository roots' });
     return;
   }
   // Use the resolved path for the rest of the handler so readdirSync
@@ -62,18 +64,11 @@ export async function routeBrowse(
       .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
       .map((e) => e.name)
       .sort();
-    const parent = dirname(targetPath) === targetPath ? '' : dirname(targetPath);
-    // Detect filesystem roots (Unix: /, Windows: C:\, D:\, etc.)
-    const roots: string[] = [];
-    if (process.platform === 'win32') {
-      // Windows: list drive letters
-      for (let i = 65; i <= 90; i++) {
-        const drive = String.fromCharCode(i) + ':\\';
-        if (existsSync(drive)) roots.push(drive);
-      }
-    } else {
-      roots.push('/');
-    }
+    const roots = allowedRoots;
+    const candidateParent = dirname(targetPath) === targetPath ? '' : dirname(targetPath);
+    const parent = candidateParent && isAllowedFilesystemPath(candidateParent, allowedRoots)
+      ? candidateParent
+      : '';
     sendJson(res, 200, {
       path: targetPath,
       dirs,
@@ -159,73 +154,6 @@ export async function routeProcesses(
     // ps not available or failed — return empty list
   }
   sendJson(res, 200, { processes });
-}
-
-/**
- * POST /api/process-kill — kill a process by PID.
- *
- * R43 (SEC2): cross-checks PID against live process list.
- * R44 (B2): narrowed from `cbm|node` to `cbm|cbm-v2` (whole-word).
- * R51 (SEC-8): only allowlists PIDs from RUNNING index jobs (stale PIDs cleared).
- */
-export async function routeProcessKill(
-  ctx: RouteContext,
-  _url: URL,
-  req: IncomingMessage,
-  res: ServerResponse,
-  _project: string,
-): Promise<void> {
-  const body = await parseJsonBody(req);
-  if (!body) {
-    sendJson(res, 400, { error: 'Invalid JSON body' });
-    return;
-  }
-  const pid = typeof body.pid === 'number' ? body.pid : parseInt(String(body.pid), 10);
-  if (!Number.isFinite(pid) || pid <= 0) {
-    sendJson(res, 400, { error: 'pid must be a positive number' });
-    return;
-  }
-  // Defense: refuse to kill ourselves
-  if (pid === process.pid) {
-    sendJson(res, 400, { error: 'Cannot kill the UI server itself' });
-    return;
-  }
-  if (process.platform !== 'win32') {
-    let knownPids: Set<number>;
-    try {
-      const output = execSync(
-        'ps aux 2>/dev/null | grep -wE "cbm|cbm-v2" | grep -v grep',
-        { encoding: 'utf-8', timeout: 5000 },
-      );
-      knownPids = new Set<number>();
-      for (const line of output.split('\n')) {
-        const parts = line.trim().split(/\s+/);
-        const p = parseInt(parts[1], 10);
-        if (Number.isFinite(p) && p > 0) knownPids.add(p);
-      }
-    } catch {
-      knownPids = new Set<number>();
-    }
-    // Also allow killing PIDs from our own tracked index jobs.
-    for (const job of ctx.indexJobs.values()) {
-      // R51 (SEC-8): only allowlist PIDs from RUNNING jobs.
-      if (job.status === 'running' && job.childPid && Number.isFinite(job.childPid)) {
-        knownPids.add(job.childPid);
-      }
-    }
-    if (!knownPids.has(pid)) {
-      sendJson(res, 403, { error: 'Refusing to kill a process that is not a cbm/cbm-v2 indexer' });
-      return;
-    }
-  }
-  try {
-    process.kill(pid, 'SIGTERM');
-    ctx.log(`Process killed: pid=${pid}`);
-    sendJson(res, 200, { success: true, pid, signal: 'SIGTERM' });
-  } catch (e: unknown) {
-    ctx.log(`Failed to kill pid ${pid}: ${errorMessage(e)}`);
-    sendJson(res, 500, { error: `Failed to kill pid ${pid}` });
-  }
 }
 
 /**
