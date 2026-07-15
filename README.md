@@ -296,6 +296,7 @@ docker run --rm -i -v cbm-cache:/root/.cache/codebase-memory-mcp cbm-v2 mcp --pr
 ### Project
 - [Contributing](CONTRIBUTING.md) — How to contribute
 - [Maintainers Guide](MAINTAINERS_GUIDE.md) — Internal conventions and invariants
+- [AI Collaboration Protocol](docs/AI_COLLABORATION_PROTOCOL.md) — External audits, GLM checkpoints, and reset recovery
 - [License](LICENSE) — MIT
 
 ## Security

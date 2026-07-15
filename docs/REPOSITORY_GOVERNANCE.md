@@ -210,8 +210,9 @@ The normal workflow for every change:
 
 ```
 feature/round branch
+  → CI triggered by each v2/** checkpoint push; latest SHA green
   → GitHub Pull Request
-  → Backend (v2) + Frontend (graph-ui) + package smoke + Docker smoke green
+  → required PR checks: Backend (v2) + Frontend (graph-ui) + package smoke + Docker smoke green
   → conversations resolved
   → squash merge
   → branch automatically deleted

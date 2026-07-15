@@ -19,6 +19,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import * as yaml from "yaml";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
 const WORKFLOWS_DIR = join(REPO_ROOT, ".github", "workflows");
@@ -88,8 +89,27 @@ describe("R166 — obsolete GitHub workflows are removed", () => {
   });
 });
 
+describe("AI checkpoint continuity — canonical CI branch contract", () => {
+  const ci = readWorkflow("ci.yml");
+  const parsed = yaml.parse(ci);
+
+  it("runs the canonical CI on main and v2/** checkpoint pushes", () => {
+    expect(parsed.on.push.branches).toEqual(["main", "v2/**"]);
+  });
+
+  it("keeps pull request validation targeted at main", () => {
+    expect(parsed.on.pull_request.branches).toEqual(["main"]);
+  });
+
+  it("keeps the canonical CI token read-only", () => {
+    expect(parsed.permissions.contents).toBe("read");
+  });
+});
+
 describe("R166 — mirror-main-to-gitlab workflow contract", () => {
-  const mirror = readWorkflow("mirror-main-to-gitlab.yml") + "\n" + readMirrorScript();
+  const mirrorWorkflow = readWorkflow("mirror-main-to-gitlab.yml");
+  const parsedMirrorWorkflow = yaml.parse(mirrorWorkflow);
+  const mirror = mirrorWorkflow + "\n" + readMirrorScript();
 
   it("mirror-main-to-gitlab.yml exists", () => {
     expect(mirror.length).toBeGreaterThan(0);
@@ -98,6 +118,10 @@ describe("R166 — mirror-main-to-gitlab workflow contract", () => {
   it("triggers on workflow_run completed of CI", () => {
     expect(mirror).toMatch(/on:\s*\n\s*workflow_run:\s*\n\s*workflows:\s*\[?"CI"\]?/);
     expect(mirror).toMatch(/types:\s*\[?"?completed"?\]?/);
+  });
+
+  it("keeps the workflow_run branch filter restricted to main", () => {
+    expect(parsedMirrorWorkflow.on.workflow_run.branches).toEqual(["main"]);
   });
 
   it("only fires when CI conclusion is success on push to main from same repository", () => {

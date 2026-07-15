@@ -11,10 +11,13 @@
    feature branch on GitHub
               │
               ▼
+   GitHub Actions CI on v2/** push
+              │
+              ▼
    GitHub Pull Request
               │
               ▼
-   GitHub Actions CI (backend + frontend + package + Docker)
+   required PR CI (backend + frontend + package + Docker)
               │
               ▼
    review + branch protection rules

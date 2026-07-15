@@ -1,6 +1,7 @@
 # GitHub Actions CI for Codebase Memory V2
-# Runs the complete validation gate on pushes to main and pull requests:
-# backend, frontend, npm package smoke, and Docker smoke.
+# Runs the complete validation gate on pushes to main, pushes to v2 work
+# branches, and pull requests: backend, frontend, npm package smoke, and
+# Docker smoke.
 # This is the canonical CI — GitHub is the canonical repository since R166
 # and GitLab is a passive main-only mirror with no pipelines.
 # Standard GitHub-hosted runners are free for public repositories; larger
@@ -14,8 +15,9 @@
 #      was silently breaking its /repos/.../actions/runs API call
 #      (every unlisted scope becomes `none` once any `permissions:` key
 #      is set at workflow level).
-# R55 (D4): removed unreachable `'v2/**'` pattern from on.push.branches —
-#      pushes arrive only from GitHub PRs/merges to `main`.
+# AI continuity: pushes from reset-prone implementation environments land on
+#      `v2/**` before a PR exists, so branch checkpoints need authoritative CI.
+#      The mirror remains main-only in mirror-main-to-gitlab.yml.
 # R166: removed all references to the GitLab → GitHub mirror; GitHub is
 #      now canonical and GitLab only receives fast-forward mirror pushes
 #      from this repository via mirror-main-to-gitlab.yml.
@@ -33,7 +35,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "v2/**"
   pull_request:
     branches: [main]
 

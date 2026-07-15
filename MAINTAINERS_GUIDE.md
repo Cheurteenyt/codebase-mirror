@@ -20,16 +20,20 @@ The canonical workflow for every change (audit fix, new feature, bug fix):
    pass with 0 regressions before committing.
 4. **Docs** — update in parallel: CHANGELOG.md entry, package.json version,
    README/docs references, and any affected operational docs.
-5. **Commit** — one commit per round (e.g. R167). Message format:
+5. **Commit** — use atomic checkpoint commits on the work branch so a reset
+   cannot erase a round. The PR is squash-merged into one round commit on
+   `main`. Message format:
    `infra(v2): R167 Mirror Hardening + Docs Fidelity + Credential Rotation — 0.71.0 → 0.72.0`
-6. **Push** — `git push -u origin v2/r<n>-<short-name>` (GitHub is
-   canonical since R166).
-7. **PR** — open a Pull Request on GitHub from `v2/r<n>-<short-name>`
-   to `main`. GitHub Actions CI runs typecheck, build, and tests on the
-   PR. After CI is green and review is complete, the PR is merged into
-   `main`. The `mirror-main-to-gitlab` workflow then fast-forwards the
-   validated SHA to GitLab `main` with `-o ci.no_pipeline` (passive
-   mirror, no GitLab pipelines).
+6. **Push** — `git push -u origin v2/r<n>-<short-name>` after every coherent
+   checkpoint (GitHub is canonical since R166). Each `v2/**` push triggers the
+   complete CI before a PR exists; the latest pushed SHA must be green.
+7. **PR** — use exactly one Pull Request from `v2/r<n>-<short-name>` to
+   `main`. Open it as a draft when durable discussion is useful, or during
+   final review to avoid duplicate branch-push and PR runs. After CI is green
+   and review is complete, squash-merge into `main`. The
+   `mirror-main-to-gitlab` workflow then fast-forwards the validated SHA to
+   GitLab `main` with `-o ci.no_pipeline` (passive mirror, no GitLab
+   pipelines).
 
 ## Naming conventions
 
@@ -174,7 +178,8 @@ quota-report API call) must have their own job-level override.
 - **GitHub Actions** (`.github/workflows/ci.yml`): canonical CI. Jobs:
   backend (typecheck + build + test + benchmark smoke), frontend (same,
   minus benchmark), npm package/install/CLI smoke, and Docker build/CLI/
-  non-root smoke. Workflow-level `permissions: contents: read`.
+  non-root smoke. It runs on pushes to `main`, pushes to `v2/**`, and PRs
+  targeting `main`. Workflow-level `permissions: contents: read`.
 - **GitHub Actions mirror** (`.github/workflows/mirror-main-to-gitlab.yml`):
   triggers on `workflow_run` of `CI` with `conclusion=success &&
   event=push && head_branch=main`. Fast-forwards the validated SHA to
@@ -188,8 +193,9 @@ quota-report API call) must have their own job-level override.
   `GITHUB_MIRROR_TOKEN` is obsolete and MUST NOT exist — verify its
   absence during the post-mirror operational checklist (the doc cannot
   observe external secrets, so it states the invariant, not the state).
-- **Branch protection**: `main` is protected. Push to feature branches →
-  GitHub PR → CI green → merge → mirror auto → GitLab `main` (passive).
+- **Branch protection**: `main` is protected. Push to a `v2/**` feature branch
+  → branch CI → GitHub PR → required PR CI → squash merge → mirror auto →
+  GitLab `main` (passive).
 
 ## Test infrastructure
 
@@ -209,6 +215,11 @@ quota-report API call) must have their own job-level override.
   chain is exercised end-to-end.
 
 ## Audit etiquette
+
+The canonical multi-agent and reset-recovery workflow is
+[AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md). External
+audits use `docs/templates/AI_AUDIT_REPORT_TEMPLATE.md`; implementation state
+is tracked separately with `docs/templates/GLM_HANDOFF_TEMPLATE.md`.
 
 When receiving an audit report from another AI (Claude Sonnet 5, etc.):
 1. **Verify each finding** against the actual codebase before implementing.
@@ -499,13 +510,13 @@ regression that lasted 3 rounds (R43-R45).
 refetch. Plus the `if (loading && !data)` gate (not just `if (loading)`)
 as defense-in-depth.
 
-### 8. `npm ci` fails because `package-lock.json` is gitignored
-**Pattern**: Dockerfile or CI uses `npm ci` but `.gitignore` excludes
-`package-lock.json` (platform-specific lockfiles). The build fails on fresh
-clone.
+### 8. `npm ci` requires synchronized committed lockfiles
+**Pattern**: A manifest changes without its lockfile, so reproducible setup
+fails on a fresh clone or resolves a different dependency graph locally.
 
-**Prevention**: Always use `npm install --no-audit --no-fund`. Never `npm ci`
-unless you commit the lockfile.
+**Prevention**: Keep `v2/package-lock.json` and `graph-ui/package-lock.json`
+committed and synchronized with their manifests. Use `npm ci` for CI and
+reset recovery. Do not hide a mismatch by falling back to `npm install`.
 
 ### 9. Committing in the wrong repo
 **Pattern**: The shell doesn't persist `cd`, so `git add -A` runs in the
@@ -526,7 +537,7 @@ Before committing any change, verify:
 - [ ] `cd v2 && npx vitest run` passes (0 failures — see CHANGELOG for count)
 - [ ] `cd graph-ui && npx tsc --noEmit` succeeds (0 TypeScript errors)
    - [ ] `cd v2 && npm run bench:incremental:smoke` passes (incremental invariants)
-- [ ] `cd graph-ui && npx vitest run` passes (23 frontend tests, 0 failures)
+- [ ] `cd graph-ui && npx vitest run` passes (0 failures; derive the count from the run)
 - [ ] Total: 0 regressions (see CHANGELOG for test count)
 - [ ] `v2/package.json` version bumped
 - [ ] `v2/CHANGELOG.md` has a new entry for the round
@@ -535,7 +546,7 @@ Before committing any change, verify:
 - [ ] If touching CI: YAML validated (`python3 -c "import yaml; yaml.safe_load(open('<file>'))"`)
 - [ ] If touching security: regression test added that would FAIL if the fix were reverted
 - [ ] Commit message follows the format: `<type>(v2): <version> R<n> <short-description> (<n> fixes, <details>)`
-- [ ] Push with MR options on a SINGLE LINE (no newlines in push options)
+- [ ] Push the single GitHub work branch and verify its remote SHA
 
 ---
 
@@ -545,16 +556,22 @@ A running list of "gotchas" that caused real incidents. Add to this list
 when you discover a new one.
 
 ### Environment resets
-The development environment has been reset multiple times (lost SSH keys,
-paramiko, cloned repos). Recovery steps:
-1. Reinstall paramiko: `/home/z/.venv/bin/python3 -m pip install paramiko cryptography`
-2. Regenerate SSH key: use Python `cryptography` library (Ed25519)
-3. Recreate `/home/z/.config/cbm/ssh-wrapper.py` (paramiko-based, shebang `/home/z/.venv/bin/python3`)
-4. `git config --global core.sshCommand /home/z/.config/cbm/ssh-wrapper.py`
-5. Re-add deploy key (project-scoped, write access) on GitLab + GitHub
-6. Re-clone from GitHub (faster than GitLab via paramiko for deep fetches)
+The implementation environment may lose SSH keys, dependencies, cloned
+repositories, and terminal context. Follow
+[AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md):
 
-See `MAINTAINERS_NOTES.local.md` for the actual key path and deploy key value.
+1. Re-clone the single active `v2/**` branch from GitHub over HTTPS.
+2. Verify local `HEAD` equals the remote branch head and the worktree is clean.
+3. Read `docs/ai/CURRENT_HANDOFF.md` and its pinned audit before editing.
+4. Restore dependencies with `npm ci` and run the recorded smoke command.
+5. Restore push-only SSH transport using
+   [RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md](docs/RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md).
+6. Continue only the handoff's single `next_action`, then commit and push a
+   new checkpoint.
+
+The implementation key is GitHub-scoped only. It is never registered on
+GitLab and never receives the passive-mirror credential. Replaced ephemeral
+GitHub public keys must be revoked by the maintainer.
 
 ### GitLab API 403 from this environment
 The GitLab API returns 403 from this IP (Cloudflare blocks HK region, private
