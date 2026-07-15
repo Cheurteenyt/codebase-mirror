@@ -9,8 +9,8 @@ Thank you for your interest in contributing! This guide covers everything you ne
 git clone https://github.com/Cheurteenyt/codebase-mirror.git
 cd codebase-mirror/v2
 
-# Install dependencies
-npm install
+# Install the committed dependency graph
+npm ci
 
 # Build (cleans dist/ first to avoid stale artifacts)
 npm run build
@@ -78,9 +78,15 @@ Key invariants (see [MAINTAINERS_GUIDE.md](MAINTAINERS_GUIDE.md)):
 ### 1. Create a branch
 
 ```bash
-git checkout -b v2/r<n>-<short-name>
+git switch -c v2/r<n>-<short-name>
 # Example: v2/r143-persistent-discovery-state
 ```
+
+For work performed in a reset-prone AI environment, follow
+[AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md). Create
+`docs/ai/CURRENT_HANDOFF.md` from the GLM handoff template on the work branch
+and push checkpoints frequently. At rest only `main` remains; one work branch
+is allowed during an active round.
 
 ### 2. Implement + test
 
@@ -107,10 +113,18 @@ git commit -m "fix(v2): R<n> <short description> — <priority summary>"
 git push -u origin v2/r<n>-<short-name>
 ```
 
+Every push to `v2/**` triggers the complete GitHub Actions gate, even before a
+PR exists. The latest pushed SHA must be green; older pending runs may be
+replaced by newer checkpoints. Verify the remote head after each
+reset-recovery checkpoint; a local test result is not equivalent to a green
+GitHub run on the pushed SHA.
+
 ### 5. Open a Pull Request on GitHub
 
 Open a Pull Request on GitHub from `v2/r<n>-<short-name>` to `main`.
-GitHub Actions CI runs typecheck, build, and tests on the PR.
+Use exactly one PR for the round. It may be opened as a draft for durable
+discussion, or during final review to avoid duplicate branch-push and PR runs.
+GitHub Actions CI runs typecheck, build, tests, package smoke, and Docker smoke.
 After CI is green and review is complete, the PR is merged into `main`.
 
 ## Testing
@@ -122,8 +136,8 @@ After CI is green and review is complete, the PR is merged into `main`.
 
 ## CI/CD
 
-GitHub is the canonical repository since R166. All CI, pull-request
-validation, reviews, and merges happen on GitHub Actions.
+GitHub is the canonical repository since R166. All branch-checkpoint CI,
+pull-request validation, reviews, and merges happen on GitHub Actions.
 
 - **Backend (v2)**: typecheck, build, tests, benchmark smoke
 - **Frontend (graph-ui)**: typecheck, build, tests
@@ -137,10 +151,11 @@ runners and storage follow separate billing/limits.
 
 Known gaps:
 - No Windows/macOS matrix (PKG-CARRY-01)
-- No lockfile (dependency drift risk)
 - Node 20 EOL in 2026
 
 See [MAINTAINERS_GUIDE.md](MAINTAINERS_GUIDE.md) for the full workflow and invariants.
+See [AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md) for
+external audit handoff and environment-reset recovery.
 
 ## Code Style Guidelines
 

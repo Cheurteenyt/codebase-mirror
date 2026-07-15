@@ -22,6 +22,7 @@
 | [CI_CONTINUITY.md](CI_CONTINUITY.md) | Operational resilience plan (3 incident levels + quarterly DR exercise) |
 | [RELEASE_POLICY.md](RELEASE_POLICY.md) | Release governance: internal rounds, package versions, GitHub Releases |
 | [REPOSITORY_GOVERNANCE.md](REPOSITORY_GOVERNANCE.md) | GitHub settings: ruleset, environment, security, verification checklist |
+| [AI_COLLABORATION_PROTOCOL.md](AI_COLLABORATION_PROTOCOL.md) | External AI audits, implementation handoffs, branch checkpoints, and reset recovery |
 
 ## Historical Documentation
 

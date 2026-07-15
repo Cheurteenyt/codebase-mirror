@@ -64,7 +64,7 @@ try:
     import asyncssh
 except ImportError:
     sys.stderr.write(
-        "asyncssh is not installed. Install with: pip install asyncssh\n"
+        "asyncssh is not installed. Install with: pip install asyncssh==2.24.0\n"
         "This helper is NOT a runtime dependency of Codebase Memory.\n"
     )
     sys.exit(2)
@@ -192,13 +192,12 @@ def validate_known_hosts(path: str) -> str:
     """
     p = Path(path)
     if not p.exists():
-        # Create an empty known_hosts and warn — but only if the user
-        # explicitly opted in via ASYNCSSH_KNOWN_HOSTS. Otherwise refuse.
         raise ValueError(
             f"known_hosts file not found: {path}\n"
-            f"Host key verification is MANDATORY. Create the file with:\n"
-            f"  ssh-keyscan -H github.com >> {path}\n"
-            f"Or set ASYNCSSH_KNOWN_HOSTS to an existing file."
+            f"Host key verification is MANDATORY. Install a GitHub host key "
+            f"whose fingerprint was verified out of band, then set "
+            f"ASYNCSSH_KNOWN_HOSTS to that file. See "
+            f"docs/RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md."
         )
     if not p.is_file():
         raise ValueError(f"known_hosts is not a regular file: {path}")

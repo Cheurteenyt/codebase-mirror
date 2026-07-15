@@ -192,12 +192,18 @@ expected 0600 or stricter. Run: chmod 600 ~/.ssh/id_ed25519
 
 ### Host key verification
 
-The helper refuses to connect without a `known_hosts` file. To create
-one:
+The helper refuses to connect without a `known_hosts` file. Obtain the
+GitHub host key through a separately trusted channel and verify its
+fingerprint before installing it. Output from the same unauthenticated
+connection is discovery data, not proof of identity.
+
+Never bootstrap trust with `known_hosts=None`. If `ssh-keyscan` or Paramiko
+is used to collect a candidate key, compare its fingerprint out of band
+before copying the verified line into `~/.ssh/known_hosts`:
 
 ```bash
-# If ssh-keyscan is available:
-ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+# If ssh-keyscan is available, collect first; do not trust automatically:
+ssh-keyscan -H github.com > /tmp/github-known-hosts.candidate
 
 # If only paramiko is available:
 python3 -c "
@@ -206,10 +212,12 @@ t = paramiko.Transport(('github.com', 22))
 t.connect()
 k = t.get_remote_server_key()
 t.close()
-with open(os.path.expanduser('~/.ssh/known_hosts'), 'a') as f:
-    f.write(f'github.com ssh-{k.get_name().replace(\"ssh-\",\"\")} {k.get_base64()}\n')
+print(f'github.com ssh-{k.get_name().replace(\"ssh-\",\"\")} {k.get_base64()}')
 "
 ```
+
+After the candidate fingerprint is verified through the trusted source,
+write only the verified host-key line to `~/.ssh/known_hosts`.
 
 ## 7. Diagnostic and recovery
 
@@ -239,20 +247,20 @@ git rev-list --objects origin/<branch>..HEAD \
 ### 7.3 Create recovery artifacts
 
 ```bash
-mkdir -p /tmp/r169b-push-recovery
+mkdir -p /tmp/cbm-push-recovery
 
-git bundle create /tmp/r169b-push-recovery/r169b-unpushed.bundle origin/<branch>..HEAD
+git bundle create /tmp/cbm-push-recovery/unpushed.bundle origin/<branch>..HEAD
 
 git format-patch --binary --full-index --stdout origin/<branch>..HEAD \
-> /tmp/r169b-push-recovery/r169b-unpushed.patch
+> /tmp/cbm-push-recovery/unpushed.patch
 
 git log --reverse --format=fuller origin/<branch>..HEAD \
-> /tmp/r169b-push-recovery/r169b-unpushed-log.txt
+> /tmp/cbm-push-recovery/unpushed-log.txt
 
-sha256sum /tmp/r169b-push-recovery/r169b-unpushed.bundle /tmp/r169b-push-recovery/r169b-unpushed.patch \
-> /tmp/r169b-push-recovery/SHA256SUMS
+sha256sum /tmp/cbm-push-recovery/unpushed.bundle /tmp/cbm-push-recovery/unpushed.patch \
+> /tmp/cbm-push-recovery/SHA256SUMS
 
-git bundle verify /tmp/r169b-push-recovery/r169b-unpushed.bundle
+git bundle verify /tmp/cbm-push-recovery/unpushed.bundle
 ```
 
 ### 7.4 Transfer to maintainer
@@ -260,19 +268,32 @@ git bundle verify /tmp/r169b-push-recovery/r169b-unpushed.bundle
 Hand off to a maintainer with native `ssh`:
 
 ```
-r169b-unpushed.bundle
-r169b-unpushed.patch
-r169b-unpushed-log.txt
+unpushed.bundle
+unpushed.patch
+unpushed-log.txt
 SHA256SUMS
 ```
 
 The maintainer can apply with:
 
 ```bash
-git fetch /path/to/r169b-unpushed.bundle HEAD
-git merge FETCH_HEAD
+git fetch origin <branch>
+git switch <branch>
+test -z "$(git status --porcelain)"
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/<branch>)"
+
+git fetch /path/to/unpushed.bundle HEAD
+EXPECTED_REMOTE_SHA="$(git rev-parse origin/<branch>)"
+git merge-base --is-ancestor "$EXPECTED_REMOTE_SHA" FETCH_HEAD || {
+    echo "bundle diverges from the expected remote head" >&2
+    exit 1
+}
+git merge --ff-only FETCH_HEAD
 git push origin <branch>
 ```
+
+If the ancestry or fast-forward check fails, stop and audit the divergence.
+Never create an automatic merge commit while restoring a reset checkpoint.
 
 **Do not commit** the bundle, patch, or logs containing local paths.
 
@@ -287,15 +308,15 @@ git push origin <branch>
 - The `-G` probe mode prints a fake SSH config to satisfy git's
   pre-push connectivity check.
 
-## 9. Installation (maintainer environments only)
+## 9. Installation (restricted implementation or maintainer environments)
 
 ```bash
 # In the Python environment used for git:
-pip install asyncssh
+pip install 'asyncssh==2.24.0'
 
 # Set up keys:
 chmod 600 ~/.ssh/id_ed25519
-ssh-keyscan -H github.com >> ~/.ssh/known_hosts  # or use paramiko fallback
+# Install only a GitHub host key verified through a separate trusted source.
 
 # Test:
 python3 scripts/dev/asyncssh-git-transport.py --self-test
