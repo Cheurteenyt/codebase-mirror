@@ -20,7 +20,7 @@ import type { RouteContext } from '../types.js';
  * R55 (Part A): uses shared safeRealpath utility.
  */
 export async function routeBrowse(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   url: URL,
   _req: IncomingMessage,
   res: ServerResponse,
@@ -81,7 +81,8 @@ export async function routeBrowse(
       parent,
     });
   } catch (e: unknown) {
-    sendJson(res, 500, { error: errorMessage(e) });
+    ctx.log(`Directory browse failed: ${errorMessage(e)}`);
+    sendJson(res, 500, { error: 'Unable to list the requested directory' });
   }
 }
 
@@ -222,7 +223,8 @@ export async function routeProcessKill(
     ctx.log(`Process killed: pid=${pid}`);
     sendJson(res, 200, { success: true, pid, signal: 'SIGTERM' });
   } catch (e: unknown) {
-    sendJson(res, 500, { error: `Failed to kill pid ${pid}: ${errorMessage(e)}` });
+    ctx.log(`Failed to kill pid ${pid}: ${errorMessage(e)}`);
+    sendJson(res, 500, { error: `Failed to kill pid ${pid}` });
   }
 }
 

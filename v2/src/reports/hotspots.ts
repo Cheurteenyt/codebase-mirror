@@ -5,6 +5,7 @@ import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
 import { computeRiskScore } from './risk.js';
 import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
+import { escapeMarkdownTableCell } from './markdown.js';
 
 export interface Hotspot {
   cbm_node_id: number;
@@ -121,10 +122,9 @@ export function renderHotspotsReportMarkdown(report: HotspotsReport): string {
   lines.push('');
   lines.push('| Module | Degree | Complexity | Notes | Risk | Documented |');
   lines.push('|---|---|---|---|---|---|');
-  const esc = (s: string) => String(s).replace(/\|/g, '\\|');
   for (const h of report.hotspots) {
     lines.push(
-      `| ${esc(h.name)} | ${h.degree} | ${h.complexity_avg.toFixed(1)} | ${h.notes_count} | ${(h.risk_score * 100).toFixed(0)}% | ${h.is_documented ? '✅' : '❌'} |`
+      `| ${escapeMarkdownTableCell(h.name)} | ${h.degree} | ${h.complexity_avg.toFixed(1)} | ${h.notes_count} | ${(h.risk_score * 100).toFixed(0)}% | ${h.is_documented ? '✅' : '❌'} |`
     );
   }
   return lines.join('\n');

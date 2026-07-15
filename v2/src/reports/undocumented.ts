@@ -4,6 +4,7 @@
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
 import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
+import { escapeMarkdownTableCell } from './markdown.js';
 
 export interface UndocumentedNode {
   cbm_node_id: number;
@@ -136,9 +137,8 @@ export function renderUndocumentedReportMarkdown(report: UndocumentedReport): st
   } else {
     lines.push('| Module | Degree | File |');
     lines.push('|---|---|---|');
-    const esc = (s: string) => String(s).replace(/\|/g, '\\|');
     for (const m of report.undocumented_modules) {
-      lines.push(`| ${esc(m.name)} | ${m.degree} | \`${esc(m.file_path)}\` |`);
+      lines.push(`| ${escapeMarkdownTableCell(m.name)} | ${m.degree} | \`${escapeMarkdownTableCell(m.file_path)}\` |`);
     }
   }
   lines.push('');
@@ -149,9 +149,8 @@ export function renderUndocumentedReportMarkdown(report: UndocumentedReport): st
   } else {
     lines.push('| Route | Degree | File |');
     lines.push('|---|---|---|');
-    const esc = (s: string) => String(s).replace(/\|/g, '\\|');
     for (const r of report.undocumented_routes) {
-      lines.push(`| ${esc(r.name)} | ${r.degree} | \`${esc(r.file_path)}\` |`);
+      lines.push(`| ${escapeMarkdownTableCell(r.name)} | ${r.degree} | \`${escapeMarkdownTableCell(r.file_path)}\` |`);
     }
   }
   lines.push('');
@@ -162,9 +161,8 @@ export function renderUndocumentedReportMarkdown(report: UndocumentedReport): st
   } else {
     lines.push('| Label | Name | Degree | Complexity | File |');
     lines.push('|---|---|---|---|---|');
-    const esc = (s: string) => String(s).replace(/\|/g, '\\|');
     for (const n of report.undocumented_critical) {
-      lines.push(`| ${esc(n.label)} | ${esc(n.name)} | ${n.degree} | ${n.complexity} | \`${esc(n.file_path)}\` |`);
+      lines.push(`| ${escapeMarkdownTableCell(n.label)} | ${escapeMarkdownTableCell(n.name)} | ${n.degree} | ${n.complexity} | \`${escapeMarkdownTableCell(n.file_path)}\` |`);
     }
   }
   return lines.join('\n');

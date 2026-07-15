@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { HumanMemoryStore, defaultHumanDbPath } from '../human/store.js';
 import { CodeGraphReader, defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { getNotifyHub } from './notify-hub.js';
-import { DEFAULT_PORT, LOG_BUFFER_MAX, MIME_TYPES, sendJson } from './helpers.js';
+import { DEFAULT_PORT, LOG_BUFFER_MAX, MIME_TYPES, errorMessage, sendJson } from './helpers.js';
 import type { RouteContext, RouteHandler, IndexJob } from './types.js';
 // Route handlers (R63: extracted to routes/*.ts)
 import { routeLayout, routeDashboard, routeGraphStatus } from './routes/graph.js';
@@ -281,10 +281,11 @@ export class UiServer {
       this.serveStatic(path, res);
     } catch (e: unknown) {
       if (responseSent || res.writableEnded) {
-        process.stderr.write(`[cbm-v2 ui] post-response error: ${e instanceof Error ? e.message : String(e)}\n`);
+        process.stderr.write(`[cbm-v2 ui] post-response error: ${errorMessage(e)}\n`);
         return;
       }
-      sendJson(res, 500, { error: e instanceof Error ? e.message : String(e) });
+      process.stderr.write(`[cbm-v2 ui] request failed: ${errorMessage(e)}\n`);
+      sendJson(res, 500, { error: 'Internal server error' });
     }
   }
 

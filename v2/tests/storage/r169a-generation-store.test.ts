@@ -3855,11 +3855,11 @@ describe("R169A-FIX-R8 — internal symbols NOT exported from public module (API
       // `declare const SymbolName`, `declare function SymbolName`, or
       // `export { SymbolName }` / `export { ..., SymbolName, ... }`.
       const patterns = [
-        new RegExp(`declare\s+interface\s+${symbol}\b`),
-        new RegExp(`declare\s+type\s+${symbol}\b`),
-        new RegExp(`declare\s+const\s+${symbol}\b`),
-        new RegExp(`declare\s+function\s+${symbol}\b`),
-        new RegExp(`export\s*\{[^}]*\b${symbol}\b[^}]*\}`),
+        new RegExp(String.raw`declare\s+interface\s+${symbol}\b`),
+        new RegExp(String.raw`declare\s+type\s+${symbol}\b`),
+        new RegExp(String.raw`declare\s+const\s+${symbol}\b`),
+        new RegExp(String.raw`declare\s+function\s+${symbol}\b`),
+        new RegExp(String.raw`export\s*\{[^}]*\b${symbol}\b[^}]*\}`),
       ];
       for (const p of patterns) {
         expect(dts).not.toMatch(p);

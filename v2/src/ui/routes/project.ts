@@ -72,7 +72,7 @@ export async function routeProjects(
  * R45 (F6/SEC4): validates name against regex to prevent path traversal.
  */
 export async function routeProjectHealth(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   url: URL,
   _req: IncomingMessage,
   res: ServerResponse,
@@ -102,7 +102,8 @@ export async function routeProjectHealth(
       size_bytes: stat.size,
     });
   } catch (e: unknown) {
-    sendJson(res, 200, { name, status: 'corrupt', reason: errorMessage(e) });
+    ctx.log(`Project health check failed for name="${name}": ${errorMessage(e)}`);
+    sendJson(res, 200, { name, status: 'corrupt', reason: 'Database health check failed' });
   }
 }
 
@@ -152,6 +153,7 @@ export async function routeProjectDelete(
     // R45 (F8): omit db_path from the response — defense-in-depth info leak.
     sendJson(res, 200, { success: true, name, deleted });
   } catch (e: unknown) {
-    sendJson(res, 500, { error: `Failed to delete project: ${errorMessage(e)}` });
+    ctx.log(`Failed to delete project name="${name}": ${errorMessage(e)}`);
+    sendJson(res, 500, { error: 'Failed to delete project' });
   }
 }

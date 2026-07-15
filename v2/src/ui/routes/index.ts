@@ -84,7 +84,7 @@ export async function routeIndex(
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('error', (err) => {
       job.status = 'failed';
-      job.error = `spawn error: ${err.message}`;
+      job.error = 'Indexer process failed to start';
       ctx.log(`Index job ${jobId} failed: ${err.message}`);
     });
     child.on('exit', (code) => {
@@ -98,15 +98,15 @@ export async function routeIndex(
         getNotifyHub().notify(projectName, 'code_graph_changed');
       } else {
         job.status = 'failed';
-        job.error = `exit code ${code}: ${stderr.slice(0, 500)}`;
-        ctx.log(`Index job ${jobId} failed (exit ${code})`);
+        job.error = `Indexer exited with code ${code}`;
+        ctx.log(`Index job ${jobId} failed (exit ${code}): ${stderr.slice(0, 500)}`);
       }
       // R51 (SEC-8): clear childPid to prevent stale PID in process-kill allowlist.
       job.childPid = undefined;
     });
   } catch (e: unknown) {
     job.status = 'failed';
-    job.error = errorMessage(e);
+    job.error = 'Indexer process failed to start';
     ctx.log(`Index job ${jobId} failed to start: ${errorMessage(e)}`);
     // R64: if spawn() threw synchronously (e.g. ENOENT when cbm binary is
     // missing), the job never started — return 500 instead of 202. The

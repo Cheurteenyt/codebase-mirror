@@ -128,6 +128,7 @@ export async function routeAdrPost(
       updated_at: node!.updated_at,
     });
   } catch (e: unknown) {
-    sendJson(res, 500, { error: errorMessage(e) });
+    ctx.log(`ADR save failed: ${errorMessage(e)}`);
+    sendJson(res, 500, { error: 'Failed to save ADR' });
   }
 }

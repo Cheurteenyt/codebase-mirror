@@ -5,6 +5,7 @@
 import { CodeGraphReader } from '../bridge/sqlite-ro.js';
 import { HumanMemoryStore } from '../human/store.js';
 import { safeJsonParse, MAX_NODES_PER_LABEL } from '../constants.js';
+import { escapeMarkdownTableCell } from './markdown.js';
 
 export interface RiskItem {
   cbm_node_id: number;
@@ -207,10 +208,8 @@ export function renderRiskReportMarkdown(report: RiskReport): string {
   lines.push('| Severity | Issue | Label | Name | File | Details |');
   lines.push('|---|---|---|---|---|---|');
   for (const item of report.items) {
-    // Escape pipe characters in fields to keep the table valid.
-    const esc = (s: string) => String(s).replace(/\|/g, '\\|');
     lines.push(
-      `| ${item.severity} | ${esc(item.issue)} | ${esc(item.label)} | ${esc(item.name)} | \`${esc(item.file_path)}\` | ${esc(item.details)} |`
+      `| ${item.severity} | ${escapeMarkdownTableCell(item.issue)} | ${escapeMarkdownTableCell(item.label)} | ${escapeMarkdownTableCell(item.name)} | \`${escapeMarkdownTableCell(item.file_path)}\` | ${escapeMarkdownTableCell(item.details)} |`
     );
   }
   return lines.join('\n');

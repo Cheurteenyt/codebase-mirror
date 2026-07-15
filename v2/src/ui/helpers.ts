@@ -52,7 +52,8 @@ export function sendJson(res: ServerResponse, status: number, body: unknown): vo
  *
  * Usage:
  *   try { ... } catch (e: unknown) {
- *     sendJson(res, 500, { error: errorMessage(e) });
+ *     log(errorMessage(e));
+ *     sendJson(res, 500, { error: 'Internal server error' });
  *   }
  */
 export function errorMessage(e: unknown): string {
