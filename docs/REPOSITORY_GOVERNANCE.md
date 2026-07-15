@@ -287,18 +287,18 @@ bootstrap is complete:
 - **Phase A (completed):** Verifier script + tests + docs published and
   squash-merged as `f5d42688d921f04b4323a017586af4566c17e381`.
 - **Phase B (active):** The mirror workflow loads both the verifier and
-  mirror state machine from this immutable pinned SHA. The verifier runs
-  before target checkout; the target checkout is thereafter treated as
-  Git data only.
+  mirror state machine from the current immutable pin shown below. The
+  verifier runs before target checkout; the target checkout is thereafter
+  treated as Git data only.
 
 ```
-TRUSTED_VERIFIER_SHA = f5d42688d921f04b4323a017586af4566c17e381
+TRUSTED_VERIFIER_SHA = 15a732d91984e5b4ffa29b4e129ac0d6316c9fca
 ```
 
 ### Rotation procedure
 
 To update the verifier or mirror state machine:
-1. Publish a new Phase A PR (scripts + tests + docs only; keep the old pin)
+1. Publish a runtime update PR (scripts + tests + docs only; keep the old pin)
 2. Squash-merge and verify CI green + mirror green
 3. Record the new squash SHA
 4. In a separate PR, update both the `TRUSTED_VERIFIER_SHA` environment

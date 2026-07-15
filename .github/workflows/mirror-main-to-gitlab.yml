@@ -6,8 +6,8 @@ name: Mirror validated GitHub main to GitLab
 # R168.1: GitHub reads fail-closed, trap outputs, test-only hooks.
 # SIG-R169 Phase B: Cross-host signature trust gate ACTIVATED.
 #
-# The verifier is loaded from the immutable Phase A squash SHA:
-#   TRUSTED_VERIFIER_SHA = f5d42688d921f04b4323a017586af4566c17e381
+# The verifier and mirror runtime are loaded from an audited immutable SHA:
+#   TRUSTED_VERIFIER_SHA = 15a732d91984e5b4ffa29b4e129ac0d6316c9fca
 #
 # This breaks the circular trust root: TARGET_SHA cannot supply its own
 # verifier because the verifier comes from a different, pinned commit.
@@ -53,13 +53,13 @@ concurrency:
   group: gitlab-passive-main-mirror
   cancel-in-progress: false
 
-# SIG-R169 Phase B: The pinned immutable Phase A squash SHA.
+# SIG-R169 Phase B: The pinned immutable audited-runtime squash SHA.
 # This is the ONLY source of trust for the verifier. Never use main, HEAD,
 # TARGET_SHA, github.sha, or any moving ref/branch/tag.
-# To rotate: publish a new Phase A PR, squash-merge, verify CI + mirror,
+# To rotate: publish a runtime update PR, squash-merge, verify CI + mirror,
 # then update this SHA in a separate PR.
 env:
-  TRUSTED_VERIFIER_SHA: f5d42688d921f04b4323a017586af4566c17e381
+  TRUSTED_VERIFIER_SHA: 15a732d91984e5b4ffa29b4e129ac0d6316c9fca
 
 jobs:
   mirror:
@@ -121,12 +121,12 @@ jobs:
           fi
 
       # ── Step 2: Checkout trusted signature verifier (PINNED SHA) ────
-      # SIG-R169 Phase B: Load the verifier from the immutable Phase A
-      # squash SHA. NOT from main, HEAD, TARGET_SHA, or github.sha.
+      # SIG-R169 Phase B: Load the verifier and runtime from the immutable
+      # audited squash SHA. NOT from main, HEAD, TARGET_SHA, or github.sha.
       - name: Checkout trusted signature verifier
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: f5d42688d921f04b4323a017586af4566c17e381
+          ref: 15a732d91984e5b4ffa29b4e129ac0d6316c9fca
           fetch-depth: 1
           sparse-checkout: |
             scripts/ci

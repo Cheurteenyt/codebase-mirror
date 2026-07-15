@@ -112,7 +112,7 @@ function runVerdict(envOverrides: Record<string, string>): VerdictResult {
 
   const baseEnv: Record<string, string> = {
     TARGET_SHA,
-    TRUSTED_VERIFIER_SHA: "f5d42688d921f04b4323a017586af4566c17e381",
+    TRUSTED_VERIFIER_SHA: "15a732d91984e5b4ffa29b4e129ac0d6316c9fca",
     EXPECTED_KEY_FP: "SHA256:test",
     EXPECTED_HOST_FP: "SHA256:test",
     GITHUB_STEP_SUMMARY: summaryFile,
@@ -468,6 +468,6 @@ describe("R169 SIG Phase B verdict runtime — summary content", () => {
 
   it("summary always contains TRUSTED_VERIFIER_SHA", () => {
     const r = runVerdict({});
-    expect(r.summary).toContain("f5d42688d921f04b4323a017586af4566c17e381");
+    expect(r.summary).toContain("15a732d91984e5b4ffa29b4e129ac0d6316c9fca");
   });
 });

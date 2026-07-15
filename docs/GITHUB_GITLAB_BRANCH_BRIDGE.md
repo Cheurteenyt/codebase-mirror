@@ -561,18 +561,18 @@ bootstrap is complete:
   f5d42688d921f04b4323a017586af4566c17e381
   ```
 - **Phase B (active):** The mirror workflow loads both the verifier and
-  mirror state machine from this immutable pinned SHA. It executes the
-  verifier before target checkout and never executes the target's copy of
-  the mirror script.
+  mirror state machine from the current immutable pin shown below. It
+  executes the verifier before target checkout and never executes the
+  target's copy of the mirror script.
 
 ```
-TRUSTED_VERIFIER_SHA = f5d42688d921f04b4323a017586af4566c17e381
+TRUSTED_VERIFIER_SHA = 15a732d91984e5b4ffa29b4e129ac0d6316c9fca
 ```
 
 ### Rotation procedure
 
 To update the verifier or mirror state machine:
-1. Publish a new Phase A PR (scripts + tests + docs only; keep the old pin)
+1. Publish a runtime update PR (scripts + tests + docs only; keep the old pin)
 2. Squash-merge and verify CI green + mirror green
 3. Record the new squash SHA
 4. In a separate PR, update both the `TRUSTED_VERIFIER_SHA` environment
@@ -588,7 +588,7 @@ Rationale: If the workflow checked out the verifier from the default
 branch without a `ref`, `actions/checkout` would use the event SHA
 (which for `workflow_run` is the latest commit on the default branch).
 This means `TARGET_SHA` could supply its own verifier — a circular
-trust root. Pinning to the Phase A SHA breaks the circle.
+trust root. Pinning to an immutable audited runtime SHA breaks the circle.
 
 ### Purpose
 

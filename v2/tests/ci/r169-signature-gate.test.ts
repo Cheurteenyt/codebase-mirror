@@ -295,14 +295,14 @@ describe("R169 SIG — token leak detection (SIG-R169-TOKEN-01)", () => {
 
 // ─── Phase B activation state tests ─────────────────────────────────────
 // Phase A was squash-merged as f5d42688d921f04b4323a017586af4566c17e381.
-// Phase B is now ACTIVE — the workflow loads the verifier from that pinned SHA.
+// Phase B is ACTIVE; the audited runtime pin was rotated after R169B merged.
 
 describe("R169 SIG — Phase B activation (SIG-R169-Phase-B)", () => {
   const workflow = readWorkflow("mirror-main-to-gitlab.yml");
 
   it("Phase B: workflow DOES activate the signature gate", () => {
     // The gate IS active in Phase B. The workflow checks out the verifier
-    // from the pinned Phase A squash SHA and runs it before target checkout.
+    // from the pinned audited-runtime squash SHA and runs it before target checkout.
     expect(workflow).toContain("Verify GitHub commit signature");
     expect(workflow).toContain("verify-github-commit-signature.sh");
   });
@@ -341,8 +341,8 @@ describe("R169 SIG — Phase B activation (SIG-R169-Phase-B)", () => {
     expect(mirrorStep).not.toMatch(/^\s*bash\s+scripts\/ci\/mirror-main-to-gitlab\.sh(?:\s|$)/m);
   });
 
-  it("Phase B: TRUSTED_VERIFIER_SHA is pinned to Phase A squash SHA", () => {
-    expect(workflow).toContain("f5d42688d921f04b4323a017586af4566c17e381");
+  it("Phase B: TRUSTED_VERIFIER_SHA is pinned to the audited runtime SHA", () => {
+    expect(workflow).toContain("15a732d91984e5b4ffa29b4e129ac0d6316c9fca");
   });
 });
 

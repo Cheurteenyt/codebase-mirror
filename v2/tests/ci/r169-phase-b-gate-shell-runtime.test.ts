@@ -162,7 +162,7 @@ function runGateWithFakeVerifier(
     GITHUB_REPOSITORY: "test/repo",
     OUTPUT_FILE: outputFile,
     GITHUB_OUTPUT: githubOutputFile,
-    TRUSTED_VERIFIER_SHA: "f5d42688d921f04b4323a017586af4566c17e381",
+    TRUSTED_VERIFIER_SHA: "15a732d91984e5b4ffa29b4e129ac0d6316c9fca",
     // Clean up env vars that could interfere
   };
   delete env.GITHUB_ACTIONS;

@@ -2,7 +2,7 @@
  * R169 SIG Phase B — Structural tests for the activated signature gate.
  *
  * SIG-R169-Phase-B requirements verified:
- *   - TRUSTED_VERIFIER_SHA pinned to exact Phase A squash SHA
+ *   - TRUSTED_VERIFIER_SHA pinned to the exact audited runtime squash SHA
  *   - Verifier checkout uses ref: <SHA> (not main/HEAD/TARGET_SHA)
  *   - Verifier checkout uses path: trusted-verifier
  *   - persist-credentials: false
@@ -22,6 +22,7 @@
 
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 const REPO_ROOT = join(__dirname, "..", "..", "..");
@@ -31,13 +32,34 @@ function readWorkflow(): string {
   return readFileSync(WORKFLOW_PATH, "utf-8");
 }
 
-const TRUSTED_VERIFIER_SHA = "f5d42688d921f04b4323a017586af4566c17e381";
+const TRUSTED_VERIFIER_SHA = "15a732d91984e5b4ffa29b4e129ac0d6316c9fca";
+
+function readPinnedBlob(relativePath: string): string {
+  return execFileSync(
+    "git",
+    ["show", `${TRUSTED_VERIFIER_SHA}:${relativePath}`],
+    { cwd: REPO_ROOT, encoding: "utf-8" },
+  );
+}
 
 describe("R169 SIG Phase B — verifier pin (SIG-R169-Phase-B-PIN)", () => {
   const workflow = readWorkflow();
 
-  it("TRUSTED_VERIFIER_SHA is the exact Phase A squash SHA", () => {
+  it("TRUSTED_VERIFIER_SHA is the exact audited runtime squash SHA", () => {
     expect(workflow).toContain(`TRUSTED_VERIFIER_SHA: ${TRUSTED_VERIFIER_SHA}`);
+  });
+
+  it("the immutable pinned blobs contain and syntax-check the production runtimes", () => {
+    const verifier = readPinnedBlob("scripts/ci/verify-github-commit-signature.sh");
+    const mirror = readPinnedBlob("scripts/ci/mirror-main-to-gitlab.sh");
+
+    expect(verifier).toContain("api_sha");
+    expect(verifier).toContain("verified_at");
+    expect(mirror).toContain("git_is_ancestor()");
+    expect(mirror).toContain("HostKeyAlgorithms=ssh-ed25519");
+    expect(mirror).toContain("PubkeyAcceptedAlgorithms=ssh-ed25519");
+    expect(() => execFileSync("bash", ["-n", "-s"], { input: verifier })).not.toThrow();
+    expect(() => execFileSync("bash", ["-n", "-s"], { input: mirror })).not.toThrow();
   });
 
   it("verifier checkout uses ref: <TRUSTED_VERIFIER_SHA> (not main/HEAD)", () => {
