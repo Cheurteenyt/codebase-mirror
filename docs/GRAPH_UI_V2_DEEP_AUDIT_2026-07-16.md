@@ -3,8 +3,9 @@
 ## Statut et règle de preuve
 
 Cet audit décrit **l’artefact 0.77.0-alpha.1 reconstruit, réindexé et servi
-localement le 16 juillet 2026**. La révision doit encore passer la CI de sa PR
-avant d’être intégrée à `main`.
+localement le 16 juillet 2026**. La révision a ensuite passé tous les gates de
+la [PR #25](https://github.com/Cheurteenyt/codebase-mirror/pull/25) avant son
+intégration à `main` au commit `63403c5`.
 
 Trois niveaux de preuve sont distingués :
 
@@ -244,6 +245,11 @@ contrat CI **18 fichiers / 121 tests**, deux typechecks, deux builds et
 servi a ensuite été contrôlé dans le navigateur : overview, drill-down clavier,
 recherche exacte, voisinage, refresh avec sélection préservée et restauration
 du focus.
+
+La CI de la PR #25 a confirmé le backend, le frontend, Windows, le tarball
+installé, Docker et CodeQL. Le smoke du tarball a indexé une fixture TypeScript,
+chargé les assets JS/CSS du paquet et exercé layout, recherche et voisinage sur
+une révision commune.
 
 Budget courant : Graph **37,90 / 40 Kio**, entrée **70,71 / 80 Kio**, CSS total
 **11,41 / 18 Kio**, JavaScript manifeste **110,25 / 125 Kio** (gzip). Les
@@ -600,7 +606,7 @@ Critère : une séquence paginée dite exacte ne mélange jamais deux index.
 
 Critère : conclusion reproductible par un tiers sur la même révision.
 
-#### P0-4 — Localement fermé, CI de PR restante
+#### P0-4 — Fermé : validation locale et CI de PR
 
 - typecheck et tests ciblés backend ;
 - typecheck, tests et build Graph UI ;
@@ -748,21 +754,17 @@ Le Graph UI V2 peut être considéré au niveau visé lorsque :
 - typecheck, tests, build, package et smoke runtime passent ;
 - le paquet publié reproduit exactement le comportement validé.
 
-## Prochaine séquence recommandée
+## Prochaine séquence après intégration
 
-1. Faire passer la CI de la PR sur Linux, Windows, le paquet installé, Docker et
-   CodeQL.
-2. Intégrer la mise à jour Dependabot validée, puis publier proprement le chantier
-   Graph UI.
-3. Exécuter le benchmark V1/V2 sur le même graphe : cold et warm, navigateur,
+1. Exécuter le benchmark V1/V2 sur le même graphe : cold et warm, navigateur,
    FPS, long tasks et deuxième page de recherche/voisinage.
-4. Organiser une comparaison aveugle des tâches, puis valider le parcours avec
+2. Organiser une comparaison aveugle des tâches, puis valider le parcours avec
    lecteur d’écran et les contrastes.
-5. Définir et appliquer un budget adaptatif uniquement à partir des mesures
+3. Définir et appliquer un budget adaptatif uniquement à partir des mesures
    nœuds, arêtes, labels, viewport et DPR.
-6. Ajouter au gate du paquet un navigateur CI qui exécute le JavaScript et une
+4. Ajouter au gate du paquet un navigateur CI qui exécute le JavaScript et une
    interaction DOM réelle.
-7. Écrire les playbooks de migration des dépendances majeures avant toute montée
+5. Écrire les playbooks de migration des dépendances majeures avant toute montée
    Vite/plugin React, TypeScript, jsdom ou better-sqlite3.
 
 La conclusion démontrée à cette révision est la suivante :
