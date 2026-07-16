@@ -650,6 +650,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const clusterTrafficRef = useRef<Map<number, ScopeTraffic>>(new Map());
   const clusterTrafficTiersRef = useRef<Map<number, number>>(new Map());
   const domainBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
+  const domainTrafficTiersRef = useRef<Map<number, number>>(new Map());
   const labelCandidatesRef = useRef<SimNode[]>([]);
   const edgeGroupsRef = useRef<Map<EdgeGroup, SimEdge[]>>(new Map());
   const hoveredScopeRef = useRef<Omit<GraphScopeSelection, "nodeIds"> | null>(null);
@@ -945,6 +946,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       clusterTrafficRef.current = new Map();
       clusterTrafficTiersRef.current = new Map();
       domainBundleBatchesRef.current = new Map();
+      domainTrafficTiersRef.current = new Map();
       labelCandidatesRef.current = [];
       edgeGroupsRef.current = new Map();
       keyboardTargetsRef.current = emptyKeyboardTargets();
@@ -1070,6 +1072,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       Math.min(28, Math.max(10, domainsRef.current.length * 3)),
     );
     domainBundleBatchesRef.current = domainBundlePlan.batches;
+    domainTrafficTiersRef.current = domainBundlePlan.trafficTiers;
     labelCandidatesRef.current = [...nodes]
       .sort((nodeA, nodeB) => {
         const structuralA = ["Project", "Package", "Module", "File", "Class", "Interface"].includes(nodeA.label) ? 0 : 1;
@@ -1352,6 +1355,27 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
+    if (domainOverview && domainTrafficTiersRef.current.size > 0) {
+      // Domain area continues to encode code volume. A second, batched outline
+      // adds the missing activity dimension without labels, gradients, or a
+      // per-domain drawing state: only real cross-domain traffic can light it.
+      for (let tier = 1; tier <= 4; tier += 1) {
+        let hasTraffic = false;
+        ctx.beginPath();
+        for (const domain of domainsRef.current) {
+          if (domainTrafficTiersRef.current.get(domain.id) !== tier) continue;
+          const trafficRadius = domain.radius + (1.1 + tier * 0.3) / tk;
+          ctx.moveTo(domain.x + trafficRadius, domain.y);
+          ctx.arc(domain.x, domain.y, trafficRadius, 0, Math.PI * 2);
+          hasTraffic = true;
+        }
+        if (!hasTraffic) continue;
+        ctx.strokeStyle = `rgba(103, 232, 249, ${0.035 + tier * 0.045})`;
+        ctx.lineWidth = (0.55 + tier * 0.4) / tk;
+        ctx.stroke();
+      }
+    }
+
     if (clustersRef.current.length > 0) {
       // Community discs replace thousands of unreadable node dots in the two
       // architecture tiers. Their size and position already encode the useful
@@ -1375,41 +1399,45 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    if (communityBundleOpacity > 0 && clusterTrafficRef.current.size > 0) {
+    if (!rawTopology && clusterTrafficRef.current.size > 0) {
       // Two batched inner discs per occupied traffic tier create depth without
       // gradients, shadows, or per-community canvas state changes. This is a
       // semantic light source: quiet communities remain visually quiet while
-      // high-traffic hubs gain a bounded focal core.
+      // high-traffic hubs gain a bounded focal core. At domain scale only the
+      // upper tiers survive, providing a few useful beacons rather than noise.
+      const minimumVisibleTier = domainOverview ? 3 : 1;
+      const overviewScale = domainOverview ? 0.72 : 1;
+      const overviewOpacity = domainOverview ? 0.68 : 1;
       const previousCompositeOperation = ctx.globalCompositeOperation;
       ctx.globalCompositeOperation = "lighter";
-      for (let tier = 1; tier <= 4; tier += 1) {
+      for (let tier = minimumVisibleTier; tier <= 4; tier += 1) {
         let hasTraffic = false;
         ctx.beginPath();
         for (const cluster of clustersRef.current) {
           if (clusterTrafficTiersRef.current.get(cluster.id) !== tier) continue;
           const bloomRadius = Math.min(
-            cluster.radius * 0.3,
-            Math.max(3 / tk, cluster.radius * (0.12 + tier * 0.035)),
+            cluster.radius * 0.3 * overviewScale,
+            Math.max(3 / tk, cluster.radius * (0.12 + tier * 0.035)) * overviewScale,
           );
           ctx.moveTo(cluster.x + bloomRadius, cluster.y);
           ctx.arc(cluster.x, cluster.y, bloomRadius, 0, Math.PI * 2);
           hasTraffic = true;
         }
         if (!hasTraffic) continue;
-        ctx.fillStyle = `rgba(103, 232, 249, ${0.008 + tier * 0.01})`;
+        ctx.fillStyle = `rgba(103, 232, 249, ${(0.008 + tier * 0.01) * overviewOpacity})`;
         ctx.fill();
 
         ctx.beginPath();
         for (const cluster of clustersRef.current) {
           if (clusterTrafficTiersRef.current.get(cluster.id) !== tier) continue;
           const coreRadius = Math.min(
-            cluster.radius * 0.14,
-            Math.max(1.5 / tk, cluster.radius * (0.045 + tier * 0.018)),
+            cluster.radius * 0.14 * overviewScale,
+            Math.max(1.5 / tk, cluster.radius * (0.045 + tier * 0.018)) * overviewScale,
           );
           ctx.moveTo(cluster.x + coreRadius, cluster.y);
           ctx.arc(cluster.x, cluster.y, coreRadius, 0, Math.PI * 2);
         }
-        ctx.fillStyle = `rgba(207, 250, 254, ${0.08 + tier * 0.04})`;
+        ctx.fillStyle = `rgba(207, 250, 254, ${(0.08 + tier * 0.04) * overviewOpacity})`;
         ctx.fill();
       }
       ctx.globalCompositeOperation = previousCompositeOperation;
@@ -1417,20 +1445,22 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       // Four batched halo tiers recover the useful V1 "hub at a glance"
       // signal at community scale. The halo represents sampled cross-scope
       // traffic while circle area remains reserved for code volume.
-      for (let tier = 1; tier <= 4; tier += 1) {
-        let hasTraffic = false;
-        ctx.beginPath();
-        for (const cluster of clustersRef.current) {
-          const trafficTier = clusterTrafficTiersRef.current.get(cluster.id);
-          if (trafficTier !== tier) continue;
-          ctx.moveTo(cluster.x + cluster.radius + 1.5 / tk, cluster.y);
-          ctx.arc(cluster.x, cluster.y, cluster.radius + 1.5 / tk, 0, Math.PI * 2);
-          hasTraffic = true;
+      if (communityBundleOpacity > 0) {
+        for (let tier = 1; tier <= 4; tier += 1) {
+          let hasTraffic = false;
+          ctx.beginPath();
+          for (const cluster of clustersRef.current) {
+            const trafficTier = clusterTrafficTiersRef.current.get(cluster.id);
+            if (trafficTier !== tier) continue;
+            ctx.moveTo(cluster.x + cluster.radius + 1.5 / tk, cluster.y);
+            ctx.arc(cluster.x, cluster.y, cluster.radius + 1.5 / tk, 0, Math.PI * 2);
+            hasTraffic = true;
+          }
+          if (!hasTraffic) continue;
+          ctx.strokeStyle = `rgba(103, 232, 249, ${0.08 + tier * 0.055})`;
+          ctx.lineWidth = (0.7 + tier * 0.48) / tk;
+          ctx.stroke();
         }
-        if (!hasTraffic) continue;
-        ctx.strokeStyle = `rgba(103, 232, 249, ${0.08 + tier * 0.055})`;
-        ctx.lineWidth = (0.7 + tier * 0.48) / tk;
-        ctx.stroke();
       }
     }
 

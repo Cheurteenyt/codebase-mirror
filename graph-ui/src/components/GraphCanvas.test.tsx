@@ -862,6 +862,110 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(Math.hypot(controlX, controlY - 144)).toBeGreaterThan(70);
   });
 
+  it("adds a semantic outline only to domains carrying cross-domain traffic", () => {
+    const ctx = installCanvasMock(800, 600);
+    const ref = createRef<GraphCanvasHandle>();
+    const domainTrafficData: GraphData = {
+      nodes: [
+        makeNode(1, "left", { x: -420, y: 80, cluster_id: 0 }),
+        makeNode(2, "right", { x: 420, y: 80, cluster_id: 1 }),
+        makeNode(3, "quiet", { x: 0, y: -360, cluster_id: 2 }),
+      ],
+      edges: Array.from({ length: 8 }, () => ({ source: 1, target: 2, type: "CALLS" })),
+      total_nodes: 3,
+      topology_revision: "semantic-domain-outline",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 4,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "left/src", x: -420, y: 80, radius: 44, node_count: 1 },
+          { id: 1, domain_id: 1, key: "right/src", x: 420, y: 80, radius: 44, node_count: 1 },
+          { id: 2, domain_id: 2, key: "quiet/src", x: 0, y: -360, radius: 44, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "left", x: -420, y: 80, radius: 120, node_count: 1, cluster_count: 1 },
+          { id: 1, key: "right", x: 420, y: 80, radius: 120, node_count: 1, cluster_count: 1 },
+          { id: 2, key: "quiet", x: 0, y: -360, radius: 120, node_count: 1, cluster_count: 1 },
+        ],
+      },
+    };
+
+    render(
+      <GraphCanvas
+        ref={ref}
+        data={domainTrafficData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    ctx.arc.mockClear();
+    act(() => ref.current?.zoomBy(1));
+    const outerArcsAt = (x: number, y: number) => ctx.arc.mock.calls.filter(
+      ([arcX, arcY, radius]) => arcX === x && arcY === y && radius > 120,
+    );
+    expect(outerArcsAt(-420, 80).length).toBeGreaterThanOrEqual(1);
+    expect(outerArcsAt(420, 80).length).toBeGreaterThanOrEqual(1);
+    expect(outerArcsAt(0, -360)).toHaveLength(0);
+  });
+
+  it("surfaces only high-traffic community hubs in the domain overview", () => {
+    const ctx = installCanvasMock(800, 600);
+    const ref = createRef<GraphCanvasHandle>();
+    const overviewHubData: GraphData = {
+      nodes: [
+        makeNode(1, "hub-source", { x: -160, y: 100, cluster_id: 0 }),
+        makeNode(2, "hub-target", { x: 160, y: 100, cluster_id: 1 }),
+        makeNode(3, "low-source", { x: -160, y: -120, cluster_id: 2 }),
+        makeNode(4, "low-target", { x: 160, y: -120, cluster_id: 3 }),
+      ],
+      edges: [
+        ...Array.from({ length: 16 }, () => ({ source: 1, target: 2, type: "CALLS" })),
+        { source: 3, target: 4, type: "CALLS" },
+      ],
+      total_nodes: 4,
+      topology_revision: "domain-overview-hubs",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 4,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "src/hub-source", x: -160, y: 100, radius: 44, node_count: 1 },
+          { id: 1, domain_id: 0, key: "src/hub-target", x: 160, y: 100, radius: 44, node_count: 1 },
+          { id: 2, domain_id: 0, key: "src/low-source", x: -160, y: -120, radius: 44, node_count: 1 },
+          { id: 3, domain_id: 0, key: "src/low-target", x: 160, y: -120, radius: 44, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "src", x: 0, y: 0, radius: 380, node_count: 4, cluster_count: 4 },
+        ],
+      },
+    };
+
+    render(
+      <GraphCanvas
+        ref={ref}
+        data={overviewHubData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    ctx.arc.mockClear();
+    act(() => ref.current?.zoomBy(1));
+    const innerArcsAt = (x: number, y: number) => ctx.arc.mock.calls.filter(
+      ([arcX, arcY, radius]) => arcX === x && arcY === y && radius < 44,
+    );
+    expect(innerArcsAt(-160, 100).length).toBeGreaterThanOrEqual(2);
+    expect(innerArcsAt(160, 100).length).toBeGreaterThanOrEqual(2);
+    expect(innerArcsAt(-160, -120)).toHaveLength(0);
+    expect(innerArcsAt(160, -120)).toHaveLength(0);
+  });
+
   it("adds bounded inner light only to communities carrying sampled traffic", () => {
     const ctx = installCanvasMock(800, 600);
     const ref = createRef<GraphCanvasHandle>();
