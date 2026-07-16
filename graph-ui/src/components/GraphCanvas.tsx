@@ -88,7 +88,7 @@ const RAW_TOPOLOGY_MIN_PROJECTED_SPACING = 18;
 const MAX_KEYBOARD_DOMAINS = 32;
 const MAX_KEYBOARD_COMMUNITIES = 64;
 const MAX_KEYBOARD_NODES = 64;
-const MAX_COMMUNITY_BACKBONE_BUNDLES = 24;
+const MAX_COMMUNITY_BACKBONE_BUNDLES = 16;
 
 function fadeBetween(value: number, start: number, end: number): number {
   return Math.max(0, Math.min(1, (value - start) / (end - start)));
@@ -207,12 +207,12 @@ const EDGE_BUNDLE_STYLES: Record<EdgeGroup, string> = {
 interface OverviewBundle {
   sourceId: number;
   targetId: number;
-  sourceX: number;
-  sourceY: number;
-  sourceRadius: number;
-  targetX: number;
-  targetY: number;
-  targetRadius: number;
+  startX: number;
+  startY: number;
+  controlX: number;
+  controlY: number;
+  endX: number;
+  endY: number;
   count: number;
   group: EdgeGroup;
   weight: number;
@@ -248,6 +248,9 @@ function buildOverviewBundleBatches(
   centers: ReadonlyMap<number, { id: number; x: number; y: number; radius: number }>,
   scopeIdForNode: (node: SimNode) => number | undefined,
   maxBundles: number,
+  routingCenterForScope?: (
+    scopeId: number,
+  ) => { id: number; x: number; y: number; radius: number } | undefined,
 ): OverviewBundlePlan {
   interface Accumulator {
     sourceId: number;
@@ -292,6 +295,22 @@ function buildOverviewBundleBatches(
     accumulator.groupCounts[group] += 1;
   }
 
+  const scopeCenters = [...centers.values()];
+  const layoutCenter = { x: 0, y: 0, radius: 0 };
+  for (const scope of scopeCenters) {
+    layoutCenter.x += scope.x;
+    layoutCenter.y += scope.y;
+  }
+  if (scopeCenters.length > 0) {
+    layoutCenter.x /= scopeCenters.length;
+    layoutCenter.y /= scopeCenters.length;
+    layoutCenter.radius = Math.max(
+      ...scopeCenters.map((scope) => (
+        Math.hypot(scope.x - layoutCenter.x, scope.y - layoutCenter.y) + scope.radius
+      )),
+    );
+  }
+
   const bundles: OverviewBundle[] = [];
   for (const accumulator of accumulators.values()) {
     const source = centers.get(accumulator.sourceId);
@@ -301,15 +320,55 @@ function buildOverviewBundleBatches(
       accumulator.groupCounts[right] - accumulator.groupCounts[left]
       || EDGE_GROUP_ORDER.indexOf(left) - EDGE_GROUP_ORDER.indexOf(right)
     ))[0];
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const length = Math.max(1, Math.hypot(dx, dy));
+    const sourceInset = Math.min(source.radius, length * 0.35);
+    const targetInset = Math.min(target.radius, length * 0.35);
+    const startX = source.x + (dx / length) * sourceInset;
+    const startY = source.y + (dy / length) * sourceInset;
+    const endX = target.x - (dx / length) * targetInset;
+    const endY = target.y - (dy / length) * targetInset;
+    const sourceRoutingCenter = routingCenterForScope?.(source.id);
+    const targetRoutingCenter = routingCenterForScope?.(target.id);
+    const routingCenter = sourceRoutingCenter && targetRoutingCenter
+      && sourceRoutingCenter.id === targetRoutingCenter.id
+      ? sourceRoutingCenter
+      : layoutCenter;
+    const normalX = -dy / length;
+    const normalY = dx / length;
+    const midpointX = (startX + endX) / 2;
+    const midpointY = (startY + endY) / 2;
+    const outwardProjection = (midpointX - routingCenter.x) * normalX
+      + (midpointY - routingCenter.y) * normalY;
+    const pairMin = Math.min(source.id, target.id);
+    const pairMax = Math.max(source.id, target.id);
+    const fallbackDirection = ((pairMin * 31 + pairMax * 17) & 1) === 0 ? -1 : 1;
+    const direction = Math.abs(outwardProjection) > 0.5
+      ? Math.sign(outwardProjection)
+      : fallbackDirection;
+    // The control point must create a real no-route corridor, not merely a
+    // decorative curve. A quadratic reaches only half of the control-point
+    // offset at t=0.5, so central chords need twice the missing clearance.
+    const routingClearance = Math.min(120, Math.max(28, routingCenter.radius * 0.2));
+    const clearanceBend = Math.max(
+      0,
+      (routingClearance - Math.abs(outwardProjection)) * 2,
+    );
+    const bend = Math.min(
+      Math.min(240, Math.max(104, length * 0.45)),
+      Math.max(16, length * 0.11, clearanceBend),
+    );
+
     bundles.push({
       sourceId: accumulator.sourceId,
       targetId: accumulator.targetId,
-      sourceX: source.x,
-      sourceY: source.y,
-      sourceRadius: source.radius,
-      targetX: target.x,
-      targetY: target.y,
-      targetRadius: target.radius,
+      startX,
+      startY,
+      controlX: midpointX + normalX * bend * direction,
+      controlY: midpointY + normalY * bend * direction,
+      endX,
+      endY,
       count: accumulator.count,
       group,
       weight: Math.min(6, Math.floor(Math.log2(Math.max(1, accumulator.count)))),
@@ -872,8 +931,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       (node) => node.cluster_id,
       Math.min(
         MAX_COMMUNITY_BACKBONE_BUNDLES,
-        Math.max(10, Math.ceil(clustersRef.current.length * 0.5)),
+        Math.max(8, Math.ceil(clustersRef.current.length * 0.35)),
       ),
+      (clusterId) => {
+        const cluster = clusterMap.get(clusterId);
+        return cluster ? domainMap.get(cluster.domain_id) : undefined;
+      },
     );
     clusterBundleBatchesRef.current = clusterBundlePlan.batches;
     clusterTrafficRef.current = clusterBundlePlan.traffic;
@@ -1192,6 +1255,44 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     }
 
     if (communityBundleOpacity > 0 && clusterTrafficRef.current.size > 0) {
+      // Two batched inner discs per occupied traffic tier create depth without
+      // gradients, shadows, or per-community canvas state changes. This is a
+      // semantic light source: quiet communities remain visually quiet while
+      // high-traffic hubs gain a bounded focal core.
+      const previousCompositeOperation = ctx.globalCompositeOperation;
+      ctx.globalCompositeOperation = "lighter";
+      for (let tier = 1; tier <= 4; tier += 1) {
+        let hasTraffic = false;
+        ctx.beginPath();
+        for (const cluster of clustersRef.current) {
+          if (clusterTrafficTiersRef.current.get(cluster.id) !== tier) continue;
+          const bloomRadius = Math.min(
+            cluster.radius * 0.3,
+            Math.max(3 / tk, cluster.radius * (0.12 + tier * 0.035)),
+          );
+          ctx.moveTo(cluster.x + bloomRadius, cluster.y);
+          ctx.arc(cluster.x, cluster.y, bloomRadius, 0, Math.PI * 2);
+          hasTraffic = true;
+        }
+        if (!hasTraffic) continue;
+        ctx.fillStyle = `rgba(103, 232, 249, ${0.008 + tier * 0.01})`;
+        ctx.fill();
+
+        ctx.beginPath();
+        for (const cluster of clustersRef.current) {
+          if (clusterTrafficTiersRef.current.get(cluster.id) !== tier) continue;
+          const coreRadius = Math.min(
+            cluster.radius * 0.14,
+            Math.max(1.5 / tk, cluster.radius * (0.045 + tier * 0.018)),
+          );
+          ctx.moveTo(cluster.x + coreRadius, cluster.y);
+          ctx.arc(cluster.x, cluster.y, coreRadius, 0, Math.PI * 2);
+        }
+        ctx.fillStyle = `rgba(207, 250, 254, ${0.08 + tier * 0.04})`;
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = previousCompositeOperation;
+
       // Four batched halo tiers recover the useful V1 "hub at a glance"
       // signal at community scale. The halo represents sampled cross-scope
       // traffic while circle area remains reserved for code volume.
@@ -1254,36 +1355,21 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       includeBundle?: (bundle: OverviewBundle) => boolean,
     ) => {
       const appendBundle = (bundle: OverviewBundle) => {
-        const dx = bundle.targetX - bundle.sourceX;
-        const dy = bundle.targetY - bundle.sourceY;
-        const length = Math.max(1, Math.hypot(dx, dy));
-        const sourceInset = Math.min(bundle.sourceRadius, length * 0.35);
-        const targetInset = Math.min(bundle.targetRadius, length * 0.35);
-        const startX = bundle.sourceX + (dx / length) * sourceInset;
-        const startY = bundle.sourceY + (dy / length) * sourceInset;
-        const endX = bundle.targetX - (dx / length) * targetInset;
-        const endY = bundle.targetY - (dy / length) * targetInset;
-        const pairMin = Math.min(bundle.sourceId, bundle.targetId);
-        const pairMax = Math.max(bundle.sourceId, bundle.targetId);
-        const direction = ((pairMin * 31 + pairMax * 17) & 1) === 0 ? -1 : 1;
-        const bend = Math.min(92, Math.max(14, length * 0.11)) * direction;
-        const controlX = (startX + endX) / 2 - (dy / length) * bend;
-        const controlY = (startY + endY) / 2 + (dx / length) * bend;
-        ctx.moveTo(startX, startY);
-        ctx.quadraticCurveTo(controlX, controlY, endX, endY);
+        ctx.moveTo(bundle.startX, bundle.startY);
+        ctx.quadraticCurveTo(bundle.controlX, bundle.controlY, bundle.endX, bundle.endY);
         // A constant-screen-size chevron encodes direction without adding a
         // separate stroke per edge bundle.
-        const tangentX = endX - controlX;
-        const tangentY = endY - controlY;
+        const tangentX = bundle.endX - bundle.controlX;
+        const tangentY = bundle.endY - bundle.controlY;
         const tangentLength = Math.max(1, Math.hypot(tangentX, tangentY));
         const unitX = tangentX / tangentLength;
         const unitY = tangentY / tangentLength;
         const arrowLength = 5.5 / tk;
         const arrowWidth = 3.25 / tk;
-        const arrowBaseX = endX - unitX * arrowLength;
-        const arrowBaseY = endY - unitY * arrowLength;
+        const arrowBaseX = bundle.endX - unitX * arrowLength;
+        const arrowBaseY = bundle.endY - unitY * arrowLength;
         ctx.moveTo(arrowBaseX - unitY * arrowWidth, arrowBaseY + unitX * arrowWidth);
-        ctx.lineTo(endX, endY);
+        ctx.lineTo(bundle.endX, bundle.endY);
         ctx.lineTo(arrowBaseX + unitY * arrowWidth, arrowBaseY - unitX * arrowWidth);
       };
 

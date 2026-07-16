@@ -752,7 +752,107 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
 
     ctx.quadraticCurveTo.mockClear();
     act(() => ref.current?.zoomBy(1));
-    expect(ctx.quadraticCurveTo).toHaveBeenCalledTimes(24);
+    expect(ctx.quadraticCurveTo).toHaveBeenCalledTimes(16);
+  });
+
+  it("routes community bundles away from the center of their shared domain", () => {
+    const ctx = installCanvasMock(800, 600);
+    const ref = createRef<GraphCanvasHandle>();
+    const routingData: GraphData = {
+      nodes: [
+        makeNode(1, "left", { x: -140, y: 100, cluster_id: 0 }),
+        makeNode(2, "right", { x: 140, y: 100, cluster_id: 2 }),
+        makeNode(3, "center-left", { x: -180, y: 0, cluster_id: 3 }),
+        makeNode(4, "center-right", { x: 180, y: 0, cluster_id: 4 }),
+      ],
+      edges: [
+        { source: 1, target: 2, type: "CALLS" },
+        { source: 3, target: 4, type: "CALLS" },
+      ],
+      total_nodes: 4,
+      topology_revision: "outward-community-routing",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 16,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "src/left", x: -140, y: 100, radius: 40, node_count: 1 },
+          { id: 2, domain_id: 0, key: "src/right", x: 140, y: 100, radius: 40, node_count: 1 },
+          { id: 3, domain_id: 0, key: "src/center-left", x: -180, y: 0, radius: 40, node_count: 1 },
+          { id: 4, domain_id: 0, key: "src/center-right", x: 180, y: 0, radius: 40, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "src", x: 0, y: 0, radius: 360, node_count: 4, cluster_count: 4 },
+        ],
+      },
+    };
+
+    render(
+      <GraphCanvas
+        ref={ref}
+        data={routingData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    ctx.quadraticCurveTo.mockClear();
+    act(() => ref.current?.zoomBy(1));
+    expect(ctx.quadraticCurveTo).toHaveBeenCalledTimes(2);
+    const upperRoute = ctx.quadraticCurveTo.mock.calls.find(([, , , endY]) => endY === 100);
+    const centerRoute = ctx.quadraticCurveTo.mock.calls.find(([, , , endY]) => endY === 0);
+    expect(upperRoute?.[1]).toBeGreaterThan(100);
+    expect(Math.abs(centerRoute?.[1] ?? 0)).toBeGreaterThanOrEqual(120);
+  });
+
+  it("adds bounded inner light only to communities carrying sampled traffic", () => {
+    const ctx = installCanvasMock(800, 600);
+    const ref = createRef<GraphCanvasHandle>();
+    const trafficCoreData: GraphData = {
+      nodes: [
+        makeNode(1, "source", { x: -160, y: 80, cluster_id: 0 }),
+        makeNode(2, "target", { x: 160, y: 80, cluster_id: 1 }),
+        makeNode(3, "quiet", { x: 0, y: -180, cluster_id: 2 }),
+      ],
+      edges: [{ source: 1, target: 2, type: "CALLS" }],
+      total_nodes: 3,
+      topology_revision: "semantic-community-core",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 16,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "src/source", x: -160, y: 80, radius: 44, node_count: 1 },
+          { id: 1, domain_id: 0, key: "src/target", x: 160, y: 80, radius: 44, node_count: 1 },
+          { id: 2, domain_id: 0, key: "src/quiet", x: 0, y: -180, radius: 44, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "src", x: 0, y: 0, radius: 380, node_count: 3, cluster_count: 3 },
+        ],
+      },
+    };
+
+    render(
+      <GraphCanvas
+        ref={ref}
+        data={trafficCoreData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    ctx.arc.mockClear();
+    act(() => ref.current?.zoomBy(1));
+    const innerArcsAt = (x: number, y: number) => ctx.arc.mock.calls.filter(
+      ([arcX, arcY, radius]) => arcX === x && arcY === y && radius < 44,
+    );
+    expect(innerArcsAt(-160, 80).length).toBeGreaterThanOrEqual(2);
+    expect(innerArcsAt(160, 80).length).toBeGreaterThanOrEqual(2);
+    expect(innerArcsAt(0, -180)).toHaveLength(0);
   });
 
   it("reveals sampled incoming and outgoing community traffic only on focus", () => {
