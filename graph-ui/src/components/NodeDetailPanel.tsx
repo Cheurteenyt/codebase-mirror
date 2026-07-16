@@ -8,7 +8,7 @@ interface Connection {
   node: GraphNode;
   edgeType: string;
   direction: "inbound" | "outbound" | "self";
-  edgeId?: number;
+  occurrences: number;
 }
 
 interface NodeDetailPanelProps {
@@ -31,6 +31,33 @@ interface NodeDetailPanelProps {
   ) => void;
   onClose: () => void;
   onNavigate: (node: GraphNode) => void;
+}
+
+function collectConnections(anchor: GraphNode, nodes: readonly GraphNode[], edges: readonly GraphEdge[]): Connection[] {
+  const nodeMap = new Map<number, GraphNode>([[anchor.id, anchor]]);
+  for (const node of nodes) nodeMap.set(node.id, node);
+  const connections = new Map<string, Connection>();
+  for (const edge of edges) {
+    let direction: Connection["direction"];
+    let neighborId: number;
+    if (edge.source === anchor.id && edge.target === anchor.id) {
+      direction = "self";
+      neighborId = anchor.id;
+    } else if (edge.source === anchor.id) {
+      direction = "outbound";
+      neighborId = edge.target;
+    } else if (edge.target === anchor.id) {
+      direction = "inbound";
+      neighborId = edge.source;
+    } else continue;
+    const neighbor = nodeMap.get(neighborId);
+    if (!neighbor) continue;
+    const key = `${direction}\0${edge.type}\0${neighborId}`;
+    const existing = connections.get(key);
+    if (existing) existing.occurrences += 1;
+    else connections.set(key, { node: neighbor, edgeType: edge.type, direction, occurrences: 1 });
+  }
+  return [...connections.values()];
 }
 
 /**
@@ -71,32 +98,16 @@ export function NodeDetailPanel({
   useEffect(() => {
     headingRef.current?.focus();
   }, [node.id]);
-  const overviewConnections = useMemo(() => {
-    const nodeMap = new Map<number, GraphNode>();
-    for (const n of allNodes) nodeMap.set(n.id, n);
-    const conns: Connection[] = [];
-    for (const edge of allEdges) {
-      if (edge.source === node.id && edge.target === node.id) {
-        conns.push({ node, edgeType: edge.type, direction: "self" });
-        continue;
-      }
-      if (edge.source === node.id) {
-        const t = nodeMap.get(edge.target);
-        if (t) conns.push({ node: t, edgeType: edge.type, direction: "outbound" });
-      }
-      if (edge.target === node.id) {
-        const s = nodeMap.get(edge.source);
-        if (s) conns.push({ node: s, edgeType: edge.type, direction: "inbound" });
-      }
-    }
-    return conns;
-  }, [node, allNodes, allEdges]);
+  const overviewConnections = useMemo(
+    () => collectConnections(node, allNodes, allEdges),
+    [node, allNodes, allEdges],
+  );
 
   let overviewOutbound = 0;
   let overviewInbound = 0;
   for (const connection of overviewConnections) {
-    if (connection.direction !== "inbound") overviewOutbound += 1;
-    if (connection.direction !== "outbound") overviewInbound += 1;
+    if (connection.direction !== "inbound") overviewOutbound += connection.occurrences;
+    if (connection.direction !== "outbound") overviewInbound += connection.occurrences;
   }
   const overviewCompletenessKnown = node.out_degree != null && node.in_degree != null;
   const overviewTotalOutbound = node.out_degree ?? overviewOutbound;
@@ -152,39 +163,7 @@ export function NodeDetailPanel({
   ]);
   const connections = useMemo(() => {
     if (!exactData) return overviewConnections;
-    const nodeMap = new Map<number, GraphNode>([[node.id, node]]);
-    for (const neighbor of exactData.nodes) nodeMap.set(neighbor.id, neighbor);
-    const exactConnections: Connection[] = [];
-    for (const edge of exactData.edges) {
-      if (edge.source === node.id && edge.target === node.id) {
-        exactConnections.push({
-          node,
-          edgeType: edge.type,
-          direction: "self",
-          edgeId: edge.id,
-        });
-        continue;
-      }
-      if (edge.source === node.id) {
-        const target = nodeMap.get(edge.target);
-        if (target) exactConnections.push({
-          node: target,
-          edgeType: edge.type,
-          direction: "outbound",
-          edgeId: edge.id,
-        });
-      }
-      if (edge.target === node.id) {
-        const source = nodeMap.get(edge.source);
-        if (source) exactConnections.push({
-          node: source,
-          edgeType: edge.type,
-          direction: "inbound",
-          edgeId: edge.id,
-        });
-      }
-    }
-    return exactConnections;
+    return collectConnections(node, exactData.nodes, exactData.edges);
   }, [exactData, node, overviewConnections]);
 
   // R43 (L2): memoize the split + grouping so it doesn't recompute on every
@@ -207,6 +186,7 @@ export function NodeDetailPanel({
   const visibleSelf = countGroups(groupedSelf);
   const visibleOutbound = countGroups(groupedOutbound) + visibleSelf;
   const visibleInbound = countGroups(groupedInbound) + visibleSelf;
+  const visibleConnectionCount = visibleOutbound + visibleInbound - visibleSelf;
   const totalOutbound = exactData?.anchor.total_outbound ?? node.out_degree ?? visibleOutbound;
   const totalInbound = exactData?.anchor.total_inbound ?? node.in_degree ?? visibleInbound;
   const totalConnectionsIsExact = exactData != null
@@ -216,11 +196,11 @@ export function NodeDetailPanel({
   // unique-edge total does not count it twice. Keep the estimate at least as
   // large as the number of distinct overview edges currently rendered.
   const provisionalUniqueConnections = Math.max(
-    connections.length,
+    visibleConnectionCount,
     totalOutbound + totalInbound - visibleSelf,
   );
   const totalConnections = exactData?.anchor.total_unique_edges
-    ?? (totalConnectionsIsExact ? connections.length : provisionalUniqueConnections);
+    ?? (totalConnectionsIsExact ? visibleConnectionCount : provisionalUniqueConnections);
   const connectionsArePartial = exactData
     ? exactData.page.next_cursor != null
     : overviewIsPartial;
@@ -345,7 +325,7 @@ export function NodeDetailPanel({
         )}
         {!exactData && !exactError && connectionsArePartial && (
           <p role="status" className="mt-2 text-[10px] leading-relaxed text-amber-200/65">
-            Showing {connections.length.toLocaleString()} overview {connections.length === 1 ? "connection" : "connections"}. Estimated unique total: {totalConnections.toLocaleString()}.
+            Showing {visibleConnectionCount.toLocaleString()} overview {visibleConnectionCount === 1 ? "connection" : "connections"}. Estimated unique total: {totalConnections.toLocaleString()}.
             In/out totals are exact; the unique total remains provisional until exact data loads.
           </p>
         )}
@@ -355,12 +335,12 @@ export function NodeDetailPanel({
           && overviewCompletenessKnown
           && !overviewIsPartial && (
           <p role="status" className="mt-2 text-[10px] leading-relaxed text-emerald-200/60">
-            Complete neighborhood present in overview · {connections.length.toLocaleString()} connections
+            Complete neighborhood present in overview · {visibleConnectionCount.toLocaleString()} connections
           </p>
         )}
         {exactData && connectionsArePartial && (
           <p role="status" aria-live="polite" className="mt-2 text-[10px] leading-relaxed text-sky-200/70">
-            Loaded {connections.length.toLocaleString()} of {totalConnections.toLocaleString()} exact connections.
+            Loaded {visibleConnectionCount.toLocaleString()} of {totalConnections.toLocaleString()} exact connections.
           </p>
         )}
         {exactData && !connectionsArePartial && (
@@ -406,6 +386,8 @@ export function NodeDetailPanel({
   );
 }
 
+export default NodeDetailPanel;
+
 /**
  * Group connections by edge type, sorted by count descending.
  * R43 (L2): rewritten to push-in-place (was O(n²) spread-per-iteration).
@@ -417,11 +399,26 @@ function groupByType(conns: Connection[]): [string, Connection[]][] {
     if (arr) arr.push(c);
     else g.set(c.edgeType, [c]);
   }
-  return [...g.entries()].sort((a, b) => b[1].length - a[1].length);
+  return [...g.entries()].sort((a, b) => countConnections(b[1]) - countConnections(a[1]));
+}
+
+function countConnections(connections: Connection[]): number {
+  return connections.reduce((sum, connection) => sum + connection.occurrences, 0);
 }
 
 function countGroups(groups: [string, Connection[]][]): number {
-  return groups.reduce((sum, [, connections]) => sum + connections.length, 0);
+  return groups.reduce((sum, [, connections]) => sum + countConnections(connections), 0);
+}
+
+function connectionName(node: GraphNode, ambiguous: boolean): string {
+  const file = node.file_path?.split(/[\\/]/).pop();
+  if (node.name.startsWith("anonymous#") && file) {
+    return `${file}${node.start_line != null ? `:${node.start_line}` : ""}`;
+  }
+  if (!ambiguous) return node.name;
+  const qualified = node.qualified_name?.split("::");
+  const scope = qualified && qualified.length > 1 ? qualified.at(-2) : file;
+  return scope ? `${node.name} · ${scope}` : node.name;
 }
 
 function ConnectionSection({ title, count, icon, groups, onNavigate }: {
@@ -450,25 +447,35 @@ function ConnectionSection({ title, count, icon, groups, onNavigate }: {
         const visibleConnections = expanded ? conns : conns.slice(0, 25);
         const normalizedType = type.replace(/_/g, " ").toLowerCase();
         const hiddenCount = conns.length - visibleConnections.length;
+        const nameCounts = new Map<string, number>();
+        let showLabels = false;
+        for (const connection of conns) {
+          nameCounts.set(connection.node.name, (nameCounts.get(connection.node.name) ?? 0) + 1);
+          if (connection.node.label !== conns[0].node.label) showLabels = true;
+        }
         return (
           <div key={type} className="mb-2">
             <p className="text-[9px] text-foreground/25 uppercase tracking-wider mb-1 font-medium">
               {normalizedType}
             </p>
             <div className="space-y-px">
-              {visibleConnections.map((c, i) => (
-              <button
-                key={`${c.edgeId ?? "overview"}-${c.node.id}-${i}`}
-                onClick={() => onNavigate(c.node)}
-                aria-label={`Open ${c.node.name} (${c.node.label})`}
-                className="group flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200/40"
-              >
-                <span className="text-foreground/25 text-[10px] group-hover:text-foreground/40">{icon}</span>
-                <span className="w-[5px] h-[5px] rounded-full shrink-0" style={{ backgroundColor: colorForLabel(c.node.label) }} />
-                <span className="text-foreground/65 group-hover:text-foreground/85 truncate">{c.node.name}</span>
-                <span className="text-foreground/25 ml-auto text-[10px] shrink-0">{c.node.label}</span>
-              </button>
-              ))}
+              {visibleConnections.map((c) => {
+                const displayName = connectionName(c.node, (nameCounts.get(c.node.name) ?? 0) > 1);
+                return (
+                  <button
+                    key={c.node.id}
+                    onClick={() => onNavigate(c.node)}
+                    aria-label={`Open ${displayName} (${c.node.label})${c.occurrences > 1 ? `, ${c.occurrences} connections` : ""}`}
+                    className="group flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200/40"
+                  >
+                    <span className="text-foreground/25 text-[10px] group-hover:text-foreground/40">{icon}</span>
+                    <span className="w-[5px] h-[5px] rounded-full shrink-0" style={{ backgroundColor: colorForLabel(c.node.label) }} />
+                    <span className="min-w-0 flex-1 truncate text-foreground/65 group-hover:text-foreground/85">{displayName}</span>
+                    {c.occurrences > 1 && <span className="shrink-0 text-[9px] tabular-nums text-sky-200/55">×{c.occurrences}</span>}
+                    {showLabels && <span className="shrink-0 text-[10px] text-foreground/25">{c.node.label}</span>}
+                  </button>
+                );
+              })}
               {conns.length > 25 && (
                 <button
                   type="button"

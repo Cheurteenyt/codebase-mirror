@@ -294,6 +294,71 @@ describe("NodeDetailPanel exact neighborhood", () => {
     expect(screen.getByText("Exact neighborhood loaded · 2 connections")).toBeInTheDocument();
   });
 
+  it("compacts repeated edges while keeping ambiguous neighbors identifiable", () => {
+    const readerCountEdges = {
+      ...graphNode(2),
+      name: "countEdges",
+      qualified_name: "CodeGraphReader::countEdges",
+      file_path: "v2/src/bridge/sqlite-ro.ts",
+    };
+    const storeCountEdges = {
+      ...graphNode(3),
+      name: "countEdges",
+      qualified_name: "HumanMemoryStore::countEdges",
+      file_path: "v2/src/human/store.ts",
+    };
+    const anonymousTest = {
+      ...graphNode(4),
+      name: "anonymous#2",
+      file_path: "v2/tests/get-project-overview.test.ts",
+      start_line: 7,
+    };
+    useExactNeighborhoodMock.mockReturnValue(hookState({
+      data: exactData({
+        anchor: {
+          kind: "node",
+          id: 1,
+          total_inbound: 1,
+          total_outbound: 3,
+          total_unique_edges: 4,
+        },
+        nodes: [node, readerCountEdges, storeCountEdges, anonymousTest],
+        edges: [
+          { id: 10, source: 1, target: 2, type: "CALLS" },
+          { id: 11, source: 1, target: 2, type: "CALLS" },
+          { id: 12, source: 1, target: 3, type: "CALLS" },
+          { id: 13, source: 4, target: 1, type: "CALLS" },
+        ],
+        page: { limit: 250, returned: 4, next_cursor: null },
+      }),
+    }));
+    const onNavigate = vi.fn();
+    renderPanel({ onNavigate });
+
+    expect(screen.getByLabelText("Out connections: 3")).toBeInTheDocument();
+    expect(screen.getByLabelText("In connections: 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Total connections: 4")).toBeInTheDocument();
+    expect(screen.getByText("References").parentElement).toHaveTextContent("(3)");
+    expect(screen.getByText("Referenced by").parentElement).toHaveTextContent("(1)");
+
+    const readerConnection = screen.getByRole("button", {
+      name: "Open countEdges · CodeGraphReader (Function), 2 connections",
+    });
+    expect(screen.getByRole("button", {
+      name: "Open countEdges · HumanMemoryStore (Function)",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("button", {
+      name: "Open get-project-overview.test.ts:7 (Function)",
+    })).toBeInTheDocument();
+    expect(screen.queryByText("anonymous#2")).not.toBeInTheDocument();
+    expect(screen.getByText("×2")).toBeInTheDocument();
+    expect(screen.getAllByText("Function")).toHaveLength(1);
+
+    fireEvent.click(readerConnection);
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(onNavigate).toHaveBeenCalledWith(readerCountEdges);
+  });
+
   it("keeps pagination actionable and distinguishes retrying a failed page", () => {
     const loadMore = vi.fn();
     const retry = vi.fn();

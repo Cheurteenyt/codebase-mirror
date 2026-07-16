@@ -2,7 +2,7 @@
 // V2 graph view — 2D force-directed canvas with filters, sidebar, and detail panel.
 // Replaces V1's 3D Three.js scene with a cleaner 2D approach.
 
-import { useEffect, useState, useCallback, useMemo, useRef, type KeyboardEvent } from "react";
+import { lazy, Suspense, useEffect, useState, useCallback, useMemo, useRef, type KeyboardEvent } from "react";
 import { useGraphData } from "../hooks/useGraphData";
 import { useWebSocket, type WsNotification } from "../hooks/useWebSocket";
 import {
@@ -12,12 +12,13 @@ import {
 } from "./GraphCanvas";
 import { FilterPanel } from "./FilterPanel";
 import { Sidebar } from "./Sidebar";
-import { NodeDetailPanel } from "./NodeDetailPanel";
 import { NodeTooltip } from "./NodeTooltip";
 import { ResizeHandle } from "./ResizeHandle";
 import { ErrorBoundary } from "./ErrorBoundary";
 import type { GraphNode, GraphData } from "../lib/types";
 import { PanelLeftOpen, X } from "lucide-react";
+
+const NodeDetailPanel = lazy(() => import("./NodeDetailPanel"));
 
 const LAYOUT_EVENTS = new Set([
   "code_graph_changed",
@@ -1040,20 +1041,22 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
             className="absolute inset-y-0 right-0 z-30 h-full max-w-[92vw] shrink-0 overflow-hidden border-l border-white/10 bg-[#081720]/98 shadow-2xl lg:relative lg:z-auto lg:bg-transparent lg:shadow-none"
             style={{ width: rightWidth }}
           >
-            <NodeDetailPanel
-              node={selectedNode}
-              overviewNodes={data.nodes}
-              allNodes={filteredData.nodes}
-              allEdges={filteredData.edges}
-              project={project}
-              exactRefreshKey={exactRefreshKey}
-              requiresExactValidation={selectedNodeRequiresExactValidation}
-              onExactValidation={handleExactValidation}
-              onNavigate={handleNodeClick}
-              onClose={() => {
-                navigateUp();
-              }}
-            />
+            <Suspense fallback={<p role="status" className="p-4 text-xs text-foreground/40">Loading node details…</p>}>
+              <NodeDetailPanel
+                node={selectedNode}
+                overviewNodes={data.nodes}
+                allNodes={filteredData.nodes}
+                allEdges={filteredData.edges}
+                project={project}
+                exactRefreshKey={exactRefreshKey}
+                requiresExactValidation={selectedNodeRequiresExactValidation}
+                onExactValidation={handleExactValidation}
+                onNavigate={handleNodeClick}
+                onClose={() => {
+                  navigateUp();
+                }}
+              />
+            </Suspense>
           </div>
         </>
       )}

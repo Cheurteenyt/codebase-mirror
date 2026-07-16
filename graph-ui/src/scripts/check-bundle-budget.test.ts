@@ -39,12 +39,13 @@ function createDistFixture(): string {
       file: "assets/entry-real.js",
       isEntry: true,
       css: ["assets/theme-real.css"],
-      dynamicImports: ["src/components/GraphTab.tsx", "src/components/ControlTab.tsx"],
+      dynamicImports: ["_GraphTab-runtime.js", "src/components/ControlTab.tsx"],
     },
-    "src/components/GraphTab.tsx": {
+    "_GraphTab-runtime.js": {
       file: "assets/lazy-real.js",
-      src: "src/components/GraphTab.tsx",
+      name: "GraphTab",
       isDynamicEntry: true,
+      dynamicImports: ["src/components/NodeDetailPanel.tsx"],
     },
     "src/components/ControlTab.tsx": {
       file: "assets/control-real.js",

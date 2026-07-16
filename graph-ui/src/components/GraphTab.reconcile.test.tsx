@@ -144,7 +144,7 @@ describe("GraphTab server-refresh state reconciliation", () => {
     const { rerender } = render(<GraphTab project="test" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Select first graph node" }));
-    expect(screen.getByRole("heading", { name: "removed" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "removed" })).toBeInTheDocument();
 
     state.data = second;
     rerender(<GraphTab project="test" />);
@@ -169,7 +169,7 @@ describe("GraphTab server-refresh state reconciliation", () => {
     const { rerender } = render(<GraphTab project="test" />);
 
     fireEvent.click(screen.getByRole("button", { name: "Select exact node outside overview" }));
-    expect(screen.getByRole("heading", { name: "exact-outside" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "exact-outside" })).toBeInTheDocument();
 
     state.data = {
       ...state.data,
@@ -212,7 +212,7 @@ describe("GraphTab server-refresh state reconciliation", () => {
     const trigger = screen.getByRole("button", { name: "Select exact node outside overview" });
     trigger.focus();
     fireEvent.click(trigger);
-    expect(screen.getByRole("heading", { name: "exact-outside" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "exact-outside" })).toBeInTheDocument();
 
     state.data = {
       ...state.data,
@@ -249,7 +249,7 @@ describe("GraphTab server-refresh state reconciliation", () => {
     const trigger = screen.getByRole("button", { name: "Select first graph node" });
     trigger.focus();
     fireEvent.click(trigger);
-    expect(screen.getByRole("heading", { name: "focus-target" })).toHaveFocus();
+    expect(await screen.findByRole("heading", { name: "focus-target" })).toHaveFocus();
 
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(trigger).toHaveFocus());

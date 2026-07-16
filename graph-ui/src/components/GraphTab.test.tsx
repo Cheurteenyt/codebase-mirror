@@ -183,7 +183,7 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     expect(actions).toHaveClass("lg:top-4", "lg:flex-row", "lg:items-center");
   });
 
-  it("dismisses the mobile navigation drawer after opening a node", () => {
+  it("dismisses the mobile navigation drawer after opening a node", async () => {
     (useGraphData as any).mockReturnValue({
       data: mockData,
       loading: false,
@@ -199,7 +199,7 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     fireEvent.click(screen.getByRole("button", { name: "Open foo" }));
 
     expect(container.querySelector('[aria-label="Dismiss graph filters"]')).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "foo" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "foo" })).toBeInTheDocument();
   });
 
   it("keeps the closed mobile drawer out of the accessibility tree and manages modal focus", async () => {

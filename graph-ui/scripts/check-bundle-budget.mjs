@@ -55,11 +55,12 @@ const mainCssPath = exactlyOne(
   `stylesheet shared by HTML and manifest entry ${mainKey}`,
 );
 
-const graphKey = "src/components/GraphTab.tsx";
-const graphChunk = manifest[graphKey];
-if (!graphChunk || graphChunk.isDynamicEntry !== true) {
-  throw new Error(`Expected ${graphKey} to be a Vite dynamic entry`);
-}
+const [graphKey, graphChunk] = exactlyOne(
+  manifestEntries.filter(([key, chunk]) => (
+    key === "src/components/GraphTab.tsx" || chunk.name === "GraphTab"
+  ) && chunk.isDynamicEntry === true),
+  "GraphTab dynamic entry",
+);
 if (!(mainChunk.dynamicImports ?? []).includes(graphKey)) {
   throw new Error(`Manifest entry ${mainKey} does not dynamically import ${graphKey}`);
 }
