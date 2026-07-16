@@ -193,6 +193,101 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(physicsNodes.find((node) => node.id === 1)?.anchorX).toBe(0);
     expect(physicsNodes.find((node) => node.id === 2)!.anchorX).toBeGreaterThan(0);
     expect(container.querySelector("canvas")).toHaveAttribute("data-layout-policy", "directed-focus");
+    expect(container.querySelector("canvas")).toHaveAttribute("data-flow-lens", "semantic-depth-v1");
+  });
+
+  it("pins only the active Stellar focus at the semantic origin", async () => {
+    const { forceSimulation } = await import("d3-force");
+    const noop = () => {};
+    const { rerender } = render(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        selectedNodeId={1}
+        highlightedIds={new Set([1, 2])}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    const physicsNodes = (forceSimulation as any).mock.calls[0][0] as Array<{
+      id: number;
+      x: number;
+      y: number;
+      fx?: number | null;
+      fy?: number | null;
+    }>;
+    expect(physicsNodes.find((node) => node.id === 1)).toMatchObject({
+      x: 0,
+      y: 0,
+      fx: 0,
+      fy: 0,
+    });
+
+    const focusedSubset: GraphData = {
+      ...dataB,
+      nodes: [dataB.nodes[1]],
+      edges: [],
+    };
+    rerender(
+      <GraphCanvas
+        data={focusedSubset}
+        visualMode="stellar"
+        selectedNodeId={2}
+        highlightedIds={new Set([2])}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    rerender(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        selectedNodeId={2}
+        highlightedIds={new Set([1, 2])}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    expect(physicsNodes.find((node) => node.id === 1)).toMatchObject({ fx: null, fy: null });
+    expect(physicsNodes.find((node) => node.id === 2)).toMatchObject({
+      x: 0,
+      y: 0,
+      fx: 0,
+      fy: 0,
+    });
+    expect(forceSimulation).toHaveBeenCalledTimes(1);
+  });
+
+  it("paints focused relations with their non-color dash grammar", () => {
+    const ctx = installCanvasMock(800, 600);
+    const data: GraphData = {
+      nodes: [makeNode(1, "focus"), makeNode(2, "callee"), makeNode(3, "dependency")],
+      edges: [
+        { source: 1, target: 2, type: "calls" },
+        { source: 1, target: 3, type: "imports" },
+      ],
+      total_nodes: 3,
+      topology_revision: "semantic-strokes",
+    };
+
+    render(
+      <GraphCanvas
+        data={data}
+        visualMode="stellar"
+        selectedNodeId={1}
+        highlightedIds={new Set([1, 2, 3])}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    expect(ctx.setLineDash.mock.calls).toContainEqual([[7, 4]]);
+    expect(ctx.setLineDash.mock.calls).toContainEqual([[]]);
   });
 
   it("enters exact-scope detail policy without creating a second simulation", async () => {
@@ -1843,6 +1938,7 @@ function installCanvasMock(width: number, height: number) {
     lineTo: vi.fn(),
     quadraticCurveTo: vi.fn(),
     bezierCurveTo: vi.fn(),
+    setLineDash: vi.fn(),
     fillText: vi.fn(),
     strokeText: vi.fn(),
     measureText: vi.fn((text: string) => ({ width: text.length * 6 })),

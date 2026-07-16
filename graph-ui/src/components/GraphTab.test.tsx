@@ -5,7 +5,7 @@
 // useGraphData.loading (tested) → GraphTab conditional (THIS TEST) → GraphCanvas unmount (tested)
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 // Mock useGraphData to control loading state
 vi.mock("../hooks/useGraphData", () => ({
@@ -245,9 +245,45 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     fireEvent.click(screen.getByRole("button", { name: "Open foo" }));
 
     expect(container.querySelector("canvas")).toHaveAttribute("data-layout-policy", "directed-focus");
-    expect(screen.getByRole("status", { name: "Stellar flow guide" })).toHaveTextContent("Incoming");
-    expect(screen.getByRole("status", { name: "Stellar flow guide" })).toHaveTextContent("foo");
-    expect(screen.getByRole("status", { name: "Stellar flow guide" })).toHaveTextContent("Outgoing");
+    const guide = screen.getByRole("status", { name: "Stellar flow guide" });
+    expect(guide).toHaveTextContent("Incoming");
+    expect(guide).toHaveTextContent("foo");
+    expect(guide).toHaveTextContent("Outgoing");
+    expect(guide).toHaveClass("bottom-16");
+  });
+
+  it("shows only the selected symbol relation groups in the Stellar lens", () => {
+    localStorage.setItem("cbm-graph-visual-mode", "stellar");
+    (useGraphData as any).mockReturnValue({
+      data: {
+        ...mockData,
+        nodes: [
+          mockData.nodes[0],
+          { ...mockData.nodes[0], id: 2, name: "bar", qualified_name: "bar", file_path: "b.ts" },
+          { ...mockData.nodes[0], id: 3, name: "baz", qualified_name: "baz", file_path: "c.ts" },
+          { ...mockData.nodes[0], id: 4, name: "qux", qualified_name: "qux", file_path: "d.ts" },
+        ],
+        edges: [
+          { source: 1, target: 2, type: "calls" },
+          { source: 3, target: 1, type: "CALLS" },
+          { source: 1, target: 4, type: "imports" },
+          { source: 2, target: 3, type: "contains" },
+        ],
+        total_nodes: 4,
+      },
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    render(<GraphTab project="test-project" />);
+    fireEvent.click(screen.getByRole("button", { name: "Expand (root)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open foo" }));
+
+    const legend = screen.getByRole("list", { name: "Visible relation types" });
+    expect(within(legend).getByText("Calls 2")).toBeInTheDocument();
+    expect(within(legend).getByText("Imports 1")).toBeInTheDocument();
+    expect(within(legend).queryByText(/Contains/)).not.toBeInTheDocument();
   });
 
   it("dismisses the mobile navigation drawer after opening a node", async () => {

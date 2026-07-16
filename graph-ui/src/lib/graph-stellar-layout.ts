@@ -14,6 +14,23 @@ export interface StellarFlowTarget {
   y: number;
   role: StellarFlowRole;
   depth: number | null;
+  /** Stable directory lane used only by the focused flow disclosure. */
+  laneKey: string | null;
+}
+
+type DirectedFlowRole = Extract<StellarFlowRole, "incoming" | "outgoing" | "bidirectional">;
+
+export interface StellarFlowLaneSummary {
+  role: DirectedFlowRole;
+  depth: number;
+  count: number;
+  x: number;
+  minY: number;
+  maxY: number;
+}
+
+export interface StellarFlowModuleSummary extends StellarFlowLaneSummary {
+  laneKey: string;
 }
 
 const GOLDEN_FRACTION = 0.6180339887498949;
@@ -26,6 +43,12 @@ function groupKey(node: GraphNode): string {
   const path = node.file_path?.replaceAll("\\", "/");
   const topLevel = path?.split("/").find(Boolean);
   return topLevel ? `path:${topLevel}` : `type:${node.label}`;
+}
+
+function flowLaneKey(node: GraphNode): string {
+  const parts = node.file_path?.replaceAll("\\", "/").split("/").filter(Boolean) ?? [];
+  if (parts.length <= 1) return parts[0] ?? node.label;
+  return parts.slice(0, Math.min(3, parts.length - 1)).join("/");
 }
 
 function stableFraction(value: number): number {
@@ -90,6 +113,7 @@ function computeConstellation(nodes: readonly GraphNode[]): Map<number, StellarF
         y: Math.sin(angle) * radius * 0.82,
         role: degree >= hubThreshold ? "hub" : "context",
         depth: null,
+        laneKey: null,
       });
     }
     sectorStart += sectorSpan;
@@ -201,7 +225,10 @@ export function computeStellarFlowLayout(
   }
 
   for (const [key, layer] of layers) {
-    layer.sort(byImportance);
+    layer.sort((left, right) => (
+      flowLaneKey(left).localeCompare(flowLaneKey(right))
+      || byImportance(left, right)
+    ));
     const [role, rawDepth] = key.split(":") as [StellarFlowRole, string];
     const depth = Number(rawDepth);
     for (let index = 0; index < layer.length; index += 1) {
@@ -216,6 +243,7 @@ export function computeStellarFlowLayout(
         y: lane.y,
         role,
         depth,
+        laneKey: flowLaneKey(node),
       });
     }
   }
@@ -233,9 +261,126 @@ export function computeStellarFlowLayout(
       y: Math.sin(angle) * radius * 0.82,
       role: "context",
       depth: null,
+      laneKey: null,
     });
   }
 
-  constellation.set(selectedNodeId, { x: 0, y: 0, role: "focus", depth: 0 });
+  constellation.set(selectedNodeId, {
+    x: 0,
+    y: 0,
+    role: "focus",
+    depth: 0,
+    laneKey: null,
+  });
   return constellation;
+}
+
+/** Return the visible directed depth for one real edge, or null for cross-links. */
+export function stellarFlowEdgeDepth(
+  sourceId: number,
+  targetId: number,
+  targets: ReadonlyMap<number, StellarFlowTarget>,
+): number | null {
+  const source = targets.get(sourceId);
+  const target = targets.get(targetId);
+  if (!source || !target) return null;
+  if (source.role === "focus") {
+    return target.depth === 1 && (target.role === "outgoing" || target.role === "bidirectional")
+      ? 1
+      : null;
+  }
+  if (target.role === "focus") {
+    return source.depth === 1 && (source.role === "incoming" || source.role === "bidirectional")
+      ? 1
+      : null;
+  }
+  if (source.depth == null || target.depth == null) return null;
+  if (
+    (source.role === "outgoing" || source.role === "bidirectional")
+    && (target.role === "outgoing" || target.role === "bidirectional")
+    && target.depth === source.depth + 1
+  ) return target.depth;
+  if (
+    (source.role === "incoming" || source.role === "bidirectional")
+    && (target.role === "incoming" || target.role === "bidirectional")
+    && source.depth === target.depth + 1
+  ) return source.depth;
+  return null;
+}
+
+interface MutableLaneSummary {
+  role: DirectedFlowRole;
+  depth: number;
+  count: number;
+  sumX: number;
+  minY: number;
+  maxY: number;
+}
+
+function addLaneTarget(
+  summaries: Map<string, MutableLaneSummary>,
+  key: string,
+  target: StellarFlowTarget,
+): void {
+  const role = target.role as DirectedFlowRole;
+  const depth = target.depth!;
+  const current = summaries.get(key);
+  if (current) {
+    current.count += 1;
+    current.sumX += target.x;
+    current.minY = Math.min(current.minY, target.y);
+    current.maxY = Math.max(current.maxY, target.y);
+  } else {
+    summaries.set(key, {
+      role,
+      depth,
+      count: 1,
+      sumX: target.x,
+      minY: target.y,
+      maxY: target.y,
+    });
+  }
+}
+
+/** Precompute the at-most-eight depth rails and bounded module labels. */
+export function summarizeStellarFlowLanes(
+  targets: ReadonlyMap<number, StellarFlowTarget>,
+): { layers: StellarFlowLaneSummary[]; modules: StellarFlowModuleSummary[] } {
+  const layerMap = new Map<string, MutableLaneSummary>();
+  const moduleMap = new Map<string, MutableLaneSummary>();
+  for (const target of targets.values()) {
+    if (
+      target.depth == null
+      || !["incoming", "outgoing", "bidirectional"].includes(target.role)
+    ) continue;
+    addLaneTarget(layerMap, `${target.role}:${target.depth}`, target);
+    if (target.laneKey) {
+      addLaneTarget(moduleMap, `${target.role}:${target.depth}:${target.laneKey}`, target);
+    }
+  }
+  const roleOrder: Record<DirectedFlowRole, number> = {
+    incoming: 0,
+    bidirectional: 1,
+    outgoing: 2,
+  };
+  const finish = (summary: MutableLaneSummary): StellarFlowLaneSummary => ({
+    role: summary.role,
+    depth: summary.depth,
+    count: summary.count,
+    x: summary.sumX / summary.count,
+    minY: summary.minY,
+    maxY: summary.maxY,
+  });
+  const byLane = (left: MutableLaneSummary, right: MutableLaneSummary) => (
+    left.depth - right.depth
+    || roleOrder[left.role] - roleOrder[right.role]
+  );
+  const layers = [...layerMap.values()].sort(byLane).map(finish);
+  const modules = [...moduleMap.entries()]
+    .sort((left, right) => byLane(left[1], right[1]) || left[0].localeCompare(right[0]))
+    .map(([key, summary]) => ({
+      ...finish(summary),
+      laneKey: key.slice(key.indexOf(":", key.indexOf(":") + 1) + 1),
+    }));
+  return { layers, modules };
 }

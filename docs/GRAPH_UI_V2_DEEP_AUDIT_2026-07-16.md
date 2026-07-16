@@ -845,10 +845,10 @@ aucun rendu 3D/WebGL, aucun shadow blur ou gradient par nœud, et aucune
 affirmation de supériorité de performance V1/V2 avant le protocole same-graph
 navigateur.
 
-Validation courante : typecheck Graph UI, **19 fichiers / 144 tests**, build
-frontend et `build:package` passent. Le chunk Graph applicatif mesure **37,28
-Kio gzip** sur un plafond de 40 Kio ; le JavaScript manifeste mesure **120,56
-Kio gzip** sur un plafond de 125 Kio.
+Validation courante : typecheck Graph UI, **21 fichiers / 153 tests**, build
+frontend et `build:package` passent. Le chunk Graph applicatif mesure **39,30
+Kio** selon le gate sur un plafond de 40 Kio ; le JavaScript manifeste mesure
+**122,58 Kio** sur un plafond de 125 Kio.
 
 Le contrôle à 1 280 px a également supprimé l’action `Clear selection` dupliquée
 dans la barre supérieure : avec le nouveau sélecteur visuel, elle chevauchait le
@@ -885,3 +885,44 @@ exécutions warm du graphe courant (9 764 nœuds, échantillon de 1 000), le lay
 gzip mesure 56 759 octets avec un p50 de 108,884 ms ; la recherche exacte a un
 p50 de 19,621 ms et le voisinage exact de 1,08 ms. Ces chiffres valident cette
 révision, mais ne remplacent pas le protocole comparatif V1/V2 same-graph.
+
+## Addendum — Stellar Flow Lens sémantique (2026-07-17)
+
+Le contrôle réel du flux sélectionné a isolé quatre ambiguïtés restantes : les
+liens multi-hop perdaient leur type dans le fond gris, la profondeur n'était pas
+lisible sans reconstruire mentalement le chemin, tous les labels partaient vers
+la droite, et un focus à fort fan-out pouvait dériver loin de l'origine sous la
+force de ses propres liens.
+
+La correction reste strictement bornée et ne crée aucun renderer supplémentaire :
+
+- le focus actif est fixé à `(0,0)` dans l'instance d3 existante puis libéré dès
+  que la sélection ou le mode change ; le glisser souris/tactile restaure aussi
+  cette origine à la fin du geste ;
+- une arête n'est promue comme flux que si elle avance réellement d'une couche
+  entrante ou sortante. Les liens directs dominent ; les profondeurs 2–4 gardent
+  la même couleur et le même motif à une intensité inférieure ;
+- `calls`, `imports`, `contains`, `data` et `other` possèdent chacun un motif de
+  trait et un glyphe distincts en plus de leur couleur. La légende DOM ne liste
+  que les groupes incidents au focus avec leur nombre visible ;
+- les rails `IN/OUT/BOTH` indiquent profondeur et effectif. Les chemins de
+  fichiers regroupent les voisins dans des lanes stables ; seuls six groupes
+  répétés des deux premières couches peuvent recevoir un label de module ;
+- les labels entrants s'ouvrent vers la gauche et les sortants vers la droite.
+  Deux alternatives verticales déterministes sont essayées avant omission, et
+  les boîtes des nœuds du flux deviennent des obstacles de collision ;
+- le guide sélectionné remonte au-dessus du fil d'Ariane pour ne plus partager
+  le même espace bas du canvas.
+
+Les nouveaux calculs coûteux — classification des arêtes de flux et résumés de
+lanes — sont exécutés au changement de focus, pas à chaque frame. Le rendu reste
+regroupé en cinq familles de relations ; les liens de transit ajoutent au plus
+cinq batches Canvas bornés. La simulation, le canvas, les objets de nœuds, les
+filtres et les données exactes restent partagés avec `Architecture`.
+
+Les régressions couvrent la classification insensible à la casse, le décodage
+hors couleur, la légende limitée au focus, les profondeurs réelles, le rejet des
+cross-links, le regroupement module, les ancres de labels et le verrouillage puis
+la libération de l'origine. La validation courante passe **21 fichiers / 153
+tests**, le typecheck, le build frontend et le paquet complet. Les gates restent
+respectés : Graph **39,30 / 40 Kio**, JavaScript manifeste **122,58 / 125 Kio**.

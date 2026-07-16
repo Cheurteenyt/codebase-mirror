@@ -130,10 +130,15 @@ model. `Architecture` is the default task view and follows the server-authored
 domain/community anchors. The optional, locally persisted `Stellar flow` view
 installs deterministic targets into that same simulation. Without a focus,
 exact full-graph degree pulls hubs toward the center while directory
-communities retain angular sectors. Selecting a visible symbol places it at the
-origin, unfolds up to four visible incoming relation layers to the left and
+communities retain angular sectors. Selecting a visible symbol pins it to the
+semantic origin, unfolds up to four visible incoming relation layers to the left and
 outgoing layers to the right, and retains unrelated symbols as dim outer
-context. Exact degree still selects the V1 reference spectral scale, node type
+context. Numbered rails come only from real directed paths. Repeated directory
+lanes receive a bounded module label; direct and transit edges share one
+five-group color/dash grammar, and the DOM guide lists only relation groups
+incident to the selected node. Incoming labels prefer left-facing anchors,
+outgoing labels prefer right-facing anchors, and each has two deterministic
+vertical fallbacks before omission. Exact degree still selects the V1 reference spectral scale, node type
 selects a circle/diamond/square glyph, and only the selected flow receives
 direction markers. Status remains an outer stroke. Invalid or unavailable local
 storage falls back to `Architecture`.
@@ -142,8 +147,10 @@ This boundary is deliberate: changing task view reuses every d3 node object,
 event listener, exactness contract, and canvas allocation. A view/focus change
 receives one bounded simulation reheat; known filter subsets and restorations
 remain settled. Sampling, exact values, filtering, navigation, accessibility,
-and detail logic are not forked. Hub bloom, orbit guides, and the focused flow
-axis are batched Canvas paths; there are no shadows, per-node gradients,
+and detail logic are not forked. The active focus alone is fixed at `(0,0)` and
+is released when selection or mode changes, preventing high-fan-out link forces
+from moving the semantic origin. Hub bloom, orbit guides, depth rails, and the
+focused flow axis are batched Canvas paths; there are no shadows, per-node gradients,
 Three.js scene, WebGL backend, or second layout engine. The Graph application
 chunk remains protected by its 40 KiB gzip budget; the stable `d3-*` force stack
 is cached separately and both remain covered by the global JavaScript budget.

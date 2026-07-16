@@ -35,6 +35,15 @@
   to four visible incoming/outgoing layers, keeps unrelated symbols as dim
   outer context, and renders bounded direction chevrons only for the selected
   flow.
+- Added the bounded Stellar Flow Lens: numbered hop rails, repeated directory
+  lane labels, semantic multi-hop relation strokes, a selection-only DOM
+  legend, and outward three-anchor label placement. Color is no longer the
+  only relation channel because calls/imports/contains/data/other use distinct
+  dash patterns and text glyphs.
+- Pin the active Stellar focus to the semantic origin and release the previous
+  focus on selection or mode changes. This prevents high-fan-out link forces
+  from pulling the selected node into an outgoing lane while retaining the
+  same simulation and node objects.
 - A view/focus change reconfigures and reheats the existing simulation exactly
   once. Known filter subsets remain settled; no Three.js/WebGL dependency,
   shadow filter, per-node gradient, second renderer, canvas, or node-object
@@ -47,6 +56,9 @@
   the side panel and the always-visible `Architecture` breadcrumb. The action
   bar now waits until `xl` for a horizontal layout, or `2xl` while the detail
   panel narrows the canvas, with both states covered by DOM regressions.
+- Move the selected Stellar guide above the breadcrumb and show only relation
+  groups that actually touch the focus, avoiding both HUD overlap and a global
+  legend that would consume attention without answering the active task.
 
 ### Performance and delivery gates
 
