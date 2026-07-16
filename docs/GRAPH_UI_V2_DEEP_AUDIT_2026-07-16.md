@@ -774,3 +774,32 @@ La conclusion démontrée à cette révision est la suivante :
 > transport ont aussi été mesurés en régime warm. Sa suprématie globale de
 > performance et d’esthétique face à la V1 reste toutefois à prouver avec le
 > protocole same-graph cold/browser et une comparaison aveugle des tâches.
+
+## Addendum — passe macro-first
+
+La première itération post-audit applique une règle plus stricte : un niveau de
+zoom ne rend qu’une seule grammaire visuelle.
+
+- domaines : noms, territoires, communautés agrégées et 28 flux dirigés au
+  maximum ; aucun nœud ni arête brute ; les comptes exacts n’apparaissent que
+  pour le domaine actif ;
+- communautés : 28 labels au maximum et 32 flux principaux ; les relations de
+  même direction sont fusionnées et colorées par leur type dominant ;
+- symboles : les nœuds et arêtes locales n’apparaissent qu’à partir de 18 px
+  d’espacement projeté ; les arêtes intercommunautés entrent plus tard et avec
+  une opacité bornée.
+
+Cette séparation retire les milliers de points illisibles de la vue globale et
+évite de mélanger flux communautaires, arêtes brutes et labels de symboles dans
+une même image. Les détails supprimés du niveau macro restent disponibles par
+drill-down, recherche exacte et voisinage exact.
+
+La régression est couverte par les tests Canvas : absence de nœuds et d’arêtes
+brutes aux niveaux macro, apparition au niveau symboles, agrégation d’une paire
+dirigée multi-relation et affichage des comptes exacts uniquement à la demande.
+La validation locale passe 17 fichiers et 117 tests frontend. Le paquet complet
+respecte les budgets gzip (Graph 39,25 kB ; bundle principal 72,56 kB). Sur sept
+exécutions warm du graphe courant (9 764 nœuds, échantillon de 1 000), le layout
+gzip mesure 56 759 octets avec un p50 de 108,884 ms ; la recherche exacte a un
+p50 de 19,621 ms et le voisinage exact de 1,08 ms. Ces chiffres valident cette
+révision, mais ne remplacent pas le protocole comparatif V1/V2 same-graph.

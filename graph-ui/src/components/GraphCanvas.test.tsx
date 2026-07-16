@@ -288,7 +288,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(physicsNode.vy).toBe(0);
   });
 
-  it("keeps exact architecture labels compact at overview scale", () => {
+  it("reveals exact architecture counts only for the active scope", () => {
     const ctx = installCanvasMock(800, 600);
     const compactData: GraphData = {
       nodes: [makeNode(1, "root", { x: 0, y: 0, cluster_id: 0 })],
@@ -299,10 +299,10 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
         node_spacing: 16,
         counts_scope: "returned_nodes",
         clusters: [
-          { id: 0, domain_id: 0, key: "(root)", x: 0, y: 0, radius: 60, node_count: 1 },
+          { id: 0, domain_id: 0, key: "(root)", x: 0, y: 0, radius: 500, node_count: 1 },
         ],
         domains: [
-          { id: 0, key: "(root)", x: 0, y: 0, radius: 90, node_count: 1, cluster_count: 1 },
+          { id: 0, key: "(root)", x: 0, y: 0, radius: 600, node_count: 1, cluster_count: 1 },
         ],
         domain_catalog: {
           exact: true,
@@ -315,7 +315,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
       },
     };
 
-    render(
+    const { getByRole } = render(
       <GraphCanvas
         data={compactData}
         highlightedIds={null}
@@ -325,8 +325,65 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
       />,
     );
 
-    expect(ctx.fillText).toHaveBeenCalledWith("1 / 12.5k nodes · 1 group", 0, expect.any(Number));
-    expect(ctx.fillText).not.toHaveBeenCalledWith(expect.stringContaining("sampled groups"), expect.any(Number), expect.any(Number));
+    expect(ctx.fillText).not.toHaveBeenCalledWith(expect.stringContaining("12.5k nodes"), expect.any(Number), expect.any(Number));
+
+    ctx.fillText.mockClear();
+    fireEvent.keyDown(getByRole("application"), { key: "d" });
+
+    expect(ctx.fillText).toHaveBeenCalledWith("12.5k nodes · 1 group", 0, expect.any(Number));
+  });
+
+  it("keeps raw nodes out of macro tiers and reveals them at symbol scale", () => {
+    const ctx = installCanvasMock(800, 600);
+    const ref = createRef<GraphCanvasHandle>();
+    const macroData: GraphData = {
+      nodes: [
+        makeNode(1, "left", { x: -100, y: 0, cluster_id: 0 }),
+        makeNode(2, "center", { x: 0, y: 0, cluster_id: 0 }),
+        makeNode(3, "right", { x: 100, y: 0, cluster_id: 0 }),
+      ],
+      edges: [
+        { source: 1, target: 2, type: "CALLS" },
+        { source: 2, target: 3, type: "CALLS" },
+      ],
+      total_nodes: 3,
+      topology_revision: "macro-first-lod",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 16,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "src/core", x: 0, y: 0, radius: 500, node_count: 3 },
+        ],
+        domains: [
+          { id: 0, key: "src", x: 0, y: 0, radius: 600, node_count: 3, cluster_count: 1 },
+        ],
+      },
+    };
+
+    render(
+      <GraphCanvas
+        ref={ref}
+        data={macroData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onScopeSelect={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    ctx.arc.mockClear();
+    ctx.lineTo.mockClear();
+    act(() => ref.current?.zoomBy(1));
+    expect(ctx.arc.mock.calls.some((call) => call[2] === 4)).toBe(false);
+    expect(ctx.lineTo).not.toHaveBeenCalled();
+
+    ctx.arc.mockClear();
+    ctx.lineTo.mockClear();
+    act(() => ref.current?.zoomBy(4));
+    expect(ctx.arc.mock.calls.filter((call) => call[2] === 4)).toHaveLength(3);
+    expect(ctx.lineTo).toHaveBeenCalledTimes(2);
   });
 
   it("restores cached positions after every node is filtered out", async () => {
@@ -560,7 +617,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     );
 
     ctx.fillText.mockClear();
-    act(() => ref.current?.zoomBy(1));
+    act(() => ref.current?.zoomBy(2));
 
     expect(ctx.fillText).toHaveBeenCalledTimes(24);
     expect(ctx.fillText).toHaveBeenCalledWith("node-64", expect.any(Number), expect.any(Number));
@@ -581,6 +638,9 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
       edges: [
         { source: 1, target: 2, type: "CALLS" },
         { source: 2, target: 3, type: "CALLS" },
+        // Same directed macro pair, different relation type: the overview
+        // must keep one architectural connection, not parallel curves.
+        { source: 1, target: 3, type: "IMPORTS" },
         { source: 3, target: 2, type: "IMPORTS" },
       ],
       total_nodes: 3,
@@ -617,13 +677,9 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     ctx.quadraticCurveTo.mockClear();
     ctx.lineTo.mockClear();
     act(() => ref.current?.zoomBy(1));
-    // Domain and community bundles overlap briefly during the continuous LOD
-    // fade, so both directed semantic flows can be painted at this threshold.
-    expect(ctx.quadraticCurveTo.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(ctx.quadraticCurveTo.mock.calls.length % 2).toBe(0);
+    expect(ctx.quadraticCurveTo).toHaveBeenCalledTimes(2);
     // Each bundle adds a two-segment target chevron without a second stroke.
-    expect(ctx.lineTo.mock.calls.length).toBeGreaterThanOrEqual(4);
-    expect(ctx.lineTo.mock.calls.length % 2).toBe(0);
+    expect(ctx.lineTo).toHaveBeenCalledTimes(4);
 
     const canvas = getByRole("application");
     fireEvent.mouseDown(canvas, { clientX: 110, clientY: 300 });
@@ -636,10 +692,9 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     }));
 
     ctx.lineTo.mockClear();
-    act(() => ref.current?.zoomBy(4));
-    // Three retained raw edges plus any bundle chevrons still fading out.
-    expect(ctx.lineTo.mock.calls.length).toBeGreaterThanOrEqual(3);
-    expect((ctx.lineTo.mock.calls.length - 3) % 2).toBe(0);
+    act(() => ref.current?.zoomBy(8));
+    // Four retained raw edges, with macro bundles fully removed at deep LOD.
+    expect(ctx.lineTo).toHaveBeenCalledTimes(4);
   });
 
   it("prioritizes a dense architecture scope over overlapping node hit targets at overview LOD", () => {

@@ -80,7 +80,6 @@ const SETTLED_FIT_DELAY_MS = 700;
 const TOUCH_TAP_SLOP_PX = 8;
 const MAX_RENDER_DPR = 2;
 const MAX_CANVAS_PIXELS = 16_000_000;
-const FAR_LABEL_LIMIT = 0;
 const MID_LABEL_LIMIT = 24;
 const NEAR_LABEL_LIMIT = 64;
 const DEFAULT_LAYOUT_NODE_SPACING = 16;
@@ -118,6 +117,8 @@ const DOMAIN_PALETTE = [
   {
     fill: "rgba(6, 182, 212, 0.034)",
     stroke: "rgba(34, 211, 238, 0.34)",
+    clusterFill: "rgba(6, 182, 212, 0.07)",
+    clusterStroke: "rgba(103, 232, 249, 0.31)",
     title: "rgba(207, 250, 254, 0.96)",
     meta: "rgba(125, 211, 252, 0.68)",
     hoverFill: "rgba(6, 182, 212, 0.09)",
@@ -126,6 +127,8 @@ const DOMAIN_PALETTE = [
   {
     fill: "rgba(99, 102, 241, 0.032)",
     stroke: "rgba(129, 140, 248, 0.32)",
+    clusterFill: "rgba(99, 102, 241, 0.066)",
+    clusterStroke: "rgba(165, 180, 252, 0.29)",
     title: "rgba(224, 231, 255, 0.96)",
     meta: "rgba(165, 180, 252, 0.68)",
     hoverFill: "rgba(99, 102, 241, 0.09)",
@@ -134,6 +137,8 @@ const DOMAIN_PALETTE = [
   {
     fill: "rgba(139, 92, 246, 0.03)",
     stroke: "rgba(167, 139, 250, 0.31)",
+    clusterFill: "rgba(139, 92, 246, 0.064)",
+    clusterStroke: "rgba(196, 181, 253, 0.28)",
     title: "rgba(237, 233, 254, 0.96)",
     meta: "rgba(196, 181, 253, 0.68)",
     hoverFill: "rgba(139, 92, 246, 0.085)",
@@ -142,6 +147,8 @@ const DOMAIN_PALETTE = [
   {
     fill: "rgba(16, 185, 129, 0.028)",
     stroke: "rgba(52, 211, 153, 0.29)",
+    clusterFill: "rgba(16, 185, 129, 0.06)",
+    clusterStroke: "rgba(110, 231, 183, 0.27)",
     title: "rgba(209, 250, 229, 0.96)",
     meta: "rgba(110, 231, 183, 0.66)",
     hoverFill: "rgba(16, 185, 129, 0.08)",
@@ -150,6 +157,8 @@ const DOMAIN_PALETTE = [
   {
     fill: "rgba(245, 158, 11, 0.026)",
     stroke: "rgba(251, 191, 36, 0.28)",
+    clusterFill: "rgba(245, 158, 11, 0.058)",
+    clusterStroke: "rgba(252, 211, 77, 0.26)",
     title: "rgba(254, 243, 199, 0.96)",
     meta: "rgba(252, 211, 77, 0.64)",
     hoverFill: "rgba(245, 158, 11, 0.075)",
@@ -232,7 +241,7 @@ function buildOverviewBundleBatches(
     sourceId: number;
     targetId: number;
     count: number;
-    group: EdgeGroup;
+    groupCounts: Record<EdgeGroup, number>;
   }
   const accumulators = new Map<string, Accumulator>();
   for (const edge of edges) {
@@ -245,18 +254,30 @@ function buildOverviewBundleBatches(
     const group = edgeGroup(edge.type);
     const sourceId = sourceScope;
     const targetId = targetScope;
-    const key = `${sourceId}:${targetId}:${group}`;
+    // A macro connection answers one question: which scope depends on which
+    // other scope? Multiple relation kinds on the same directed pair are
+    // collapsed into one bundle, colored by its dominant semantic relation.
+    // Keeping parallel type-specific curves here made the overview look more
+    // precise while actually obscuring the architecture it was meant to show.
+    const key = `${sourceId}:${targetId}`;
     let accumulator = accumulators.get(key);
     if (!accumulator) {
       accumulator = {
         sourceId,
         targetId,
         count: 0,
-        group,
+        groupCounts: {
+          calls: 0,
+          imports: 0,
+          contains: 0,
+          data: 0,
+          other: 0,
+        },
       };
       accumulators.set(key, accumulator);
     }
     accumulator.count += 1;
+    accumulator.groupCounts[group] += 1;
   }
 
   const bundles: OverviewBundle[] = [];
@@ -264,6 +285,10 @@ function buildOverviewBundleBatches(
     const source = centers.get(accumulator.sourceId);
     const target = centers.get(accumulator.targetId);
     if (!source || !target) continue;
+    const group = [...EDGE_GROUP_ORDER].sort((left, right) => (
+      accumulator.groupCounts[right] - accumulator.groupCounts[left]
+      || EDGE_GROUP_ORDER.indexOf(left) - EDGE_GROUP_ORDER.indexOf(right)
+    ))[0];
     bundles.push({
       sourceId: accumulator.sourceId,
       targetId: accumulator.targetId,
@@ -274,7 +299,7 @@ function buildOverviewBundleBatches(
       targetY: target.y,
       targetRadius: target.radius,
       count: accumulator.count,
-      group: accumulator.group,
+      group,
       weight: Math.min(6, Math.floor(Math.log2(Math.max(1, accumulator.count)))),
     });
   }
@@ -804,14 +829,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       map,
       clusterMap,
       (node) => node.cluster_id,
-      Math.min(180, Math.max(36, clustersRef.current.length * 4)),
+      Math.min(32, Math.max(12, Math.ceil(clustersRef.current.length * 0.75))),
     );
     domainBundleBatchesRef.current = buildOverviewBundleBatches(
       edges,
       map,
       domainMap,
       (node) => node.cluster_id == null ? undefined : clusterMap.get(node.cluster_id)?.domain_id,
-      72,
+      Math.min(28, Math.max(10, domainsRef.current.length * 3)),
     );
     labelCandidatesRef.current = [...nodes]
       .sort((nodeA, nodeB) => {
@@ -1042,14 +1067,35 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const projectedNodeSpacing = layoutNodeSpacingRef.current * tk;
     const domainOverview = projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING;
     const rawTopology = projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING;
-    // Adjacent LODs overlap briefly for continuity, but domain bundles are
-    // gone before raw topology appears. This prevents the three simultaneous
-    // layers that previously made the transition busier than either endpoint.
-    const domainBundleOpacity = 1 - fadeBetween(projectedNodeSpacing, 4.5, 7);
-    const communityBundleOpacity = fadeBetween(projectedNodeSpacing, 6, 9)
-      * (1 - fadeBetween(projectedNodeSpacing, 14, 18));
-    const localEdgeOpacity = fadeBetween(projectedNodeSpacing, 9, 13);
-    const crossEdgeOpacity = fadeBetween(projectedNodeSpacing, 16, 20);
+    // Each tier owns the canvas completely. Mixing adjacent grammars briefly
+    // looked smoother in motion but produced static frames with unlabeled
+    // community flows or raw hairballs inside a domain overview.
+    const domainBundleOpacity = domainOverview ? 1 : 0;
+    const communityBundleOpacity = !domainOverview && !rawTopology ? 0.72 : 0;
+    // Raw topology is deliberately absent from the two architecture tiers.
+    // Edges and nodes enter together only when the projected spacing makes
+    // individual symbols readable and directly selectable.
+    const rawNodeOpacity = rawTopology
+      ? 0.78 + fadeBetween(projectedNodeSpacing, 18, 24) * 0.22
+      : 0;
+    const localEdgeOpacity = rawTopology
+      ? 0.18 + fadeBetween(projectedNodeSpacing, 20, 32) * 0.42
+      : 0;
+    const crossEdgeOpacity = rawTopology
+      ? fadeBetween(projectedNodeSpacing, 24, 36) * 0.45
+      : 0;
+    const hoveredScope = hoveredScopeRef.current;
+    const keyboardFocus = keyboardFocusRef.current;
+    const activeDomainId = hoveredScope?.kind === "domain"
+      ? hoveredScope.id
+      : keyboardFocus?.kind === "domain"
+        ? keyboardFocus.id
+        : undefined;
+    const activeCommunityId = hoveredScope?.kind === "community"
+      ? hoveredScope.id
+      : keyboardFocus?.kind === "community"
+        ? keyboardFocus.id
+        : undefined;
 
     if (domainsRef.current.length > 0) {
       // A small fixed palette makes top-level architecture areas immediately
@@ -1075,23 +1121,28 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     }
 
     if (clustersRef.current.length > 0) {
-      ctx.beginPath();
-      for (const cluster of clustersRef.current) {
-        ctx.moveTo(cluster.x + cluster.radius, cluster.y);
-        ctx.arc(cluster.x, cluster.y, cluster.radius, 0, Math.PI * 2);
+      // Community discs replace thousands of unreadable node dots in the two
+      // architecture tiers. Their size and position already encode the useful
+      // information; domain color preserves nesting without adding a legend.
+      for (let paletteIndex = 0; paletteIndex < DOMAIN_PALETTE.length; paletteIndex += 1) {
+        let hasCluster = false;
+        ctx.beginPath();
+        for (const cluster of clustersRef.current) {
+          if (((cluster.domain_id % DOMAIN_PALETTE.length) + DOMAIN_PALETTE.length) % DOMAIN_PALETTE.length !== paletteIndex) continue;
+          ctx.moveTo(cluster.x + cluster.radius, cluster.y);
+          ctx.arc(cluster.x, cluster.y, cluster.radius, 0, Math.PI * 2);
+          hasCluster = true;
+        }
+        if (!hasCluster) continue;
+        const palette = DOMAIN_PALETTE[paletteIndex];
+        ctx.fillStyle = rawTopology ? palette.fill : palette.clusterFill;
+        ctx.fill();
+        ctx.strokeStyle = rawTopology ? palette.stroke : palette.clusterStroke;
+        ctx.lineWidth = (rawTopology ? 0.75 : 1.05) / tk;
+        ctx.stroke();
       }
-      ctx.fillStyle = domainOverview
-        ? "rgba(14, 165, 233, 0.011)"
-        : "rgba(14, 165, 233, 0.024)";
-      ctx.fill();
-      ctx.strokeStyle = domainOverview
-        ? "rgba(71, 116, 143, 0.13)"
-        : "rgba(71, 148, 179, 0.28)";
-      ctx.lineWidth = (domainOverview ? 0.65 : 0.9) / tk;
-      ctx.stroke();
     }
 
-    const hoveredScope = hoveredScopeRef.current;
     if (hoveredScope) {
       const hoveredCircle = hoveredScope.kind === "domain"
         ? domainsRef.current.find((domain) => domain.id === hoveredScope.id)
@@ -1113,7 +1164,6 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    const keyboardFocus = keyboardFocusRef.current;
     if (keyboardFocus && keyboardFocus.kind !== "node") {
       const focusedCircle = keyboardFocus.kind === "domain"
         ? domainsRef.current.find((domain) => domain.id === keyboardFocus.id)
@@ -1131,58 +1181,92 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       batches: ReadonlyMap<string, OverviewBundle[]>,
       widthScale: number,
       opacity: number,
+      focusId?: number,
+      includeBundle?: (bundle: OverviewBundle) => boolean,
     ) => {
-      ctx.globalAlpha = opacity;
+      const appendBundle = (bundle: OverviewBundle) => {
+        const dx = bundle.targetX - bundle.sourceX;
+        const dy = bundle.targetY - bundle.sourceY;
+        const length = Math.max(1, Math.hypot(dx, dy));
+        const sourceInset = Math.min(bundle.sourceRadius, length * 0.35);
+        const targetInset = Math.min(bundle.targetRadius, length * 0.35);
+        const startX = bundle.sourceX + (dx / length) * sourceInset;
+        const startY = bundle.sourceY + (dy / length) * sourceInset;
+        const endX = bundle.targetX - (dx / length) * targetInset;
+        const endY = bundle.targetY - (dy / length) * targetInset;
+        const pairMin = Math.min(bundle.sourceId, bundle.targetId);
+        const pairMax = Math.max(bundle.sourceId, bundle.targetId);
+        const direction = ((pairMin * 31 + pairMax * 17) & 1) === 0 ? -1 : 1;
+        const bend = Math.min(92, Math.max(14, length * 0.11)) * direction;
+        const controlX = (startX + endX) / 2 - (dy / length) * bend;
+        const controlY = (startY + endY) / 2 + (dx / length) * bend;
+        ctx.moveTo(startX, startY);
+        ctx.quadraticCurveTo(controlX, controlY, endX, endY);
+        // A constant-screen-size chevron encodes direction without adding a
+        // separate stroke per edge bundle.
+        const tangentX = endX - controlX;
+        const tangentY = endY - controlY;
+        const tangentLength = Math.max(1, Math.hypot(tangentX, tangentY));
+        const unitX = tangentX / tangentLength;
+        const unitY = tangentY / tangentLength;
+        const arrowLength = 5.5 / tk;
+        const arrowWidth = 3.25 / tk;
+        const arrowBaseX = endX - unitX * arrowLength;
+        const arrowBaseY = endY - unitY * arrowLength;
+        ctx.moveTo(arrowBaseX - unitY * arrowWidth, arrowBaseY + unitX * arrowWidth);
+        ctx.lineTo(endX, endY);
+        ctx.lineTo(arrowBaseX + unitY * arrowWidth, arrowBaseY - unitX * arrowWidth);
+      };
+
       for (const bundles of batches.values()) {
         const first = bundles[0];
         if (!first) continue;
-        ctx.beginPath();
-        for (const bundle of bundles) {
-          const dx = bundle.targetX - bundle.sourceX;
-          const dy = bundle.targetY - bundle.sourceY;
-          const length = Math.max(1, Math.hypot(dx, dy));
-          const sourceInset = Math.min(bundle.sourceRadius, length * 0.35);
-          const targetInset = Math.min(bundle.targetRadius, length * 0.35);
-          const startX = bundle.sourceX + (dx / length) * sourceInset;
-          const startY = bundle.sourceY + (dy / length) * sourceInset;
-          const endX = bundle.targetX - (dx / length) * targetInset;
-          const endY = bundle.targetY - (dy / length) * targetInset;
-          const pairMin = Math.min(bundle.sourceId, bundle.targetId);
-          const pairMax = Math.max(bundle.sourceId, bundle.targetId);
-          const direction = ((pairMin * 31 + pairMax * 17) & 1) === 0 ? -1 : 1;
-          const bend = Math.min(92, Math.max(14, length * 0.11)) * direction;
-          const controlX = (startX + endX) / 2 - (dy / length) * bend;
-          const controlY = (startY + endY) / 2 + (dx / length) * bend;
-          ctx.moveTo(startX, startY);
-          ctx.quadraticCurveTo(controlX, controlY, endX, endY);
-          // A constant-screen-size chevron encodes direction without adding a
-          // separate stroke per edge bundle. It shares this batch's path and
-          // therefore keeps the overview draw cost bounded.
-          const tangentX = endX - controlX;
-          const tangentY = endY - controlY;
-          const tangentLength = Math.max(1, Math.hypot(tangentX, tangentY));
-          const unitX = tangentX / tangentLength;
-          const unitY = tangentY / tangentLength;
-          const arrowLength = 5.5 / tk;
-          const arrowWidth = 3.25 / tk;
-          const arrowBaseX = endX - unitX * arrowLength;
-          const arrowBaseY = endY - unitY * arrowLength;
-          ctx.moveTo(arrowBaseX - unitY * arrowWidth, arrowBaseY + unitX * arrowWidth);
-          ctx.lineTo(endX, endY);
-          ctx.lineTo(arrowBaseX + unitY * arrowWidth, arrowBaseY - unitX * arrowWidth);
-        }
         ctx.strokeStyle = EDGE_BUNDLE_STYLES[first.group];
         ctx.lineWidth = Math.min(4.5, 0.75 + first.weight * 0.625) * widthScale / tk;
-        ctx.stroke();
+        const paint = (related: boolean, alpha: number) => {
+          let hasPath = false;
+          ctx.beginPath();
+          for (const bundle of bundles) {
+            if (includeBundle && !includeBundle(bundle)) continue;
+            const isRelated = focusId == null
+              || bundle.sourceId === focusId
+              || bundle.targetId === focusId;
+            if (focusId != null && isRelated !== related) continue;
+            appendBundle(bundle);
+            hasPath = true;
+          }
+          if (!hasPath) return;
+          ctx.globalAlpha = opacity * alpha;
+          ctx.stroke();
+        };
+        if (focusId == null) paint(true, 1);
+        else {
+          // Keep just enough global context to preserve orientation while the
+          // active scope's incoming and outgoing flows become unambiguous.
+          paint(false, 0.12);
+          paint(true, 1);
+        }
       }
       ctx.globalAlpha = 1;
     };
 
     if (domainBundleOpacity > 0 && domainBundleBatchesRef.current.size > 0) {
-      drawBundleBatches(domainBundleBatchesRef.current, 1.25, domainBundleOpacity);
+      drawBundleBatches(domainBundleBatchesRef.current, 1.25, domainBundleOpacity, activeDomainId);
     }
     if (communityBundleOpacity > 0 && clusterBundleBatchesRef.current.size > 0) {
-      drawBundleBatches(clusterBundleBatchesRef.current, 1, communityBundleOpacity);
+      const touchesActiveDomain = activeDomainId == null
+        ? undefined
+        : (bundle: OverviewBundle) => (
+            clusterMapRef.current.get(bundle.sourceId)?.domain_id === activeDomainId
+            || clusterMapRef.current.get(bundle.targetId)?.domain_id === activeDomainId
+          );
+      drawBundleBatches(
+        clusterBundleBatchesRef.current,
+        0.78,
+        communityBundleOpacity,
+        activeCommunityId,
+        touchesActiveDomain,
+      );
     }
 
     // Pass 1: default (non-highlighted) edges — single path, single stroke.
@@ -1225,7 +1309,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     // Pass 2: highlighted edges — grouped into at most five semantic stroke
     // batches. This restores relation meaning without per-edge style changes.
-    if (activeHighlightedIds && selectedNodeId != null) {
+    if (localEdgeOpacity > 0 && activeHighlightedIds && selectedNodeId != null) {
+      ctx.globalAlpha = rawNodeOpacity;
       ctx.lineWidth = 1.2 / tk;
       for (const [group, groupedEdges] of edgeGroupsRef.current) {
         let hasPath = false;
@@ -1245,11 +1330,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ctx.strokeStyle = EDGE_GROUP_STYLES[group];
         ctx.stroke();
       }
+      ctx.globalAlpha = 1;
     }
 
     // Draw nodes. Semantic fill is never replaced by selection or status;
-    // those dimensions use outer rings so the graph remains decodable.
-    for (const node of nodesRef.current) {
+    // those dimensions use outer rings so the graph remains decodable. Nodes
+    // enter before dense edge layers, and are never painted in macro views.
+    const renderedNodes = rawNodeOpacity > 0 ? nodesRef.current : [];
+    for (const node of renderedNodes) {
       const x = node.x ?? 0;
       const y = node.y ?? 0;
       const isHighlighted = activeHighlightedIds?.has(node.id) ?? false;
@@ -1264,14 +1352,16 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fillStyle = color;
-      ctx.globalAlpha = activeHighlightedIds && !isHighlighted ? 0.3 : 1;
+      ctx.globalAlpha = rawNodeOpacity * (activeHighlightedIds && !isHighlighted ? 0.3 : 1);
       ctx.fill();
       ctx.globalAlpha = 1;
 
       if (deadCodeView && node.status) {
+        ctx.globalAlpha = rawNodeOpacity;
         ctx.strokeStyle = colorForStatus(node.status);
         ctx.lineWidth = 1.4 / tk;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
 
       if (isHighlighted) {
@@ -1281,7 +1371,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           ? "rgba(236, 254, 255, 0.98)"
           : "rgba(34, 211, 238, 0.82)";
         ctx.lineWidth = (node.id === selectedNodeId ? 2.2 : 1.2) / tk;
+        ctx.globalAlpha = rawNodeOpacity;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
 
       if (keyboardFocus?.kind === "node" && keyboardFocus.id === node.id) {
@@ -1289,7 +1381,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ctx.arc(x, y, r + 5 / tk, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(236, 254, 255, 0.98)";
         ctx.lineWidth = 2.4 / tk;
+        ctx.globalAlpha = rawNodeOpacity;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -1304,11 +1398,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         const title = domain.key;
         const exactDomain = domainCatalogRef.current.get(domain.key);
         const groupLabel = domain.cluster_count === 1 ? "group" : "groups";
-        // This label is intentionally compact: exact full counts remain in
-        // the Fidelity HUD, while a shorter map annotation avoids clipping
-        // and lets the architecture itself own the canvas.
+        const showSummary = activeDomainId === domain.id;
+        // Counts are useful when the user asks about one scope, but repeating
+        // them across the whole map competes with the architecture. The exact
+        // full-domain count therefore appears only for the active scope.
         const summary = exactDomain
-          ? `${compactArchitectureCount(domain.node_count)} / ${compactArchitectureCount(exactDomain.node_count)} nodes · ${domain.cluster_count} ${groupLabel}`
+          ? `${compactArchitectureCount(exactDomain.node_count)} nodes · ${domain.cluster_count} ${groupLabel}`
           : `${compactArchitectureCount(domain.node_count)} nodes · ${domain.cluster_count} ${groupLabel}`;
         const palette = domainPalette(domain.id);
         const titleY = domain.y - domain.radius + 14 / tk;
@@ -1316,13 +1411,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ctx.font = `750 ${13 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
         const titleWidth = ctx.measureText(title).width;
         ctx.font = `500 ${9.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
-        const summaryWidth = ctx.measureText(summary).width;
+        const summaryWidth = showSummary ? ctx.measureText(summary).width : 0;
         const boxWidth = Math.max(titleWidth, summaryWidth) + 12 / tk;
         const box = {
           left: domain.x - boxWidth / 2,
           right: domain.x + boxWidth / 2,
           top: titleY - 4 / tk,
-          bottom: summaryY + 13 / tk,
+          bottom: showSummary ? summaryY + 13 / tk : titleY + 15 / tk,
         };
         const collides = occupied.some((other) => !(
           box.right < other.left
@@ -1338,21 +1433,27 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ctx.strokeText(title, domain.x, titleY);
         ctx.fillStyle = palette.title;
         ctx.fillText(title, domain.x, titleY);
-        ctx.font = `500 ${9.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
-        ctx.fillStyle = palette.meta;
-        ctx.fillText(summary, domain.x, summaryY);
+        if (showSummary) {
+          ctx.font = `500 ${9.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = palette.meta;
+          ctx.fillText(summary, domain.x, summaryY);
+        }
       }
     }
 
     if (!domainOverview && clustersRef.current.length > 0) {
       const domainById = new Map(domainsRef.current.map((domain) => [domain.id, domain]));
-      const clusterLimit = rawTopology ? 80 : 42;
+      const clusterLimit = rawTopology ? 64 : 28;
       const clusterFontSize = 10 / tk;
       ctx.font = `650 ${clusterFontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       for (const cluster of [...clustersRef.current]
-        .sort((left, right) => right.node_count - left.node_count || left.id - right.id)
+        .sort((left, right) => (
+          Number(right.id === activeCommunityId) - Number(left.id === activeCommunityId)
+          || right.node_count - left.node_count
+          || left.id - right.id
+        ))
         .slice(0, clusterLimit)) {
         const domainKey = domainById.get(cluster.domain_id)?.key;
         const prefix = domainKey && cluster.key.startsWith(`${domainKey}/`) ? `${domainKey}/` : "";
@@ -1385,17 +1486,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     // Zoom-dependent labels with collision avoidance. The selected node is
     // always attempted first, followed by its neighborhood and ranked hubs.
-    const labelLimit = tk < 0.45
-      ? FAR_LABEL_LIMIT
-      : tk < 0.9
+    const labelLimit = !rawTopology
+      ? 0
+      : projectedNodeSpacing < 32
         ? MID_LABEL_LIMIT
         : NEAR_LABEL_LIMIT;
     const labelNodes: SimNode[] = [];
     const labelIds = new Set<number>();
-    // The exact selected node remains legible even at the farthest LOD. Every
-    // other label, including a large highlighted domain/community, shares the
-    // normal semantic-zoom budget instead of bypassing it up to the near cap.
-    const selectedLabelNode = selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined;
+    // The exact selected node remains first in the raw-topology label budget.
+    // Every other label, including a large highlighted neighborhood, shares
+    // the same bounded semantic-zoom budget.
+    const selectedLabelNode = rawTopology && selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined;
     const labelBudget = Math.max(labelLimit, selectedLabelNode ? 1 : 0);
     const addLabelNode = (node: SimNode | undefined) => {
       if (!node || labelIds.has(node.id) || labelNodes.length >= labelBudget) return;
