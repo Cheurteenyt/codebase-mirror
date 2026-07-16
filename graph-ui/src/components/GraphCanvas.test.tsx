@@ -6,6 +6,7 @@ import { createRef } from "react";
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import { GraphCanvas, computeSemanticZoomLayers, type GraphCanvasHandle } from "./GraphCanvas";
+import { stellarNodeColor, stellarNodeGlyph } from "../lib/graph-visual-mode";
 import { NodeTooltip } from "./NodeTooltip";
 import type { GraphData, GraphNode, GraphEdge } from "../lib/types";
 
@@ -106,6 +107,51 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
       expect(domains > 0 && communities > 0).toBe(false);
       expect(communities > 0 && raw > 0).toBe(false);
     }
+  });
+
+  it("maps exact degree to a bounded stellar spectrum and keeps type semantics in the glyph", () => {
+    expect(stellarNodeColor(makeNode(1, "leaf", { in_degree: 0, out_degree: 1 }))).toBe("#ff6050");
+    expect(stellarNodeColor(makeNode(2, "sun", { in_degree: 6, out_degree: 6 }))).toBe("#ffe080");
+    expect(stellarNodeColor(makeNode(3, "hub", { in_degree: 26, out_degree: 25 }))).toBe("#80a0ff");
+    expect(stellarNodeColor(makeNode(4, "malformed", { in_degree: Number.POSITIVE_INFINITY, out_degree: 1 }))).toBe("#ff6050");
+
+    expect(stellarNodeGlyph("Function")).toBe("circle");
+    expect(stellarNodeGlyph("Class")).toBe("diamond");
+    expect(stellarNodeGlyph("File")).toBe("square");
+  });
+
+  it("switches visual policy without rebuilding or reheating the simulation", async () => {
+    const { forceSimulation } = await import("d3-force");
+    const noop = () => {};
+    const { container, rerender } = render(
+      <GraphCanvas
+        data={dataA}
+        visualMode="architecture"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    const sim = (forceSimulation as any).mock.results[0].value;
+    sim.alpha.mockClear();
+    sim.restart.mockClear();
+
+    rerender(
+      <GraphCanvas
+        data={dataA}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    expect(forceSimulation).toHaveBeenCalledTimes(1);
+    expect(sim.alpha).not.toHaveBeenCalledWith(0.3);
+    expect(sim.restart).not.toHaveBeenCalled();
+    expect(container.querySelector("canvas")).toHaveAttribute("data-visual-mode", "stellar");
   });
 
   it("reuses the same simulation across data changes (does not explode the graph)", async () => {

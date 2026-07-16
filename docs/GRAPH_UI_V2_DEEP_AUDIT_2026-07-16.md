@@ -239,7 +239,7 @@ jamais les deux niveaux.
 | ResizeHandle clavier et pointerCancel | ResizeHandle.test.tsx |
 | Packing, couverture de domaines et métadonnées du layout | tests UI V2 côté backend |
 
-Résultats courants : Graph UI **17 fichiers / 116 tests**, backend UI/SQLite/
+Résultats courants : Graph UI **17 fichiers / 131 tests**, backend UI/SQLite/
 contrat CI **18 fichiers / 121 tests**, deux typechecks, deux builds et
 `build:package` réussis. Le build Graph UI impose les budgets gzip. Le paquet
 servi a ensuite été contrôlé dans le navigateur : overview, drill-down clavier,
@@ -251,8 +251,8 @@ installé, Docker et CodeQL. Le smoke du tarball a indexé une fixture TypeScrip
 chargé les assets JS/CSS du paquet et exercé layout, recherche et voisinage sur
 une révision commune.
 
-Budget courant : Graph **37,90 / 40 Kio**, entrée **70,71 / 80 Kio**, CSS total
-**11,41 / 18 Kio**, JavaScript manifeste **110,25 / 125 Kio** (gzip). Les
+Budget courant : Graph **38,20 / 40 Kio**, entrée **70,73 / 80 Kio**, CSS total
+**11,58 / 18 Kio**, JavaScript manifeste **115,14 / 125 Kio** (gzip). Les
 assets sont résolus par `index.html` et le manifeste Vite, pas par ordre de
 répertoire ou nom supposé.
 
@@ -661,7 +661,7 @@ le nombre de représentants sans provoquer de saut de topologie.
 Audit axe/contraste, tests lecteur d’écran, liste exacte alternative au canvas,
 tailles minimales de cible et encodages non exclusivement colorés.
 
-#### P1-7 — Renforcer le langage visuel
+#### P1-7 — Partiel : renforcer le langage visuel
 
 Tester :
 
@@ -673,6 +673,12 @@ Tester :
 - labels qui restent stables pendant le zoom.
 
 Chaque variante doit être évaluée par tâche et non par préférence isolée.
+
+Le mode `Stellar` ferme une première partie sans créer un second produit : il
+réintroduit le signal degré → spectre, encode le type par forme, rend la
+direction du flux sélectionné et fait ressortir les hubs par chemins Canvas
+bornés. La profondeur d’appel 2D, la légende compacte et la comparaison aveugle
+restent ouvertes.
 
 #### P1-8 — Partiel : smoke HTTP/data automatisé, DOM CI restant
 
@@ -774,6 +780,53 @@ La conclusion démontrée à cette révision est la suivante :
 > transport ont aussi été mesurés en régime warm. Sa suprématie globale de
 > performance et d’esthétique face à la V1 reste toutefois à prouver avec le
 > protocole same-graph cold/browser et une comparaison aveugle des tâches.
+
+## Addendum — politique Stellar sans second moteur
+
+La comparaison runtime avec la V1 a confirmé une différence précise : la V2
+est plus explicable et plus exacte, mais la vue de symboles n’exposait pas aussi
+vite les hubs et le sens du flux. La correction n’est pas un retour à Three.js
+ou à deux implémentations concurrentes.
+
+`Architecture` et `Stellar` partagent désormais strictement :
+
+- le sous-graphe représentatif, ses métadonnées de fidélité et ses révisions ;
+- les objets d3, positions refroidies, forces, collisions et niveaux de zoom ;
+- les filtres, sélections, voisinages exacts, recherche et panneaux ;
+- les cibles souris/tactiles/clavier et les annonces d’accessibilité.
+
+Seule la politique de peinture change. Au niveau symboles, `Stellar` utilise le
+degré exact entrant + sortant pour l’échelle spectrale de référence V1. Le type
+reste décodable sans couleur : cercle pour les appels/symboles usuels, losange
+pour classe/interface/type, carré pour fichier/dossier/module/section. Le
+statut reste un contour indépendant. Les hubs ont un seul halo additif groupé
+et les chevrons directionnels sont limités aux arêtes visibles du nœud
+sélectionné. Au niveau agrégé, la couleur représente un palier borné de trafic
+inter-scope de l’échantillon ; elle ne prétend pas être un degré exact du
+projet.
+
+Le choix est localement persisté et toute valeur absente/invalide revient à
+`Architecture`. Un changement de mode ne reconstruit pas et ne réchauffe pas la
+simulation. Les régressions vérifient cette invariance, l’identité du canvas,
+la persistance et le contrat couleur/forme. Le budget de 40 Kio gzip du chunk
+Graph reste un gate de build.
+
+Non-objectifs explicites : aucune profondeur d’appel fictive, aucune seconde
+topologie, aucun rendu 3D/WebGL, aucun shadow blur ou gradient par nœud, et
+aucune affirmation de supériorité de performance V1/V2 avant le protocole
+same-graph navigateur.
+
+Validation de cette passe : typecheck Graph UI, **17 fichiers / 131 tests**,
+build frontend et `build:package` passent. Le chunk Graph final mesure **38,20
+Kio gzip** sur un plafond de 40 Kio ; le JavaScript manifeste mesure **115,14
+Kio gzip** sur un plafond de 125 Kio.
+
+Le contrôle à 1 280 px a également supprimé l’action `Clear selection` dupliquée
+dans la barre supérieure : avec le nouveau sélecteur visuel, elle chevauchait le
+HUD. L’action reste dans le panneau latéral et dans le fil d’Ariane
+`Architecture`, donc la correction réduit le chrome sans retirer de parcours.
+La barre reste verticale jusqu’à `xl`, et jusqu’à `2xl` lorsque le panneau de
+détail réduit le canvas ; une régression DOM verrouille ces deux états.
 
 ## Addendum — passe macro-first
 

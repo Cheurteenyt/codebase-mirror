@@ -284,12 +284,20 @@ The `## HUMAN NOTES` section is **never** overwritten by V2. Edit it freely in O
 
 ## Graph UI
 
-The V2 graph UI replaces V1's 3D Three.js scene with a cleaner 2D d3-force canvas:
+The V2 graph UI replaces V1's separate 3D Three.js scene with one bounded 2D
+d3-force canvas and two rendering policies over the same graph:
 
 - **Dashboard tab** (default): KPIs, graph freshness, smart recommendations
 - **Graph tab**: 2D force-directed canvas with filters, pan/zoom, node detail panel
+  - **Architecture** (default): type colors and a quiet domain/community hierarchy
+  - **Stellar** (optional, persisted locally): exact-degree spectrum, semantic
+    glyphs, bounded hub bloom, and selected-flow direction markers
 - **Projects tab**: Project list with node/edge counts and health status
 - **Control tab**: System info
+
+Both Graph styles share the same layout, simulation, sampling/exactness labels,
+filters, selection, keyboard model, and detail APIs. Switching style redraws the
+settled canvas; it does not rebuild or reheat the graph.
 
 ```bash
 # From v2/ in a source checkout

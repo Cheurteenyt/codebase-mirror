@@ -22,6 +22,28 @@
 - Kept transient exact-neighborhood failures visible and retryable; only a
   current HTTP 404 can invalidate an off-overview selection.
 
+### Single-renderer visual policies
+
+- Added an optional, locally persisted `Stellar` policy beside the default
+  `Architecture` policy. Both use the same bounded graph, d3 simulation,
+  selection, filters, keyboard model, and exact detail contracts; switching
+  policy only redraws the settled canvas.
+- Restored the useful V1 degree-at-a-glance spectral scale using exact V2
+  in/out degree, while preserving node type without color dependence through
+  circle, diamond, and square glyphs. Status continues to use an outer stroke.
+- Added batched spectral traffic beacons at aggregate zoom, one batched hub
+  bloom at symbol zoom, and bounded direction chevrons only for a selected raw
+  flow. No Three.js/WebGL dependency, shadow filter, per-node gradient, second
+  layout, or simulation reheat was introduced.
+- Added regressions for the spectral/glyph contract, style persistence, canvas
+  identity, and simulation non-reheat; the existing Graph chunk gzip budget
+  remains enforced.
+- Removed the redundant selected-scope action from the top toolbar after a
+  1,280 px runtime check exposed a HUD overlap. Selection clearing remains in
+  the side panel and the always-visible `Architecture` breadcrumb. The action
+  bar now waits until `xl` for a horizontal layout, or `2xl` while the detail
+  panel narrows the canvas, with both states covered by DOM regressions.
+
 ### Performance and delivery gates
 
 - Filtered induced edges inside SQLite, retained layout/simulation objects

@@ -31,7 +31,10 @@ const mockData = {
 };
 
 describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
 
   it("does NOT show spinner on same-project refetch (keeps GraphCanvas mounted)", async () => {
     const mockUseGraphData = useGraphData as any;
@@ -177,10 +180,53 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     });
 
     render(<GraphTab project="test-project" />);
+    fireEvent.click(screen.getByRole("button", { name: "Select (root)" }));
 
     const actions = screen.getByRole("toolbar", { name: "Graph actions" });
     expect(actions).toHaveClass("top-20", "flex-col", "items-end");
-    expect(actions).toHaveClass("lg:top-4", "lg:flex-row", "lg:items-center");
+    expect(actions).toHaveClass("xl:top-4", "xl:flex-row", "xl:items-center");
+    expect(actions).not.toHaveTextContent("Clear selection");
+  });
+
+  it("defers the horizontal action bar while the detail panel narrows the canvas", () => {
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    render(<GraphTab project="test-project" />);
+    fireEvent.click(screen.getByRole("button", { name: "Expand (root)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open foo" }));
+
+    const actions = screen.getByRole("toolbar", { name: "Graph actions" });
+    expect(actions).toHaveClass("top-20", "flex-col", "items-end");
+    expect(actions).toHaveClass("2xl:top-4", "2xl:flex-row", "2xl:items-center");
+    expect(actions).not.toHaveClass("xl:top-4", "xl:flex-row");
+  });
+
+  it("persists the optional visual policy without replacing the graph canvas", () => {
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    const first = render(<GraphTab project="test-project" />);
+    const canvas = first.container.querySelector("canvas");
+    expect(canvas).toHaveAttribute("data-visual-mode", "architecture");
+
+    fireEvent.click(screen.getByRole("button", { name: "Use stellar graph style" }));
+    expect(first.container.querySelector("canvas")).toBe(canvas);
+    expect(canvas).toHaveAttribute("data-visual-mode", "stellar");
+    expect(localStorage.getItem("cbm-graph-visual-mode")).toBe("stellar");
+
+    first.unmount();
+    const second = render(<GraphTab project="test-project" />);
+    expect(second.container.querySelector("canvas")).toHaveAttribute("data-visual-mode", "stellar");
+    expect(screen.getByRole("button", { name: "Use architecture graph style" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("dismisses the mobile navigation drawer after opening a node", async () => {

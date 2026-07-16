@@ -125,6 +125,21 @@ A React/Vite application (`graph-ui/`) served by the V2 backend:
 - **Control** — system information, logs, and owned index-job controls
 - **Real-time updates** via WebSocket where the active view requires them
 
+The Graph tab has one topology, one d3 simulation, and one interaction model.
+`Architecture` is the default rendering policy. The optional, locally persisted
+`Stellar` policy changes paint only: exact full-graph degree selects the V1
+reference spectral scale, node type selects a circle/diamond/square glyph,
+sampled cross-scope traffic colors aggregate beacons, and only the selected raw
+flow receives direction markers. Status remains an outer stroke. Invalid or
+unavailable local storage falls back to `Architecture`.
+
+This policy boundary is deliberate: a style switch must not reconstruct or
+reheat the simulation, alter collision/hit radii, change sampling, reinterpret
+exact values, or fork filtering, navigation, accessibility, and detail logic.
+Hub bloom and traffic beacons are batched Canvas paths; there are no shadows,
+per-node gradients, Three.js scene, WebGL backend, or second layout engine. The
+Graph dynamic chunk remains protected by its 40 KiB gzip budget.
+
 The UI is built and embedded in the npm package at `dist/ui/`. Runtime
 resolution uses `import.meta.url` so it works from any working directory.
 The loopback server keeps an idle LRU budget of four project-store entries;

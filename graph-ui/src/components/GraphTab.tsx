@@ -16,6 +16,11 @@ import { NodeTooltip } from "./NodeTooltip";
 import { ResizeHandle } from "./ResizeHandle";
 import { ErrorBoundary } from "./ErrorBoundary";
 import type { GraphNode, GraphData } from "../lib/types";
+import {
+  loadGraphVisualMode,
+  saveGraphVisualMode,
+  type GraphVisualMode,
+} from "../lib/graph-visual-mode";
 import { PanelLeftOpen, X } from "lucide-react";
 
 const NodeDetailPanel = lazy(() => import("./NodeDetailPanel"));
@@ -121,6 +126,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   const mobileDrawerWasOpenRef = useRef(false);
   const [leftWidth, setLeftWidth] = useState(() => loadWidth("cbm-left-w", 260));
   const [rightWidth, setRightWidth] = useState(() => loadWidth("cbm-right-w", 280));
+  const [visualMode, setVisualMode] = useState<GraphVisualMode>(loadGraphVisualMode);
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -844,6 +850,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
             ref={canvasRef}
             data={filteredData}
             active={active}
+            visualMode={visualMode}
             highlightedIds={highlightedIds}
             selectedNodeId={selectedNode?.id ?? null}
             deadCodeView={deadCodeView}
@@ -974,16 +981,22 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
             <div
               role="toolbar"
               aria-label="Graph actions"
-              className="absolute right-3 top-20 z-20 flex flex-col items-end gap-1.5 lg:right-4 lg:top-4 lg:flex-row lg:items-center lg:gap-2"
+              className={`absolute right-3 top-20 z-20 flex flex-col items-end gap-1.5 ${selectedNode ? "2xl:right-4 2xl:top-4 2xl:flex-row 2xl:items-center 2xl:gap-2" : "xl:right-4 xl:top-4 xl:flex-row xl:items-center xl:gap-2"}`}
             >
-              {highlightedIds && (
-                <button
-                  onClick={navigateHome}
-                  className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]"
-                >
-                  Clear selection
-                </button>
-              )}
+              <button
+                onClick={() => setVisualMode((current) => {
+                  const next = current === "architecture" ? "stellar" : "architecture";
+                  saveGraphVisualMode(next);
+                  return next;
+                })}
+                className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors ${visualMode === "stellar" ? "border-indigo-300/20 bg-indigo-300/[0.1] text-indigo-100" : "border-white/[0.06] bg-white/[0.04] text-foreground/55 hover:bg-white/[0.08]"}`}
+                aria-label={`Use ${visualMode === "architecture" ? "stellar" : "architecture"} graph style`}
+                aria-pressed={visualMode === "stellar"}
+                title="Switch visual style without changing graph data or layout"
+              >
+                <span aria-hidden="true" className={visualMode === "stellar" ? "text-indigo-200" : "text-cyan-300/60"}>✦</span>
+                {visualMode === "stellar" ? "Stellar" : "Architecture"}
+              </button>
               <button
                 onClick={() => fetchOverview(project)}
                 className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]"

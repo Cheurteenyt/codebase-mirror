@@ -8,6 +8,12 @@ import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY
 import type { GraphData, GraphNode } from "../lib/types";
 import { colorForLabel, colorForStatus } from "../lib/colors";
 import {
+  stellarNodeColor,
+  stellarNodeDegree,
+  stellarNodeGlyph,
+  type GraphVisualMode,
+} from "../lib/graph-visual-mode";
+import {
   GRAPH_TOOLTIP_POSITION_EVENT,
   type GraphTooltipPositionDetail,
 } from "../lib/graph-tooltip-position";
@@ -40,6 +46,7 @@ export interface GraphScopeSelection {
 interface GraphCanvasProps {
   data: GraphData;
   active?: boolean;
+  visualMode?: GraphVisualMode;
   highlightedIds: Set<number> | null;
   selectedNodeId?: number | null;
   deadCodeView: boolean;
@@ -89,6 +96,7 @@ const MAX_KEYBOARD_DOMAINS = 32;
 const MAX_KEYBOARD_COMMUNITIES = 64;
 const MAX_KEYBOARD_NODES = 64;
 const MAX_COMMUNITY_BACKBONE_BUNDLES = 16;
+const STELLAR_TRAFFIC_RGB = ["255,96,80", "255,192,112", "255,240,192", "128,160,255"] as const;
 
 function fadeBetween(value: number, start: number, end: number): number {
   return Math.max(0, Math.min(1, (value - start) / (end - start)));
@@ -630,6 +638,36 @@ function nodeRadius(node: Pick<GraphNode, "size">): number {
   return Math.max(MIN_NODE_RADIUS, Math.min(MAX_NODE_RADIUS, size));
 }
 
+function traceNodePath(
+  ctx: CanvasRenderingContext2D,
+  node: GraphNode,
+  x: number,
+  y: number,
+  radius: number,
+  visualMode: GraphVisualMode,
+): void {
+  if (visualMode !== "stellar") {
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    return;
+  }
+
+  const glyph = stellarNodeGlyph(node.label);
+  if (glyph === "square") {
+    const extent = radius * 0.82;
+    ctx.rect(x - extent, y - extent, extent * 2, extent * 2);
+    return;
+  }
+  if (glyph === "diamond") {
+    ctx.moveTo(x, y - radius);
+    ctx.lineTo(x + radius, y);
+    ctx.lineTo(x, y + radius);
+    ctx.lineTo(x - radius, y);
+    ctx.lineTo(x, y - radius);
+    return;
+  }
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+}
+
 function traceEdges(
   ctx: CanvasRenderingContext2D,
   edges: SimEdge[],
@@ -652,6 +690,41 @@ function traceEdges(
   return hasPath;
 }
 
+function traceSelectedDirectionMarkers(
+  ctx: CanvasRenderingContext2D,
+  edges: SimEdge[],
+  nodeMap: Map<number, SimNode>,
+  selectedNodeId: number,
+  markerSize: number,
+): boolean {
+  let hasPath = false;
+  for (const edge of edges) {
+    const source = nodeMap.get(simEdgeNodeId(edge.source));
+    const target = nodeMap.get(simEdgeNodeId(edge.target));
+    if (!source || !target || (source.id !== selectedNodeId && target.id !== selectedNodeId)) continue;
+    const sourceX = source.x ?? 0;
+    const sourceY = source.y ?? 0;
+    const targetX = target.x ?? 0;
+    const targetY = target.y ?? 0;
+    const dx = targetX - sourceX;
+    const dy = targetY - sourceY;
+    const length = Math.hypot(dx, dy);
+    if (length < markerSize * 2) continue;
+    const unitX = dx / length;
+    const unitY = dy / length;
+    const tipX = sourceX + dx * 0.62;
+    const tipY = sourceY + dy * 0.62;
+    const baseX = tipX - unitX * markerSize;
+    const baseY = tipY - unitY * markerSize;
+    const wing = markerSize * 0.55;
+    ctx.moveTo(baseX - unitY * wing, baseY + unitX * wing);
+    ctx.lineTo(tipX, tipY);
+    ctx.lineTo(baseX + unitY * wing, baseY - unitX * wing);
+    hasPath = true;
+  }
+  return hasPath;
+}
+
 function edgeKey(edge: { source: number; target: number; type: string }): string {
   return `${edge.source}\u0000${edge.target}\u0000${edge.type}`;
 }
@@ -665,6 +738,7 @@ function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
 export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function GraphCanvas({
   data,
   active = true,
+  visualMode = "architecture",
   highlightedIds,
   selectedNodeId = null,
   deadCodeView,
@@ -1452,7 +1526,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           hasTraffic = true;
         }
         if (!hasTraffic) continue;
-        ctx.strokeStyle = `rgba(103, 232, 249, ${0.035 + tier * 0.045})`;
+        const trafficRgb = visualMode === "stellar" ? STELLAR_TRAFFIC_RGB[tier - 1] : "103,232,249";
+        ctx.strokeStyle = `rgba(${trafficRgb},${0.035 + tier * 0.045})`;
         ctx.lineWidth = (0.55 + tier * 0.4) / tk;
         ctx.stroke();
       }
@@ -1508,7 +1583,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           hasTraffic = true;
         }
         if (!hasTraffic) continue;
-        ctx.fillStyle = `rgba(103, 232, 249, ${(0.008 + tier * 0.01) * overviewOpacity})`;
+        const trafficRgb = visualMode === "stellar" ? STELLAR_TRAFFIC_RGB[tier - 1] : "103,232,249";
+        ctx.fillStyle = `rgba(${trafficRgb},${(0.008 + tier * 0.01) * overviewOpacity})`;
         ctx.fill();
 
         ctx.beginPath();
@@ -1521,7 +1597,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           ctx.moveTo(cluster.x + coreRadius, cluster.y);
           ctx.arc(cluster.x, cluster.y, coreRadius, 0, Math.PI * 2);
         }
-        ctx.fillStyle = `rgba(207, 250, 254, ${(0.08 + tier * 0.04) * overviewOpacity})`;
+        ctx.fillStyle = visualMode === "stellar"
+          ? `rgba(${trafficRgb},${(0.09 + tier * 0.045) * overviewOpacity})`
+          : `rgba(207,250,254,${(0.08 + tier * 0.04) * overviewOpacity})`;
         ctx.fill();
       }
       ctx.globalCompositeOperation = previousCompositeOperation;
@@ -1541,7 +1619,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
             hasTraffic = true;
           }
           if (!hasTraffic) continue;
-          ctx.strokeStyle = `rgba(103, 232, 249, ${0.08 + tier * 0.055})`;
+          const trafficRgb = visualMode === "stellar" ? STELLAR_TRAFFIC_RGB[tier - 1] : "103,232,249";
+          ctx.strokeStyle = `rgba(${trafficRgb},${0.08 + tier * 0.055})`;
           ctx.lineWidth = (0.7 + tier * 0.48) / tk;
           ctx.stroke();
         }
@@ -1728,8 +1807,43 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         if (!traceEdges(ctx, groupedEdges, nodeMap, selectedNodeId, true)) continue;
         ctx.strokeStyle = EDGE_GROUP_STYLES[group];
         ctx.stroke();
+        if (visualMode === "stellar") {
+          ctx.beginPath();
+          if (traceSelectedDirectionMarkers(ctx, groupedEdges, nodeMap, selectedNodeId, 4.5 / tk)) {
+            ctx.lineWidth = 0.9 / tk;
+            ctx.stroke();
+            ctx.lineWidth = 1.2 / tk;
+          }
+        }
       }
       ctx.globalAlpha = 1;
+    }
+
+    // One batched additive path recovers the useful V1 hub-at-a-glance signal
+    // without gradients, shadows, per-node filters, or any change to the
+    // collision radii and simulation state.
+    if (visualMode === "stellar" && rawNodeOpacity) {
+      let hasHub = false;
+      ctx.beginPath();
+      for (const node of nodesRef.current) {
+        if (stellarNodeDegree(node) < 18) continue;
+        if (activeHighlightedIds && !activeHighlightedIds.has(node.id) && node.id !== selectedNodeId) continue;
+        const x = node.x ?? 0;
+        const y = node.y ?? 0;
+        const glowRadius = nodeRadius(node) + 3.5 / tk;
+        ctx.moveTo(x + glowRadius, y);
+        ctx.arc(x, y, glowRadius, 0, Math.PI * 2);
+        hasHub = true;
+      }
+      if (hasHub) {
+        const previousCompositeOperation = ctx.globalCompositeOperation;
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = "rgba(128, 160, 255, 0.18)";
+        ctx.globalAlpha = rawNodeOpacity;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = previousCompositeOperation;
+      }
     }
 
     // Draw nodes. Semantic fill is never replaced by selection or status;
@@ -1751,10 +1865,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       const baseRadius = Math.max(nodeRadius(node), 1.2 / tk);
       const r = individualHighlight ? baseRadius * 1.5 : baseRadius;
 
-      const color = colorForLabel(node.label);
+      const color = visualMode === "stellar"
+        ? stellarNodeColor(node)
+        : colorForLabel(node.label);
 
       ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
+      traceNodePath(ctx, node, x, y, r, visualMode);
       ctx.fillStyle = color;
       ctx.globalAlpha = nodeOpacity * (activeHighlightedIds && !isHighlighted ? 0.3 : 1);
       ctx.fill();
@@ -1973,7 +2089,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     ctx.globalAlpha = previousLabelAlpha;
 
     ctx.restore();
-  }, [visibleHighlightedIds, selectedNodeId, deadCodeView]);
+  }, [visibleHighlightedIds, selectedNodeId, deadCodeView, visualMode]);
 
   // R40 (UI-3): sync drawRef AND immediately call the new draw. Previously
   // this was split into two effects: one to set drawRef.current, and a
@@ -2577,9 +2693,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     <>
       <canvas
         ref={canvasRef}
+        data-visual-mode={visualMode}
         className="w-full h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 focus-visible:ring-inset"
         style={{
-          background: "radial-gradient(circle at 50% 46%, rgba(12, 74, 110, 0.24) 0%, rgba(6, 11, 18, 0.97) 48%, #04070c 100%)",
+          background: visualMode === "stellar"
+            ? "radial-gradient(circle at 50% 46%, rgba(40, 46, 105, 0.28) 0%, rgba(8, 12, 28, 0.97) 48%, #03050b 100%)"
+            : "radial-gradient(circle at 50% 46%, rgba(12, 74, 110, 0.24) 0%, rgba(6, 11, 18, 0.97) 48%, #04070c 100%)",
           cursor: "default",
           touchAction: "none",
         }}
