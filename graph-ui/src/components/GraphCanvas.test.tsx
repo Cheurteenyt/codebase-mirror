@@ -673,22 +673,39 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(nodeFillAlphas).toEqual([1, 1]);
   });
 
-  it("keeps highlighted scope labels inside the active LOD budget and prioritizes the selected node", () => {
+  it("keeps dense scope selections quiet and prioritizes the exact selected node", () => {
     const ctx = installCanvasMock(800, 600);
     const ref = createRef<GraphCanvasHandle>();
-    // These bounds fit at k~=0.596, inside the 24-label mid LOD. Screen-space
+    // These bounds fit at k~=0.596, inside the raw-topology mid LOD. Screen-space
     // gaps remain large enough that collision avoidance does not lower the
     // count and accidentally mask a budget regression.
-    const nodes = Array.from({ length: 64 }, (_, index) => {
-      const column = index % 8;
-      const row = Math.floor(index / 8);
+    const nodes = Array.from({ length: 100 }, (_, index) => {
+      const column = index % 10;
+      const row = Math.floor(index / 10);
       const id = index + 1;
-      return makeNode(id, `node-${id}`, {
+      const name = id === 87 ? "anonymous#1" : id === 89 ? "node-88" : `node-${id}`;
+      if (id >= 76 && id <= 86) {
+        return makeNode(id, name, {
+          x: id % 2 === 0 ? -1_200 : 1_200,
+          y: id % 4 < 2 ? -900 : 900,
+        });
+      }
+      if (id >= 87) {
+        const selectedIndex = id - 87;
+        return makeNode(id, name, {
+          x: (selectedIndex % 5 - 2) * 80,
+          y: (Math.floor(selectedIndex / 5) - 1) * 80,
+        });
+      }
+      return makeNode(id, name, {
         x: (column - 3.5) * 160,
         y: (row - 3.5) * 112,
       });
     });
-    const highlightedIds = new Set(nodes.map((node) => node.id));
+    // Keep the dense selection outside the first 64 globally ranked nodes and
+    // its first candidates outside the viewport. Scope labels must come
+    // from the complete pre-ranked overview and the visible selected members.
+    const highlightedIds = new Set(nodes.slice(75).map((node) => node.id));
     const labelData: GraphData = {
       nodes,
       edges: [],
@@ -701,18 +718,28 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
         ref={ref}
         data={labelData}
         highlightedIds={highlightedIds}
-        selectedNodeId={64}
+        selectedNodeId={100}
         deadCodeView={false}
         onNodeClick={() => {}}
         onNodeHover={() => {}}
       />,
     );
 
+    const initialScale = ctx.scale.mock.calls.at(-1)[0] as number;
+    ctx.arc.mockClear();
     ctx.fillText.mockClear();
-    act(() => ref.current?.zoomBy(2));
+    act(() => ref.current?.zoomBy(20 / (16 * initialScale)));
 
-    expect(ctx.fillText).toHaveBeenCalledTimes(24);
-    expect(ctx.fillText).toHaveBeenCalledWith("node-64", expect.any(Number), expect.any(Number));
+    // A scope is one collective selection, not 64 individually enlarged
+    // nodes and rings. The exact node still keeps its personal accent.
+    expect(ctx.arc).toHaveBeenCalledTimes(nodes.length + 1);
+    expect(ctx.arc.mock.calls.filter((call) => call[2] === 6)).toHaveLength(1);
+    expect(ctx.fillText).toHaveBeenCalledTimes(12);
+    const renderedLabels = ctx.fillText.mock.calls.map((call) => call[0]);
+    expect(new Set(renderedLabels).size).toBe(renderedLabels.length);
+    expect(ctx.fillText).not.toHaveBeenCalledWith("anonymous#1", expect.any(Number), expect.any(Number));
+    expect(renderedLabels.filter((label) => label === "node-88")).toHaveLength(1);
+    expect(ctx.fillText).toHaveBeenCalledWith("node-100", expect.any(Number), expect.any(Number));
   });
 
   it("bundles macro links at overview scale and keeps them out of d3 physics", async () => {
