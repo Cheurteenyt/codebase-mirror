@@ -5,7 +5,7 @@
 import { createRef } from "react";
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
-import { GraphCanvas, type GraphCanvasHandle } from "./GraphCanvas";
+import { GraphCanvas, computeSemanticZoomLayers, type GraphCanvasHandle } from "./GraphCanvas";
 import { NodeTooltip } from "./NodeTooltip";
 import type { GraphData, GraphNode, GraphEdge } from "../lib/types";
 
@@ -76,6 +76,36 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("hands semantic zoom layers through quiet, non-overlapping flow transitions", () => {
+    const [overviewDomains, overviewCommunities, , overviewRaw] = computeSemanticZoomLayers(4);
+    expect(overviewDomains).toBe(1);
+    expect(overviewCommunities).toBe(0);
+    expect(overviewRaw).toBe(0);
+
+    const [domainFlows, communityFlows, communityReveal] = computeSemanticZoomLayers(7);
+    expect(domainFlows).toBe(0);
+    expect(communityFlows).toBe(0);
+    expect(communityReveal).toBeCloseTo(0.5);
+
+    const [, fullCommunityFlows, , communityRaw] = computeSemanticZoomLayers(8.5);
+    expect(fullCommunityFlows).toBeCloseTo(0.72);
+    expect(communityRaw).toBe(0);
+
+    const [, rawHandoffFlows, , rawHandoffReveal] = computeSemanticZoomLayers(18);
+    expect(rawHandoffFlows).toBe(0);
+    expect(rawHandoffReveal).toBe(0);
+
+    const [, , , rawMidpoint] = computeSemanticZoomLayers(20);
+    expect(rawMidpoint).toBeCloseTo(0.5);
+    expect(computeSemanticZoomLayers(22)[3]).toBe(1);
+
+    for (let spacing = 0; spacing <= 40; spacing += 0.1) {
+      const [domains, communities, , raw] = computeSemanticZoomLayers(spacing);
+      expect(domains > 0 && communities > 0).toBe(false);
+      expect(communities > 0 && raw > 0).toBe(false);
+    }
   });
 
   it("reuses the same simulation across data changes (does not explode the graph)", async () => {

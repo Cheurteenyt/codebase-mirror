@@ -94,6 +94,42 @@ function fadeBetween(value: number, start: number, end: number): number {
   return Math.max(0, Math.min(1, (value - start) / (end - start)));
 }
 
+export function computeSemanticZoomLayers(projectedNodeSpacing: number) {
+  const communityReveal = fadeBetween(
+    projectedNodeSpacing,
+    5.5,
+    8.5,
+  );
+  const rawTopologyReveal = fadeBetween(
+    projectedNodeSpacing,
+    18,
+    22,
+  );
+  return [
+    // Each flow grammar fully leaves the canvas before the next one enters.
+    // The quiet frame between them preserves a readable static composition at
+    // every zoom value instead of briefly stacking two kinds of topology.
+    1 - fadeBetween(
+      projectedNodeSpacing,
+      5.5,
+      DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING,
+    ),
+    0.72
+      * fadeBetween(
+        projectedNodeSpacing,
+        DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING,
+        8.5,
+      )
+      * (1 - fadeBetween(
+        projectedNodeSpacing,
+        16,
+        18,
+      )),
+    communityReveal,
+    rawTopologyReveal,
+  ] as const;
+}
+
 type LayoutCluster = NonNullable<GraphData["layout"]>["clusters"][number];
 type LayoutDomain = NonNullable<GraphData["layout"]>["domains"][number];
 type KeyboardTargetKind = "domain" | "community" | "node";
@@ -1302,23 +1338,21 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const projectedNodeSpacing = layoutNodeSpacingRef.current * tk;
     const domainOverview = projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING;
     const rawTopology = projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING;
-    // Each tier owns the canvas completely. Mixing adjacent grammars briefly
-    // looked smoother in motion but produced static frames with unlabeled
-    // community flows or raw hairballs inside a domain overview.
-    const domainBundleOpacity = domainOverview ? 1 : 0;
-    const communityBundleOpacity = !domainOverview && !rawTopology ? 0.72 : 0;
-    // Raw topology is deliberately absent from the two architecture tiers.
-    // Edges and nodes enter together only when the projected spacing makes
-    // individual symbols readable and directly selectable.
-    const rawNodeOpacity = rawTopology
-      ? 0.78 + fadeBetween(projectedNodeSpacing, 18, 24) * 0.22
-      : 0;
-    const localEdgeOpacity = rawTopology
-      ? 0.18 + fadeBetween(projectedNodeSpacing, 20, 32) * 0.42
-      : 0;
-    const crossEdgeOpacity = rawTopology
-      ? fadeBetween(projectedNodeSpacing, 24, 36) * 0.45
-      : 0;
+    const [
+      domainBundleOpacity,
+      communityBundleOpacity,
+      communityReveal,
+      rawTopologyReveal,
+    ] = computeSemanticZoomLayers(projectedNodeSpacing);
+    // Raw topology enters only after the community backbone has fully left.
+    // Nodes lead their lower-contrast edges so intermediate frames disclose
+    // readable symbols rather than a hairball.
+    const rawNodeOpacity = rawTopologyReveal
+      * (0.78 + fadeBetween(projectedNodeSpacing, 22, 26) * 0.22);
+    const localEdgeOpacity = rawTopologyReveal
+      * (0.18 + fadeBetween(projectedNodeSpacing, 22, 32) * 0.42);
+    const crossEdgeOpacity = rawTopologyReveal
+      * fadeBetween(projectedNodeSpacing, 24, 36) * 0.45;
     const hoveredScope = hoveredScopeRef.current;
     const keyboardFocus = keyboardFocusRef.current;
     const activeDomainId = hoveredScope?.kind === "domain"
@@ -1380,6 +1414,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       // Community discs replace thousands of unreadable node dots in the two
       // architecture tiers. Their size and position already encode the useful
       // information; domain color preserves nesting without adding a legend.
+      // The same surface persists through the raw handoff and simply recedes,
+      // keeping spatial context without another palette pass.
       for (let paletteIndex = 0; paletteIndex < DOMAIN_PALETTE.length; paletteIndex += 1) {
         let hasCluster = false;
         ctx.beginPath();
@@ -1391,10 +1427,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         }
         if (!hasCluster) continue;
         const palette = DOMAIN_PALETTE[paletteIndex];
-        ctx.fillStyle = rawTopology ? palette.fill : palette.clusterFill;
+        ctx.fillStyle = palette.clusterFill;
         ctx.fill();
-        ctx.strokeStyle = rawTopology ? palette.stroke : palette.clusterStroke;
-        ctx.lineWidth = (rawTopology ? 0.75 : 1.05) / tk;
+        ctx.strokeStyle = palette.clusterStroke;
+        ctx.lineWidth = 1.05 / tk;
         ctx.stroke();
       }
     }
@@ -1723,9 +1759,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     }
 
     // Labels are painted after edges and nodes so no topology line can cut
-    // through them. Domains own the overview; communities appear only once
-    // the user has drilled beyond the architecture tier.
+    // through them. Domain names remain as dimmed anchors while community and
+    // node labels progressively inherit the available attention budget.
     if (domainsRef.current.length > 0) {
+      const previousAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = previousAlpha * (1 - communityReveal * 0.55);
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       for (const domain of [...domainsRef.current]
@@ -1774,11 +1812,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           ctx.fillText(summary, domain.x, summaryY);
         }
       }
+      ctx.globalAlpha = previousAlpha;
     }
 
-    if (!domainOverview && clustersRef.current.length > 0) {
+    if (communityReveal > 0 && clustersRef.current.length > 0) {
+      const previousAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = previousAlpha * communityReveal * (1 - rawTopologyReveal * 0.55);
       const domainById = new Map(domainsRef.current.map((domain) => [domain.id, domain]));
-      const clusterLimit = rawTopology ? 64 : 28;
+      const clusterLimit = Math.round(28 + (64 - 28) * rawTopologyReveal);
       const clusterFontSize = 10 / tk;
       ctx.font = `650 ${clusterFontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       ctx.textAlign = "center";
@@ -1832,11 +1873,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           ctx.fillText(summary, labelX, summaryY);
         }
       }
+      ctx.globalAlpha = previousAlpha;
     }
 
     // Zoom-dependent labels with collision avoidance. The selected node is
     // always attempted first, followed by its neighborhood and ranked hubs.
-    const labelLimit = !rawTopology
+    const labelLimit = rawTopologyReveal <= 0
       ? 0
       : projectedNodeSpacing < 32
         ? MID_LABEL_LIMIT
@@ -1846,7 +1888,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // The exact selected node remains first in the raw-topology label budget.
     // Every other label, including a large highlighted neighborhood, shares
     // the same bounded semantic-zoom budget.
-    const selectedLabelNode = rawTopology && selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined;
+    const selectedLabelNode = rawTopologyReveal > 0 && selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined;
     const labelBudget = Math.max(labelLimit, selectedLabelNode ? 1 : 0);
     const addLabelNode = (node: SimNode | undefined) => {
       if (!node || labelIds.has(node.id) || labelNodes.length >= labelBudget) return;
@@ -1864,6 +1906,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     ctx.font = `500 ${labelFontSize}px Inter, ui-sans-serif, system-ui, sans-serif`;
     ctx.textAlign = "start";
     ctx.textBaseline = "middle";
+    const previousLabelAlpha = ctx.globalAlpha;
+    ctx.globalAlpha = previousLabelAlpha * rawTopologyReveal;
     for (const node of labelNodes) {
       const rawLabel = node.name || node.qualified_name || String(node.id);
       const label = rawLabel.length > 34 ? `${rawLabel.slice(0, 31)}…` : rawLabel;
@@ -1892,6 +1936,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         : "rgba(203, 225, 236, 0.88)";
       ctx.fillText(label, x, y);
     }
+    ctx.globalAlpha = previousLabelAlpha;
 
     ctx.restore();
   }, [visibleHighlightedIds, selectedNodeId, deadCodeView]);
