@@ -207,10 +207,13 @@ const EDGE_BUNDLE_STYLES: Record<EdgeGroup, string> = {
 interface OverviewBundle {
   sourceId: number;
   targetId: number;
+  route: "quadratic" | "corridor";
   startX: number;
   startY: number;
-  controlX: number;
-  controlY: number;
+  control1X: number;
+  control1Y: number;
+  control2X: number;
+  control2Y: number;
   endX: number;
   endY: number;
   count: number;
@@ -310,31 +313,78 @@ function buildOverviewBundleBatches(
       )),
     );
   }
+  const routingGroupMembers = new Map<number, typeof scopeCenters>();
+  if (routingCenterForScope) {
+    for (const scope of scopeCenters) {
+      const group = routingCenterForScope(scope.id);
+      if (!group) continue;
+      const members = routingGroupMembers.get(group.id);
+      if (members) members.push(scope);
+      else routingGroupMembers.set(group.id, [scope]);
+    }
+  }
+
+  const rankedAccumulators = [...accumulators.values()]
+    .map((accumulator) => ({
+      ...accumulator,
+      group: [...EDGE_GROUP_ORDER].sort((left, right) => (
+        accumulator.groupCounts[right] - accumulator.groupCounts[left]
+        || EDGE_GROUP_ORDER.indexOf(left) - EDGE_GROUP_ORDER.indexOf(right)
+      ))[0],
+    }))
+    .sort((left, right) => (
+      right.count - left.count
+      || left.sourceId - right.sourceId
+      || left.targetId - right.targetId
+      || EDGE_GROUP_ORDER.indexOf(left.group) - EDGE_GROUP_ORDER.indexOf(right.group)
+    ));
+
+  // Traffic keeps every aggregate pair from the bounded response, even though
+  // expensive route geometry is prepared only for the visible backbone.
+  const traffic = new Map<number, ScopeTraffic>();
+  for (const accumulator of rankedAccumulators) {
+    const source = traffic.get(accumulator.sourceId) ?? { incoming: 0, outgoing: 0 };
+    source.outgoing += accumulator.count;
+    traffic.set(accumulator.sourceId, source);
+    const target = traffic.get(accumulator.targetId) ?? { incoming: 0, outgoing: 0 };
+    target.incoming += accumulator.count;
+    traffic.set(accumulator.targetId, target);
+  }
+  const maxTraffic = Math.max(
+    1,
+    ...[...traffic.values()].map((scope) => scope.incoming + scope.outgoing),
+  );
+  const maxLogTraffic = Math.log1p(maxTraffic);
+  const trafficTiers = new Map<number, number>();
+  for (const [scopeId, scope] of traffic) {
+    const total = scope.incoming + scope.outgoing;
+    trafficTiers.set(scopeId, Math.max(1, Math.min(4, Math.ceil(
+      (Math.log1p(total) / maxLogTraffic) * 4,
+    ))));
+  }
 
   const bundles: OverviewBundle[] = [];
-  for (const accumulator of accumulators.values()) {
+  for (const accumulator of rankedAccumulators.slice(0, maxBundles)) {
     const source = centers.get(accumulator.sourceId);
     const target = centers.get(accumulator.targetId);
     if (!source || !target) continue;
-    const group = [...EDGE_GROUP_ORDER].sort((left, right) => (
-      accumulator.groupCounts[right] - accumulator.groupCounts[left]
-      || EDGE_GROUP_ORDER.indexOf(left) - EDGE_GROUP_ORDER.indexOf(right)
-    ))[0];
+    const group = accumulator.group;
     const dx = target.x - source.x;
     const dy = target.y - source.y;
     const length = Math.max(1, Math.hypot(dx, dy));
     const sourceInset = Math.min(source.radius, length * 0.35);
     const targetInset = Math.min(target.radius, length * 0.35);
-    const startX = source.x + (dx / length) * sourceInset;
-    const startY = source.y + (dy / length) * sourceInset;
-    const endX = target.x - (dx / length) * targetInset;
-    const endY = target.y - (dy / length) * targetInset;
+    let startX = source.x + (dx / length) * sourceInset;
+    let startY = source.y + (dy / length) * sourceInset;
+    let endX = target.x - (dx / length) * targetInset;
+    let endY = target.y - (dy / length) * targetInset;
     const sourceRoutingCenter = routingCenterForScope?.(source.id);
     const targetRoutingCenter = routingCenterForScope?.(target.id);
-    const routingCenter = sourceRoutingCenter && targetRoutingCenter
+    const sharedRoutingCenter = sourceRoutingCenter && targetRoutingCenter
       && sourceRoutingCenter.id === targetRoutingCenter.id
       ? sourceRoutingCenter
-      : layoutCenter;
+      : undefined;
+    const routingCenter = sharedRoutingCenter ?? layoutCenter;
     const normalX = -dy / length;
     const normalY = dx / length;
     const midpointX = (startX + endX) / 2;
@@ -359,14 +409,116 @@ function buildOverviewBundleBatches(
       Math.min(240, Math.max(104, length * 0.45)),
       Math.max(16, length * 0.11, clearanceBend),
     );
+    let route: OverviewBundle["route"] = "quadratic";
+    let control1X = midpointX + normalX * bend * direction;
+    let control1Y = midpointY + normalY * bend * direction;
+    let control2X = control1X;
+    let control2Y = control1Y;
+
+    if (sharedRoutingCenter) {
+      // Intra-domain traffic converges on one of twelve local corridor lanes.
+      // Quantizing the direction makes nearby connections share visual spines,
+      // while keeping the lane inside the useful half of the domain avoids the
+      // large decorative orbits produced by peripheral routing.
+      const rawCorridorX = control1X - sharedRoutingCenter.x;
+      const rawCorridorY = control1Y - sharedRoutingCenter.y;
+      const rawCorridorRadius = Math.hypot(rawCorridorX, rawCorridorY);
+      const corridorAngleStep = Math.PI / 6;
+      const corridorAngle = Math.round(
+        Math.atan2(rawCorridorY, rawCorridorX) / corridorAngleStep,
+      ) * corridorAngleStep;
+      const corridorRadius = Math.min(
+        sharedRoutingCenter.radius * 0.46,
+        Math.max(
+          Math.min(sharedRoutingCenter.radius * 0.4, routingClearance * 1.05),
+          rawCorridorRadius,
+        ),
+      );
+      let bestLane: {
+        score: number;
+        startX: number;
+        startY: number;
+        controlX: number;
+        controlY: number;
+        endX: number;
+        endY: number;
+      } | undefined;
+      const obstacles = routingGroupMembers.get(sharedRoutingCenter.id) ?? [];
+      for (const laneOffset of [0, -1, 1, -2, 2]) {
+        const candidateAngle = corridorAngle + laneOffset * corridorAngleStep;
+        const candidateControlX = sharedRoutingCenter.x + Math.cos(candidateAngle) * corridorRadius;
+        const candidateControlY = sharedRoutingCenter.y + Math.sin(candidateAngle) * corridorRadius;
+        const sourceToCorridorX = candidateControlX - source.x;
+        const sourceToCorridorY = candidateControlY - source.y;
+        const sourceToCorridorLength = Math.max(1, Math.hypot(sourceToCorridorX, sourceToCorridorY));
+        const targetToCorridorX = candidateControlX - target.x;
+        const targetToCorridorY = candidateControlY - target.y;
+        const targetToCorridorLength = Math.max(1, Math.hypot(targetToCorridorX, targetToCorridorY));
+        const candidateStartX = source.x + (sourceToCorridorX / sourceToCorridorLength) * source.radius;
+        const candidateStartY = source.y + (sourceToCorridorY / sourceToCorridorLength) * source.radius;
+        const candidateEndX = target.x + (targetToCorridorX / targetToCorridorLength) * target.radius;
+        const candidateEndY = target.y + (targetToCorridorY / targetToCorridorLength) * target.radius;
+        let clearanceScore = Math.min(
+          Math.hypot(candidateControlX - source.x, candidateControlY - source.y) - source.radius,
+          Math.hypot(candidateControlX - target.x, candidateControlY - target.y) - target.radius,
+        );
+        for (const obstacle of obstacles) {
+          if (obstacle.id === source.id || obstacle.id === target.id) continue;
+          clearanceScore = Math.min(
+            clearanceScore,
+            Math.hypot(candidateControlX - obstacle.x, candidateControlY - obstacle.y) - obstacle.radius,
+          );
+          for (const t of [0.25, 0.5, 0.75]) {
+            const inverseT = 1 - t;
+            const controlWeight = 3 * inverseT * t;
+            const pathX = inverseT ** 3 * candidateStartX
+              + controlWeight * candidateControlX
+              + t ** 3 * candidateEndX;
+            const pathY = inverseT ** 3 * candidateStartY
+              + controlWeight * candidateControlY
+              + t ** 3 * candidateEndY;
+            clearanceScore = Math.min(
+              clearanceScore,
+              Math.hypot(pathX - obstacle.x, pathY - obstacle.y) - obstacle.radius,
+            );
+          }
+        }
+        const score = clearanceScore - Math.abs(laneOffset) * routingClearance * 0.04;
+        if (!bestLane || score > bestLane.score) {
+          bestLane = {
+            score,
+            startX: candidateStartX,
+            startY: candidateStartY,
+            controlX: candidateControlX,
+            controlY: candidateControlY,
+            endX: candidateEndX,
+            endY: candidateEndY,
+          };
+        }
+      }
+      if (bestLane) {
+        startX = bestLane.startX;
+        startY = bestLane.startY;
+        control1X = bestLane.controlX;
+        control1Y = bestLane.controlY;
+        control2X = bestLane.controlX;
+        control2Y = bestLane.controlY;
+        endX = bestLane.endX;
+        endY = bestLane.endY;
+      }
+      route = "corridor";
+    }
 
     bundles.push({
       sourceId: accumulator.sourceId,
       targetId: accumulator.targetId,
+      route,
       startX,
       startY,
-      controlX: midpointX + normalX * bend * direction,
-      controlY: midpointY + normalY * bend * direction,
+      control1X,
+      control1Y,
+      control2X,
+      control2Y,
       endX,
       endY,
       count: accumulator.count,
@@ -374,40 +526,9 @@ function buildOverviewBundleBatches(
       weight: Math.min(6, Math.floor(Math.log2(Math.max(1, accumulator.count)))),
     });
   }
-  bundles.sort((left, right) => (
-    right.count - left.count
-    || left.sourceId - right.sourceId
-    || left.targetId - right.targetId
-    || EDGE_GROUP_ORDER.indexOf(left.group) - EDGE_GROUP_ORDER.indexOf(right.group)
-  ));
-
-  // Traffic uses every aggregate pair from the bounded response, not just the
-  // visual backbone retained below. That lets a community's outline preserve
-  // architectural salience without putting every crossing back on screen.
-  const traffic = new Map<number, ScopeTraffic>();
-  for (const bundle of bundles) {
-    const source = traffic.get(bundle.sourceId) ?? { incoming: 0, outgoing: 0 };
-    source.outgoing += bundle.count;
-    traffic.set(bundle.sourceId, source);
-    const target = traffic.get(bundle.targetId) ?? { incoming: 0, outgoing: 0 };
-    target.incoming += bundle.count;
-    traffic.set(bundle.targetId, target);
-  }
-  const maxTraffic = Math.max(
-    1,
-    ...[...traffic.values()].map((scope) => scope.incoming + scope.outgoing),
-  );
-  const maxLogTraffic = Math.log1p(maxTraffic);
-  const trafficTiers = new Map<number, number>();
-  for (const [scopeId, scope] of traffic) {
-    const total = scope.incoming + scope.outgoing;
-    trafficTiers.set(scopeId, Math.max(1, Math.min(4, Math.ceil(
-      (Math.log1p(total) / maxLogTraffic) * 4,
-    ))));
-  }
 
   const batches = new Map<string, OverviewBundle[]>();
-  for (const bundle of bundles.slice(0, maxBundles)) {
+  for (const bundle of bundles) {
     const key = `${bundle.group}:${bundle.weight}`;
     const batch = batches.get(key);
     if (batch) batch.push(bundle);
@@ -1356,11 +1477,26 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     ) => {
       const appendBundle = (bundle: OverviewBundle) => {
         ctx.moveTo(bundle.startX, bundle.startY);
-        ctx.quadraticCurveTo(bundle.controlX, bundle.controlY, bundle.endX, bundle.endY);
+        if (bundle.route === "corridor") {
+          ctx.bezierCurveTo(
+            bundle.control1X,
+            bundle.control1Y,
+            bundle.control2X,
+            bundle.control2Y,
+            bundle.endX,
+            bundle.endY,
+          );
+        } else {
+          ctx.quadraticCurveTo(bundle.control1X, bundle.control1Y, bundle.endX, bundle.endY);
+        }
         // A constant-screen-size chevron encodes direction without adding a
         // separate stroke per edge bundle.
-        const tangentX = bundle.endX - bundle.controlX;
-        const tangentY = bundle.endY - bundle.controlY;
+        const tangentX = bundle.endX - (
+          bundle.route === "corridor" ? bundle.control2X : bundle.control1X
+        );
+        const tangentY = bundle.endY - (
+          bundle.route === "corridor" ? bundle.control2Y : bundle.control1Y
+        );
         const tangentLength = Math.max(1, Math.hypot(tangentX, tangentY));
         const unitX = tangentX / tangentLength;
         const unitY = tangentY / tangentLength;
@@ -1415,6 +1551,19 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
             clusterMapRef.current.get(bundle.sourceId)?.domain_id === activeDomainId
             || clusterMapRef.current.get(bundle.targetId)?.domain_id === activeDomainId
           );
+      // Keep architecture flows in the negative space between communities.
+      // A single even-odd clip masks every disc in one batched operation, so
+      // unrelated routes can pass behind scopes without visually cutting
+      // through them or adding per-edge obstacle work during redraws.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(-10_000_000, -10_000_000, 20_000_000, 20_000_000);
+      for (const cluster of clustersRef.current) {
+        const maskRadius = cluster.radius + 1.5 / tk;
+        ctx.moveTo(cluster.x + maskRadius, cluster.y);
+        ctx.arc(cluster.x, cluster.y, maskRadius, 0, Math.PI * 2);
+      }
+      ctx.clip("evenodd");
       drawBundleBatches(
         clusterBundleBatchesRef.current,
         0.78,
@@ -1422,6 +1571,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         activeCommunityId,
         touchesActiveDomain,
       );
+      ctx.restore();
     }
 
     // Pass 1: default (non-highlighted) edges — single path, single stroke.
