@@ -2,7 +2,8 @@
 // Read-only access to the V1 code graph SQLite DB.
 
 import Database from 'better-sqlite3';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { BULK_CHUNK_SIZE } from '../constants.js';
 import { resolveProjectStoragePath } from '../storage/project-path.js';
 
@@ -27,11 +28,53 @@ export interface CodeEdge {
   properties_json: string;
 }
 
+export interface BulkEdgesResult {
+  edges: Array<{ source: number; target: number; type: string }>;
+  strategy: 'connectivity-first-dual-cap-v1';
+  total_induced_edges: number;
+  returned_edges: number;
+  edges_truncated: boolean;
+  limit_per_direction: number;
+  available_by_type: Record<string, number>;
+  returned_by_type: Record<string, number>;
+}
+
+export interface ExactNeighborhoodPage {
+  anchor: CodeNode;
+  neighbors: Array<{ edge: CodeEdge; node: CodeNode }>;
+  total_inbound: number;
+  total_outbound: number;
+  total_unique_edges: number;
+  next_after_edge_id: number | null;
+}
+
+export interface ExactNodeSearchPage {
+  nodes: CodeNode[];
+  total_matches: number;
+  next_after_rank: number | null;
+  next_after_node_id: number | null;
+}
+
+export interface ArchitectureDomainSummary {
+  key: string;
+  node_count: number;
+  file_count: number;
+  representative: CodeNode;
+}
+
+export type GraphSnapshotResult<T> =
+  | { ok: true; graph_revision: string; value: T }
+  | {
+      ok: false;
+      graph_revision: string;
+      expected_graph_revision: string;
+    };
+
 // ── Row types (what SQLite actually returns) ──────────────────────────────
 // R59: same pattern as store.ts R58 — replace `as any` casts with proper row
 // types so the compiler catches column-name typos and schema drift at build time.
 
-/** Raw row from `SELECT * FROM nodes`. */
+/** Raw row from `SELECT * FROM nodes` across current and legacy V1 schemas. */
 interface CodeNodeRow {
   id: number;
   project: string;
@@ -41,8 +84,11 @@ interface CodeNodeRow {
   file_path: string;
   start_line: number;
   end_line: number;
-  properties_json: string;
+  properties_json?: string | null;
+  properties?: string | null;
 }
+
+type PropertiesColumn = 'properties_json' | 'properties' | 'both' | null;
 
 // CodeEdgeRow is not defined here because edges are always queried with column
 // aliases (e.id AS edge_id, etc.) to avoid duplicate-name collisions with nodes
@@ -148,12 +194,59 @@ function escapeLike(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
 }
 
+interface NeighborhoodCountRow {
+  inbound: number;
+  outbound: number;
+  self_loops: number;
+}
+
+function detectPropertiesColumn(
+  db: Database.Database,
+  table: 'nodes' | 'edges',
+): PropertiesColumn {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  const hasJson = columns.some((column) => column.name === 'properties_json');
+  const hasLegacy = columns.some((column) => column.name === 'properties');
+  if (hasJson && hasLegacy) return 'both';
+  if (hasJson) return 'properties_json';
+  if (hasLegacy) return 'properties';
+  return null;
+}
+
+function rowPropertiesJson(row: CodeNodeRow): string {
+  return row.properties_json || row.properties || '{}';
+}
+
+const READER_PROCESS_EPOCH = randomUUID();
+let nextReaderEpoch = 0;
+
+function databaseIdentity(dbPath: string): string {
+  let canonicalPath = dbPath;
+  try {
+    canonicalPath = realpathSync.native(dbPath);
+  } catch {
+    // The constructor already proved that the path exists. Keep the original
+    // absolute path if identity metadata becomes unavailable concurrently.
+  }
+  try {
+    const stat = statSync(dbPath, { bigint: true });
+    return `${canonicalPath}\0${stat.dev}:${stat.ino}`;
+  } catch {
+    return canonicalPath;
+  }
+}
+
 export function defaultCodeDbPath(project: string): string {
   return resolveProjectStoragePath(project, '.db');
 }
 
 export class CodeGraphReader {
   private db: Database.Database;
+  private readonly nodePropertiesColumn!: PropertiesColumn;
+  private readonly edgePropertiesColumn!: PropertiesColumn;
+  private readonly revisionIdentity: string;
+  private cachedDataVersion = -1;
+  private cachedGraphRevision = '';
 
   // R59: hot-path prepared statements, prepared once in the constructor.
   // getNodeById and findNodeByQualifiedName are called on every MCP tool
@@ -174,6 +267,8 @@ export class CodeGraphReader {
         `  4. Set XDG_CACHE_HOME to point to a non-default cache directory if configured`
       );
     }
+    const readerEpoch = ++nextReaderEpoch;
+    this.revisionIdentity = `${databaseIdentity(dbPath)}\0${READER_PROCESS_EPOCH}:${readerEpoch}`;
     this.db = new Database(dbPath, { readonly: true, fileMustExist: true });
     try {
       // Set busy_timeout to handle concurrent writes from V1 engine gracefully.
@@ -184,6 +279,11 @@ export class CodeGraphReader {
       // getBulkEdges/getBulkNodeDegrees on large graphs).
       this.db.pragma('temp_store = MEMORY');
       this.db.pragma('cache_size = -65536');
+      // Current V2 stores expose `properties_json`; original V1 stores used
+      // `properties`. Detect the physical columns once so every reader method
+      // presents the stable CodeNode/CodeEdge `properties_json` contract.
+      this.nodePropertiesColumn = detectPropertiesColumn(this.db, 'nodes');
+      this.edgePropertiesColumn = detectPropertiesColumn(this.db, 'edges');
       // NOTE: do NOT set `journal_mode = WAL` on a readonly connection — it's a no-op or error.
       // V1 sets WAL when it opens the DB for writing; the readonly reader inherits it.
       // R59: prepare hot-path statements once. These two single-row lookups are
@@ -201,6 +301,75 @@ export class CodeGraphReader {
 
   close(): void {
     this.db.close();
+  }
+
+  /**
+   * Opaque revision of the graph currently visible to this reader.
+   *
+   * PRAGMA data_version changes when another SQLite connection commits. The
+   * physical identity and reader epoch make replacement/reopen fail closed,
+   * because data_version values are only comparable on the same connection.
+   */
+  getGraphRevision(): string {
+    const dataVersion = Number(this.db.pragma('data_version', { simple: true }));
+    if (!Number.isSafeInteger(dataVersion) || dataVersion < 0) {
+      throw new Error('SQLite returned an invalid PRAGMA data_version');
+    }
+    if (dataVersion === this.cachedDataVersion && this.cachedGraphRevision) {
+      return this.cachedGraphRevision;
+    }
+    const digest = createHash('sha256')
+      .update(this.revisionIdentity)
+      .update('\0')
+      .update(String(dataVersion))
+      .digest('base64url')
+      .slice(0, 22);
+    this.cachedDataVersion = dataVersion;
+    this.cachedGraphRevision = `graph-reader-v1:${digest}`;
+    return this.cachedGraphRevision;
+  }
+
+  /**
+   * Run a set of synchronous graph reads against one SQLite snapshot. Cursor
+   * validation happens after the read transaction begins, closing the race in
+   * which a writer could commit between revision validation and the first
+   * page/count query.
+   */
+  withGraphSnapshot<T>(
+    expectedGraphRevision: string | null,
+    read: (graphRevision: string) => T,
+  ): GraphSnapshotResult<T> {
+    type SnapshotAttempt = GraphSnapshotResult<T> | { retry: true };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // Observe once before BEGIN and once after establishing the read
+      // snapshot. If a commit lands in that window, discard the attempt so a
+      // revision can never describe a different snapshot.
+      const revisionBeforeSnapshot = this.getGraphRevision();
+      const transaction = this.db.transaction((): SnapshotAttempt => {
+        this.db.prepare('SELECT 1 FROM sqlite_schema LIMIT 1').get();
+        const graphRevision = this.getGraphRevision();
+        if (graphRevision !== revisionBeforeSnapshot) return { retry: true };
+        if (expectedGraphRevision !== null && expectedGraphRevision !== graphRevision) {
+          return {
+            ok: false,
+            graph_revision: graphRevision,
+            expected_graph_revision: expectedGraphRevision,
+          };
+        }
+        return { ok: true, graph_revision: graphRevision, value: read(graphRevision) };
+      });
+      const result = transaction.deferred();
+      if ('retry' in result) continue;
+      return result;
+    }
+    throw new Error('Graph changed repeatedly while opening a stable read snapshot');
+  }
+
+  private propertiesExpression(alias: string, column: PropertiesColumn): string {
+    if (column === 'both') {
+      return `COALESCE(NULLIF(${alias}.properties_json, ''), NULLIF(${alias}.properties, ''), '{}')`;
+    }
+    return column ? `${alias}.${column}` : "'{}'";
   }
 
   getNodeById(id: number): CodeNode | null {
@@ -254,15 +423,79 @@ export class CodeGraphReader {
     return this.listNodes(project, { label: 'File', limit });
   }
 
+  /**
+   * Return exact top-level path-domain counts plus one stable representative.
+   * A File is preferred when the domain has one, preserving overview coverage;
+   * domains containing only other node labels still remain visible. This stays
+   * exhaustive without transferring every node row to JavaScript, so a domain
+   * indexed after the first 10k files cannot disappear.
+   */
+  listArchitectureDomains(project: string): ArchitectureDomainSummary[] {
+    const rows = this.db
+      .prepare(
+        `WITH normalized_nodes AS (
+           SELECT n.id, n.label,
+             TRIM(
+               CASE
+                 WHEN SUBSTR(REPLACE(n.file_path, CHAR(92), '/'), 2, 2) = ':/'
+                   THEN SUBSTR(REPLACE(n.file_path, CHAR(92), '/'), 4)
+                 ELSE REPLACE(n.file_path, CHAR(92), '/')
+               END,
+               '/'
+             ) AS normalized_path
+           FROM nodes n
+           WHERE n.project = ?
+         ), node_domains AS (
+           SELECT id, label,
+             CASE
+               WHEN normalized_path = '' THEN '(virtual)'
+               WHEN INSTR(normalized_path, '/') = 0 THEN
+                 CASE
+                   WHEN label IN ('Directory', 'Folder') THEN normalized_path
+                   ELSE '(root)'
+                 END
+               ELSE SUBSTR(normalized_path, 1, INSTR(normalized_path, '/') - 1)
+             END AS architecture_domain
+           FROM normalized_nodes
+         ), domain_summaries AS (
+           SELECT
+             architecture_domain,
+             COUNT(*) AS node_count,
+             SUM(CASE WHEN label = 'File' THEN 1 ELSE 0 END) AS file_count,
+             COALESCE(MIN(CASE WHEN label = 'File' THEN id END), MIN(id)) AS representative_id
+           FROM node_domains
+           GROUP BY architecture_domain
+         )
+         SELECT n.*, d.architecture_domain, d.node_count, d.file_count
+         FROM domain_summaries d
+         JOIN nodes n ON n.id = d.representative_id AND n.project = ?
+         ORDER BY d.architecture_domain ASC, n.id ASC`,
+      )
+      .all(project, project) as Array<CodeNodeRow & {
+        architecture_domain: string;
+        node_count: number;
+        file_count: number;
+      }>;
+    return rows.map((row) => ({
+      key: row.architecture_domain,
+      node_count: row.node_count,
+      file_count: row.file_count,
+      representative: deserializeCodeNode(row),
+    }));
+  }
+
   getNeighbors(nodeId: number, direction: 'in' | 'out' | 'both' = 'both', limit = 100): { edge: CodeEdge; node: CodeNode }[] {
     const results: { edge: CodeEdge; node: CodeNode }[] = [];
-    // CRITICAL: use column aliases — both edges and nodes tables have `id`, `project`, `properties_json`.
-    // Without aliases, better-sqlite3 returns the last column value for duplicate names, corrupting edge.id and edge.properties_json.
+    // CRITICAL: use column aliases — both edges and nodes tables have `id`,
+    // `project`, and a properties column. Without aliases, better-sqlite3
+    // returns the last duplicate value and corrupts the edge payload.
+    const edgeProperties = this.propertiesExpression('e', this.edgePropertiesColumn);
+    const nodeProperties = this.propertiesExpression('n', this.nodePropertiesColumn);
     const EDGE_COLS = `e.id AS edge_id, e.project AS edge_project, e.source_id, e.target_id,
-                       e.type AS edge_type, e.properties_json AS edge_properties`;
+                       e.type AS edge_type, ${edgeProperties} AS edge_properties`;
     const NODE_COLS = `n.id AS node_id, n.project AS node_project, n.label, n.name,
                        n.qualified_name, n.file_path, n.start_line, n.end_line,
-                       n.properties_json AS node_properties`;
+                       ${nodeProperties} AS node_properties`;
 
     if (direction === 'out' || direction === 'both') {
       const rows = this.db
@@ -333,6 +566,112 @@ export class CodeGraphReader {
       }
     }
     return results;
+  }
+
+  /**
+   * Strict, project-scoped, id-ordered page for Graph UI drill-down.
+   * Unlike the legacy MCP helper, this never swallows SQL errors and applies
+   * one combined page limit across inbound and outbound relationships.
+   */
+  getExactNeighborhoodPage(
+    project: string,
+    nodeId: number,
+    afterEdgeId = 0,
+    limit = 100,
+  ): ExactNeighborhoodPage | null {
+    const anchorRow = this.db
+      .prepare('SELECT * FROM nodes WHERE project = ? AND id = ?')
+      .get(project, nodeId) as CodeNodeRow | undefined;
+    if (!anchorRow) return null;
+
+    const countRow = this.db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM edges WHERE project = ? AND target_id = ?) AS inbound,
+           (SELECT COUNT(*) FROM edges WHERE project = ? AND source_id = ?) AS outbound,
+           (SELECT COUNT(*) FROM edges
+              WHERE project = ? AND source_id = ? AND target_id = ?) AS self_loops`,
+      )
+      .get(project, nodeId, project, nodeId, project, nodeId, nodeId) as NeighborhoodCountRow;
+
+    const safeAfterEdgeId = Math.max(0, Math.floor(afterEdgeId));
+    const safeLimit = Math.max(1, Math.min(250, Math.floor(limit)));
+    const edgeProperties = this.propertiesExpression('e', this.edgePropertiesColumn);
+    const nodeProperties = this.propertiesExpression('n', this.nodePropertiesColumn);
+    const rows = this.db
+      .prepare(
+        `WITH incident_edges AS (
+           SELECT * FROM edges
+           WHERE project = ? AND source_id = ? AND id > ?
+           UNION ALL
+           SELECT * FROM edges
+           WHERE project = ? AND target_id = ? AND source_id <> ? AND id > ?
+         )
+         SELECT
+           e.id AS edge_id, e.project AS edge_project,
+           e.source_id, e.target_id, e.type AS edge_type,
+           ${edgeProperties} AS edge_properties,
+           n.id AS node_id, n.project AS node_project,
+           n.label, n.name, n.qualified_name, n.file_path,
+           n.start_line, n.end_line, ${nodeProperties} AS node_properties
+         FROM incident_edges e
+         JOIN nodes n
+           ON n.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
+          AND n.project = e.project
+         ORDER BY e.id ASC
+         LIMIT ?`,
+      )
+      // Split the two directions so SQLite can use idx_edges_source and
+      // idx_edges_target. The equivalent OR predicate is planned as a scan of
+      // every project edge once ORDER BY id is present. Exclude self-loops from
+      // the inbound branch so they remain one unique relationship in the page.
+      .all(
+        project,
+        nodeId,
+        safeAfterEdgeId,
+        project,
+        nodeId,
+        nodeId,
+        safeAfterEdgeId,
+        nodeId,
+        safeLimit + 1,
+      ) as NeighborRow[];
+    const hasMore = rows.length > safeLimit;
+    const pageRows = hasMore ? rows.slice(0, safeLimit) : rows;
+    const neighbors = pageRows.map((row) => ({
+      edge: {
+        id: row.edge_id,
+        project: row.edge_project,
+        source_id: row.source_id,
+        target_id: row.target_id,
+        type: row.edge_type,
+        properties_json: row.edge_properties ?? '{}',
+      },
+      node: deserializeCodeNode({
+        id: row.node_id,
+        project: row.node_project,
+        label: row.label,
+        name: row.name,
+        qualified_name: row.qualified_name,
+        file_path: row.file_path,
+        start_line: row.start_line,
+        end_line: row.end_line,
+        properties_json: row.node_properties ?? '{}',
+      }),
+    }));
+
+    return {
+      anchor: deserializeCodeNode(anchorRow),
+      neighbors,
+      total_inbound: countRow?.inbound ?? 0,
+      total_outbound: countRow?.outbound ?? 0,
+      total_unique_edges: (countRow?.inbound ?? 0)
+        + (countRow?.outbound ?? 0)
+        - (countRow?.self_loops ?? 0),
+      next_after_edge_id: hasMore && neighbors.length > 0
+        ? neighbors[neighbors.length - 1].edge.id
+        : null,
+    };
   }
 
   /**
@@ -487,56 +826,162 @@ export class CodeGraphReader {
     nodeIds: number[],
     limitPerNode = 0,
   ): Array<{ source: number; target: number; type: string }> {
-    if (nodeIds.length === 0) return [];
-    const nodeIdSet = new Set(nodeIds);
-    const seenEdgeKeys = new Set<string>();
-    const result: Array<{ source: number; target: number; type: string }> = [];
-    const visibleRows: EdgeTripleRow[] = [];
-    const perNodeOutCount = new Map<number, number>();
-    const perNodeInCount = new Map<number, number>();
+    return this.getBulkEdgesWithStats(nodeIds, limitPerNode).edges;
+  }
 
-    const tryPush = (row: EdgeTripleRow, nodeSide: 'source' | 'target') => {
-      const source = row.source_id;
-      const target = row.target_id;
-      if (!nodeIdSet.has(source) || !nodeIdSet.has(target)) return;
-      const key = `${source}-${target}-${row.type}`;
-      if (seenEdgeKeys.has(key)) return;
-      if (limitPerNode > 0) {
-        const cap = nodeSide === 'source' ? perNodeOutCount : perNodeInCount;
-        const node = nodeSide === 'source' ? source : target;
-        const current = cap.get(node) ?? 0;
-        if (current >= limitPerNode) return;
-        cap.set(node, current + 1);
-      }
-      seenEdgeKeys.add(key);
-      result.push({ source, target, type: row.type });
+  /**
+   * Fetch internal edges with honest directional caps and coverage metadata.
+   * Every admitted edge consumes one source-out and one target-in slot. The old
+   * two-pass deduplication only charged whichever side saw the edge first,
+   * allowing both advertised caps to be exceeded substantially.
+   */
+  getBulkEdgesWithStats(nodeIds: number[], limitPerNode = 0): BulkEdgesResult {
+    const empty: BulkEdgesResult = {
+      edges: [],
+      strategy: 'connectivity-first-dual-cap-v1',
+      total_induced_edges: 0,
+      returned_edges: 0,
+      edges_truncated: false,
+      limit_per_direction: Math.max(0, limitPerNode),
+      available_by_type: {},
+      returned_by_type: {},
     };
+    if (nodeIds.length === 0) return empty;
+    const nodeIdSet = new Set(nodeIds);
+    const visibleNodeIdsJson = JSON.stringify([...nodeIdSet]);
+    const seenEdgeKeys = new Set<string>();
+    const visibleRows: EdgeTripleRow[] = [];
 
     for (let i = 0; i < nodeIds.length; i += BULK_CHUNK_SIZE) {
       const chunk = nodeIds.slice(i, i + BULK_CHUNK_SIZE);
       const placeholders = chunk.map(() => '?').join(',');
-      try {
-        // Out-edges: chunk nodes are sources.
-        const outRows = this.db
-          .prepare(
-            `SELECT source_id, target_id, type FROM edges WHERE source_id IN (${placeholders}) ORDER BY id ASC`,
-          )
-          .all(...chunk) as EdgeTripleRow[];
-        for (const row of outRows) {
-          if (!nodeIdSet.has(row.target_id)) continue;
-          visibleRows.push(row);
-          tryPush(row, 'source');
-        }
-      } catch {
-        // ignore — return partial results for this chunk
+      // Fail the whole overview on SQL errors. Returning a partial result here
+      // would make total_induced_edges and edges_truncated look authoritative.
+      const outRows = this.db
+        .prepare(
+          `SELECT source_id, target_id, type
+           FROM edges
+           WHERE source_id IN (${placeholders})
+             AND target_id IN (
+               SELECT CAST(value AS INTEGER) FROM json_each(?)
+             )
+           ORDER BY id ASC`,
+        )
+        // Keep source-side chunking for the existing deterministic ordering,
+        // but make SQLite return only induced edges. Previously a visible hub
+        // materialized every external out-edge before JavaScript discarded it.
+        .all(...chunk, visibleNodeIdsJson) as EdgeTripleRow[];
+      for (const row of outRows) {
+        const key = `${row.source_id}-${row.target_id}-${row.type}`;
+        if (seenEdgeKeys.has(key)) continue;
+        seenEdgeKeys.add(key);
+        visibleRows.push(row);
       }
     }
-    // Reuse the same rows for the incoming-direction cap. An internal edge
-    // always has a visible source, so no target-side SQL scan is needed.
-    if (limitPerNode > 0) {
-      for (const row of visibleRows) tryPush(row, 'target');
+    const availableByType: Record<string, number> = {};
+    for (const row of visibleRows) {
+      availableByType[row.type] = (availableByType[row.type] ?? 0) + 1;
     }
-    return result;
+
+    if (limitPerNode <= 0) {
+      return {
+        edges: visibleRows.map((row) => ({
+          source: row.source_id,
+          target: row.target_id,
+          type: row.type,
+        })),
+        strategy: 'connectivity-first-dual-cap-v1',
+        total_induced_edges: visibleRows.length,
+        returned_edges: visibleRows.length,
+        edges_truncated: false,
+        limit_per_direction: 0,
+        available_by_type: availableByType,
+        returned_by_type: { ...availableByType },
+      };
+    }
+
+    const edgePriority = (type: string): number => {
+      switch (type.toUpperCase()) {
+        case 'CONTAINS':
+        case 'DECLARES':
+        case 'DEFINES':
+        case 'HAS_METHOD':
+          return 0;
+        case 'EXTENDS':
+        case 'IMPLEMENTS':
+        case 'IMPORTS':
+          return 1;
+        case 'CALLS':
+          return 2;
+        default:
+          return 3;
+      }
+    };
+    const orderedRows = visibleRows
+      .map((row, index) => ({ row, index }))
+      .sort((a, b) => edgePriority(a.row.type) - edgePriority(b.row.type) || a.index - b.index)
+      .map(({ row }) => row);
+
+    const perNodeOutCount = new Map<number, number>();
+    const perNodeInCount = new Map<number, number>();
+    const edges: Array<{ source: number; target: number; type: string }> = [];
+    const returnedByType: Record<string, number> = {};
+    const selectedKeys = new Set<string>();
+    const parent = new Map<number, number>(nodeIds.map((id) => [id, id]));
+    const findRoot = (id: number): number => {
+      let root = parent.get(id) ?? id;
+      while ((parent.get(root) ?? root) !== root) root = parent.get(root)!;
+      let current = id;
+      while ((parent.get(current) ?? current) !== root) {
+        const next = parent.get(current) ?? current;
+        parent.set(current, root);
+        current = next;
+      }
+      return root;
+    };
+    const union = (source: number, target: number) => {
+      const sourceRoot = findRoot(source);
+      const targetRoot = findRoot(target);
+      if (sourceRoot !== targetRoot) parent.set(targetRoot, sourceRoot);
+    };
+    const canAdmit = (row: EdgeTripleRow): boolean => (
+      (perNodeOutCount.get(row.source_id) ?? 0) < limitPerNode
+      && (perNodeInCount.get(row.target_id) ?? 0) < limitPerNode
+    );
+    const admit = (row: EdgeTripleRow) => {
+      const sourceOut = perNodeOutCount.get(row.source_id) ?? 0;
+      const targetIn = perNodeInCount.get(row.target_id) ?? 0;
+      perNodeOutCount.set(row.source_id, sourceOut + 1);
+      perNodeInCount.set(row.target_id, targetIn + 1);
+      edges.push({ source: row.source_id, target: row.target_id, type: row.type });
+      returnedByType[row.type] = (returnedByType[row.type] ?? 0) + 1;
+      selectedKeys.add(`${row.source_id}-${row.target_id}-${row.type}`);
+    };
+
+    // First reserve scarce directional slots for a spanning forest. Cycles
+    // cannot improve overview connectivity and are filled only afterwards.
+    for (const row of orderedRows) {
+      if (row.source_id === row.target_id || findRoot(row.source_id) === findRoot(row.target_id)) continue;
+      if (!canAdmit(row)) continue;
+      admit(row);
+      union(row.source_id, row.target_id);
+    }
+    for (const row of orderedRows) {
+      const key = `${row.source_id}-${row.target_id}-${row.type}`;
+      if (selectedKeys.has(key) || !canAdmit(row)) continue;
+      admit(row);
+    }
+
+    return {
+      edges,
+      strategy: 'connectivity-first-dual-cap-v1',
+      total_induced_edges: visibleRows.length,
+      returned_edges: edges.length,
+      edges_truncated: edges.length < visibleRows.length,
+      limit_per_direction: Math.max(0, limitPerNode),
+      available_by_type: availableByType,
+      returned_by_type: returnedByType,
+    };
   }
 
   /**
@@ -574,8 +1019,9 @@ export class CodeGraphReader {
     // Per-anchor per-direction counters (so we cap 50 out AND 50 in, not 100 total).
     const outCount = new Map<number, number>();
     const inCount = new Map<number, number>();
+    const edgeProperties = this.propertiesExpression('e', this.edgePropertiesColumn);
     const EDGE_COLS = `e.id AS edge_id, e.project AS edge_project, e.source_id, e.target_id,
-                       e.type AS edge_type, e.properties_json AS edge_properties`;
+                       e.type AS edge_type, ${edgeProperties} AS edge_properties`;
 
     const makeEdge = (row: BulkEdgeRow): CodeEdge => ({
       id: row.edge_id,
@@ -848,6 +1294,99 @@ export class CodeGraphReader {
   }
 
   /**
+   * Exhaustive literal substring search for the Graph UI. Results are scoped
+   * to one project, ordered by stable node id, and paged without OFFSET so a
+   * caller never has to download the overview sample before searching.
+   */
+  searchNodesExactPage(
+    project: string,
+    query: string,
+    afterRank = -1,
+    afterNodeId = 0,
+    limit = 50,
+  ): ExactNodeSearchPage {
+    const safeQuery = query.trim();
+    const safeAfterRank = Number.isSafeInteger(afterRank)
+      ? Math.max(-1, Math.min(5, afterRank))
+      : -1;
+    const safeAfterNodeId = Number.isSafeInteger(afterNodeId)
+      ? Math.max(0, afterNodeId)
+      : 0;
+    const safeLimit = Number.isSafeInteger(limit)
+      ? Math.max(1, Math.min(250, limit))
+      : 50;
+    if (safeQuery.length === 0) {
+      return {
+        nodes: [],
+        total_matches: 0,
+        next_after_rank: null,
+        next_after_node_id: null,
+      };
+    }
+
+    const portableQuery = normalizePathForSearch(safeQuery);
+    const prefixPattern = `${escapeLike(safeQuery)}%`;
+    const rawPattern = `%${escapeLike(safeQuery)}%`;
+    const portablePattern = `%${escapeLike(portableQuery)}%`;
+    const matchSql = `(
+      name LIKE ? ESCAPE '\\'
+      OR REPLACE(qualified_name, CHAR(92), '/') LIKE ? ESCAPE '\\'
+      OR REPLACE(file_path, CHAR(92), '/') LIKE ? ESCAPE '\\'
+    )`;
+    const totalMatches = (
+      this.db
+        .prepare(`SELECT COUNT(*) AS c FROM nodes WHERE project = ? AND ${matchSql}`)
+        .get(project, rawPattern, portablePattern, portablePattern) as CountRow
+    ).c;
+    const rankSql = `CASE
+      WHEN name = ? COLLATE NOCASE THEN 0
+      WHEN REPLACE(qualified_name, CHAR(92), '/') = ? COLLATE NOCASE
+        OR REPLACE(file_path, CHAR(92), '/') = ? COLLATE NOCASE THEN 1
+      WHEN name LIKE ? ESCAPE '\\' THEN 2
+      WHEN name LIKE ? ESCAPE '\\' THEN 3
+      WHEN REPLACE(qualified_name, CHAR(92), '/') LIKE ? ESCAPE '\\' THEN 4
+      ELSE 5
+    END`;
+    const rows = this.db
+      .prepare(
+        `WITH ranked_matches AS (
+           SELECT nodes.*, ${rankSql} AS match_rank
+           FROM nodes
+           WHERE project = ? AND ${matchSql}
+         )
+         SELECT * FROM ranked_matches
+         WHERE match_rank > ? OR (match_rank = ? AND id > ?)
+         ORDER BY match_rank ASC, id ASC
+         LIMIT ?`,
+      )
+      .all(
+        safeQuery,
+        portableQuery,
+        portableQuery,
+        prefixPattern,
+        rawPattern,
+        portablePattern,
+        project,
+        rawPattern,
+        portablePattern,
+        portablePattern,
+        safeAfterRank,
+        safeAfterRank,
+        safeAfterNodeId,
+        safeLimit + 1,
+      ) as Array<CodeNodeRow & { match_rank: number }>;
+    const hasMore = rows.length > safeLimit;
+    const pageRows = hasMore ? rows.slice(0, safeLimit) : rows;
+    const lastRow = pageRows[pageRows.length - 1];
+    return {
+      nodes: pageRows.map(deserializeCodeNode),
+      total_matches: totalMatches,
+      next_after_rank: hasMore && lastRow ? lastRow.match_rank : null,
+      next_after_node_id: hasMore && lastRow ? lastRow.id : null,
+    };
+  }
+
+  /**
    * Return the most connected nodes for one label.
    *
    * The Graph UI uses this as a building block for a balanced overview. The
@@ -880,6 +1419,7 @@ export class CodeGraphReader {
     const safeLimit = Math.max(0, Math.min(10000, Math.floor(limit)));
     if (safeLimit === 0 || labels.length === 0) return [];
     const placeholders = labels.map(() => '?').join(',');
+    const nodeProperties = this.propertiesExpression('n', this.nodePropertiesColumn);
     const rows = this.db
       .prepare(
         `SELECT n.*
@@ -903,10 +1443,10 @@ export class CodeGraphReader {
              THEN 1 ELSE 0
            END ASC,
            CASE
-             WHEN json_valid(n.properties_json) THEN
+             WHEN json_valid(${nodeProperties}) THEN
                CASE
-                 WHEN COALESCE(json_extract(n.properties_json, '$.is_exported'), 0) IN (1, 'true')
-                   OR COALESCE(json_extract(n.properties_json, '$.exported'), 0) IN (1, 'true')
+                 WHEN COALESCE(json_extract(${nodeProperties}, '$.is_exported'), 0) IN (1, 'true')
+                   OR COALESCE(json_extract(${nodeProperties}, '$.exported'), 0) IN (1, 'true')
                  THEN 1 ELSE 0
                END
              ELSE 0
@@ -964,12 +1504,13 @@ export class CodeGraphReader {
     // Use json_extract (SQLite 3.38+) for an indexed-style exact lookup.
     // Fall back to JS-side filtering if json_extract is unavailable.
     try {
+      const nodeProperties = this.propertiesExpression('nodes', this.nodePropertiesColumn);
       const row = this.db
         .prepare(
           `SELECT * FROM nodes
            WHERE project = ? AND label = 'Route'
-             AND LOWER(json_extract(properties_json, '$.route_method')) = LOWER(?)
-             AND json_extract(properties_json, '$.route_path') = ?
+             AND LOWER(json_extract(${nodeProperties}, '$.route_method')) = LOWER(?)
+             AND json_extract(${nodeProperties}, '$.route_path') = ?
            LIMIT 1`
         )
         .get(project, method.toUpperCase(), path) as CodeNodeRow | undefined;
@@ -985,7 +1526,7 @@ export class CodeGraphReader {
       for (const row of rows) {
         let props: Record<string, unknown>;
         try {
-          props = JSON.parse(row.properties_json || '{}');
+          props = JSON.parse(rowPropertiesJson(row));
         } catch {
           continue; // Skip corrupted row
         }
@@ -1035,6 +1576,6 @@ function deserializeCodeNode(row: CodeNodeRow): CodeNode {
     file_path: row.file_path,
     start_line: row.start_line,
     end_line: row.end_line,
-    properties_json: row.properties_json || '{}',
+    properties_json: rowPropertiesJson(row),
   };
 }

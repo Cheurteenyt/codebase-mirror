@@ -19,7 +19,13 @@ import {
 import { defaultCodeDbPath } from '../bridge/sqlite-ro.js';
 import { getNotifyHub } from './notify-hub.js';
 import type { IndexJob, RouteContext, RouteHandler } from './types.js';
-import { routeDashboard, routeGraphStatus, routeLayout } from './routes/graph.js';
+import {
+  routeDashboard,
+  routeGraphStatus,
+  routeLayout,
+  routeNeighborhood,
+  routeNodeSearch,
+} from './routes/graph.js';
 import { routeProjectDelete, routeProjectHealth, routeProjects } from './routes/project.js';
 import { routeAdrGet, routeAdrPost, routeHumanNotes } from './routes/human.js';
 import {
@@ -130,6 +136,8 @@ export class UiServer {
 
   private readonly routes: Map<string, RouteHandler> = new Map([
     ['GET /api/layout',          (ctx, u, r, s, p) => routeLayout(ctx, u, r, s, p)],
+    ['GET /api/neighborhood',    (ctx, u, r, s, p) => routeNeighborhood(ctx, u, r, s, p)],
+    ['GET /api/node-search',     (ctx, u, r, s, p) => routeNodeSearch(ctx, u, r, s, p)],
     ['GET /api/projects',        (ctx, u, r, s, p) => routeProjects(ctx, u, r, s, p)],
     ['GET /api/project-health',  (ctx, u, r, s, p) => routeProjectHealth(ctx, u, r, s, p)],
     ['GET /api/dashboard',       (ctx, u, r, s, p) => routeDashboard(ctx, u, r, s, p)],

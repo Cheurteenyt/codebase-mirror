@@ -36,11 +36,21 @@ export function ResizeHandle({ side, onResize }: ResizeHandleProps) {
 
   return (
     <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize ${side} graph panel`}
+      tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      className="w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors shrink-0"
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const physicalDelta = event.key === "ArrowRight" ? 10 : -10;
+        onResize(side === "left" ? physicalDelta : -physicalDelta);
+      }}
+      className="w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors shrink-0 focus-visible:outline-none focus-visible:bg-primary/50 focus-visible:ring-1 focus-visible:ring-primary/70"
     />
   );
 }

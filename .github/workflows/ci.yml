@@ -319,8 +319,9 @@ jobs:
       - name: Test
         run: npx vitest run
 
-  # ── Package: autonomous pack + install + CLI smoke ─────────────
+  # ── Package: autonomous pack + install + indexed Graph UI smoke ─
   package-smoke:
+    # Keep this exact display name in sync with the protect-main required check.
     name: npm pack + install + CLI smoke
     needs: preflight
     runs-on: ubuntu-latest
@@ -390,32 +391,83 @@ jobs:
 
       - name: Install tarball in temp directory
         run: |
-          mkdir -p /tmp/cbm-install
-          npm install --prefix /tmp/cbm-install "${{ env.TARBALL }}"
+          INSTALL_DIR="$RUNNER_TEMP/cbm-install"
+          mkdir -p "$INSTALL_DIR"
+          npm install --prefix "$INSTALL_DIR" "${{ env.TARBALL }}"
+          echo "CBM_INSTALL_DIR=$INSTALL_DIR" >> "$GITHUB_ENV"
 
       - name: CLI smoke test from arbitrary cwd
-        working-directory: /tmp
+        working-directory: ${{ runner.temp }}
         run: |
-          /tmp/cbm-install/node_modules/.bin/cbm-v2 --version
-          /tmp/cbm-install/node_modules/.bin/cbm-v2 --help
+          "$CBM_INSTALL_DIR/node_modules/.bin/cbm-v2" --version
+          "$CBM_INSTALL_DIR/node_modules/.bin/cbm-v2" --help
 
-      - name: Embedded UI HTTP smoke from arbitrary cwd
-        working-directory: /tmp
+      - name: Embedded packaged Graph UI data contract smoke
+        working-directory: ${{ runner.temp }}
         shell: bash
         run: |
+          set -euo pipefail
+
+          PROJECT="package-smoke"
+          FIXTURE_ROOT="$RUNNER_TEMP/cbm-package-smoke-fixture"
+          CACHE_ROOT="$RUNNER_TEMP/cbm-package-smoke-cache"
+          CBM_BIN="$CBM_INSTALL_DIR/node_modules/.bin/cbm-v2"
           UI_LOG="$RUNNER_TEMP/cbm-packed-ui.log"
-          /tmp/cbm-install/node_modules/.bin/cbm-v2 \
-            ui --project package-smoke --port 19749 >"$UI_LOG" 2>&1 &
-          UI_PID=$!
+          BASE_URL="http://127.0.0.1:19749"
+          UI_PID=""
+
           cleanup() {
-            kill "$UI_PID" 2>/dev/null || true
-            wait "$UI_PID" 2>/dev/null || true
+            status=$?
+            trap - EXIT INT TERM
+            if [ -n "$UI_PID" ]; then
+              kill "$UI_PID" 2>/dev/null || true
+              for _ in $(seq 1 20); do
+                if ! kill -0 "$UI_PID" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+              if kill -0 "$UI_PID" 2>/dev/null; then
+                kill -KILL "$UI_PID" 2>/dev/null || true
+              fi
+              wait "$UI_PID" 2>/dev/null || true
+            fi
+            if [ "$status" -ne 0 ] && [ -f "$UI_LOG" ]; then
+              echo "=== Packaged Graph UI log ===" >&2
+              cat "$UI_LOG" >&2
+            fi
+            exit "$status"
           }
           trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          mkdir -p "$FIXTURE_ROOT/src" "$CACHE_ROOT"
+          cat > "$FIXTURE_ROOT/src/package-smoke.ts" <<'TS'
+          export function packagedGraphTarget(value: number): number {
+            return value * 2;
+          }
+
+          export function packagedGraphCaller(): number {
+            return packagedGraphTarget(21);
+          }
+          TS
+
+          export XDG_CACHE_HOME="$CACHE_ROOT"
+          "$CBM_BIN" index \
+            --project "$PROJECT" \
+            --root "$FIXTURE_ROOT" \
+            --workers 0
+
+          "$CBM_BIN" ui --project "$PROJECT" --port 19749 >"$UI_LOG" 2>&1 &
+          UI_PID=$!
 
           READY=0
           for _ in $(seq 1 40); do
-            if curl --fail --silent http://127.0.0.1:19749/ >/dev/null; then
+            if ! kill -0 "$UI_PID" 2>/dev/null; then
+              break
+            fi
+            if curl --fail --silent "$BASE_URL/" >/dev/null; then
               READY=1
               break
             fi
@@ -425,9 +477,107 @@ jobs:
             cat "$UI_LOG" >&2
             exit 1
           fi
-          curl --fail --silent http://127.0.0.1:19749/ | grep -F 'id="root"'
-          curl --fail --silent http://127.0.0.1:19749/api/bootstrap \
-            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const x=JSON.parse(s);if(typeof x.csrf_token!=='string'||x.csrf_token.length<32)process.exit(1)})"
+
+          export BASE_URL PROJECT
+          node --input-type=module <<'NODE'
+          const baseUrl = process.env.BASE_URL;
+          const project = process.env.PROJECT;
+
+          function invariant(condition, message) {
+            if (!condition) throw new Error(message);
+          }
+
+          async function read(path, kind = 'json') {
+            const response = await fetch(`${baseUrl}${path}`);
+            const body = await response.text();
+            invariant(response.ok, `${path} returned ${response.status}: ${body}`);
+            if (kind === 'text') return body;
+            try {
+              return JSON.parse(body);
+            } catch (error) {
+              throw new Error(`${path} returned invalid JSON: ${error.message}`);
+            }
+          }
+
+          const html = await read('/', 'text');
+          invariant(html.includes('id="root"'), 'Packaged UI HTML is missing the React root');
+          const assetPaths = [...html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g)]
+            .map((match) => match[1]);
+          invariant(assetPaths.length >= 2, 'Packaged UI HTML did not reference JS and CSS assets');
+          for (const assetPath of assetPaths) {
+            const assetResponse = await fetch(`${baseUrl}${assetPath}`);
+            const assetBytes = await assetResponse.arrayBuffer();
+            const contentType = assetResponse.headers.get('content-type') ?? '';
+            invariant(assetResponse.ok, `${assetPath} returned ${assetResponse.status}`);
+            invariant(assetBytes.byteLength > 0, `${assetPath} was empty`);
+            if (assetPath.endsWith('.js')) {
+              invariant(contentType.includes('javascript'), `${assetPath} has content-type ${contentType}`);
+            } else if (assetPath.endsWith('.css')) {
+              invariant(contentType.includes('text/css'), `${assetPath} has content-type ${contentType}`);
+            }
+          }
+
+          const bootstrap = await read('/api/bootstrap');
+          invariant(
+            typeof bootstrap.csrf_token === 'string' && bootstrap.csrf_token.length >= 32,
+            'Bootstrap did not return a valid CSRF token',
+          );
+
+          const layout = await read(`/api/layout?project=${encodeURIComponent(project)}&max_nodes=100`);
+          invariant(layout.contract_version === 1, 'Layout contract version is not 1');
+          invariant(
+            /^graph-reader-v1:[A-Za-z0-9_-]{22}$/.test(layout.graph_revision),
+            'Layout did not expose a valid graph revision',
+          );
+          const catalog = layout.layout?.domain_catalog;
+          invariant(catalog?.exact === true, 'Layout domain_catalog is not exact');
+          invariant(catalog.counts_scope === 'all_nodes', 'Domain catalog does not cover all nodes');
+          invariant(Array.isArray(catalog.domains) && catalog.domains.length > 0, 'Domain catalog is empty');
+          invariant(
+            catalog.domains.reduce((sum, domain) => sum + domain.node_count, 0) === layout.total_nodes,
+            'Exact domain counts do not add up to layout.total_nodes',
+          );
+
+          const search = await read(
+            `/api/node-search?project=${encodeURIComponent(project)}&q=packagedGraphCaller&limit=10`,
+          );
+          invariant(search.contract_version === 1, 'Node search contract version is not 1');
+          invariant(search.exact === true, 'Node search is not exact');
+          invariant(
+            /^graph-reader-v1:[A-Za-z0-9_-]{22}$/.test(search.graph_revision),
+            'Node search did not expose a valid graph revision',
+          );
+          invariant(
+            search.graph_revision === layout.graph_revision,
+            'Layout and search were not read from the same graph revision',
+          );
+          const fixtureNode = search.nodes?.find((node) => node.name === 'packagedGraphCaller');
+          invariant(Number.isSafeInteger(fixtureNode?.id), 'Indexed fixture symbol was not found');
+
+          const neighborhood = await read(
+            `/api/neighborhood?project=${encodeURIComponent(project)}&node_id=${fixtureNode.id}&limit=10`,
+          );
+          invariant(neighborhood.contract_version === 1, 'Neighborhood contract version is not 1');
+          invariant(neighborhood.exact === true, 'Neighborhood is not exact');
+          invariant(
+            neighborhood.graph_revision === search.graph_revision,
+            'Search and neighborhood were not read from the same graph revision',
+          );
+          invariant(neighborhood.anchor?.id === fixtureNode.id, 'Neighborhood anchor does not match search');
+          invariant(neighborhood.anchor.total_unique_edges > 0, 'Fixture symbol has no indexed neighborhood');
+          invariant(neighborhood.page?.returned > 0, 'Neighborhood returned no fixture edges');
+          invariant(
+            neighborhood.edges?.every(
+              (edge) => edge.source === fixtureNode.id || edge.target === fixtureNode.id,
+            ),
+            'Neighborhood returned an edge unrelated to its anchor',
+          );
+
+          console.log(
+            `Packaged Graph UI verified: ${layout.total_nodes} nodes, fixture node ${fixtureNode.id}, `
+              + `${neighborhood.page.returned} neighborhood edge(s).`,
+          );
+          NODE
 
   # ── Docker: image + CLI + non-root smoke ───────────────────────
   docker-smoke:

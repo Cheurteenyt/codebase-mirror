@@ -29,4 +29,17 @@ describe("R40 (UI-11): ResizeHandle releases drag on pointerCancel", () => {
     fireEvent.pointerMove(handle, { clientX: 200, pointerId: 1 });
     expect(onResize.mock.calls.length).toBe(callsDuringDrag); // no new calls
   });
+
+  it("is keyboard accessible and moves in physical screen direction", () => {
+    const onResize = vi.fn();
+    const { getByRole } = render(<ResizeHandle side="right" onResize={onResize} />);
+    const handle = getByRole("separator", { name: "Resize right graph panel" });
+
+    expect(handle).toHaveAttribute("tabindex", "0");
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+
+    expect(onResize).toHaveBeenNthCalledWith(1, -10);
+    expect(onResize).toHaveBeenNthCalledWith(2, 10);
+  });
 });

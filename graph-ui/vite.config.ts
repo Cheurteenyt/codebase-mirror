@@ -27,6 +27,9 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: true,
+    // Bundle budgets resolve real entry and dynamic-entry assets from this
+    // manifest instead of guessing from hash-prefixed directory names.
+    manifest: true,
   },
   // R44 (Part C): Vitest configuration. The dependencies (@testing-library/react,
   // @testing-library/jest-dom, jsdom, vitest) were already installed in package.json

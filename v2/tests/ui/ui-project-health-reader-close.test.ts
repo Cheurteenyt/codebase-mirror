@@ -27,6 +27,24 @@ vi.mock('../../src/bridge/sqlite-ro.js', () => ({
 
 import { routeProjectHealth } from '../../src/ui/routes/project.js';
 
+function createServerResponseMock() {
+  const headers = new Map<string, string | number | readonly string[]>();
+  const end = vi.fn();
+  const response = {
+    req: { method: 'GET', headers: {} },
+    statusCode: 0,
+    getHeader: vi.fn((name: string) => headers.get(name.toLowerCase())),
+    setHeader: vi.fn((name: string, value: string | number | readonly string[]) => {
+      headers.set(name.toLowerCase(), value);
+      return response;
+    }),
+    hasHeader: vi.fn((name: string) => headers.has(name.toLowerCase())),
+    removeHeader: vi.fn((name: string) => headers.delete(name.toLowerCase())),
+    end,
+  };
+  return { response, end };
+}
+
 describe('GET /api/project-health reader lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -43,20 +61,20 @@ describe('GET /api/project-health reader lifecycle', () => {
   ])('closes the reader when %s fails after opening the database', async (_operation, fail) => {
     fail();
     const log = vi.fn();
-    const writeHead = vi.fn();
-    const end = vi.fn();
+    const { response, end } = createServerResponseMock();
 
     await routeProjectHealth(
       { log } as unknown as RouteContext,
       new URL('http://localhost/api/project-health?name=sample'),
       {} as IncomingMessage,
-      { writeHead, end } as unknown as ServerResponse,
+      response as unknown as ServerResponse,
       'fallback',
     );
 
     expect(mocks.close).toHaveBeenCalledOnce();
-    expect(writeHead).toHaveBeenCalledWith(200, expect.any(Object));
-    expect(JSON.parse(String(end.mock.calls[0]?.[0]))).toEqual({
+    expect(response.statusCode).toBe(200);
+    expect(response.getHeader('Content-Type')).toBe('application/json; charset=utf-8');
+    expect(JSON.parse(Buffer.from(end.mock.calls[0]?.[0]).toString('utf8'))).toEqual({
       name: 'sample',
       status: 'corrupt',
       reason: 'Database health check failed',

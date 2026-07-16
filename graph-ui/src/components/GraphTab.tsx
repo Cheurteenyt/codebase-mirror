@@ -2,10 +2,14 @@
 // V2 graph view — 2D force-directed canvas with filters, sidebar, and detail panel.
 // Replaces V1's 3D Three.js scene with a cleaner 2D approach.
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, type KeyboardEvent } from "react";
 import { useGraphData } from "../hooks/useGraphData";
 import { useWebSocket, type WsNotification } from "../hooks/useWebSocket";
-import { GraphCanvas, type GraphCanvasHandle } from "./GraphCanvas";
+import {
+  GraphCanvas,
+  type GraphCanvasHandle,
+  type GraphScopeSelection,
+} from "./GraphCanvas";
 import { FilterPanel } from "./FilterPanel";
 import { Sidebar } from "./Sidebar";
 import { NodeDetailPanel } from "./NodeDetailPanel";
@@ -21,6 +25,28 @@ const LAYOUT_EVENTS = new Set([
   "human_nodes_changed",
   "cbm_links_changed",
 ]);
+
+const EXACT_INVALIDATION_EVENTS = new Set([
+  "code_graph_changed",
+  "graph_reindexed",
+]);
+const DESKTOP_MEDIA_QUERY = "(min-width: 1024px)";
+const DRAWER_FOCUSABLE_SELECTOR = [
+  "button:not([disabled])",
+  "a[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function canRestoreFocus(element: HTMLElement | null): element is HTMLElement {
+  return Boolean(
+    element?.isConnected
+    && !element.closest("[inert]")
+    && !element.closest('[aria-hidden="true"]'),
+  );
+}
 
 function loadWidth(key: string, fallback: number): number {
   try {
@@ -38,25 +64,67 @@ interface GraphTabProps {
   active?: boolean;
 }
 
+type GraphTrailItem = Pick<GraphScopeSelection, "kind" | "key">;
+
+function sameNodeIds(left: ReadonlySet<number> | null, right: ReadonlySet<number>): boolean {
+  if (!left || left.size !== right.size) return false;
+  for (const id of right) if (!left.has(id)) return false;
+  return true;
+}
+
+function visibleNeighborhood(data: GraphData, nodeId: number): Set<number> | null {
+  const visibleNodeIds = new Set(data.nodes.map((node) => node.id));
+  if (!visibleNodeIds.has(nodeId)) return null;
+
+  const connectedIds = new Set([nodeId]);
+  for (const edge of data.edges) {
+    if (edge.source === nodeId) connectedIds.add(edge.target);
+    if (edge.target === nodeId) connectedIds.add(edge.source);
+  }
+  return connectedIds;
+}
+
 export function GraphTab({ project, active = true }: GraphTabProps) {
   const { data, loading, error, fetchOverview } = useGraphData();
   const [highlightedIds, setHighlightedIds] = useState<Set<number> | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  // A project-wide search or exact neighborhood can open a node that is not
+  // part of the representative overview. Its absence from the next layout is
+  // not evidence that it was deleted.
+  const selectedNodeOutsideOverviewRef = useRef(false);
+  const [selectedNodeExactRefreshKey, setSelectedNodeExactRefreshKey] = useState<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
+  // Breadcrumb identity is path-based. Numeric layout ids are local to one
+  // response and can be renumbered when a directory appears or disappears.
+  const [navigationHistory, setNavigationHistory] = useState<GraphTrailItem[]>([]);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const firstLoad = useRef(true);
   const wsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsRefreshGenerationRef = useRef(0);
+  const exactInvalidationPendingRef = useRef(false);
+  const activeProjectRef = useRef(project);
+  activeProjectRef.current = project;
+  const [exactRefreshEpoch, setExactRefreshEpoch] = useState(0);
   // R41 (UI-9): imperative handle to the canvas — used by the "Reset view"
   // button to call canvasRef.current?.resetView() without lifting transformRef.
   const canvasRef = useRef<GraphCanvasHandle>(null);
-  // R41 (UI-8): removed `showLabels` state — the toggle was dead code
-  // (FilterPanel rendered the checkbox but GraphCanvas.draw never rendered
-  // any text). Implementing real labels needs collision avoidance on a
-  // 2000-node graph, out of scope for a single-round fix.
+  const graphRegionRef = useRef<HTMLDivElement>(null);
+  const detailPanelRef = useRef<HTMLDivElement>(null);
+  const detailReturnFocusRef = useRef<HTMLElement | null>(null);
+  const detailFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mobileDrawerRef = useRef<HTMLDivElement>(null);
+  const mobileCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileTriggerRef = useRef<HTMLButtonElement>(null);
+  const suppressDrawerFocusRestoreRef = useRef(false);
+  const mobileDrawerWasOpenRef = useRef(false);
   const [leftWidth, setLeftWidth] = useState(() => loadWidth("cbm-left-w", 260));
   const [rightWidth, setRightWidth] = useState(() => loadWidth("cbm-right-w", 280));
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.matchMedia(DESKTOP_MEDIA_QUERY).matches || window.innerWidth >= 1024;
+  });
 
   const [enabledLabels, setEnabledLabels] = useState<Set<string>>(new Set());
   const [enabledEdgeTypes, setEnabledEdgeTypes] = useState<Set<string>>(new Set());
@@ -143,10 +211,154 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       (e) => enabledEdgeTypes.has(e.type) && nodeIds.has(e.source) && nodeIds.has(e.target),
     );
 
-    return { nodes, edges, total_nodes: data.total_nodes };
+    return { ...data, nodes, edges };
   }, [data, enabledLabels, enabledEdgeTypes, showOnlyDead, hideEntryPoints, hideTests]);
 
+  // The full Code DB revision is authoritative. The WS epoch invalidates exact
+  // requests immediately, including when an overview refresh fails or its
+  // representative topology hash stays unchanged for an off-sample mutation.
+  const exactRefreshKey = `${project ?? "none"}:${data?.graph_revision ?? data?.topology_revision ?? "unloaded"}:${exactRefreshEpoch}`;
+  const selectedNodeRequiresExactValidation = Boolean(
+    selectedNode
+    && selectedNodeOutsideOverviewRef.current
+    && selectedNodeExactRefreshKey !== exactRefreshKey,
+  );
+
+  const restoreDetailFocus = useCallback(() => {
+    if (detailFocusTimerRef.current) clearTimeout(detailFocusTimerRef.current);
+    detailFocusTimerRef.current = setTimeout(() => {
+      detailFocusTimerRef.current = null;
+      const requestedTarget = detailReturnFocusRef.current;
+      const target = canRestoreFocus(requestedTarget)
+        ? requestedTarget
+        : graphRegionRef.current;
+      target?.focus({ preventScroll: true });
+      detailReturnFocusRef.current = null;
+    }, 0);
+  }, []);
+
+  const closeMobilePanel = useCallback((restoreFocus = true) => {
+    suppressDrawerFocusRestoreRef.current = !restoreFocus;
+    setMobilePanelOpen(false);
+  }, []);
+
+  const handleMobileDrawerKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (isDesktop || !mobilePanelOpen) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMobilePanel(true);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const drawer = mobileDrawerRef.current;
+    if (!drawer) return;
+    const focusable = [...drawer.querySelectorAll<HTMLElement>(DRAWER_FOCUSABLE_SELECTOR)]
+      .filter((element) => !element.closest("[inert]") && element.getAttribute("aria-hidden") !== "true");
+    if (focusable.length === 0) {
+      event.preventDefault();
+      drawer.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }, [closeMobilePanel, isDesktop, mobilePanelOpen]);
+
   useEffect(() => {
+    const media = window.matchMedia(DESKTOP_MEDIA_QUERY);
+    const update = () => setIsDesktop(media.matches || window.innerWidth >= 1024);
+    update();
+    media.addEventListener("change", update);
+    window.addEventListener("resize", update);
+    return () => {
+      media.removeEventListener("change", update);
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isDesktop) {
+      mobileDrawerWasOpenRef.current = false;
+      suppressDrawerFocusRestoreRef.current = false;
+      return;
+    }
+    if (mobilePanelOpen) {
+      mobileDrawerWasOpenRef.current = true;
+      const timer = setTimeout(() => mobileCloseButtonRef.current?.focus(), 0);
+      return () => clearTimeout(timer);
+    }
+    if (!mobileDrawerWasOpenRef.current) return;
+    mobileDrawerWasOpenRef.current = false;
+    if (suppressDrawerFocusRestoreRef.current) {
+      suppressDrawerFocusRestoreRef.current = false;
+      return;
+    }
+    mobileTriggerRef.current?.focus({ preventScroll: true });
+  }, [isDesktop, mobilePanelOpen]);
+
+  // Reconcile object references after every server response. A removal-only
+  // topology refresh must close stale detail/tooltip state; metadata-only
+  // refreshes replace the selected object without disturbing the viewport.
+  useEffect(() => {
+    if (!data) return;
+    if (selectedNode) {
+      const refreshed = data.nodes.find((node) => node.id === selectedNode.id);
+      if (!refreshed && !selectedNodeOutsideOverviewRef.current) {
+        setSelectedNode(null);
+        setSelectedNodeExactRefreshKey(null);
+        selectedNodeOutsideOverviewRef.current = false;
+        setHighlightedIds(null);
+        setSelectedPath(null);
+        restoreDetailFocus();
+      } else if (refreshed && refreshed !== selectedNode) {
+        selectedNodeOutsideOverviewRef.current = false;
+        setSelectedNodeExactRefreshKey(null);
+        setSelectedNode(refreshed);
+        setSelectedPath(refreshed.file_path ?? null);
+        setHighlightedIds(filteredData ? visibleNeighborhood(filteredData, refreshed.id) : null);
+      }
+    }
+    if (hoveredNode) {
+      const refreshedHover = data.nodes.find((node) => node.id === hoveredNode.id) ?? null;
+      if (refreshedHover !== hoveredNode) setHoveredNode(refreshedHover);
+    }
+  }, [data, restoreDetailFocus]);
+
+  // A selected node's visual neighborhood is a projection of the currently
+  // rendered topology, not of the last click. Recompute it after label or edge
+  // filters change, and do not dim the whole overview for an exact node that is
+  // intentionally outside the representative map.
+  useEffect(() => {
+    if (!filteredData || !selectedNode) return;
+    const next = visibleNeighborhood(filteredData, selectedNode.id);
+    if (next) {
+      if (!sameNodeIds(highlightedIds, next)) setHighlightedIds(next);
+    } else if (highlightedIds !== null) {
+      setHighlightedIds(null);
+    }
+  }, [filteredData, highlightedIds, selectedNode]);
+
+  useEffect(() => {
+    wsRefreshGenerationRef.current += 1;
+    exactInvalidationPendingRef.current = false;
+    if (wsRefreshTimerRef.current) {
+      clearTimeout(wsRefreshTimerRef.current);
+      wsRefreshTimerRef.current = null;
+    }
+    if (detailFocusTimerRef.current) {
+      clearTimeout(detailFocusTimerRef.current);
+      detailFocusTimerRef.current = null;
+    }
+    detailReturnFocusRef.current = null;
+    setMobilePanelOpen(false);
+    setSelectedNodeExactRefreshKey(null);
     if (project) {
       firstLoad.current = true;
       // R32 (B-new-2 fix): reset the known-sets on project change so the
@@ -156,6 +368,8 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       setHighlightedIds(null);
       setSelectedPath(null);
       setSelectedNode(null);
+      selectedNodeOutsideOverviewRef.current = false;
+      setNavigationHistory([]);
     }
   }, [project]);
 
@@ -169,14 +383,26 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   // (notes created/updated/deleted via CLI/MCP/sync), re-fetch the layout.
   const handleGraphNotification = useCallback((notification: WsNotification) => {
     if (!project) return;
+    if (activeProjectRef.current !== project) return;
+    if (notification.project !== project) return;
     // Human-human edges and sync completion do not change the rendered code
     // topology. Avoid transferring and simulating the full graph for them.
     if (!LAYOUT_EVENTS.has(notification.event)) return;
+    if (EXACT_INVALIDATION_EVENTS.has(notification.event)
+      && !exactInvalidationPendingRef.current) {
+      exactInvalidationPendingRef.current = true;
+      setExactRefreshEpoch((value) => value + 1);
+    }
     // Coalesce mixed note/link notifications into one terminal refresh.
     if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+    const scheduledProject = project;
+    const scheduledGeneration = ++wsRefreshGenerationRef.current;
     wsRefreshTimerRef.current = setTimeout(() => {
       wsRefreshTimerRef.current = null;
-      void fetchOverview(project);
+      if (scheduledGeneration !== wsRefreshGenerationRef.current
+        || activeProjectRef.current !== scheduledProject) return;
+      exactInvalidationPendingRef.current = false;
+      void fetchOverview(scheduledProject);
     }, 350);
   }, [project, fetchOverview]);
   useWebSocket(active ? project : null, handleGraphNotification);
@@ -184,27 +410,221 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
     if (!active && wsRefreshTimerRef.current) {
       clearTimeout(wsRefreshTimerRef.current);
       wsRefreshTimerRef.current = null;
+      wsRefreshGenerationRef.current += 1;
+      exactInvalidationPendingRef.current = false;
     }
   }, [active]);
   useEffect(() => () => {
     if (wsRefreshTimerRef.current) clearTimeout(wsRefreshTimerRef.current);
+    if (detailFocusTimerRef.current) clearTimeout(detailFocusTimerRef.current);
+    wsRefreshGenerationRef.current += 1;
   }, []);
+
+  const makeScope = useCallback((kind: GraphScopeSelection["kind"], id: number) => {
+    if (!filteredData?.layout) return null;
+    if (kind === "domain") {
+      const domain = filteredData.layout.domains.find((candidate) => candidate.id === id);
+      if (!domain) return null;
+      const clusterIds = new Set(filteredData.layout.clusters
+        .filter((cluster) => cluster.domain_id === id)
+        .map((cluster) => cluster.id));
+      return {
+        kind,
+        id,
+        key: domain.key,
+        nodeIds: new Set(filteredData.nodes
+          .filter((node) => node.cluster_id != null && clusterIds.has(node.cluster_id))
+          .map((node) => node.id)),
+      } satisfies GraphScopeSelection;
+    }
+    const community = filteredData.layout.clusters.find((candidate) => candidate.id === id);
+    if (!community) return null;
+    return {
+      kind,
+      id,
+      key: community.key,
+      nodeIds: new Set(filteredData.nodes
+        .filter((node) => node.cluster_id === id)
+        .map((node) => node.id)),
+    } satisfies GraphScopeSelection;
+  }, [filteredData]);
+
+  const makeScopeByKey = useCallback((trailItem: GraphTrailItem) => {
+    if (!filteredData?.layout) return null;
+    const match = trailItem.kind === "domain"
+      ? filteredData.layout.domains.find((candidate) => candidate.key === trailItem.key)
+      : filteredData.layout.clusters.find((candidate) => candidate.key === trailItem.key);
+    return match ? makeScope(trailItem.kind, match.id) : null;
+  }, [filteredData, makeScope]);
+
+  const showScope = useCallback((scope: GraphScopeSelection) => {
+    const shouldRestoreDetailFocus = selectedNode != null;
+    setSelectedNode(null);
+    setSelectedNodeExactRefreshKey(null);
+    selectedNodeOutsideOverviewRef.current = false;
+    setHoveredNode(null);
+    setHighlightedIds(scope.nodeIds.size > 0 ? scope.nodeIds : null);
+    setSelectedPath(scope.key);
+    canvasRef.current?.focusNodes(scope.nodeIds, scope.kind === "domain" ? 0.52 : 1.2);
+    if (shouldRestoreDetailFocus) restoreDetailFocus();
+  }, [restoreDetailFocus, selectedNode]);
+
+  const handleScopeSelect = useCallback((incoming: GraphScopeSelection) => {
+    const scope = makeScope(incoming.kind, incoming.id) ?? incoming;
+    const trail: GraphScopeSelection[] = [];
+    if (scope.kind === "community" && filteredData?.layout) {
+      const community = filteredData.layout.clusters.find((candidate) => candidate.id === scope.id);
+      const parent = community ? makeScope("domain", community.domain_id) : null;
+      if (parent) trail.push(parent);
+    }
+    trail.push(scope);
+    setNavigationHistory(trail.map(({ kind, key }) => ({ kind, key })));
+    showScope(scope);
+  }, [filteredData, makeScope, showScope]);
 
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
       if (!filteredData) return;
-      setSelectedNode(node);
-
-      const connectedIds = new Set([node.id]);
-      for (const edge of filteredData.edges) {
-        if (edge.source === node.id) connectedIds.add(edge.target);
-        if (edge.target === node.id) connectedIds.add(edge.source);
+      const activeElement = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+      if (!detailPanelRef.current?.contains(activeElement)) {
+        detailReturnFocusRef.current = mobilePanelOpen && !isDesktop
+          ? graphRegionRef.current
+          : (activeElement && activeElement !== document.body
+              ? activeElement
+              : graphRegionRef.current);
       }
-      setHighlightedIds(connectedIds);
-      setSelectedPath(node.file_path ?? null);
+      const overviewNode = data?.nodes.find((candidate) => candidate.id === node.id);
+      const resolvedNode = overviewNode ?? node;
+      selectedNodeOutsideOverviewRef.current = overviewNode == null;
+      setSelectedNodeExactRefreshKey(overviewNode == null ? exactRefreshKey : null);
+      setSelectedNode(resolvedNode);
+
+      setHighlightedIds(visibleNeighborhood(filteredData, resolvedNode.id));
+      setSelectedPath(resolvedNode.file_path ?? null);
+      if (resolvedNode.cluster_id != null && filteredData.layout) {
+        const community = makeScope("community", resolvedNode.cluster_id);
+        const cluster = filteredData.layout.clusters.find((candidate) => candidate.id === resolvedNode.cluster_id);
+        const domain = cluster ? makeScope("domain", cluster.domain_id) : null;
+        setNavigationHistory(
+          [...(domain ? [domain] : []), ...(community ? [community] : [])]
+            .map(({ kind, key }) => ({ kind, key })),
+        );
+      } else {
+        // Exact project search may open a node that is intentionally absent
+        // from the representative overview. Do not leave an unrelated scope
+        // breadcrumb attached to that globally resolved result.
+        setNavigationHistory([]);
+      }
+      canvasRef.current?.focusNode(resolvedNode.id);
     },
-    [filteredData],
+    [data, exactRefreshKey, filteredData, isDesktop, makeScope, mobilePanelOpen],
   );
+
+  const handleSidebarNodeSelect = useCallback((node: GraphNode) => {
+    handleNodeClick(node);
+    // The sidebar is a modal drawer below the desktop breakpoint. Leaving it
+    // open beside the detail panel reduced the actual graph to a narrow strip
+    // after an exact-search result was opened. On desktop this state does not
+    // hide the persistent sidebar, so the same callback works for both modes.
+    closeMobilePanel(false);
+  }, [closeMobilePanel, handleNodeClick]);
+
+  const navigateHome = useCallback(() => {
+    const shouldRestoreDetailFocus = selectedNode != null;
+    setNavigationHistory([]);
+    setHighlightedIds(null);
+    setSelectedPath(null);
+    setSelectedNode(null);
+    setSelectedNodeExactRefreshKey(null);
+    selectedNodeOutsideOverviewRef.current = false;
+    setHoveredNode(null);
+    canvasRef.current?.resetView();
+    if (shouldRestoreDetailFocus) restoreDetailFocus();
+  }, [restoreDetailFocus, selectedNode]);
+
+  const navigateToHistoryIndex = useCallback((index: number) => {
+    const scope = navigationHistory[index] ? makeScopeByKey(navigationHistory[index]) : null;
+    if (!scope) return;
+    setNavigationHistory((previous) => previous.slice(0, index + 1));
+    showScope(scope);
+  }, [makeScopeByKey, navigationHistory, showScope]);
+
+  const navigateUp = useCallback(() => {
+    if (selectedNode) {
+      setSelectedNode(null);
+      setSelectedNodeExactRefreshKey(null);
+      selectedNodeOutsideOverviewRef.current = false;
+      const parentItem = navigationHistory.at(-1);
+      const parent = parentItem ? makeScopeByKey(parentItem) : null;
+      if (parent) {
+        showScope(parent);
+      } else navigateHome();
+      return;
+    }
+    if (navigationHistory.length <= 1) {
+      navigateHome();
+      return;
+    }
+    const parent = makeScopeByKey(navigationHistory[navigationHistory.length - 2]);
+    setNavigationHistory((previous) => previous.slice(0, -1));
+    if (parent) showScope(parent);
+    else navigateHome();
+  }, [makeScopeByKey, navigateHome, navigationHistory, restoreDetailFocus, selectedNode, showScope]);
+
+  const handleExactValidation = useCallback((
+    nodeId: number,
+    refreshKey: string | number | undefined,
+    valid: boolean,
+  ) => {
+    if (!selectedNode
+      || selectedNode.id !== nodeId
+      || refreshKey !== exactRefreshKey
+      || !selectedNodeOutsideOverviewRef.current) return;
+    if (valid) {
+      setSelectedNodeExactRefreshKey(exactRefreshKey);
+      return;
+    }
+    setSelectedNode(null);
+    setSelectedNodeExactRefreshKey(null);
+    selectedNodeOutsideOverviewRef.current = false;
+    setHighlightedIds(null);
+    setSelectedPath(null);
+    setNavigationHistory([]);
+    restoreDetailFocus();
+  }, [exactRefreshKey, restoreDetailFocus, selectedNode]);
+
+  // Resolve every breadcrumb against the latest response instead of keeping
+  // response-local numeric ids and node snapshots. This makes refreshes and
+  // directory additions safe: the same key stays selected, while a removed
+  // path is truncated cleanly rather than silently pointing at another scope.
+  useEffect(() => {
+    if (navigationHistory.length === 0 || !filteredData?.layout) return;
+    const resolved: GraphScopeSelection[] = [];
+    for (const item of navigationHistory) {
+      const scope = makeScopeByKey(item);
+      if (!scope) break;
+      resolved.push(scope);
+    }
+
+    if (resolved.length !== navigationHistory.length) {
+      setNavigationHistory((previous) => previous.slice(0, resolved.length));
+    }
+    if (selectedNode) return;
+
+    const activeScope = resolved.at(-1);
+    if (!activeScope) {
+      setHighlightedIds(null);
+      setSelectedPath(null);
+      canvasRef.current?.resetView();
+      return;
+    }
+    if (!sameNodeIds(highlightedIds, activeScope.nodeIds)) {
+      setHighlightedIds(activeScope.nodeIds.size > 0 ? activeScope.nodeIds : null);
+    }
+    if (selectedPath !== activeScope.key) setSelectedPath(activeScope.key);
+  }, [filteredData, highlightedIds, makeScopeByKey, navigationHistory, selectedNode, selectedPath]);
 
   const toggleLabel = useCallback((label: string) => {
     setEnabledLabels((prev) => {
@@ -256,7 +676,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
           <div className="w-8 h-8 border-2 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-foreground/40 text-sm">Computing layout...</p>
+          <p className="text-foreground/60 text-sm" role="status" aria-live="polite">Computing layout...</p>
         </div>
       </div>
     );
@@ -287,23 +707,48 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   }
 
   return (
-    <div className="relative h-full flex overflow-hidden">
+    <div
+      className="relative h-full flex overflow-hidden"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && mobilePanelOpen && !isDesktop) {
+          event.preventDefault();
+          event.stopPropagation();
+          closeMobilePanel(true);
+          return;
+        }
+        if (event.key !== "Escape" || (navigationHistory.length === 0 && !selectedNode)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        navigateUp();
+      }}
+    >
       {mobilePanelOpen && (
         <button
           className="absolute inset-0 z-20 bg-black/55 backdrop-blur-[2px] lg:hidden"
-          aria-label="Close graph filters"
-          onClick={() => setMobilePanelOpen(false)}
+          aria-label="Dismiss graph filters"
+          aria-hidden="true"
+          tabIndex={-1}
+          onClick={() => closeMobilePanel(true)}
         />
       )}
       {/* Left sidebar */}
       <div
+        ref={mobileDrawerRef}
+        role={!isDesktop && mobilePanelOpen ? "dialog" : undefined}
+        aria-modal={!isDesktop && mobilePanelOpen ? true : undefined}
+        aria-label={!isDesktop && mobilePanelOpen ? "Graph filters and architecture search" : undefined}
+        aria-hidden={!isDesktop && !mobilePanelOpen ? true : undefined}
+        inert={!isDesktop && !mobilePanelOpen ? true : undefined}
+        tabIndex={!isDesktop && mobilePanelOpen ? -1 : undefined}
+        onKeyDown={handleMobileDrawerKeyDown}
         className={`absolute inset-y-0 left-0 z-30 flex h-full max-w-[86vw] shrink-0 flex-col border-r border-white/10 bg-[#081720]/97 shadow-2xl backdrop-blur-xl transition-transform duration-200 lg:relative lg:z-auto lg:translate-x-0 lg:bg-[#0b1920]/90 lg:shadow-none ${mobilePanelOpen ? "translate-x-0" : "-translate-x-full"}`}
         style={{ width: leftWidth }}
       >
         <button
+          ref={mobileCloseButtonRef}
           className="absolute right-2 top-2 z-10 rounded-lg border border-white/10 bg-white/[0.05] p-1.5 text-slate-400 hover:text-slate-100 lg:hidden"
           aria-label="Close graph filters"
-          onClick={() => setMobilePanelOpen(false)}
+          onClick={() => closeMobilePanel(true)}
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -325,12 +770,39 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
           onToggleHideTests={() => setHideTests((v) => !v)}
         />
         <Sidebar
+          project={project}
+          exactRefreshKey={exactRefreshKey}
           nodes={filteredData.nodes}
           selectedPath={selectedPath}
+          selectedNodeId={selectedNode?.id ?? null}
+          onSelectNode={handleSidebarNodeSelect}
           onSelectPath={(path, ids) => {
-            setSelectedPath(path);
-            setHighlightedIds(ids.size > 0 ? ids : null);
-            if (ids.size > 0) setMobilePanelOpen(false);
+             if (ids.size === 0) {
+               navigateHome();
+               return;
+             }
+             const domain = filteredData.layout?.domains.find((candidate) => candidate.key === path);
+             const community = filteredData.layout?.clusters.find((candidate) => candidate.key === path);
+             if (community) handleScopeSelect({
+               kind: "community",
+               id: community.id,
+               key: community.key,
+               nodeIds: ids,
+             });
+             else if (domain) handleScopeSelect({
+               kind: "domain",
+               id: domain.id,
+               key: domain.key,
+               nodeIds: ids,
+             });
+             else {
+               setSelectedNode(null);
+               setNavigationHistory([]);
+               setSelectedPath(path);
+               setHighlightedIds(ids);
+               canvasRef.current?.focusNodes(ids, 0.7);
+             }
+             closeMobilePanel(false);
           }}
         />
       </div>
@@ -348,8 +820,15 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       </div>
 
       {/* Graph canvas */}
-      <div className="flex-1 relative overflow-hidden">
+      <div
+        ref={graphRegionRef}
+        tabIndex={-1}
+        aria-label="Architecture graph canvas region"
+        inert={!isDesktop && mobilePanelOpen ? true : undefined}
+        className="flex-1 relative overflow-hidden focus:outline-none"
+      >
         <button
+          ref={mobileTriggerRef}
           onClick={() => setMobilePanelOpen(true)}
           className="absolute left-3 top-3 z-20 grid h-9 w-9 place-items-center rounded-xl border border-white/10 bg-[#081720]/85 text-slate-300 shadow-xl backdrop-blur-md lg:hidden"
           aria-label="Open graph filters"
@@ -365,8 +844,10 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
             data={filteredData}
             active={active}
             highlightedIds={highlightedIds}
+            selectedNodeId={selectedNode?.id ?? null}
             deadCodeView={deadCodeView}
             onNodeClick={handleNodeClick}
+            onScopeSelect={handleScopeSelect}
             onNodeHover={(node, pos) => {
               setHoveredNode(node);
               if (pos) setTooltipPos(pos);
@@ -385,22 +866,102 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
           </div>
         ) : (
           <>
-            {/* HUD */}
-            <div className="absolute left-14 top-3 rounded-lg border border-white/10 bg-[#071219]/80 px-3 py-2 text-[10px] text-foreground/65 pointer-events-none font-mono backdrop-blur-md lg:left-4 lg:top-4 lg:text-[11px]">
-              <p>
-                {filteredData.nodes.length.toLocaleString()} nodes shown /{" "}
-                {data.total_nodes.toLocaleString()} total
-              </p>
-              <p className="text-foreground/40 mt-0.5">
-                {filteredData.edges.length.toLocaleString()} visible edges
-                {data.truncated
-                  ? ` · ${data.sampling?.strategy === "balanced-degree-v1" ? "balanced degree sample" : (data.sampling?.strategy ?? "sampled")}`
-                  : " · complete graph"}
-              </p>
-              {highlightedIds && highlightedIds.size > 0 && (
-                <p className="text-cyan-400/50 mt-0.5">{highlightedIds.size} selected</p>
-              )}
-            </div>
+            {/* Compact fidelity HUD. The previous five-line fixed panel hid a
+                meaningful part of the architecture map. Keep the sampling
+                truth visible in one row and reveal diagnostics on demand. */}
+            <details className="group absolute left-14 top-3 z-20 max-w-[calc(100%-8rem)] overflow-hidden rounded-xl border border-white/10 bg-[#071219]/88 text-[10px] text-foreground/70 shadow-xl backdrop-blur-md lg:left-4 lg:top-4 lg:max-w-[min(760px,calc(100%-16rem))] lg:text-[11px]">
+              <summary
+                className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono marker:content-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-400/70"
+                title="Toggle graph fidelity details"
+              >
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.8)]" />
+                <span className="whitespace-nowrap">
+                  <strong className="font-semibold text-cyan-50">{filteredData.nodes.length.toLocaleString()}</strong>
+                  <span className="text-foreground/45"> / {data.total_nodes.toLocaleString()} nodes</span>
+                </span>
+                {data.layout?.domains && (
+                  <span className="hidden whitespace-nowrap text-sky-200/70 sm:inline">
+                    {(data.layout.domain_catalog?.total_domains ?? data.layout.domains.length).toLocaleString()} domains
+                    {data.layout.domain_catalog?.exact ? " exact" : ""}
+                    {" · "}{data.layout.clusters.length.toLocaleString()} represented communities
+                  </span>
+                )}
+                <span className={`whitespace-nowrap rounded-md border px-1.5 py-0.5 font-sans text-[9px] font-semibold uppercase tracking-[0.12em] ${data.truncated ? "border-amber-300/15 bg-amber-300/[0.06] text-amber-100/75" : "border-emerald-300/15 bg-emerald-300/[0.06] text-emerald-100/75"}`}>
+                  {data.truncated ? "covered sample" : "complete"}
+                </span>
+                {highlightedIds && highlightedIds.size > 0 && (
+                  <span className="hidden whitespace-nowrap text-cyan-300/65 md:inline">
+                    {highlightedIds.size.toLocaleString()} selected
+                  </span>
+                )}
+                <span className="ml-auto whitespace-nowrap font-sans text-[9px] uppercase tracking-[0.14em] text-foreground/35 group-open:text-cyan-200/60">
+                  Fidelity
+                </span>
+              </summary>
+              <div className="border-t border-white/[0.07] px-3 py-2 font-mono leading-relaxed text-foreground/48">
+                <p>
+                  {filteredData.edges.length.toLocaleString()} visible edges
+                  {data.truncated
+                    ? ` · ${data.sampling?.strategy === "architecture-coverage-v1" ? "architecture-covered representatives" : (data.sampling?.strategy ?? "sampled")}`
+                    : " · complete graph"}
+                </p>
+                {data.edge_sampling?.edges_truncated && (
+                  <p className="text-amber-100/65">
+                    {data.edge_sampling.returned_edges.toLocaleString()} /{" "}
+                    {data.edge_sampling.total_induced_edges.toLocaleString()} induced edges retained
+                    {` · max ${data.edge_sampling.limit_per_direction} in/out per shown node`}
+                  </p>
+                )}
+                <p className="text-sky-200/45">
+                  Directed bundles at overview · retained raw links appear with zoom
+                  {data.layout?.domain_catalog?.exact ? " · domain totals cover all project nodes" : ""}
+                  {data.truncated ? " · community geometry and flows describe representatives" : ""}
+                </p>
+              </div>
+            </details>
+
+            {(navigationHistory.length > 0 || selectedNode) && (
+              <nav
+                aria-label="Graph navigation"
+                className="absolute bottom-4 left-4 z-20 flex max-w-[calc(100%-2rem)] items-center gap-1 overflow-hidden rounded-xl border border-white/10 bg-[#071219]/90 p-1.5 text-[12px] text-slate-300 shadow-xl backdrop-blur-md"
+              >
+                <button
+                  onClick={navigateUp}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-cyan-200/75 hover:bg-white/[0.08] hover:text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
+                  aria-label="Go up one architecture level"
+                  title="Go up (Escape)"
+                >
+                  ←
+                </button>
+                <button
+                  onClick={navigateHome}
+                  className="shrink-0 rounded-lg px-2 py-1.5 text-slate-400 hover:bg-white/[0.06] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
+                >
+                  Architecture
+                </button>
+                {navigationHistory.map((scope, index) => (
+                  <span key={`${scope.kind}:${scope.key}`} className="flex min-w-0 items-center gap-1">
+                    <span className="text-slate-600">/</span>
+                    <button
+                      onClick={() => navigateToHistoryIndex(index)}
+                      aria-current={index === navigationHistory.length - 1 && !selectedNode ? "page" : undefined}
+                      className="max-w-48 truncate rounded-lg px-2 py-1.5 text-sky-200/70 hover:bg-white/[0.06] hover:text-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
+                      title={scope.key}
+                    >
+                      {scope.kind === "domain" ? scope.key : scope.key.split("/").slice(1).join("/") || scope.key}
+                    </button>
+                  </span>
+                ))}
+                {selectedNode && (
+                  <span className="flex min-w-0 items-center gap-1" aria-current="page">
+                    <span className="text-slate-600">/</span>
+                    <span className="max-w-52 truncate px-2 py-1.5 text-cyan-100" title={selectedNode.name}>
+                      {selectedNode.name}
+                    </span>
+                  </span>
+                )}
+              </nav>
+            )}
 
             {error && data && (
               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-lg border border-amber-400/20 bg-amber-950/80 px-3 py-2 text-[11px] text-amber-200 shadow-xl backdrop-blur-md">
@@ -416,11 +977,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
             >
               {highlightedIds && (
                 <button
-                  onClick={() => {
-                    setHighlightedIds(null);
-                    setSelectedPath(null);
-                    setSelectedNode(null);
-                  }}
+                  onClick={navigateHome}
                   className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]"
                 >
                   Clear selection
@@ -432,14 +989,28 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
               >
                 Refresh
               </button>
-              {/* R41 (UI-9): reset pan/zoom to origin. Recovers from
-                  off-screen pans without a page refresh. */}
+              <button
+                onClick={() => canvasRef.current?.zoomBy(1 / 1.2)}
+                className="grid h-8 w-8 place-items-center rounded-lg bg-white/[0.05] text-sm text-foreground/70 hover:bg-white/[0.1]"
+                title="Zoom out"
+                aria-label="Zoom out"
+              >
+                −
+              </button>
               <button
                 onClick={() => canvasRef.current?.resetView()}
-                className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]"
-                title="Reset pan and zoom to default"
+                className="px-3 py-1.5 rounded-lg bg-white/[0.05] text-foreground/70 hover:bg-white/[0.1] text-[12px]"
+                title="Fit the complete graph"
               >
-                Reset view
+                Fit
+              </button>
+              <button
+                onClick={() => canvasRef.current?.zoomBy(1.2)}
+                className="grid h-8 w-8 place-items-center rounded-lg bg-white/[0.05] text-sm text-foreground/70 hover:bg-white/[0.1]"
+                title="Zoom in"
+                aria-label="Zoom in"
+              >
+                +
               </button>
             </div>
 
@@ -464,19 +1035,23 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
             />
           </div>
           <div
+            ref={detailPanelRef}
+            inert={!isDesktop && mobilePanelOpen ? true : undefined}
             className="absolute inset-y-0 right-0 z-30 h-full max-w-[92vw] shrink-0 overflow-hidden border-l border-white/10 bg-[#081720]/98 shadow-2xl lg:relative lg:z-auto lg:bg-transparent lg:shadow-none"
             style={{ width: rightWidth }}
           >
             <NodeDetailPanel
               node={selectedNode}
+              overviewNodes={data.nodes}
               allNodes={filteredData.nodes}
               allEdges={filteredData.edges}
               project={project}
-              onNavigate={(n) => setSelectedNode(n)}
+              exactRefreshKey={exactRefreshKey}
+              requiresExactValidation={selectedNodeRequiresExactValidation}
+              onExactValidation={handleExactValidation}
+              onNavigate={handleNodeClick}
               onClose={() => {
-                setSelectedNode(null);
-                setHighlightedIds(null);
-                setSelectedPath(null);
+                navigateUp();
               }}
             />
           </div>

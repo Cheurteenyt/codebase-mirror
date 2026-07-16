@@ -1,6 +1,6 @@
 # Documentation Index
 
-> **Last verified:** 0.76.0 / 2026-07-15 audit
+> **Last verified:** 0.77.0-alpha.1 / 2026-07-16 Graph UI audit
 
 ## Current Documentation
 
@@ -11,6 +11,7 @@
 | [CLI_REFERENCE.md](CLI_REFERENCE.md) | Complete CLI command reference |
 | [MCP_TOOLS.md](MCP_TOOLS.md) | MCP server tools documentation |
 | [PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md](PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md) | Measured performance, transfer, token, and responsive UI audit |
+| [GRAPH_UI_V2_DEEP_AUDIT_2026-07-16.md](GRAPH_UI_V2_DEEP_AUDIT_2026-07-16.md) | V1/V2 Graph UI fidelity, runtime performance, accessibility, regression, and update-readiness audit |
 | [INTELLIGENCE.md](INTELLIGENCE.md) | Graph status, freshness, SWR cache |
 | [OBSIDIAN_INTEGRATION.md](OBSIDIAN_INTEGRATION.md) | Obsidian vault sync, frontmatter, wikilinks |
 | [HUMAN_MEMORY_GRAPH_SCHEMA.md](HUMAN_MEMORY_GRAPH_SCHEMA.md) | Human memory graph database schema |

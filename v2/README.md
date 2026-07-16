@@ -89,6 +89,24 @@ Control can browse and index the user's home directory and the selected
 project's indexed root by default. Use `--allowed-root <paths...>` for other
 repository trees; the server canonicalizes paths and enforces containment.
 
+The read-only graph API keeps the initial layout bounded while allowing exact
+drill-downs across the complete indexed project:
+
+- `GET /api/node-search?project=my-app&q=auth&limit=50` returns ranked literal
+  matches with an opaque `page.next_cursor` for the next page.
+- `GET /api/neighborhood?project=my-app&node_id=42&limit=100` returns the exact
+  inbound/outbound neighborhood with stable edge-id pagination.
+- `GET /api/layout?project=my-app&max_nodes=2000` returns the sampled visual
+  layout plus `layout.domain_catalog`, whose domain counts and representatives
+  cover the complete project rather than only the visual sample.
+
+Layout, exact search, and neighborhood responses include an opaque
+`graph_revision`, and each response is read from one SQLite snapshot. Exact
+cursors are valid only for that revision. If indexing changes or replaces the
+graph between pages, the server responds with HTTP `409`, code
+`"GRAPH_REVISION_MISMATCH"`, and `restart_from_first_page: true` instead of
+mixing two graph states.
+
 ## Node compatibility
 
 - **Runtime:** Node >= 22.12.0

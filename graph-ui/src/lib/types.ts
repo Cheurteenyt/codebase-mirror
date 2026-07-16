@@ -9,6 +9,8 @@ export interface GraphNode {
   id: number;
   x: number;
   y: number;
+  /** Directory community assigned by the server-side structured layout. */
+  cluster_id?: number;
   label: string;
   name: string;
   file_path?: string;
@@ -19,6 +21,9 @@ export interface GraphNode {
   color: string;
   /** Dead-code classification from the layout engine. */
   status?: NodeStatus;
+  /** Exact full-graph degree counts; the overview edge list may be sampled. */
+  in_degree?: number;
+  out_degree?: number;
   in_calls?: number;
   /** V2: risk score (0.0-1.0) from computeRiskScore. */
   risk_score?: number;
@@ -42,16 +47,107 @@ export interface GraphEdge {
 }
 
 export interface GraphData {
+  /** Versioned HTTP layout contract; optional only for legacy/test fixtures. */
+  contract_version?: 1;
   nodes: GraphNode[];
   edges: GraphEdge[];
   total_nodes: number;
   returned_nodes?: number;
+  /** Opaque revision shared by layout, exact search, and exact neighborhood reads. */
+  graph_revision?: string;
+  /** Stable for metadata/filter changes; changes when the server topology changes. */
+  topology_revision?: string;
   truncated?: boolean;
   sampling?: {
     strategy: string;
     node_limit: number;
     available_by_label: Record<string, number>;
     returned_by_label: Record<string, number>;
+  };
+  edge_sampling?: {
+    strategy: string;
+    total_induced_edges: number;
+    returned_edges: number;
+    edges_truncated: boolean;
+    limit_per_direction: number;
+    available_by_type: Record<string, number>;
+    returned_by_type: Record<string, number>;
+  };
+  layout?: {
+    strategy: string;
+    /** World-space node spacing used by semantic zoom thresholds. */
+    node_spacing: number;
+    /** Hierarchy counts describe returned overview nodes, not hidden samples. */
+    counts_scope: "returned_nodes";
+    clusters: Array<{
+      id: number;
+      domain_id: number;
+      key: string;
+      x: number;
+      y: number;
+      radius: number;
+      node_count: number;
+    }>;
+    domains: Array<{
+      id: number;
+      key: string;
+      x: number;
+      y: number;
+      radius: number;
+      node_count: number;
+      cluster_count: number;
+    }>;
+    domain_catalog?: {
+      exact: true;
+      counts_scope: "all_nodes";
+      total_domains: number;
+      domains: Array<{
+        key: string;
+        node_count: number;
+        file_count: number;
+        representative_node_id: number;
+      }>;
+    };
+  };
+}
+
+export interface GraphNeighborhoodData {
+  contract_version: 1;
+  exact: true;
+  /** Immutable for every page merged into this exact result. */
+  graph_revision: string;
+  anchor: {
+    kind: "node";
+    id: number;
+    total_inbound: number;
+    total_outbound: number;
+    total_unique_edges: number;
+  };
+  nodes: GraphNode[];
+  edges: Array<GraphEdge & { id: number }>;
+  page: {
+    limit: number;
+    returned: number;
+    next_cursor: string | null;
+  };
+}
+
+export interface GraphNodeSearchData {
+  contract_version: 1;
+  exact: true;
+  /** Immutable for every page merged into this exact result. */
+  graph_revision: string;
+  scope: "complete_project";
+  query: string;
+  match_strategy: "literal-relevance-v1";
+  total_matches: number;
+  returned_nodes: number;
+  truncated: boolean;
+  nodes: GraphNode[];
+  page: {
+    limit: number;
+    returned: number;
+    next_cursor: string | null;
   };
 }
 
