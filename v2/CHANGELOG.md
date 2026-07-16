@@ -1,5 +1,43 @@
 # Changelog — Codebase Memory V2
 
+## 0.77.0-alpha.1 — structured and exact Graph UI (2026-07-16)
+
+### Graph fidelity and navigation
+
+- Replaced the flat overview with a deterministic domain → community → node
+  map, progressive edge bundles, bounded local physics, stable drill-down, and
+  explicit representative-versus-exact fidelity metadata.
+- Added exact, project-scoped, keyset-paginated node search and neighborhood
+  APIs so search and detail views are not limited to the overview sample.
+- Bound layout, search, neighborhood, and exact cursors to an opaque SQLite
+  snapshot revision. A changed graph fails closed with an explicit HTTP 409,
+  and the UI discards stale pages before restarting from page one.
+- Added exact top-level domain coverage, root-file scope parity, global symbol
+  search, exact detail pagination, refresh-safe off-overview selection, and
+  honest partial/error states.
+- Added roving ARIA tree navigation, bounded keyboard navigation for the
+  canvas, focus restoration, reduced-motion support, a non-tabbable closed
+  mobile drawer, a single selected tree item, and consistent
+  keyboard/pointer/touch interactions.
+- Kept transient exact-neighborhood failures visible and retryable; only a
+  current HTTP 404 can invalidate an off-overview selection.
+
+### Performance and delivery gates
+
+- Filtered induced edges inside SQLite, retained layout/simulation objects
+  across compatible refreshes, limited device-pixel allocation, and kept
+  overview transfer and rendering explicitly bounded.
+- Intersected highlights with the rendered topology, recomputed selected
+  neighborhoods after filters, prioritized architecture scopes at aggregate
+  zoom levels, and enforced strict semantic label budgets.
+- Added Brotli/gzip response compression, ETags, a bounded compressed-payload
+  cache, a reproducible Graph UI runtime benchmark, and enforced gzip bundle
+  budgets for the entry, Graph chunk, CSS, and total JavaScript.
+- Extended the installed-tarball CI smoke to index a real TypeScript fixture
+  and verify packaged JS/CSS assets, layout, exact domain catalog, search,
+  neighborhood, and shared graph revision while preserving the required-check
+  display name.
+
 ## 0.76.0 — performance, precision, UI, and update readiness (2026-07-15)
 
 ### Performance and token efficiency

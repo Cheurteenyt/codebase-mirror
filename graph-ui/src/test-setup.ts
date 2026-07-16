@@ -56,6 +56,10 @@ if (typeof HTMLCanvasElement !== "undefined") {
       stroke: () => {},
       moveTo: () => {},
       lineTo: () => {},
+      quadraticCurveTo: () => {},
+      fillText: () => {},
+      strokeText: () => {},
+      measureText: (text: string) => ({ width: text.length * 6 }),
       canvas: { width: 800, height: 600 },
     } as any;
   } as any;

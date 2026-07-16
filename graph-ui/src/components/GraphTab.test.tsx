@@ -5,7 +5,7 @@
 // useGraphData.loading (tested) → GraphTab conditional (THIS TEST) → GraphCanvas unmount (tested)
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // Mock useGraphData to control loading state
 vi.mock("../hooks/useGraphData", () => ({
@@ -120,6 +120,37 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     expect(canvas?.getAttribute("aria-label")).toContain("1 nodes");
   });
 
+  it("recomputes a selected node neighborhood when relationship filters change", async () => {
+    (useGraphData as any).mockReturnValue({
+      data: {
+        nodes: [
+          mockData.nodes[0],
+          {
+            ...mockData.nodes[0],
+            id: 2,
+            label: "Class",
+            name: "bar",
+            file_path: "b.ts",
+            qualified_name: "bar",
+          },
+        ],
+        edges: [{ source: 1, target: 2, type: "CALLS" }],
+        total_nodes: 2,
+      },
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    render(<GraphTab project="test-project" />);
+    fireEvent.click(screen.getByRole("button", { name: "Expand (root)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open foo" }));
+    await waitFor(() => expect(screen.getByText("2 selected")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /calls 1/i }));
+    await waitFor(() => expect(screen.getByText("1 selected")).toBeInTheDocument());
+  });
+
   it("resets dead-code filters when they hide every node", () => {
     (useGraphData as any).mockReturnValue({
       data: mockData,
@@ -150,5 +181,97 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     const actions = screen.getByRole("toolbar", { name: "Graph actions" });
     expect(actions).toHaveClass("top-20", "flex-col", "items-end");
     expect(actions).toHaveClass("lg:top-4", "lg:flex-row", "lg:items-center");
+  });
+
+  it("dismisses the mobile navigation drawer after opening a node", () => {
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    const { container } = render(<GraphTab project="test-project" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open graph filters" }));
+    expect(container.querySelector('[aria-label="Dismiss graph filters"]')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand (root)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open foo" }));
+
+    expect(container.querySelector('[aria-label="Dismiss graph filters"]')).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "foo" })).toBeInTheDocument();
+  });
+
+  it("keeps the closed mobile drawer out of the accessibility tree and manages modal focus", async () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 640 });
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    const { container } = render(<GraphTab project="test-project" />);
+    const trigger = screen.getByRole("button", { name: "Open graph filters" });
+    const closedDrawer = container.querySelector('[aria-hidden="true"][inert]');
+    expect(closedDrawer).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "None" })).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Graph filters and architecture search" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).not.toHaveAttribute("aria-hidden");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Close graph filters" })).toHaveFocus());
+
+    fireEvent.click(screen.getByRole("button", { name: "Close graph filters" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(container.querySelector('[aria-hidden="true"][inert]')).toBeInTheDocument();
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+    window.dispatchEvent(new Event("resize"));
+  });
+
+  it("cancels a queued project-A refresh and ignores its stale callback after switching to B", () => {
+    vi.useFakeTimers();
+    try {
+      const fetchOverview = vi.fn().mockResolvedValue(undefined);
+      (useGraphData as any).mockReturnValue({
+        data: mockData,
+        loading: false,
+        error: null,
+        fetchOverview,
+      });
+      const view = render(<GraphTab project="project-a" />);
+      const projectACallback = (useWebSocket as any).mock.calls.at(-1)[1] as (notification: {
+        type: string;
+        event: string;
+        project: string;
+        timestamp: string;
+      }) => void;
+
+      act(() => projectACallback({
+        type: "notification",
+        event: "graph_reindexed",
+        project: "project-a",
+        timestamp: new Date().toISOString(),
+      }));
+      view.rerender(<GraphTab project="project-b" />);
+      expect(fetchOverview).toHaveBeenCalledWith("project-b");
+      fetchOverview.mockClear();
+
+      act(() => {
+        projectACallback({
+          type: "notification",
+          event: "graph_reindexed",
+          project: "project-a",
+          timestamp: new Date().toISOString(),
+        });
+        vi.advanceTimersByTime(400);
+      });
+      expect(fetchOverview).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

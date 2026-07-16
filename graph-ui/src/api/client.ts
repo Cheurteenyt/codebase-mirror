@@ -13,6 +13,8 @@
 
 import type {
   GraphData,
+  GraphNeighborhoodData,
+  GraphNodeSearchData,
   Project,
   ProjectHealth,
   DashboardData,
@@ -27,7 +29,7 @@ const API_BASE = "";
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 export class ApiError extends Error {
-  constructor(public code: number, message: string) {
+  constructor(public code: number, message: string, public details?: unknown) {
     super(message);
     this.name = "ApiError";
   }
@@ -59,7 +61,7 @@ async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }));
-      throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
+      throw new ApiError(res.status, body.message ?? body.error ?? `HTTP ${res.status}`, body);
     }
     return res.json() as Promise<T>;
   } catch (e: unknown) {
@@ -133,7 +135,7 @@ async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}):
     }
     if (!res.ok) {
       const errBody = await res.json().catch(() => ({ error: res.statusText }));
-      throw new ApiError(res.status, errBody.error ?? `HTTP ${res.status}`);
+      throw new ApiError(res.status, errBody.message ?? errBody.error ?? `HTTP ${res.status}`, errBody);
     }
     return res.json() as Promise<T>;
   } catch (e: unknown) {
@@ -157,6 +159,32 @@ export const api = {
       `${API_BASE}/api/layout?project=${encodeURIComponent(project)}&max_nodes=${maxNodes}`,
       opts,
     ),
+
+  getNeighborhood: (project: string, nodeId: number, cursor?: string | null, opts?: FetchOptions) => {
+    const params = new URLSearchParams({
+      project,
+      node_id: String(nodeId),
+      limit: "250",
+    });
+    if (cursor) params.set("cursor", cursor);
+    return fetchJson<GraphNeighborhoodData>(`${API_BASE}/api/neighborhood?${params}`, {
+      timeoutMs: 8_000,
+      ...opts,
+    });
+  },
+
+  searchNodes: (project: string, query: string, cursor?: string | null, opts?: FetchOptions) => {
+    const params = new URLSearchParams({
+      project,
+      q: query,
+      limit: "50",
+    });
+    if (cursor) params.set("cursor", cursor);
+    return fetchJson<GraphNodeSearchData>(`${API_BASE}/api/node-search?${params}`, {
+      timeoutMs: 8_000,
+      ...opts,
+    });
+  },
 
   // ── Projects ──────────────────────────────────────────────────
   getProjects: (opts?: FetchOptions) =>

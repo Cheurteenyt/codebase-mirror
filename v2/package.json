@@ -1,6 +1,6 @@
 {
   "name": "codebase-memory-v2",
-  "version": "0.76.0",
+  "version": "0.77.0-alpha.1",
   "packageManager": "npm@10.9.0",
   "description": "Codebase Memory V2 — hybrid code intelligence (native WASM indexer + human memory graph + Obsidian sync)",
   "type": "module",
@@ -22,6 +22,7 @@
     "bench:incremental:smoke": "tsx scripts/incremental-benchmark-r87.ts --smoke",
     "bench:precision": "tsx scripts/precision-benchmark-r112.ts --project precision-bench --root ./src --sample 50",
     "bench:tokens": "tsx scripts/token-payload-benchmark.ts",
+    "bench:graph-ui": "node scripts/graph-ui-runtime-benchmark.mjs",
     "build:backend": "npm run clean && tsc -p tsconfig.json",
     "build:package": "node scripts/build-package.mjs",
     "prepack": "npm run build:package",

@@ -37,6 +37,7 @@ function CheckRow({
   return (
     <button
       onClick={onToggle}
+      aria-pressed={checked}
       className={`flex items-center gap-1.5 text-[11px] font-medium transition-all ${
         checked ? "text-primary" : "text-foreground/40"
       }`}
@@ -119,6 +120,7 @@ export function FilterPanel({
                     <button
                       key={label}
                       onClick={() => onToggleLabel(label)}
+                      aria-pressed={on}
                       className={`inline-flex items-center gap-1 px-1.5 py-[3px] rounded-md text-[10px] font-medium transition-all border ${
                         on ? "border-white/[0.08] bg-white/[0.04]" : "border-transparent opacity-25"
                       }`}
@@ -144,6 +146,7 @@ export function FilterPanel({
                     <button
                       key={type}
                       onClick={() => onToggleEdgeType(type)}
+                      aria-pressed={on}
                       className={`inline-flex items-center gap-1 px-1.5 py-[3px] rounded-md text-[10px] font-medium transition-all border ${
                         on ? "border-white/[0.06] bg-white/[0.03] text-foreground/60" : "border-transparent opacity-20 text-foreground/30"
                       }`}

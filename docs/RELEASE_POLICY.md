@@ -1,7 +1,7 @@
 # Release Policy — Codebase Memory V2
 
 > **Status:** current
-> **Last verified:** 0.76.0 / 2026-07-15 audit
+> **Last verified:** 0.77.0-alpha.1 / 2026-07-16 audit
 
 ## Overview
 

@@ -1,12 +1,16 @@
 // graph-ui/src/components/GraphCanvas.tsx
 // V2: 2D canvas-based graph renderer using d3-force.
-// Replaces V1's 3D Three.js scene with a cleaner, more readable 2D layout.
-// Advantages: no GPU needed, handles 5000+ nodes, simpler interaction.
+// The bounded overview stays cheap while semantic zoom and exact, on-demand
+// neighborhoods preserve the precision that a flat, fully rendered graph lost.
 
-import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
-import { forceSimulation, forceManyBody, forceLink, forceCenter, forceCollide, forceX, forceY } from "d3-force";
+import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useId, useMemo } from "react";
+import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY } from "d3-force";
 import type { GraphData, GraphNode } from "../lib/types";
 import { colorForLabel, colorForStatus } from "../lib/colors";
+import {
+  GRAPH_TOOLTIP_POSITION_EVENT,
+  type GraphTooltipPositionDetail,
+} from "../lib/graph-tooltip-position";
 
 /**
  * R41 (UI-9): imperative handle exposed by GraphCanvas. Lets the parent
@@ -20,14 +24,27 @@ export interface GraphCanvasHandle {
   resetView: () => void;
   /** Zoom in/out by a factor (e.g. 1.2 to zoom in, 0.83 to zoom out). */
   zoomBy: (factor: number) => void;
+  /** Center one node without restarting the simulation. */
+  focusNode: (nodeId: number) => void;
+  /** Fit a selected file/folder subset without disturbing the layout. */
+  focusNodes: (nodeIds: Iterable<number>, minimumZoom?: number) => void;
+}
+
+export interface GraphScopeSelection {
+  kind: "domain" | "community";
+  id: number;
+  key: string;
+  nodeIds: Set<number>;
 }
 
 interface GraphCanvasProps {
   data: GraphData;
   active?: boolean;
   highlightedIds: Set<number> | null;
+  selectedNodeId?: number | null;
   deadCodeView: boolean;
   onNodeClick: (node: GraphNode) => void;
+  onScopeSelect?: (scope: GraphScopeSelection) => void;
   onNodeHover: (node: GraphNode | null, pos?: { x: number; y: number }) => void;
 }
 
@@ -36,6 +53,8 @@ interface SimNode extends GraphNode {
   vy?: number;
   fx?: number | null;
   fy?: number | null;
+  anchorX: number;
+  anchorY: number;
 }
 
 interface SimEdge {
@@ -48,13 +67,284 @@ const DEFAULT_NODE_RADIUS = 4;
 const MIN_NODE_RADIUS = 2;
 const MAX_NODE_RADIUS = 12;
 const HIGHLIGHT_SCALE = 1.5;
-const FIT_PADDING = 48;
-const LINK_DISTANCE = 30;
-const CHARGE_STRENGTH = -45;
-const CHARGE_DISTANCE_MAX = 260;
-const CENTERING_STRENGTH = 0.025;
+// Keep architecture labels inside the viewport as well as the circles. The
+// summary line uses a constant screen-space font, so the old 48 px padding
+// could clip a small domain parked at the left or right packing extreme.
+const FIT_PADDING = 64;
+const LOCAL_LINK_DISTANCE = 30;
+const CHARGE_STRENGTH = -38;
+const CHARGE_DISTANCE_MAX = 220;
+const ANCHOR_STRENGTH = 0.24;
+const SIMULATION_ALPHA_DECAY = 0.045;
 const SETTLED_FIT_DELAY_MS = 700;
 const TOUCH_TAP_SLOP_PX = 8;
+const MAX_RENDER_DPR = 2;
+const MAX_CANVAS_PIXELS = 16_000_000;
+const FAR_LABEL_LIMIT = 0;
+const MID_LABEL_LIMIT = 24;
+const NEAR_LABEL_LIMIT = 64;
+const DEFAULT_LAYOUT_NODE_SPACING = 16;
+const DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING = 7;
+const RAW_TOPOLOGY_MIN_PROJECTED_SPACING = 18;
+const MAX_KEYBOARD_DOMAINS = 32;
+const MAX_KEYBOARD_COMMUNITIES = 64;
+const MAX_KEYBOARD_NODES = 64;
+
+function fadeBetween(value: number, start: number, end: number): number {
+  return Math.max(0, Math.min(1, (value - start) / (end - start)));
+}
+
+type LayoutCluster = NonNullable<GraphData["layout"]>["clusters"][number];
+type LayoutDomain = NonNullable<GraphData["layout"]>["domains"][number];
+type KeyboardTargetKind = "domain" | "community" | "node";
+
+interface KeyboardTarget {
+  kind: KeyboardTargetKind;
+  id: number;
+  label: string;
+  x: number;
+  y: number;
+  radius: number;
+  semanticLabel?: string;
+}
+
+type KeyboardTargets = Record<KeyboardTargetKind, KeyboardTarget[]>;
+
+function emptyKeyboardTargets(): KeyboardTargets {
+  return { domain: [], community: [], node: [] };
+}
+
+const DOMAIN_PALETTE = [
+  {
+    fill: "rgba(6, 182, 212, 0.034)",
+    stroke: "rgba(34, 211, 238, 0.34)",
+    title: "rgba(207, 250, 254, 0.96)",
+    meta: "rgba(125, 211, 252, 0.68)",
+    hoverFill: "rgba(6, 182, 212, 0.09)",
+    hoverStroke: "rgba(103, 232, 249, 0.9)",
+  },
+  {
+    fill: "rgba(99, 102, 241, 0.032)",
+    stroke: "rgba(129, 140, 248, 0.32)",
+    title: "rgba(224, 231, 255, 0.96)",
+    meta: "rgba(165, 180, 252, 0.68)",
+    hoverFill: "rgba(99, 102, 241, 0.09)",
+    hoverStroke: "rgba(165, 180, 252, 0.9)",
+  },
+  {
+    fill: "rgba(139, 92, 246, 0.03)",
+    stroke: "rgba(167, 139, 250, 0.31)",
+    title: "rgba(237, 233, 254, 0.96)",
+    meta: "rgba(196, 181, 253, 0.68)",
+    hoverFill: "rgba(139, 92, 246, 0.085)",
+    hoverStroke: "rgba(196, 181, 253, 0.9)",
+  },
+  {
+    fill: "rgba(16, 185, 129, 0.028)",
+    stroke: "rgba(52, 211, 153, 0.29)",
+    title: "rgba(209, 250, 229, 0.96)",
+    meta: "rgba(110, 231, 183, 0.66)",
+    hoverFill: "rgba(16, 185, 129, 0.08)",
+    hoverStroke: "rgba(110, 231, 183, 0.88)",
+  },
+  {
+    fill: "rgba(245, 158, 11, 0.026)",
+    stroke: "rgba(251, 191, 36, 0.28)",
+    title: "rgba(254, 243, 199, 0.96)",
+    meta: "rgba(252, 211, 77, 0.64)",
+    hoverFill: "rgba(245, 158, 11, 0.075)",
+    hoverStroke: "rgba(252, 211, 77, 0.86)",
+  },
+] as const;
+
+function domainPalette(domainId: number) {
+  const index = ((domainId % DOMAIN_PALETTE.length) + DOMAIN_PALETTE.length) % DOMAIN_PALETTE.length;
+  return DOMAIN_PALETTE[index];
+}
+
+function compactArchitectureCount(value: number): string {
+  if (value < 1_000) return value.toLocaleString();
+  const units = [
+    { threshold: 1_000_000_000, suffix: "b" },
+    { threshold: 1_000_000, suffix: "m" },
+    { threshold: 1_000, suffix: "k" },
+  ] as const;
+  const unit = units.find((candidate) => value >= candidate.threshold)!;
+  const scaled = value / unit.threshold;
+  const precision = scaled < 100 ? 1 : 0;
+  return `${scaled.toFixed(precision).replace(/\.0$/u, "")}${unit.suffix}`;
+}
+
+const EDGE_GROUP_STYLES = {
+  calls: "rgba(34, 211, 238, 0.72)",
+  contains: "rgba(167, 139, 250, 0.7)",
+  imports: "rgba(251, 191, 36, 0.68)",
+  data: "rgba(52, 211, 153, 0.68)",
+  other: "rgba(148, 163, 184, 0.62)",
+} as const;
+
+type EdgeGroup = keyof typeof EDGE_GROUP_STYLES;
+
+const EDGE_GROUP_ORDER: EdgeGroup[] = ["calls", "imports", "contains", "data", "other"];
+const EDGE_BUNDLE_STYLES: Record<EdgeGroup, string> = {
+  calls: "rgba(34, 211, 238, 0.38)",
+  contains: "rgba(167, 139, 250, 0.34)",
+  imports: "rgba(251, 191, 36, 0.35)",
+  data: "rgba(52, 211, 153, 0.34)",
+  other: "rgba(148, 163, 184, 0.27)",
+};
+
+interface OverviewBundle {
+  sourceId: number;
+  targetId: number;
+  sourceX: number;
+  sourceY: number;
+  sourceRadius: number;
+  targetX: number;
+  targetY: number;
+  targetRadius: number;
+  count: number;
+  group: EdgeGroup;
+  weight: number;
+}
+
+function edgeGroup(type: string): EdgeGroup {
+  const normalized = type.toLowerCase();
+  if (normalized.includes("call")) return "calls";
+  if (normalized.includes("contain") || normalized.includes("define") || normalized.includes("member")) return "contains";
+  if (normalized.includes("import") || normalized.includes("use") || normalized.includes("depend")) return "imports";
+  if (normalized.includes("read") || normalized.includes("write") || normalized.includes("data")) return "data";
+  return "other";
+}
+
+function simEdgeNodeId(endpoint: number | SimNode): number {
+  return typeof endpoint === "number" ? endpoint : endpoint.id;
+}
+
+function buildOverviewBundleBatches(
+  edges: readonly SimEdge[],
+  nodeMap: ReadonlyMap<number, SimNode>,
+  centers: ReadonlyMap<number, { id: number; x: number; y: number; radius: number }>,
+  scopeIdForNode: (node: SimNode) => number | undefined,
+  maxBundles: number,
+): Map<string, OverviewBundle[]> {
+  interface Accumulator {
+    sourceId: number;
+    targetId: number;
+    count: number;
+    group: EdgeGroup;
+  }
+  const accumulators = new Map<string, Accumulator>();
+  for (const edge of edges) {
+    const sourceNode = nodeMap.get(simEdgeNodeId(edge.source));
+    const targetNode = nodeMap.get(simEdgeNodeId(edge.target));
+    if (!sourceNode || !targetNode) continue;
+    const sourceScope = scopeIdForNode(sourceNode);
+    const targetScope = scopeIdForNode(targetNode);
+    if (sourceScope == null || targetScope == null || sourceScope === targetScope) continue;
+    const group = edgeGroup(edge.type);
+    const sourceId = sourceScope;
+    const targetId = targetScope;
+    const key = `${sourceId}:${targetId}:${group}`;
+    let accumulator = accumulators.get(key);
+    if (!accumulator) {
+      accumulator = {
+        sourceId,
+        targetId,
+        count: 0,
+        group,
+      };
+      accumulators.set(key, accumulator);
+    }
+    accumulator.count += 1;
+  }
+
+  const bundles: OverviewBundle[] = [];
+  for (const accumulator of accumulators.values()) {
+    const source = centers.get(accumulator.sourceId);
+    const target = centers.get(accumulator.targetId);
+    if (!source || !target) continue;
+    bundles.push({
+      sourceId: accumulator.sourceId,
+      targetId: accumulator.targetId,
+      sourceX: source.x,
+      sourceY: source.y,
+      sourceRadius: source.radius,
+      targetX: target.x,
+      targetY: target.y,
+      targetRadius: target.radius,
+      count: accumulator.count,
+      group: accumulator.group,
+      weight: Math.min(6, Math.floor(Math.log2(Math.max(1, accumulator.count)))),
+    });
+  }
+  bundles.sort((left, right) => (
+    right.count - left.count
+    || left.sourceId - right.sourceId
+    || left.targetId - right.targetId
+    || EDGE_GROUP_ORDER.indexOf(left.group) - EDGE_GROUP_ORDER.indexOf(right.group)
+  ));
+
+  const batches = new Map<string, OverviewBundle[]>();
+  for (const bundle of bundles.slice(0, maxBundles)) {
+    const key = `${bundle.group}:${bundle.weight}`;
+    const batch = batches.get(key);
+    if (batch) batch.push(bundle);
+    else batches.set(key, [bundle]);
+  }
+  return batches;
+}
+
+interface CanvasBackingStore {
+  width: number;
+  height: number;
+  scaleX: number;
+  scaleY: number;
+}
+
+function boundedCanvasBackingStore(width: number, height: number): CanvasBackingStore {
+  const cssWidth = Number.isFinite(width) ? Math.max(0, width) : 0;
+  const cssHeight = Number.isFinite(height) ? Math.max(0, height) : 0;
+  const rawDeviceRatio = window.devicePixelRatio || 1;
+  const deviceRatio = Number.isFinite(rawDeviceRatio) && rawDeviceRatio > 0
+    ? Math.min(MAX_RENDER_DPR, rawDeviceRatio)
+    : 1;
+  if (cssWidth === 0 || cssHeight === 0) {
+    return { width: 0, height: 0, scaleX: deviceRatio, scaleY: deviceRatio };
+  }
+
+  // The physical pixel ceiling is authoritative. Large CSS viewports may
+  // therefore render below 1x; clamping the ratio to 1 would allocate more
+  // than MAX_CANVAS_PIXELS before the first frame is drawn.
+  const budgetRatio = Math.sqrt(MAX_CANVAS_PIXELS / cssWidth / cssHeight);
+  const effectiveRatio = Math.min(deviceRatio, budgetRatio);
+  let backingWidth = Math.max(1, Math.floor(cssWidth * effectiveRatio));
+  let backingHeight = Math.max(1, Math.floor(cssHeight * effectiveRatio));
+
+  // Integer conversion and a very thin viewport can still make one minimum
+  // dimension push the product over budget. Cap the larger axis explicitly;
+  // separate X/Y scales preserve CSS-coordinate interaction in that edge case.
+  if (backingWidth * backingHeight > MAX_CANVAS_PIXELS) {
+    if (backingWidth >= backingHeight) {
+      backingWidth = Math.max(1, Math.floor(MAX_CANVAS_PIXELS / backingHeight));
+      if (backingWidth * backingHeight > MAX_CANVAS_PIXELS) {
+        backingHeight = Math.max(1, Math.floor(MAX_CANVAS_PIXELS / backingWidth));
+      }
+    } else {
+      backingHeight = Math.max(1, Math.floor(MAX_CANVAS_PIXELS / backingWidth));
+      if (backingWidth * backingHeight > MAX_CANVAS_PIXELS) {
+        backingWidth = Math.max(1, Math.floor(MAX_CANVAS_PIXELS / backingHeight));
+      }
+    }
+  }
+
+  return {
+    width: backingWidth,
+    height: backingHeight,
+    scaleX: backingWidth / cssWidth,
+    scaleY: backingHeight / cssHeight,
+  };
+}
 
 function nodeRadius(node: Pick<GraphNode, "size">): number {
   const size = Number(node.size);
@@ -76,11 +366,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   data,
   active = true,
   highlightedIds,
+  selectedNodeId = null,
   deadCodeView,
   onNodeClick,
+  onScopeSelect,
   onNodeHover,
 }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const backingScaleRef = useRef({ x: 1, y: 1 });
+  const keyboardInstructionsId = useId();
+  const keyboardStatusId = useId();
+  const keyboardStatusRef = useRef<HTMLSpanElement>(null);
   const simRef = useRef<ReturnType<typeof forceSimulation> | null>(null);
   const transformRef = useRef({ x: 0, y: 0, k: 1 });
   const nodesRef = useRef<SimNode[]>([]);
@@ -92,6 +388,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const nodeStateCacheRef = useRef<Map<number, SimNode>>(new Map());
   const knownNodeIdsRef = useRef<Set<number>>(new Set());
   const knownEdgeKeysRef = useRef<Set<string>>(new Set());
+  const topologyRevisionRef = useRef<string | undefined>(undefined);
   const currentNodeIdsRef = useRef<Set<number>>(new Set());
   const currentEdgeKeysRef = useRef<Set<string>>(new Set());
   const drawRef = useRef<(() => void) | null>(null);
@@ -100,10 +397,30 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   // per frame for a 2000-node graph). The map only changes when nodesRef
   // changes, so we rebuild it only on data updates.
   const nodeMapRef = useRef<Map<number, SimNode>>(new Map());
+  const clustersRef = useRef<LayoutCluster[]>([]);
+  const clusterMapRef = useRef<Map<number, LayoutCluster>>(new Map());
+  const domainsRef = useRef<LayoutDomain[]>([]);
+  const domainCatalogRef = useRef<Map<string, { node_count: number; file_count: number }>>(new Map());
+  const layoutNodeSpacingRef = useRef(DEFAULT_LAYOUT_NODE_SPACING);
+  const localEdgesRef = useRef<SimEdge[]>([]);
+  const crossClusterEdgesRef = useRef<SimEdge[]>([]);
+  const clusterBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
+  const domainBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
+  const labelCandidatesRef = useRef<SimNode[]>([]);
+  const edgeGroupsRef = useRef<Map<EdgeGroup, SimEdge[]>>(new Map());
+  const hoveredScopeRef = useRef<Omit<GraphScopeSelection, "nodeIds"> | null>(null);
+  const keyboardTargetsRef = useRef<KeyboardTargets>(emptyKeyboardTargets());
+  const keyboardVisibleCountsRef = useRef<Record<KeyboardTargetKind, number>>({
+    domain: 0,
+    community: 0,
+    node: 0,
+  });
+  const keyboardFocusRef = useRef<KeyboardTarget | null>(null);
   // R40 (UI-6): rAF-batched tick handler. d3-force ticks much faster than
   // 60fps during initial layout; without batching, draw() runs multiple
   // times per frame, wasting CPU on a canvas redraw that the user never sees.
   const rafIdRef = useRef<number | null>(null);
+  const viewAnimationRafRef = useRef<number | null>(null);
   const autoFitRafRef = useRef<number | null>(null);
   const settledFitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasAutoFitRef = useRef(false);
@@ -112,12 +429,59 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const previousActiveRef = useRef(active);
   activeRef.current = active;
 
+  // Exact search can select a node that is intentionally absent from the
+  // representative canvas, and filters can remove a previously highlighted
+  // node. Only a highlight that intersects the currently rendered topology
+  // may dim the map or consume the semantic-label budget.
+  const visibleHighlightedIds = useMemo(() => {
+    if (!highlightedIds || highlightedIds.size === 0) return null;
+    const visible = new Set<number>();
+    for (const node of data.nodes) {
+      if (highlightedIds.has(node.id)) visible.add(node.id);
+    }
+    return visible.size > 0 ? visible : null;
+  }, [data.nodes, highlightedIds]);
+
   const cancelPendingAutoFit = useCallback(() => {
     if (autoFitRafRef.current != null) {
       cancelAnimationFrame(autoFitRafRef.current);
       autoFitRafRef.current = null;
     }
   }, []);
+
+  const cancelViewAnimation = useCallback(() => {
+    if (viewAnimationRafRef.current != null) {
+      cancelAnimationFrame(viewAnimationRafRef.current);
+      viewAnimationRafRef.current = null;
+    }
+  }, []);
+
+  const animateToTransform = useCallback((target: { x: number; y: number; k: number }) => {
+    cancelViewAnimation();
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    if (reduceMotion) {
+      transformRef.current = target;
+      drawRef.current?.();
+      return;
+    }
+
+    const start = { ...transformRef.current };
+    let startedAt: number | null = null;
+    const step = (timestamp: number) => {
+      if (startedAt == null) startedAt = timestamp;
+      const progress = Math.min(1, (timestamp - startedAt) / 220);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      transformRef.current = {
+        x: start.x + (target.x - start.x) * eased,
+        y: start.y + (target.y - start.y) * eased,
+        k: start.k + (target.k - start.k) * eased,
+      };
+      drawRef.current?.();
+      if (progress < 1) viewAnimationRafRef.current = requestAnimationFrame(step);
+      else viewAnimationRafRef.current = null;
+    };
+    viewAnimationRafRef.current = requestAnimationFrame(step);
+  }, [cancelViewAnimation]);
 
   /**
    * Fit visible node bounds into CSS-pixel canvas bounds. Returns false while
@@ -129,24 +493,33 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     if (!canvas || nodes.length === 0) return false;
 
     const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const viewportWidth = rect.width || canvas.clientWidth || canvas.width / dpr;
-    const viewportHeight = rect.height || canvas.clientHeight || canvas.height / dpr;
+    const backingScale = backingScaleRef.current;
+    const viewportWidth = rect.width || canvas.clientWidth || canvas.width / backingScale.x;
+    const viewportHeight = rect.height || canvas.clientHeight || canvas.height / backingScale.y;
     if (viewportWidth <= 0 || viewportHeight <= 0) return false;
 
     let minX = Number.POSITIVE_INFINITY;
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
-    for (const node of nodes) {
-      const x = node.x;
-      const y = node.y;
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      const radius = nodeRadius(node);
-      minX = Math.min(minX, x - radius);
-      minY = Math.min(minY, y - radius);
-      maxX = Math.max(maxX, x + radius);
-      maxY = Math.max(maxY, y + radius);
+    if (domainsRef.current.length > 0) {
+      for (const domain of domainsRef.current) {
+        minX = Math.min(minX, domain.x - domain.radius);
+        minY = Math.min(minY, domain.y - domain.radius);
+        maxX = Math.max(maxX, domain.x + domain.radius);
+        maxY = Math.max(maxY, domain.y + domain.radius);
+      }
+    } else {
+      for (const node of nodes) {
+        const x = node.x;
+        const y = node.y;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const radius = nodeRadius(node);
+        minX = Math.min(minX, x - radius);
+        minY = Math.min(minY, y - radius);
+        maxX = Math.max(maxX, x + radius);
+        maxY = Math.max(maxY, y + radius);
+      }
     }
     if (![minX, minY, maxX, maxY].every(Number.isFinite)) return false;
 
@@ -186,8 +559,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   // event listeners (mousedown/mousemove/mouseup/wheel) — wasteful and can
   // cause missed events during the rebind window.
   const onNodeClickRef = useRef(onNodeClick);
+  const onScopeSelectRef = useRef(onScopeSelect);
   const onNodeHoverRef = useRef(onNodeHover);
   useEffect(() => { onNodeClickRef.current = onNodeClick; }, [onNodeClick]);
+  useEffect(() => { onScopeSelectRef.current = onScopeSelect; }, [onScopeSelect]);
   useEffect(() => { onNodeHoverRef.current = onNodeHover; }, [onNodeHover]);
 
   const dragRef = useRef<{ node: SimNode | null; startX: number; startY: number }>({
@@ -201,6 +576,100 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   // node was unchanged, causing the whole GraphTab tree to re-render
   // continuously while the cursor was over the canvas.
   const lastHoverIdRef = useRef<number | null>(null);
+
+  const activateScope = useCallback((scope: Omit<GraphScopeSelection, "nodeIds">) => {
+    const clusterDomain = new Map(
+      clustersRef.current.map((cluster) => [cluster.id, cluster.domain_id]),
+    );
+    const nodeIds = new Set<number>();
+    for (const node of nodesRef.current) {
+      if (scope.kind === "community" && node.cluster_id === scope.id) nodeIds.add(node.id);
+      if (
+        scope.kind === "domain"
+        && node.cluster_id != null
+        && clusterDomain.get(node.cluster_id) === scope.id
+      ) nodeIds.add(node.id);
+    }
+    onScopeSelectRef.current?.({ ...scope, nodeIds });
+  }, []);
+
+  const focusKeyboardTarget = useCallback((target: KeyboardTarget, index: number) => {
+    keyboardFocusRef.current = target;
+    hasUserInteractedRef.current = true;
+    cancelPendingAutoFit();
+    const canvas = canvasRef.current;
+    let x = target.x;
+    let y = target.y;
+    let radius = target.radius;
+    if (target.kind === "node") {
+      const node = nodeMapRef.current.get(target.id);
+      if (node) {
+        x = node.x ?? x;
+        y = node.y ?? y;
+        radius = nodeRadius(node);
+      }
+    }
+
+    const rect = canvas?.getBoundingClientRect();
+    let zoom = target.kind === "node" ? 1.25 : 0.35;
+    if (rect && target.kind !== "node") {
+      const availableWidth = Math.max(1, rect.width - FIT_PADDING * 2);
+      const availableHeight = Math.max(1, rect.height - FIT_PADDING * 2);
+      zoom = Math.max(0.1, Math.min(3, availableWidth / (radius * 2), availableHeight / (radius * 2)));
+    } else if (target.kind === "node") {
+      zoom = Math.max(1.25, Math.min(3, transformRef.current.k));
+    }
+
+    // Paint the virtual focus ring immediately; the optional view animation
+    // then brings an off-screen target into the center without a React render.
+    drawRef.current?.();
+    animateToTransform({ x: -x * zoom, y: -y * zoom, k: zoom });
+
+    const targets = keyboardTargetsRef.current[target.kind];
+    const visible = keyboardVisibleCountsRef.current[target.kind];
+    const kindLabel = target.kind === "domain"
+      ? "Domain"
+      : target.kind === "community"
+        ? "Community"
+        : `Node${target.semanticLabel ? ` ${target.semanticLabel}` : ""}`;
+    const boundedNote = targets.length < visible
+      ? ` ${targets.length} of ${visible} visible ${target.kind} targets are keyboard-browsable.`
+      : "";
+    if (keyboardStatusRef.current) {
+      keyboardStatusRef.current.textContent = `${kindLabel} ${target.label}, ${index + 1} of ${targets.length}.${boundedNote} Press Enter to activate.`;
+    }
+  }, [animateToTransform, cancelPendingAutoFit]);
+
+  const cycleKeyboardTarget = useCallback((kind: KeyboardTargetKind, direction: 1 | -1) => {
+    const targets = keyboardTargetsRef.current[kind];
+    if (targets.length === 0) {
+      if (keyboardStatusRef.current) {
+        keyboardStatusRef.current.textContent = `No visible ${kind} targets.`;
+      }
+      return;
+    }
+    const current = keyboardFocusRef.current;
+    const currentIndex = current?.kind === kind
+      ? targets.findIndex((target) => target.id === current.id)
+      : -1;
+    const index = currentIndex < 0
+      ? (direction === 1 ? 0 : targets.length - 1)
+      : (currentIndex + direction + targets.length) % targets.length;
+    focusKeyboardTarget(targets[index], index);
+  }, [focusKeyboardTarget]);
+
+  const activateKeyboardTarget = useCallback((): boolean => {
+    const target = keyboardFocusRef.current;
+    if (!target) return false;
+    if (target.kind === "node") {
+      const node = nodeMapRef.current.get(target.id);
+      if (!node) return false;
+      onNodeClickRef.current(node as GraphNode);
+      return true;
+    }
+    activateScope({ kind: target.kind, id: target.id, key: target.label });
+    return true;
+  }, [activateScope]);
 
   // Update simulation when data changes.
   // R40 (UI-2): previously this effect tore down the entire simulation and
@@ -221,6 +690,21 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       nodesRef.current = [];
       edgesRef.current = [];
       nodeMapRef.current = new Map();
+      clustersRef.current = [];
+      clusterMapRef.current = new Map();
+      domainsRef.current = [];
+      domainCatalogRef.current = new Map();
+      layoutNodeSpacingRef.current = DEFAULT_LAYOUT_NODE_SPACING;
+      localEdgesRef.current = [];
+      crossClusterEdgesRef.current = [];
+      clusterBundleBatchesRef.current = new Map();
+      domainBundleBatchesRef.current = new Map();
+      labelCandidatesRef.current = [];
+      edgeGroupsRef.current = new Map();
+      keyboardTargetsRef.current = emptyKeyboardTargets();
+      keyboardVisibleCountsRef.current = { domain: 0, community: 0, node: 0 };
+      keyboardFocusRef.current = null;
+      if (keyboardStatusRef.current) keyboardStatusRef.current.textContent = "";
       currentNodeIdsRef.current = new Set();
       currentEdgeKeysRef.current = new Set();
       drawRef.current?.();
@@ -234,15 +718,35 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // A filter may remove nodes/edges and later re-add them. As long as every
     // incoming topology element has been seen during this mount, it is a view
     // change rather than new graph topology and must not reheat d3.
-    const topologyAlreadyKnown = [...incomingNodeIds].every((id) => knownNodeIdsRef.current.has(id))
+    const sameServerTopology = data.topology_revision != null
+      && data.topology_revision === topologyRevisionRef.current;
+    const serverTopologyChanged = data.topology_revision != null
+      && data.topology_revision !== topologyRevisionRef.current;
+    // A new server revision is not a client-side filter. Drop retired physics
+    // objects and membership keys before accepting it, otherwise repeated
+    // reindexes make these caches grow for the lifetime of the mounted tab and
+    // can resurrect stale coordinates when an id is later reused.
+    if (serverTopologyChanged) {
+      nodeStateCacheRef.current.clear();
+      knownNodeIdsRef.current.clear();
+      knownEdgeKeysRef.current.clear();
+    }
+    const incomingSubsetWasSeen = [...incomingNodeIds].every((id) => knownNodeIdsRef.current.has(id))
       && [...incomingEdgeKeys].every((key) => knownEdgeKeysRef.current.has(key));
+    // Modern responses explicitly distinguish a client-side filter from a
+    // removal-only server refresh. Keep the legacy subset heuristic only for
+    // old backends that do not expose topology_revision.
+    const topologyAlreadyKnown = data.topology_revision != null
+      ? sameServerTopology && incomingSubsetWasSeen
+      : incomingSubsetWasSeen;
+    topologyRevisionRef.current = data.topology_revision;
 
     // Reuse the cached physics object for every known node. Update semantic
     // metadata in place while preserving d3-owned position/velocity fields.
     const nodes: SimNode[] = data.nodes.map((n) => {
       const cached = nodeStateCacheRef.current.get(n.id);
       if (!cached) {
-        const created = { ...n } as SimNode;
+        const created = { ...n, anchorX: n.x, anchorY: n.y } as SimNode;
         nodeStateCacheRef.current.set(n.id, created);
         return created;
       }
@@ -254,7 +758,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         fx: cached.fx,
         fy: cached.fy,
       };
-      Object.assign(cached, n, physics);
+      Object.assign(cached, n, { anchorX: n.x, anchorY: n.y }, physics);
       return cached;
     });
     const edges: SimEdge[] = data.edges.map((e) => ({ ...e }));
@@ -269,13 +773,115 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const map = new Map<number, SimNode>();
     for (const n of nodes) map.set(n.id, n);
     nodeMapRef.current = map;
+    const visibleClusterIds = new Set(nodes.map((node) => node.cluster_id).filter((id): id is number => id != null));
+    clustersRef.current = (data.layout?.clusters ?? []).filter((cluster) => visibleClusterIds.has(cluster.id));
+    layoutNodeSpacingRef.current = data.layout?.node_spacing ?? DEFAULT_LAYOUT_NODE_SPACING;
+    const visibleDomainIds = new Set(clustersRef.current.map((cluster) => cluster.domain_id));
+    domainsRef.current = (data.layout?.domains ?? []).filter((domain) => visibleDomainIds.has(domain.id));
+    domainCatalogRef.current = new Map(
+      (data.layout?.domain_catalog?.domains ?? []).map((domain) => [domain.key, domain]),
+    );
+    const clusterMap = new Map(clustersRef.current.map((cluster) => [cluster.id, cluster]));
+    clusterMapRef.current = clusterMap;
+    const domainMap = new Map(domainsRef.current.map((domain) => [domain.id, domain]));
+    const localEdges: SimEdge[] = [];
+    const crossClusterEdges: SimEdge[] = [];
+    for (const edge of edges) {
+      const source = map.get(simEdgeNodeId(edge.source));
+      const target = map.get(simEdgeNodeId(edge.target));
+      // Legacy responses without cluster metadata retain their complete force
+      // behavior. Hierarchical responses deliberately keep macro links out of
+      // d3 so unrelated architecture domains cannot collapse into a hairball.
+      const isLocal = source?.cluster_id == null
+        || target?.cluster_id == null
+        || source.cluster_id === target.cluster_id;
+      (isLocal ? localEdges : crossClusterEdges).push(edge);
+    }
+    localEdgesRef.current = localEdges;
+    crossClusterEdgesRef.current = crossClusterEdges;
+    clusterBundleBatchesRef.current = buildOverviewBundleBatches(
+      edges,
+      map,
+      clusterMap,
+      (node) => node.cluster_id,
+      Math.min(180, Math.max(36, clustersRef.current.length * 4)),
+    );
+    domainBundleBatchesRef.current = buildOverviewBundleBatches(
+      edges,
+      map,
+      domainMap,
+      (node) => node.cluster_id == null ? undefined : clusterMap.get(node.cluster_id)?.domain_id,
+      72,
+    );
+    labelCandidatesRef.current = [...nodes]
+      .sort((nodeA, nodeB) => {
+        const structuralA = ["Project", "Package", "Module", "File", "Class", "Interface"].includes(nodeA.label) ? 0 : 1;
+        const structuralB = ["Project", "Package", "Module", "File", "Class", "Interface"].includes(nodeB.label) ? 0 : 1;
+        return structuralA - structuralB || nodeB.size - nodeA.size || nodeA.id - nodeB.id;
+      })
+      .slice(0, NEAR_LABEL_LIMIT);
+    keyboardVisibleCountsRef.current = {
+      domain: domainsRef.current.length,
+      community: clustersRef.current.length,
+      node: nodes.length,
+    };
+    keyboardTargetsRef.current = {
+      domain: [...domainsRef.current]
+        .sort((left, right) => right.node_count - left.node_count || left.id - right.id)
+        .slice(0, MAX_KEYBOARD_DOMAINS)
+        .map((domain) => ({
+          kind: "domain",
+          id: domain.id,
+          label: domain.key,
+          x: domain.x,
+          y: domain.y,
+          radius: domain.radius,
+        })),
+      community: [...clustersRef.current]
+        .sort((left, right) => right.node_count - left.node_count || left.id - right.id)
+        .slice(0, MAX_KEYBOARD_COMMUNITIES)
+        .map((cluster) => ({
+          kind: "community",
+          id: cluster.id,
+          label: cluster.key,
+          x: cluster.x,
+          y: cluster.y,
+          radius: cluster.radius,
+        })),
+      node: labelCandidatesRef.current.slice(0, MAX_KEYBOARD_NODES).map((node) => ({
+        kind: "node",
+        id: node.id,
+        label: node.name || node.qualified_name || String(node.id),
+        semanticLabel: node.label,
+        x: node.x ?? 0,
+        y: node.y ?? 0,
+        radius: nodeRadius(node),
+      })),
+    };
+    const keyboardFocus = keyboardFocusRef.current;
+    if (keyboardFocus) {
+      const refreshedFocus = keyboardTargetsRef.current[keyboardFocus.kind]
+        .find((target) => target.id === keyboardFocus.id);
+      keyboardFocusRef.current = refreshedFocus ?? null;
+      if (!refreshedFocus && keyboardStatusRef.current) keyboardStatusRef.current.textContent = "";
+    }
+    const edgeGroups = new Map<EdgeGroup, SimEdge[]>();
+    for (const edge of edges) {
+      const group = edgeGroup(edge.type);
+      const bucket = edgeGroups.get(group);
+      if (bucket) bucket.push(edge);
+      else edgeGroups.set(group, [edge]);
+    }
+    edgeGroupsRef.current = edgeGroups;
 
     if (simRef.current) {
-      if (!topologyIdentical) {
+      if (!topologyIdentical || serverTopologyChanged) {
         // Swap the active subset while retaining cached node objects. Merely
         // filtering to known topology (or restoring it) does not restart d3.
+        // A server revision with the same IDs still reinitializes forceX/Y,
+        // whose target arrays are cached by d3 during initialize().
         simRef.current.nodes(nodes);
-        (simRef.current.force("link") as any).links(edges);
+        (simRef.current.force("link") as any).links(localEdges);
       }
       if (!topologyAlreadyKnown) {
         // Only genuinely new nodes/edges need a gentle topology re-layout.
@@ -292,25 +898,42 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         )
         .force(
           "link",
-          forceLink<SimNode, SimEdge>(edges)
+          forceLink<SimNode, SimEdge>(localEdges)
             .id((d) => d.id)
-            .distance(LINK_DISTANCE)
+            .distance(LOCAL_LINK_DISTANCE)
             .strength(0.3),
         )
-        .force("center", forceCenter(0, 0))
-        // forceCenter only translates the centroid; it does not pull isolated
-        // nodes back. Weak axis forces keep disconnected components inside a
-        // readable overview and cap the area d3 must continuously traverse.
-        .force("x", forceX<SimNode>(0).strength(CENTERING_STRENGTH))
-        .force("y", forceY<SimNode>(0).strength(CENTERING_STRENGTH))
+        // Preserve the server's directory map while allowing gentle local
+        // relaxation. This is the key distinction from a global force blob.
+        .force("x", forceX<SimNode>((node) => node.anchorX).strength(ANCHOR_STRENGTH))
+        .force("y", forceY<SimNode>((node) => node.anchorY).strength(ANCHOR_STRENGTH))
         .force("collide", forceCollide<SimNode>((node) => nodeRadius(node) + 4))
         .alpha(1)
-        .alphaDecay(0.02);
+        .alphaDecay(SIMULATION_ALPHA_DECAY);
 
       // R40 (UI-6): batch tick-driven draws via requestAnimationFrame.
       // d3 ticks much faster than 60fps during initial layout; without
       // batching, draw() runs many times per visible frame.
       sim.on("tick", () => {
+        // Scope contours and hit targets are server-authored and static. Keep
+        // d3's gentle local refinement inside those exact community circles so
+        // the rendered node, its clickable scope, and the breadcrumb cannot
+        // disagree after settling or a drag/release.
+        for (const node of nodesRef.current) {
+          if (node.cluster_id == null) continue;
+          const cluster = clusterMapRef.current.get(node.cluster_id);
+          if (!cluster) continue;
+          const dx = (node.x ?? cluster.x) - cluster.x;
+          const dy = (node.y ?? cluster.y) - cluster.y;
+          const distance = Math.hypot(dx, dy);
+          const maxDistance = Math.max(0, cluster.radius - nodeRadius(node) - 4);
+          if (distance <= maxDistance || distance === 0) continue;
+          const scale = maxDistance / distance;
+          node.x = cluster.x + dx * scale;
+          node.y = cluster.y + dy * scale;
+          node.vx = 0;
+          node.vy = 0;
+        }
         if (rafIdRef.current != null) return;
         rafIdRef.current = requestAnimationFrame(() => {
           rafIdRef.current = null;
@@ -367,6 +990,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         rafIdRef.current = null;
       }
       cancelPendingAutoFit();
+      cancelViewAnimation();
       if (settledFitTimerRef.current != null) {
         clearTimeout(settledFitTimerRef.current);
         settledFitTimerRef.current = null;
@@ -377,7 +1001,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         simRef.current = null;
       }
     };
-  }, [cancelPendingAutoFit]);
+  }, [cancelPendingAutoFit, cancelViewAnimation]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -391,12 +1015,15 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // full resolution on HiDPI/Retina displays. The canvas backing store is
     // already sized to clientWidth * dpr in the resize handler, so we just
     // need to scale the context by dpr before applying the pan/zoom transform.
-    const dpr = window.devicePixelRatio || 1;
+    const backingScale = backingScaleRef.current;
 
     ctx.clearRect(0, 0, width, height);
     ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.translate(width / (2 * dpr) + tx, height / (2 * dpr) + ty);
+    ctx.scale(backingScale.x, backingScale.y);
+    ctx.translate(
+      width / (2 * backingScale.x) + tx,
+      height / (2 * backingScale.y) + ty,
+    );
     ctx.scale(tk, tk);
 
     // R40 (UI-2): use the cached nodeMap instead of rebuilding it on every draw.
@@ -406,66 +1033,417 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const nodeMap = nodeMapRef.current;
     // An empty Set is semantically the same as no selection. Treating it as
     // truthy used to dim every node and leave a phantom selection state.
-    const activeHighlightedIds = highlightedIds && highlightedIds.size > 0
-      ? highlightedIds
-      : null;
+    const activeHighlightedIds = visibleHighlightedIds;
+    const occupied: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+
+    // Directory communities are precomputed server-side and require only two
+    // batched paths here, regardless of the node count. They make overview
+    // structure visible before individual labels are readable.
+    const projectedNodeSpacing = layoutNodeSpacingRef.current * tk;
+    const domainOverview = projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING;
+    const rawTopology = projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING;
+    // Adjacent LODs overlap briefly for continuity, but domain bundles are
+    // gone before raw topology appears. This prevents the three simultaneous
+    // layers that previously made the transition busier than either endpoint.
+    const domainBundleOpacity = 1 - fadeBetween(projectedNodeSpacing, 4.5, 7);
+    const communityBundleOpacity = fadeBetween(projectedNodeSpacing, 6, 9)
+      * (1 - fadeBetween(projectedNodeSpacing, 14, 18));
+    const localEdgeOpacity = fadeBetween(projectedNodeSpacing, 9, 13);
+    const crossEdgeOpacity = fadeBetween(projectedNodeSpacing, 16, 20);
+
+    if (domainsRef.current.length > 0) {
+      // A small fixed palette makes top-level architecture areas immediately
+      // distinguishable. Domains are still batched by palette slot, keeping
+      // the number of canvas state changes constant even for large monorepos.
+      for (let paletteIndex = 0; paletteIndex < DOMAIN_PALETTE.length; paletteIndex += 1) {
+        let hasDomain = false;
+        ctx.beginPath();
+        for (const domain of domainsRef.current) {
+          if (((domain.id % DOMAIN_PALETTE.length) + DOMAIN_PALETTE.length) % DOMAIN_PALETTE.length !== paletteIndex) continue;
+          ctx.moveTo(domain.x + domain.radius, domain.y);
+          ctx.arc(domain.x, domain.y, domain.radius, 0, Math.PI * 2);
+          hasDomain = true;
+        }
+        if (!hasDomain) continue;
+        const palette = DOMAIN_PALETTE[paletteIndex];
+        ctx.fillStyle = palette.fill;
+        ctx.fill();
+        ctx.strokeStyle = palette.stroke;
+        ctx.lineWidth = 1.35 / tk;
+        ctx.stroke();
+      }
+    }
+
+    if (clustersRef.current.length > 0) {
+      ctx.beginPath();
+      for (const cluster of clustersRef.current) {
+        ctx.moveTo(cluster.x + cluster.radius, cluster.y);
+        ctx.arc(cluster.x, cluster.y, cluster.radius, 0, Math.PI * 2);
+      }
+      ctx.fillStyle = domainOverview
+        ? "rgba(14, 165, 233, 0.011)"
+        : "rgba(14, 165, 233, 0.024)";
+      ctx.fill();
+      ctx.strokeStyle = domainOverview
+        ? "rgba(71, 116, 143, 0.13)"
+        : "rgba(71, 148, 179, 0.28)";
+      ctx.lineWidth = (domainOverview ? 0.65 : 0.9) / tk;
+      ctx.stroke();
+    }
+
+    const hoveredScope = hoveredScopeRef.current;
+    if (hoveredScope) {
+      const hoveredCircle = hoveredScope.kind === "domain"
+        ? domainsRef.current.find((domain) => domain.id === hoveredScope.id)
+        : clustersRef.current.find((cluster) => cluster.id === hoveredScope.id);
+      if (hoveredCircle) {
+        const palette = hoveredScope.kind === "domain"
+          ? domainPalette(hoveredCircle.id)
+          : {
+              hoverFill: "rgba(14, 165, 233, 0.075)",
+              hoverStroke: "rgba(125, 211, 252, 0.82)",
+            };
+        ctx.beginPath();
+        ctx.arc(hoveredCircle.x, hoveredCircle.y, hoveredCircle.radius, 0, Math.PI * 2);
+        ctx.fillStyle = palette.hoverFill;
+        ctx.fill();
+        ctx.strokeStyle = palette.hoverStroke;
+        ctx.lineWidth = 2.2 / tk;
+        ctx.stroke();
+      }
+    }
+
+    const keyboardFocus = keyboardFocusRef.current;
+    if (keyboardFocus && keyboardFocus.kind !== "node") {
+      const focusedCircle = keyboardFocus.kind === "domain"
+        ? domainsRef.current.find((domain) => domain.id === keyboardFocus.id)
+        : clustersRef.current.find((cluster) => cluster.id === keyboardFocus.id);
+      if (focusedCircle) {
+        ctx.beginPath();
+        ctx.arc(focusedCircle.x, focusedCircle.y, focusedCircle.radius + 3 / tk, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(236, 254, 255, 0.98)";
+        ctx.lineWidth = 2.6 / tk;
+        ctx.stroke();
+      }
+    }
+
+    const drawBundleBatches = (
+      batches: ReadonlyMap<string, OverviewBundle[]>,
+      widthScale: number,
+      opacity: number,
+    ) => {
+      ctx.globalAlpha = opacity;
+      for (const bundles of batches.values()) {
+        const first = bundles[0];
+        if (!first) continue;
+        ctx.beginPath();
+        for (const bundle of bundles) {
+          const dx = bundle.targetX - bundle.sourceX;
+          const dy = bundle.targetY - bundle.sourceY;
+          const length = Math.max(1, Math.hypot(dx, dy));
+          const sourceInset = Math.min(bundle.sourceRadius, length * 0.35);
+          const targetInset = Math.min(bundle.targetRadius, length * 0.35);
+          const startX = bundle.sourceX + (dx / length) * sourceInset;
+          const startY = bundle.sourceY + (dy / length) * sourceInset;
+          const endX = bundle.targetX - (dx / length) * targetInset;
+          const endY = bundle.targetY - (dy / length) * targetInset;
+          const pairMin = Math.min(bundle.sourceId, bundle.targetId);
+          const pairMax = Math.max(bundle.sourceId, bundle.targetId);
+          const direction = ((pairMin * 31 + pairMax * 17) & 1) === 0 ? -1 : 1;
+          const bend = Math.min(92, Math.max(14, length * 0.11)) * direction;
+          const controlX = (startX + endX) / 2 - (dy / length) * bend;
+          const controlY = (startY + endY) / 2 + (dx / length) * bend;
+          ctx.moveTo(startX, startY);
+          ctx.quadraticCurveTo(controlX, controlY, endX, endY);
+          // A constant-screen-size chevron encodes direction without adding a
+          // separate stroke per edge bundle. It shares this batch's path and
+          // therefore keeps the overview draw cost bounded.
+          const tangentX = endX - controlX;
+          const tangentY = endY - controlY;
+          const tangentLength = Math.max(1, Math.hypot(tangentX, tangentY));
+          const unitX = tangentX / tangentLength;
+          const unitY = tangentY / tangentLength;
+          const arrowLength = 5.5 / tk;
+          const arrowWidth = 3.25 / tk;
+          const arrowBaseX = endX - unitX * arrowLength;
+          const arrowBaseY = endY - unitY * arrowLength;
+          ctx.moveTo(arrowBaseX - unitY * arrowWidth, arrowBaseY + unitX * arrowWidth);
+          ctx.lineTo(endX, endY);
+          ctx.lineTo(arrowBaseX + unitY * arrowWidth, arrowBaseY - unitX * arrowWidth);
+        }
+        ctx.strokeStyle = EDGE_BUNDLE_STYLES[first.group];
+        ctx.lineWidth = Math.min(4.5, 0.75 + first.weight * 0.625) * widthScale / tk;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    };
+
+    if (domainBundleOpacity > 0 && domainBundleBatchesRef.current.size > 0) {
+      drawBundleBatches(domainBundleBatchesRef.current, 1.25, domainBundleOpacity);
+    }
+    if (communityBundleOpacity > 0 && clusterBundleBatchesRef.current.size > 0) {
+      drawBundleBatches(clusterBundleBatchesRef.current, 1, communityBundleOpacity);
+    }
 
     // Pass 1: default (non-highlighted) edges — single path, single stroke.
-    ctx.strokeStyle = "rgba(100, 116, 139, 0.1)";
-    ctx.lineWidth = 0.5 / tk;
+    ctx.strokeStyle = rawTopology
+      ? "rgba(100, 135, 158, 0.18)"
+      : "rgba(100, 135, 158, 0.105)";
+    ctx.lineWidth = (rawTopology ? 0.65 : 0.5) / tk;
+    ctx.globalAlpha = localEdgeOpacity;
     ctx.beginPath();
-    for (const edge of edgesRef.current) {
-      const sId = typeof edge.source === "number" ? edge.source : edge.source.id;
-      const tId = typeof edge.target === "number" ? edge.target : edge.target.id;
+    const defaultEdges = localEdgeOpacity > 0 ? localEdgesRef.current : [];
+    for (const edge of defaultEdges) {
+      const sId = simEdgeNodeId(edge.source);
+      const tId = simEdgeNodeId(edge.target);
       const source = nodeMap.get(sId);
       const target = nodeMap.get(tId);
       if (!source || !target) continue;
-      if (activeHighlightedIds && (activeHighlightedIds.has(source.id) || activeHighlightedIds.has(target.id))) continue;
+      if (selectedNodeId != null && (source.id === selectedNodeId || target.id === selectedNodeId)) continue;
       ctx.moveTo(source.x ?? 0, source.y ?? 0);
       ctx.lineTo(target.x ?? 0, target.y ?? 0);
     }
     ctx.stroke();
+    ctx.globalAlpha = 1;
 
-    // Pass 2: highlighted edges — single path, single stroke.
-    if (activeHighlightedIds) {
-      ctx.strokeStyle = "rgba(6, 182, 212, 0.4)";
-      ctx.lineWidth = 1 / tk;
+    if (crossEdgeOpacity > 0) {
+      ctx.globalAlpha = crossEdgeOpacity;
+      ctx.strokeStyle = "rgba(100, 135, 158, 0.18)";
+      ctx.lineWidth = 0.65 / tk;
       ctx.beginPath();
-      for (const edge of edgesRef.current) {
-        const sId = typeof edge.source === "number" ? edge.source : edge.source.id;
-        const tId = typeof edge.target === "number" ? edge.target : edge.target.id;
-        const source = nodeMap.get(sId);
-        const target = nodeMap.get(tId);
+      for (const edge of crossClusterEdgesRef.current) {
+        const source = nodeMap.get(simEdgeNodeId(edge.source));
+        const target = nodeMap.get(simEdgeNodeId(edge.target));
         if (!source || !target) continue;
-        if (!activeHighlightedIds.has(source.id) && !activeHighlightedIds.has(target.id)) continue;
+        if (selectedNodeId != null && (source.id === selectedNodeId || target.id === selectedNodeId)) continue;
         ctx.moveTo(source.x ?? 0, source.y ?? 0);
         ctx.lineTo(target.x ?? 0, target.y ?? 0);
       }
       ctx.stroke();
+      ctx.globalAlpha = 1;
     }
 
-    // Draw nodes
+    // Pass 2: highlighted edges — grouped into at most five semantic stroke
+    // batches. This restores relation meaning without per-edge style changes.
+    if (activeHighlightedIds && selectedNodeId != null) {
+      ctx.lineWidth = 1.2 / tk;
+      for (const [group, groupedEdges] of edgeGroupsRef.current) {
+        let hasPath = false;
+        ctx.beginPath();
+        for (const edge of groupedEdges) {
+          const sId = simEdgeNodeId(edge.source);
+          const tId = simEdgeNodeId(edge.target);
+          const source = nodeMap.get(sId);
+          const target = nodeMap.get(tId);
+          if (!source || !target) continue;
+          if (source.id !== selectedNodeId && target.id !== selectedNodeId) continue;
+          ctx.moveTo(source.x ?? 0, source.y ?? 0);
+          ctx.lineTo(target.x ?? 0, target.y ?? 0);
+          hasPath = true;
+        }
+        if (!hasPath) continue;
+        ctx.strokeStyle = EDGE_GROUP_STYLES[group];
+        ctx.stroke();
+      }
+    }
+
+    // Draw nodes. Semantic fill is never replaced by selection or status;
+    // those dimensions use outer rings so the graph remains decodable.
     for (const node of nodesRef.current) {
       const x = node.x ?? 0;
       const y = node.y ?? 0;
       const isHighlighted = activeHighlightedIds?.has(node.id) ?? false;
-      const baseRadius = nodeRadius(node);
+      // Keep overview dots legible without inflating simulation collision
+      // radii. The floor is expressed in screen pixels, so it disappears as
+      // soon as semantic zoom makes the real node size readable.
+      const baseRadius = Math.max(nodeRadius(node), 1.2 / tk);
       const r = isHighlighted ? baseRadius * HIGHLIGHT_SCALE : baseRadius;
 
-      const color = deadCodeView
-        ? colorForStatus(node.status)
-        : colorForLabel(node.label);
+      const color = colorForLabel(node.label);
 
       ctx.beginPath();
       ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fillStyle = isHighlighted ? "#06b6d4" : color;
+      ctx.fillStyle = color;
       ctx.globalAlpha = activeHighlightedIds && !isHighlighted ? 0.3 : 1;
       ctx.fill();
       ctx.globalAlpha = 1;
+
+      if (deadCodeView && node.status) {
+        ctx.strokeStyle = colorForStatus(node.status);
+        ctx.lineWidth = 1.4 / tk;
+        ctx.stroke();
+      }
+
+      if (isHighlighted) {
+        ctx.beginPath();
+        ctx.arc(x, y, r + (node.id === selectedNodeId ? 4 : 2.5) / tk, 0, Math.PI * 2);
+        ctx.strokeStyle = node.id === selectedNodeId
+          ? "rgba(236, 254, 255, 0.98)"
+          : "rgba(34, 211, 238, 0.82)";
+        ctx.lineWidth = (node.id === selectedNodeId ? 2.2 : 1.2) / tk;
+        ctx.stroke();
+      }
+
+      if (keyboardFocus?.kind === "node" && keyboardFocus.id === node.id) {
+        ctx.beginPath();
+        ctx.arc(x, y, r + 5 / tk, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(236, 254, 255, 0.98)";
+        ctx.lineWidth = 2.4 / tk;
+        ctx.stroke();
+      }
+    }
+
+    // Labels are painted after edges and nodes so no topology line can cut
+    // through them. Domains own the overview; communities appear only once
+    // the user has drilled beyond the architecture tier.
+    if (domainsRef.current.length > 0) {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (const domain of [...domainsRef.current]
+        .sort((left, right) => right.node_count - left.node_count || left.id - right.id)) {
+        const title = domain.key;
+        const exactDomain = domainCatalogRef.current.get(domain.key);
+        const groupLabel = domain.cluster_count === 1 ? "group" : "groups";
+        // This label is intentionally compact: exact full counts remain in
+        // the Fidelity HUD, while a shorter map annotation avoids clipping
+        // and lets the architecture itself own the canvas.
+        const summary = exactDomain
+          ? `${compactArchitectureCount(domain.node_count)} / ${compactArchitectureCount(exactDomain.node_count)} nodes · ${domain.cluster_count} ${groupLabel}`
+          : `${compactArchitectureCount(domain.node_count)} nodes · ${domain.cluster_count} ${groupLabel}`;
+        const palette = domainPalette(domain.id);
+        const titleY = domain.y - domain.radius + 14 / tk;
+        const summaryY = titleY + 16 / tk;
+        ctx.font = `750 ${13 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
+        const titleWidth = ctx.measureText(title).width;
+        ctx.font = `500 ${9.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
+        const summaryWidth = ctx.measureText(summary).width;
+        const boxWidth = Math.max(titleWidth, summaryWidth) + 12 / tk;
+        const box = {
+          left: domain.x - boxWidth / 2,
+          right: domain.x + boxWidth / 2,
+          top: titleY - 4 / tk,
+          bottom: summaryY + 13 / tk,
+        };
+        const collides = occupied.some((other) => !(
+          box.right < other.left
+          || box.left > other.right
+          || box.bottom < other.top
+          || box.top > other.bottom
+        ));
+        if (collides) continue;
+        occupied.push(box);
+        ctx.font = `750 ${13 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
+        ctx.strokeStyle = "rgba(3, 8, 14, 0.94)";
+        ctx.lineWidth = 4 / tk;
+        ctx.strokeText(title, domain.x, titleY);
+        ctx.fillStyle = palette.title;
+        ctx.fillText(title, domain.x, titleY);
+        ctx.font = `500 ${9.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillStyle = palette.meta;
+        ctx.fillText(summary, domain.x, summaryY);
+      }
+    }
+
+    if (!domainOverview && clustersRef.current.length > 0) {
+      const domainById = new Map(domainsRef.current.map((domain) => [domain.id, domain]));
+      const clusterLimit = rawTopology ? 80 : 42;
+      const clusterFontSize = 10 / tk;
+      ctx.font = `650 ${clusterFontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (const cluster of [...clustersRef.current]
+        .sort((left, right) => right.node_count - left.node_count || left.id - right.id)
+        .slice(0, clusterLimit)) {
+        const domainKey = domainById.get(cluster.domain_id)?.key;
+        const prefix = domainKey && cluster.key.startsWith(`${domainKey}/`) ? `${domainKey}/` : "";
+        const label = cluster.key.slice(prefix.length);
+        const labelX = cluster.x;
+        const labelY = cluster.y - cluster.radius + 9 / tk;
+        const width = ctx.measureText(label).width;
+        const height = 12 / tk;
+        const box = {
+          left: labelX - width / 2 - 3 / tk,
+          right: labelX + width / 2 + 3 / tk,
+          top: labelY - 2 / tk,
+          bottom: labelY + height,
+        };
+        const collides = occupied.some((other) => !(
+          box.right < other.left
+          || box.left > other.right
+          || box.bottom < other.top
+          || box.top > other.bottom
+        ));
+        if (collides) continue;
+        occupied.push(box);
+        ctx.strokeStyle = "rgba(3, 8, 14, 0.92)";
+        ctx.lineWidth = 3 / tk;
+        ctx.strokeText(label, labelX, labelY);
+        ctx.fillStyle = "rgba(165, 219, 239, 0.78)";
+        ctx.fillText(label, labelX, labelY);
+      }
+    }
+
+    // Zoom-dependent labels with collision avoidance. The selected node is
+    // always attempted first, followed by its neighborhood and ranked hubs.
+    const labelLimit = tk < 0.45
+      ? FAR_LABEL_LIMIT
+      : tk < 0.9
+        ? MID_LABEL_LIMIT
+        : NEAR_LABEL_LIMIT;
+    const labelNodes: SimNode[] = [];
+    const labelIds = new Set<number>();
+    // The exact selected node remains legible even at the farthest LOD. Every
+    // other label, including a large highlighted domain/community, shares the
+    // normal semantic-zoom budget instead of bypassing it up to the near cap.
+    const selectedLabelNode = selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined;
+    const labelBudget = Math.max(labelLimit, selectedLabelNode ? 1 : 0);
+    const addLabelNode = (node: SimNode | undefined) => {
+      if (!node || labelIds.has(node.id) || labelNodes.length >= labelBudget) return;
+      labelIds.add(node.id);
+      labelNodes.push(node);
+    };
+    addLabelNode(selectedLabelNode);
+    if (activeHighlightedIds) {
+      for (const id of activeHighlightedIds) addLabelNode(nodeMap.get(id));
+    }
+    for (const node of labelCandidatesRef.current.slice(0, labelLimit)) addLabelNode(node);
+
+    const labelFontSize = 10.5 / tk;
+    const labelHeight = 13 / tk;
+    ctx.font = `500 ${labelFontSize}px Inter, ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = "start";
+    ctx.textBaseline = "middle";
+    for (const node of labelNodes) {
+      const rawLabel = node.name || node.qualified_name || String(node.id);
+      const label = rawLabel.length > 34 ? `${rawLabel.slice(0, 31)}…` : rawLabel;
+      const x = (node.x ?? 0) + nodeRadius(node) + 4 / tk;
+      const y = node.y ?? 0;
+      const width = ctx.measureText(label).width;
+      const box = {
+        left: x - 2 / tk,
+        right: x + width + 2 / tk,
+        top: y - labelHeight / 2,
+        bottom: y + labelHeight / 2,
+      };
+      const collides = occupied.some((other) => !(
+        box.right < other.left
+        || box.left > other.right
+        || box.bottom < other.top
+        || box.top > other.bottom
+      ));
+      if (collides && node.id !== selectedNodeId) continue;
+      occupied.push(box);
+      ctx.strokeStyle = "rgba(3, 8, 14, 0.94)";
+      ctx.lineWidth = 3 / tk;
+      ctx.strokeText(label, x, y);
+      ctx.fillStyle = node.id === selectedNodeId
+        ? "rgba(236, 254, 255, 0.98)"
+        : "rgba(203, 225, 236, 0.88)";
+      ctx.fillText(label, x, y);
     }
 
     ctx.restore();
-  }, [highlightedIds, deadCodeView]);
+  }, [visibleHighlightedIds, selectedNodeId, deadCodeView]);
 
   // R40 (UI-3): sync drawRef AND immediately call the new draw. Previously
   // this was split into two effects: one to set drawRef.current, and a
@@ -494,9 +1472,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       // rendering on HiDPI/Retina displays. Without this, the canvas renders
       // at 1x and the browser stretches it to fill the CSS box, producing
       // blurry nodes and edges.
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = parent.clientWidth * dpr;
-      canvas.height = parent.clientHeight * dpr;
+      const backingStore = boundedCanvasBackingStore(parent.clientWidth, parent.clientHeight);
+      backingScaleRef.current = { x: backingStore.scaleX, y: backingStore.scaleY };
+      canvas.width = backingStore.width;
+      canvas.height = backingStore.height;
       canvas.style.width = parent.clientWidth + 'px';
       canvas.style.height = parent.clientHeight + 'px';
       if (!hasAutoFitRef.current && !hasUserInteractedRef.current && fitVisibleGraph()) {
@@ -520,6 +1499,32 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     let isPanning = false;
     let panStart = { x: 0, y: 0 };
+    let pointerStart = { x: 0, y: 0 };
+    let tooltipPositionRaf: number | null = null;
+    let pendingTooltipPosition: GraphTooltipPositionDetail | null = null;
+
+    const cancelTooltipPosition = () => {
+      pendingTooltipPosition = null;
+      if (tooltipPositionRaf != null) {
+        cancelAnimationFrame(tooltipPositionRaf);
+        tooltipPositionRaf = null;
+      }
+    };
+
+    const queueTooltipPosition = (position: GraphTooltipPositionDetail) => {
+      pendingTooltipPosition = position;
+      if (tooltipPositionRaf != null) return;
+      tooltipPositionRaf = requestAnimationFrame(() => {
+        tooltipPositionRaf = null;
+        const detail = pendingTooltipPosition;
+        pendingTooltipPosition = null;
+        if (!detail) return;
+        canvas.parentElement?.dispatchEvent(new CustomEvent<GraphTooltipPositionDetail>(
+          GRAPH_TOOLTIP_POSITION_EVENT,
+          { detail },
+        ));
+      });
+    };
 
     const getGraphPos = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
@@ -537,20 +1542,74 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       const k = transformRef.current.k;
       const scaledX = mx / k;
       const scaledY = my / k;
+      let closest: SimNode | null = null;
+      let closestDistance = Number.POSITIVE_INFINITY;
       for (const node of nodesRef.current) {
         const dx = (node.x ?? 0) - scaledX;
         const dy = (node.y ?? 0) - scaledY;
-        const hitRadius = nodeRadius(node) * HIGHLIGHT_SCALE;
-        if (dx * dx + dy * dy < hitRadius ** 2) return node;
+        // Keep a usable 20px diameter hit target at overview scale and choose
+        // the closest candidate when projected hit areas overlap.
+        const hitRadius = Math.max(nodeRadius(node) * HIGHLIGHT_SCALE, 10 / k);
+        const distance = dx * dx + dy * dy;
+        if (distance < hitRadius ** 2 && distance < closestDistance) {
+          closest = node;
+          closestDistance = distance;
+        }
       }
-      return null;
+      return closest;
+    };
+
+    const findScopeAt = (mx: number, my: number): Omit<GraphScopeSelection, "nodeIds"> | null => {
+      if (!onScopeSelectRef.current) return null;
+      const k = transformRef.current.k;
+      const projectedNodeSpacing = layoutNodeSpacingRef.current * k;
+      if (projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING) return null;
+      const scaledX = mx / k;
+      const scaledY = my / k;
+      const candidates = projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING
+        ? domainsRef.current.map((scope) => ({ ...scope, kind: "domain" as const }))
+        : clustersRef.current.map((scope) => ({ ...scope, kind: "community" as const }));
+      let closest: (typeof candidates)[number] | null = null;
+      let closestDistance = Number.POSITIVE_INFINITY;
+      for (const scope of candidates) {
+        const dx = scope.x - scaledX;
+        const dy = scope.y - scaledY;
+        const distance = dx * dx + dy * dy;
+        if (distance <= scope.radius ** 2 && distance < closestDistance) {
+          closest = scope;
+          closestDistance = distance;
+        }
+      }
+      return closest ? { kind: closest.kind, id: closest.id, key: closest.key } : null;
+    };
+
+    const selectScopeAt = (mx: number, my: number): boolean => {
+      const scope = findScopeAt(mx, my);
+      if (!scope) return false;
+      activateScope(scope);
+      return true;
+    };
+
+    const updateHoveredScope = (scope: Omit<GraphScopeSelection, "nodeIds"> | null) => {
+      const previous = hoveredScopeRef.current;
+      if (previous?.kind === scope?.kind && previous?.id === scope?.id) return;
+      hoveredScopeRef.current = scope;
+      drawRef.current?.();
     };
 
     const onMouseDown = (e: MouseEvent) => {
       hasUserInteractedRef.current = true;
       cancelPendingAutoFit();
+      cancelViewAnimation();
+      updateHoveredScope(null);
+      pointerStart = { x: e.clientX, y: e.clientY };
       const pos = getGraphPos(e.clientX, e.clientY);
-      const node = findNodeAt(pos.x, pos.y);
+      // At domain/community LOD, projected node spacing is smaller than the
+      // minimum node hit target. Resolve the visible architecture scope first
+      // so dense node hit-discs cannot make drill-down unreachable. At raw LOD
+      // findScopeAt returns null and node interaction keeps its precedence.
+      const scope = findScopeAt(pos.x, pos.y);
+      const node = scope ? null : findNodeAt(pos.x, pos.y);
       if (node) {
         dragRef.current = { node, startX: e.clientX, startY: e.clientY };
       } else {
@@ -596,25 +1655,42 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         const rect = canvas.getBoundingClientRect();
         const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
         const pos = getGraphPos(e.clientX, e.clientY);
-        const node = findNodeAt(pos.x, pos.y);
+        const scope = findScopeAt(pos.x, pos.y);
+        const node = scope ? null : findNodeAt(pos.x, pos.y);
+        updateHoveredScope(scope);
         const hoverId = node?.id ?? null;
         if (hoverId !== lastHoverIdRef.current) {
           lastHoverIdRef.current = hoverId;
           onNodeHoverRef.current(node ?? null, screenPos);
         }
-        canvas.style.cursor = node ? "pointer" : "default";
+        if (node) queueTooltipPosition(screenPos);
+        else cancelTooltipPosition();
+        canvas.style.cursor = node || scope ? "pointer" : "default";
       }
     };
 
+    const onMouseLeave = () => {
+      cancelTooltipPosition();
+      updateHoveredScope(null);
+      if (lastHoverIdRef.current != null) {
+        lastHoverIdRef.current = null;
+        onNodeHoverRef.current(null);
+      }
+      canvas.style.cursor = "default";
+    };
+
     const onMouseUp = (e: MouseEvent) => {
+      const moved = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
       if (dragRef.current.node) {
-        const moved = Math.abs(e.clientX - dragRef.current.startX) + Math.abs(e.clientY - dragRef.current.startY);
         if (moved < 3 && dragRef.current.node) {
           onNodeClickRef.current(dragRef.current.node as GraphNode);
         }
         dragRef.current.node.fx = null;
         dragRef.current.node.fy = null;
         simRef.current?.alphaTarget(0);
+      } else if (isPanning && moved < 3) {
+        const pos = getGraphPos(e.clientX, e.clientY);
+        selectScopeAt(pos.x, pos.y);
       }
       dragRef.current.node = null;
       isPanning = false;
@@ -627,6 +1703,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       e.preventDefault();
       hasUserInteractedRef.current = true;
       cancelPendingAutoFit();
+      cancelViewAnimation();
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
       const oldK = transformRef.current.k;
       const newK = Math.max(0.1, Math.min(10, oldK * delta));
@@ -727,6 +1804,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       e.preventDefault();
       hasUserInteractedRef.current = true;
       cancelPendingAutoFit();
+      cancelViewAnimation();
 
       if (e.touches.length >= 2) {
         beginPinch(e.touches);
@@ -739,7 +1817,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       touchStart = { x: touch.clientX, y: touch.clientY };
       touchMaxMovement = 0;
       const pos = getGraphPos(touch.clientX, touch.clientY);
-      const node = findNodeAt(pos.x, pos.y);
+      const scope = findScopeAt(pos.x, pos.y);
+      const node = scope ? null : findNodeAt(pos.x, pos.y);
       if (node) {
         touchMode = "node";
         dragRef.current = { node, startX: touch.clientX, startY: touch.clientY };
@@ -836,6 +1915,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           onNodeClickRef.current(node as GraphNode);
         }
         releaseDraggedNode();
+      } else if (touchMode === "pan" && touchMaxMovement <= TOUCH_TAP_SLOP_PX) {
+        const endedTouch = getTouch(e.changedTouches, primaryTouchId);
+        if (endedTouch) {
+          const pos = getGraphPos(endedTouch.clientX, endedTouch.clientY);
+          selectScopeAt(pos.x, pos.y);
+        }
       }
 
       if (e.touches.length === 1) beginPanTouch(e.touches[0]);
@@ -850,6 +1935,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("mousemove", onMouseMove);
+    canvas.addEventListener("mouseleave", onMouseLeave);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("touchstart", onTouchStart, { passive: false });
     canvas.addEventListener("touchmove", onTouchMove, { passive: false });
@@ -865,16 +1951,18 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     return () => {
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("mousemove", onMouseMove);
+      canvas.removeEventListener("mouseleave", onMouseLeave);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("touchstart", onTouchStart);
       canvas.removeEventListener("touchmove", onTouchMove);
       canvas.removeEventListener("touchend", onTouchEnd);
       canvas.removeEventListener("touchcancel", onTouchCancel);
       window.removeEventListener("mouseup", onMouseUp);
+      cancelTooltipPosition();
       releaseDraggedNode();
       resetTouchState();
     };
-  }, [cancelPendingAutoFit]); // callbacks are accessed via refs; only the stable cancel helper is captured
+  }, [activateScope, cancelPendingAutoFit, cancelViewAnimation]); // callbacks are accessed via refs
 
   // Expose fit/reset/zoom without lifting transformRef out of the canvas.
   useImperativeHandle(ref, () => ({
@@ -882,6 +1970,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       hasUserInteractedRef.current = true;
       hasAutoFitRef.current = true;
       cancelPendingAutoFit();
+      cancelViewAnimation();
       if (!fitVisibleGraph()) {
         transformRef.current = { x: 0, y: 0, k: 1 };
         drawRef.current?.();
@@ -891,6 +1980,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       hasUserInteractedRef.current = true;
       hasAutoFitRef.current = true;
       cancelPendingAutoFit();
+      cancelViewAnimation();
       if (!fitVisibleGraph()) {
         transformRef.current = { x: 0, y: 0, k: 1 };
         drawRef.current?.();
@@ -899,19 +1989,137 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     zoomBy: (factor: number) => {
       hasUserInteractedRef.current = true;
       cancelPendingAutoFit();
+      cancelViewAnimation();
       const newK = Math.max(0.1, Math.min(10, transformRef.current.k * factor));
       transformRef.current.k = newK;
       drawRef.current?.();
     },
-  }), [cancelPendingAutoFit, fitVisibleGraph]);
+    focusNode: (nodeId: number) => {
+      const node = nodeMapRef.current.get(nodeId);
+      if (!node) return;
+      hasUserInteractedRef.current = true;
+      cancelPendingAutoFit();
+      const k = Math.max(1.25, transformRef.current.k);
+      animateToTransform({
+        x: -(node.x ?? 0) * k,
+        y: -(node.y ?? 0) * k,
+        k,
+      });
+    },
+    focusNodes: (nodeIds: Iterable<number>, minimumZoom = 0.25) => {
+      const idSet = new Set(nodeIds);
+      const nodes = nodesRef.current.filter((node) => idSet.has(node.id));
+      const canvas = canvasRef.current;
+      if (!canvas || nodes.length === 0) return;
+      hasUserInteractedRef.current = true;
+      cancelPendingAutoFit();
+      if (nodes.length === 1) {
+        const node = nodes[0];
+        const k = Math.max(1.25, minimumZoom, transformRef.current.k);
+        animateToTransform({ x: -(node.x ?? 0) * k, y: -(node.y ?? 0) * k, k });
+        return;
+      }
+
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const node of nodes) {
+        const radius = nodeRadius(node);
+        minX = Math.min(minX, (node.x ?? 0) - radius);
+        minY = Math.min(minY, (node.y ?? 0) - radius);
+        maxX = Math.max(maxX, (node.x ?? 0) + radius);
+        maxY = Math.max(maxY, (node.y ?? 0) + radius);
+      }
+      const rect = canvas.getBoundingClientRect();
+      const availableWidth = Math.max(1, rect.width - FIT_PADDING * 2);
+      const availableHeight = Math.max(1, rect.height - FIT_PADDING * 2);
+      const graphWidth = Math.max(1, maxX - minX);
+      const graphHeight = Math.max(1, maxY - minY);
+      const k = Math.max(minimumZoom, Math.min(3, availableWidth / graphWidth, availableHeight / graphHeight));
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      animateToTransform({ x: -centerX * k, y: -centerY * k, k });
+    },
+  }), [animateToTransform, cancelPendingAutoFit, cancelViewAnimation, fitVisibleGraph]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="w-full h-full"
-      style={{ background: "#06090f", cursor: "default", touchAction: "none" }}
-      role="img"
-      aria-label={`Code graph: ${data?.nodes.length ?? 0} nodes, ${data?.edges.length ?? 0} edges. Drag to pan, scroll or pinch to zoom, click or tap a node for details.`}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        className="w-full h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 focus-visible:ring-inset"
+        style={{
+          background: "radial-gradient(circle at 50% 46%, rgba(12, 74, 110, 0.24) 0%, rgba(6, 11, 18, 0.97) 48%, #04070c 100%)",
+          cursor: "default",
+          touchAction: "none",
+        }}
+        role="application"
+        aria-roledescription="interactive code graph"
+        aria-label={`Code graph: ${data?.nodes.length ?? 0} nodes and ${data?.edges.length ?? 0} edges`}
+        aria-describedby={keyboardInstructionsId}
+        aria-keyshortcuts="D Shift+D C Shift+C N Shift+N Enter Space"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.altKey || event.ctrlKey || event.metaKey) return;
+          const lowerKey = event.key.toLowerCase();
+          const targetKind = lowerKey === "d"
+            ? "domain"
+            : lowerKey === "c"
+              ? "community"
+              : lowerKey === "n"
+                ? "node"
+                : null;
+          if (targetKind) {
+            event.preventDefault();
+            cycleKeyboardTarget(targetKind, event.shiftKey ? -1 : 1);
+            return;
+          }
+          if ((event.key === "Enter" || event.key === " " || event.key === "Spacebar") && activateKeyboardTarget()) {
+            event.preventDefault();
+            return;
+          }
+
+          const transform = transformRef.current;
+          let handled = true;
+          if (event.key === "+" || event.key === "=") {
+            transform.k = Math.min(10, transform.k * 1.15);
+          } else if (event.key === "-" || event.key === "_") {
+            transform.k = Math.max(0.1, transform.k / 1.15);
+          } else if (event.key === "0") {
+            fitVisibleGraph();
+          } else if (event.key === "ArrowLeft") {
+            transform.x += 40;
+          } else if (event.key === "ArrowRight") {
+            transform.x -= 40;
+          } else if (event.key === "ArrowUp") {
+            transform.y += 40;
+          } else if (event.key === "ArrowDown") {
+            transform.y -= 40;
+          } else {
+            handled = false;
+          }
+          if (!handled) return;
+          event.preventDefault();
+          hasUserInteractedRef.current = true;
+          cancelPendingAutoFit();
+          cancelViewAnimation();
+          drawRef.current?.();
+        }}
+      />
+      <span id={keyboardInstructionsId} className="sr-only">
+        Interactive graph. Press D or Shift+D to browse up to 32 visible domains,
+        C or Shift+C for up to 64 communities, and N or Shift+N for up to 64
+        representative nodes. Press Enter or Space to activate the announced target.
+        Arrow keys pan, plus and minus zoom, zero fits the graph, and Escape goes up.
+      </span>
+      <span
+        id={keyboardStatusId}
+        ref={keyboardStatusRef}
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      />
+    </>
   );
 });
