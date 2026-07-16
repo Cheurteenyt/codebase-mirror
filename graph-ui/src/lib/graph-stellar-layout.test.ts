@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { GraphEdge, GraphNode } from "./types";
-import { computeStellarFlowLayout } from "./graph-stellar-layout";
+import {
+  computeStellarFlowLayout,
+  stellarFlowEdgeDepth,
+  summarizeStellarFlowLanes,
+} from "./graph-stellar-layout";
 
 const node = (
   id: number,
@@ -68,6 +72,37 @@ describe("Stellar flow layout", () => {
     expect(layout.get(4)).toMatchObject({ role: "outgoing", depth: 2 });
     expect(layout.get(4)!.x).toBeGreaterThan(layout.get(3)!.x);
     expect(layout.get(5)!.role).toBe("context");
+    expect(stellarFlowEdgeDepth(1, 3, layout)).toBe(1);
+    expect(stellarFlowEdgeDepth(3, 4, layout)).toBe(2);
+    expect(stellarFlowEdgeDepth(2, 4, layout)).toBeNull();
+  });
+
+  it("groups directed lanes by module and exposes bounded depth summaries", () => {
+    const nodes = [
+      { ...node(1, 0, 4), file_path: "v2/src/mcp/focus.ts" },
+      { ...node(2, 1, 0), file_path: "v2/src/storage/a.ts" },
+      { ...node(3, 1, 0), file_path: "v2/src/storage/b.ts" },
+      { ...node(4, 1, 0), file_path: "graph-ui/src/lib/a.ts" },
+      { ...node(5, 1, 0), file_path: "graph-ui/src/lib/b.ts" },
+    ];
+    const edges = nodes.slice(1).map((target) => ({
+      source: 1,
+      target: target.id,
+      type: "calls",
+    }));
+
+    const layout = computeStellarFlowLayout(nodes, edges, 1);
+    const summary = summarizeStellarFlowLanes(layout);
+
+    expect(layout.get(2)?.laneKey).toBe("v2/src/storage");
+    expect(layout.get(3)?.laneKey).toBe("v2/src/storage");
+    expect(summary.layers).toEqual([
+      expect.objectContaining({ role: "outgoing", depth: 1, count: 4 }),
+    ]);
+    expect(summary.modules.map((module) => [module.laneKey, module.count])).toEqual([
+      ["graph-ui/src/lib", 2],
+      ["v2/src/storage", 2],
+    ]);
   });
 
   it("keeps high-fanout directed layers spatially bounded", () => {

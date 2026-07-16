@@ -295,8 +295,12 @@ d3-force canvas and two task views over the same graph:
   - **Architecture** (default): type colors and a quiet domain/community hierarchy
   - **Stellar flow** (optional, persisted locally): exact-degree hubs form a
     deterministic constellation; selecting a symbol unfolds up to four visible
-    incoming/outgoing relation layers around it, with unrelated nodes retained
-    as dim outer context
+    incoming/outgoing relation layers around a focus pinned to the semantic
+    origin, with unrelated nodes retained as dim outer context. Numbered rails
+    expose hop depth, repeated directory lanes expose module context, and
+    relation colors plus dash patterns are decoded by a selection-only legend.
+    Incoming labels open to the left and outgoing labels to the right through
+    three deterministic collision candidates
   - **Exact scope** (on demand): revision-bound domain/directory pages replace
     the representative frame inside the same canvas; raw internal topology is
     shown immediately and dense scopes expose an explicit Load more action
@@ -308,7 +312,10 @@ sampling/exactness labels, filters, selection, keyboard model, and detail APIs.
 `Architecture` follows server-authored domain/community anchors. `Stellar flow`
 reconfigures that same simulation with task-specific targets and one bounded
 reheat when the view or focused symbol changes; known filter subsets do not
-reheat and no renderer, canvas, or node object is rebuilt.
+reheat and no renderer, canvas, or node object is rebuilt. Direct relations lead
+the focused frame while real depths 2–4 retain their semantic line grammar at a
+lower weight; cross-links that do not advance toward or away from the focus are
+not promoted as flow.
 
 ```bash
 # From v2/ in a source checkout

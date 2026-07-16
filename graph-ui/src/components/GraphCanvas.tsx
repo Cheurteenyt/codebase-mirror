@@ -15,8 +15,17 @@ import {
 } from "../lib/graph-visual-mode";
 import {
   computeStellarFlowLayout,
+  stellarFlowEdgeDepth,
+  summarizeStellarFlowLanes,
   type StellarFlowTarget,
 } from "../lib/graph-stellar-layout";
+import { stellarFlowLabelAnchors } from "../lib/graph-flow-labels";
+import {
+  GRAPH_EDGE_GROUP_META,
+  GRAPH_EDGE_GROUP_ORDER,
+  graphEdgeGroup,
+  type GraphEdgeGroup,
+} from "../lib/graph-flow-semantics";
 import {
   GRAPH_TOOLTIP_POSITION_EVENT,
   type GraphTooltipPositionDetail,
@@ -77,6 +86,11 @@ interface SimEdge {
   source: number | SimNode;
   target: number | SimNode;
   type: string;
+}
+
+interface StellarFlowEdgeBatch {
+  direct: SimEdge[];
+  transit: SimEdge[];
 }
 
 const DEFAULT_NODE_RADIUS = 4;
@@ -243,25 +257,6 @@ function compactArchitectureCount(value: number): string {
   return `${scaled.toFixed(precision).replace(/\.0$/u, "")}${unit.suffix}`;
 }
 
-const EDGE_GROUP_STYLES = {
-  calls: "rgba(34, 211, 238, 0.72)",
-  contains: "rgba(167, 139, 250, 0.7)",
-  imports: "rgba(251, 191, 36, 0.68)",
-  data: "rgba(52, 211, 153, 0.68)",
-  other: "rgba(148, 163, 184, 0.62)",
-} as const;
-
-type EdgeGroup = keyof typeof EDGE_GROUP_STYLES;
-
-const EDGE_GROUP_ORDER: EdgeGroup[] = ["calls", "imports", "contains", "data", "other"];
-const EDGE_BUNDLE_STYLES: Record<EdgeGroup, string> = {
-  calls: "rgba(34, 211, 238, 0.38)",
-  contains: "rgba(167, 139, 250, 0.34)",
-  imports: "rgba(251, 191, 36, 0.35)",
-  data: "rgba(52, 211, 153, 0.34)",
-  other: "rgba(148, 163, 184, 0.27)",
-};
-
 interface OverviewBundle {
   sourceId: number;
   targetId: number;
@@ -275,7 +270,7 @@ interface OverviewBundle {
   endX: number;
   endY: number;
   count: number;
-  group: EdgeGroup;
+  group: GraphEdgeGroup;
   weight: number;
 }
 
@@ -288,15 +283,6 @@ interface OverviewBundlePlan {
   batches: Map<string, OverviewBundle[]>;
   traffic: Map<number, ScopeTraffic>;
   trafficTiers: Map<number, number>;
-}
-
-function edgeGroup(type: string): EdgeGroup {
-  const normalized = type.toLowerCase();
-  if (normalized.includes("call")) return "calls";
-  if (normalized.includes("contain") || normalized.includes("define") || normalized.includes("member")) return "contains";
-  if (normalized.includes("import") || normalized.includes("use") || normalized.includes("depend")) return "imports";
-  if (normalized.includes("read") || normalized.includes("write") || normalized.includes("data")) return "data";
-  return "other";
 }
 
 function simEdgeNodeId(endpoint: number | SimNode): number {
@@ -317,7 +303,7 @@ function buildOverviewBundleBatches(
     sourceId: number;
     targetId: number;
     count: number;
-    groupCounts: Record<EdgeGroup, number>;
+    groupCounts: Record<GraphEdgeGroup, number>;
   }
   const accumulators = new Map<string, Accumulator>();
   for (const edge of edges) {
@@ -327,7 +313,7 @@ function buildOverviewBundleBatches(
     const sourceScope = scopeIdForNode(sourceNode);
     const targetScope = scopeIdForNode(targetNode);
     if (sourceScope == null || targetScope == null || sourceScope === targetScope) continue;
-    const group = edgeGroup(edge.type);
+    const group = graphEdgeGroup(edge.type);
     const sourceId = sourceScope;
     const targetId = targetScope;
     // A macro connection answers one question: which scope depends on which
@@ -385,16 +371,16 @@ function buildOverviewBundleBatches(
   const rankedAccumulators = [...accumulators.values()]
     .map((accumulator) => ({
       ...accumulator,
-      group: [...EDGE_GROUP_ORDER].sort((left, right) => (
+      group: [...GRAPH_EDGE_GROUP_ORDER].sort((left, right) => (
         accumulator.groupCounts[right] - accumulator.groupCounts[left]
-        || EDGE_GROUP_ORDER.indexOf(left) - EDGE_GROUP_ORDER.indexOf(right)
+        || GRAPH_EDGE_GROUP_ORDER.indexOf(left) - GRAPH_EDGE_GROUP_ORDER.indexOf(right)
       ))[0],
     }))
     .sort((left, right) => (
       right.count - left.count
       || left.sourceId - right.sourceId
       || left.targetId - right.targetId
-      || EDGE_GROUP_ORDER.indexOf(left.group) - EDGE_GROUP_ORDER.indexOf(right.group)
+      || GRAPH_EDGE_GROUP_ORDER.indexOf(left.group) - GRAPH_EDGE_GROUP_ORDER.indexOf(right.group)
     ));
 
   // Traffic keeps every aggregate pair from the bounded response, even though
@@ -787,6 +773,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   // changes, so we rebuild it only on data updates.
   const nodeMapRef = useRef<Map<number, SimNode>>(new Map());
   const stellarFlowTargetsRef = useRef<Map<number, StellarFlowTarget>>(new Map());
+  const stellarFlowLanesRef = useRef<ReturnType<typeof summarizeStellarFlowLanes>>({
+    layers: [],
+    modules: [],
+  });
+  const stellarFlowEdgeGroupsRef = useRef<Map<GraphEdgeGroup, StellarFlowEdgeBatch>>(new Map());
   const clustersRef = useRef<LayoutCluster[]>([]);
   const clusterMapRef = useRef<Map<number, LayoutCluster>>(new Map());
   const domainsRef = useRef<LayoutDomain[]>([]);
@@ -801,7 +792,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const domainBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
   const domainTrafficTiersRef = useRef<Map<number, number>>(new Map());
   const labelCandidatesRef = useRef<SimNode[]>([]);
-  const edgeGroupsRef = useRef<Map<EdgeGroup, SimEdge[]>>(new Map());
+  const edgeGroupsRef = useRef<Map<GraphEdgeGroup, SimEdge[]>>(new Map());
   const hoveredScopeRef = useRef<Omit<GraphScopeSelection, "nodeIds"> | null>(null);
   const keyboardTargetsRef = useRef<KeyboardTargets>(emptyKeyboardTargets());
   const keyboardVisibleCountsRef = useRef<Record<KeyboardTargetKind, number>>({
@@ -823,10 +814,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const previousActiveRef = useRef(active);
   const previousDetailModeRef = useRef(detailMode);
   const visualModeRef = useRef(visualMode);
+  const selectedNodeIdRef = useRef(selectedNodeId);
   const previousFlowFrameRef = useRef({ visualMode: "architecture" as GraphVisualMode, selectedNodeId: null as number | null });
   const dataRequiresLayoutReheatRef = useRef(false);
   activeRef.current = active;
   visualModeRef.current = visualMode;
+  selectedNodeIdRef.current = selectedNodeId;
 
   // Exact search can select a node that is intentionally absent from the
   // representative canvas, and filters can remove a previously highlighted
@@ -1096,6 +1089,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       edgesRef.current = [];
       nodeMapRef.current = new Map();
       stellarFlowTargetsRef.current = new Map();
+      stellarFlowLanesRef.current = { layers: [], modules: [] };
+      stellarFlowEdgeGroupsRef.current = new Map();
       clustersRef.current = [];
       clusterMapRef.current = new Map();
       domainsRef.current = [];
@@ -1318,9 +1313,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       keyboardFocusRef.current = refreshedFocus ?? null;
       if (!refreshedFocus && keyboardStatusRef.current) keyboardStatusRef.current.textContent = "";
     }
-    const edgeGroups = new Map<EdgeGroup, SimEdge[]>();
+    const edgeGroups = new Map<GraphEdgeGroup, SimEdge[]>();
     for (const edge of edges) {
-      const group = edgeGroup(edge.type);
+      const group = graphEdgeGroup(edge.type);
       const bucket = edgeGroups.get(group);
       if (bucket) bucket.push(edge);
       else edgeGroups.set(group, [edge]);
@@ -1423,10 +1418,26 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     if (!sim || nodes.length === 0) return;
 
     const previousFrame = previousFlowFrameRef.current;
+    const previousFocusedNodeId = previousFrame.visualMode === "stellar"
+      ? previousFrame.selectedNodeId
+      : null;
     const modeChanged = previousFrame.visualMode !== visualMode;
     const focusChanged = visualMode === "stellar"
       && previousFrame.selectedNodeId !== selectedNodeId;
     const semanticFrameChanged = modeChanged || focusChanged;
+    if (
+      previousFocusedNodeId != null
+      && (visualMode !== "stellar" || previousFocusedNodeId !== selectedNodeId)
+    ) {
+      // The previous focus may currently be filtered out of nodesRef. Release
+      // its cached physics object as well so restoring that filter cannot
+      // resurrect a second invisible pin.
+      const previousFocusedNode = nodeStateCacheRef.current.get(previousFocusedNodeId);
+      if (previousFocusedNode) {
+        previousFocusedNode.fx = null;
+        previousFocusedNode.fy = null;
+      }
+    }
     previousFlowFrameRef.current = { visualMode, selectedNodeId };
 
     if (visualMode === "stellar") {
@@ -1436,11 +1447,43 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         selectedNodeId,
       );
       stellarFlowTargetsRef.current = targets;
+      stellarFlowLanesRef.current = summarizeStellarFlowLanes(targets);
+      const flowEdgeGroups = new Map<GraphEdgeGroup, StellarFlowEdgeBatch>();
+      for (const edge of edgesRef.current) {
+        const depth = stellarFlowEdgeDepth(
+          simEdgeNodeId(edge.source),
+          simEdgeNodeId(edge.target),
+          targets,
+        );
+        if (depth == null) continue;
+        const group = graphEdgeGroup(edge.type);
+        let batch = flowEdgeGroups.get(group);
+        if (!batch) {
+          batch = { direct: [], transit: [] };
+          flowEdgeGroups.set(group, batch);
+        }
+        (depth === 1 ? batch.direct : batch.transit).push(edge);
+      }
+      stellarFlowEdgeGroupsRef.current = flowEdgeGroups;
       for (const node of nodes) {
         const target = targets.get(node.id);
         if (!target) continue;
         node.anchorX = target.x;
         node.anchorY = target.y;
+        if (target.role === "focus") {
+          // The selected symbol is the semantic origin, not merely a soft
+          // suggestion to d3. High fan-out link forces must never pull the
+          // focus into an incoming/outgoing lane.
+          node.x = 0;
+          node.y = 0;
+          node.vx = 0;
+          node.vy = 0;
+          node.fx = 0;
+          node.fy = 0;
+        } else if (node.id === previousFocusedNodeId) {
+          node.fx = null;
+          node.fy = null;
+        }
       }
       const touchesFocus = (edge: SimEdge) => selectedNodeId != null && (
         simEdgeNodeId(edge.source) === selectedNodeId
@@ -1479,7 +1522,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         .force("collide", forceCollide<SimNode>((node) => nodeRadius(node) + 7));
     } else {
       stellarFlowTargetsRef.current = new Map();
+      stellarFlowLanesRef.current = { layers: [], modules: [] };
+      stellarFlowEdgeGroupsRef.current = new Map();
       for (const node of nodes) {
+        if (node.id === previousFocusedNodeId) {
+          node.fx = null;
+          node.fy = null;
+        }
         node.anchorX = node.architectureX;
         node.anchorY = node.architectureY;
       }
@@ -1872,22 +1921,88 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           maxX = Math.max(maxX, target.x);
           minY = Math.min(minY, target.y);
         }
-        const labelY = minY - 42 / tk;
         ctx.beginPath();
         ctx.moveTo(minX - 24 / tk, 0);
         ctx.lineTo(maxX + 24 / tk, 0);
         ctx.strokeStyle = "rgba(165, 180, 252, 0.15)";
         ctx.lineWidth = 0.8 / tk;
         ctx.stroke();
-        ctx.font = `650 ${9.5 / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+
+        // Depth rails turn the starburst into a directed frame. They are
+        // precomputed only when the focus changes, so cooled redraws retain a
+        // constant amount of work regardless of the project size.
+        ctx.setLineDash([3 / tk, 5 / tk]);
+        ctx.font = `650 ${8.5 / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillStyle = "rgba(165, 180, 252, 0.68)";
-        if (minX < 0) ctx.fillText("INCOMING", minX, labelY);
-        ctx.fillStyle = "rgba(236, 254, 255, 0.82)";
-        ctx.fillText("FOCUS", 0, labelY);
-        ctx.fillStyle = "rgba(125, 211, 252, 0.68)";
-        if (maxX > 0) ctx.fillText("OUTGOING", maxX, labelY);
+        for (const lane of stellarFlowLanesRef.current.layers) {
+          const top = lane.minY - 18 / tk;
+          const bottom = lane.maxY + 18 / tk;
+          ctx.beginPath();
+          ctx.moveTo(lane.x, top);
+          ctx.lineTo(lane.x, bottom);
+          ctx.strokeStyle = lane.role === "incoming"
+            ? "rgba(165, 180, 252, 0.12)"
+            : lane.role === "outgoing"
+              ? "rgba(103, 232, 249, 0.12)"
+              : "rgba(216, 180, 254, 0.11)";
+          ctx.lineWidth = 0.7 / tk;
+          ctx.stroke();
+          const direction = lane.role === "incoming" ? "IN" : lane.role === "outgoing" ? "OUT" : "BOTH";
+          const label = `${direction} ${lane.depth} · ${lane.count}`;
+          const labelY = top - 8 / tk;
+          ctx.fillStyle = lane.role === "incoming"
+            ? "rgba(165, 180, 252, 0.65)"
+            : lane.role === "outgoing"
+              ? "rgba(125, 211, 252, 0.65)"
+              : "rgba(216, 180, 254, 0.6)";
+          ctx.fillText(label, lane.x, labelY);
+          const labelWidth = ctx.measureText(label).width;
+          occupied.push({
+            left: lane.x - labelWidth / 2 - 2 / tk,
+            right: lane.x + labelWidth / 2 + 2 / tk,
+            top: labelY - 6 / tk,
+            bottom: labelY + 6 / tk,
+          });
+        }
+        ctx.setLineDash([]);
+
+        // Only repeated near-focus modules earn a label. This exposes the
+        // architectural grouping needed for the task without turning every
+        // node path into permanent chrome.
+        ctx.font = `600 ${8 / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        for (const module of stellarFlowLanesRef.current.modules
+          .filter((candidate) => candidate.depth <= 2 && candidate.count > 1)
+          .sort((left, right) => right.count - left.count || left.laneKey.localeCompare(right.laneKey))
+          .slice(0, 6)) {
+          const label = `${module.laneKey.length > 24 ? `…${module.laneKey.slice(-23)}` : module.laneKey} · ${module.count}`;
+          const labelX = module.x;
+          const labelY = module.minY - 8 / tk;
+          const labelWidth = ctx.measureText(label).width;
+          const box = {
+            left: labelX - labelWidth / 2 - 2 / tk,
+            right: labelX + labelWidth / 2 + 2 / tk,
+            top: labelY - 6 / tk,
+            bottom: labelY + 6 / tk,
+          };
+          if (occupied.some((other) => !(
+            box.right < other.left
+            || box.left > other.right
+            || box.bottom < other.top
+            || box.top > other.bottom
+          ))) continue;
+          occupied.push(box);
+          ctx.strokeStyle = "rgba(3, 8, 14, 0.94)";
+          ctx.lineWidth = 2.5 / tk;
+          ctx.strokeText(label, labelX, labelY);
+          ctx.fillStyle = "rgba(148, 197, 218, 0.7)";
+          ctx.fillText(label, labelX, labelY);
+        }
+
+        const focusLabelY = minY - 42 / tk;
+        ctx.font = `650 ${9 / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.fillStyle = "rgba(236, 254, 255, 0.78)";
+        ctx.fillText("FOCUS", 0, focusLabelY);
       } else if (targets.size > 0) {
         let maxRadius = 0;
         for (const target of targets.values()) {
@@ -1949,7 +2064,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       for (const bundles of batches.values()) {
         const first = bundles[0];
         if (!first) continue;
-        ctx.strokeStyle = EDGE_BUNDLE_STYLES[first.group];
+        const meta = GRAPH_EDGE_GROUP_META[first.group];
+        ctx.strokeStyle = meta.stroke;
+        ctx.setLineDash(meta.dash.map((segment) => segment / tk));
         ctx.lineWidth = Math.min(4.5, 0.75 + first.weight * 0.625) * widthScale / tk;
         const paint = (related: boolean, alpha: number) => {
           let hasPath = false;
@@ -1964,7 +2081,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
             hasPath = true;
           }
           if (!hasPath) return;
-          ctx.globalAlpha = opacity * alpha;
+          ctx.globalAlpha = opacity * alpha * 0.48;
           ctx.stroke();
         };
         if (focusId == null) paint(true, 1);
@@ -1975,6 +2092,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           paint(true, 1);
         }
       }
+      ctx.setLineDash([]);
       ctx.globalAlpha = 1;
     };
 
@@ -2044,22 +2162,48 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // Pass 2: highlighted edges — grouped into at most five semantic stroke
     // batches. This restores relation meaning without per-edge style changes.
     if (localEdgeOpacity && activeHighlightedIds && selectedNodeId != null) {
-      ctx.globalAlpha = rawNodeOpacity;
-      ctx.lineWidth = 1.2 / tk;
-      for (const [group, groupedEdges] of edgeGroupsRef.current) {
-        ctx.beginPath();
-        if (!traceEdges(ctx, groupedEdges, nodeMap, selectedNodeId, true)) continue;
-        ctx.strokeStyle = EDGE_GROUP_STYLES[group];
-        ctx.stroke();
-        if (visualMode === "stellar") {
-          ctx.beginPath();
-          if (traceSelectedDirectionMarkers(ctx, groupedEdges, nodeMap, selectedNodeId, 4.5 / tk)) {
+      if (stellarFocused) {
+        // Multi-hop flow edges are pre-batched when focus changes. Direct
+        // relations lead; depths 2–4 retain the same semantic pattern at a
+        // quieter weight instead of falling back to anonymous gray links.
+        for (const [group, batch] of stellarFlowEdgeGroupsRef.current) {
+          const meta = GRAPH_EDGE_GROUP_META[group];
+          ctx.strokeStyle = meta.stroke;
+          ctx.setLineDash(meta.dash.map((segment) => segment / tk));
+          if (batch.transit.length > 0) {
+            ctx.globalAlpha = rawNodeOpacity * 0.42;
             ctx.lineWidth = 0.9 / tk;
+            ctx.beginPath();
+            traceEdges(ctx, batch.transit, nodeMap, null);
             ctx.stroke();
-            ctx.lineWidth = 1.2 / tk;
+          }
+          if (batch.direct.length > 0) {
+            ctx.globalAlpha = rawNodeOpacity;
+            ctx.lineWidth = 1.25 / tk;
+            ctx.beginPath();
+            traceEdges(ctx, batch.direct, nodeMap, null);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            if (traceSelectedDirectionMarkers(ctx, batch.direct, nodeMap, selectedNodeId, 4.5 / tk)) {
+              ctx.lineWidth = 0.9 / tk;
+              ctx.stroke();
+            }
           }
         }
+      } else {
+        ctx.globalAlpha = rawNodeOpacity;
+        ctx.lineWidth = 1.2 / tk;
+        for (const [group, groupedEdges] of edgeGroupsRef.current) {
+          const meta = GRAPH_EDGE_GROUP_META[group];
+          ctx.setLineDash(meta.dash.map((segment) => segment / tk));
+          ctx.beginPath();
+          if (!traceEdges(ctx, groupedEdges, nodeMap, selectedNodeId, true)) continue;
+          ctx.strokeStyle = meta.stroke;
+          ctx.stroke();
+        }
       }
+      ctx.setLineDash([]);
       ctx.globalAlpha = 1;
     }
 
@@ -2325,35 +2469,74 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     const labelHeight = 13 / tk;
     ctx.font = `500 ${10.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
-    ctx.textAlign = "start";
     ctx.textBaseline = "middle";
     const previousLabelAlpha = ctx.globalAlpha;
     ctx.globalAlpha = previousLabelAlpha * rawTopologyReveal;
+
+    if (stellarFocused) {
+      // Labels may move around their own node, but never cover another node in
+      // the directed frame. Context dots stay excluded to keep this O(flow).
+      for (const node of nodesRef.current) {
+        const target = stellarFlowTargetsRef.current.get(node.id);
+        if (!target || target.role === "context" || target.role === "hub") continue;
+        const radius = nodeRadius(node) + 2 / tk;
+        const x = node.x ?? 0;
+        const y = node.y ?? 0;
+        occupied.push({
+          left: x - radius,
+          right: x + radius,
+          top: y - radius,
+          bottom: y + radius,
+        });
+      }
+    }
+
     for (const node of labelNodes) {
       const rawLabel = node.name || node.qualified_name || String(node.id);
       const label = rawLabel.length > 34 ? `${rawLabel.slice(0, 31)}…` : rawLabel;
-      const x = (node.x ?? 0) + nodeRadius(node) + 4 / tk;
-      const y = node.y ?? 0;
-      const box = {
-        left: x - 2 / tk,
-        right: x + ctx.measureText(label).width + 2 / tk,
-        top: y - labelHeight / 2,
-        bottom: y + labelHeight / 2,
-      };
-      if (occupied.some((other) => !(
-        box.right < other.left
-        || box.left > other.right
-        || box.bottom < other.top
-        || box.top > other.bottom
-      )) && node.id !== selectedNodeId) continue;
-      occupied.push(box);
+      const nodeX = node.x ?? 0;
+      const nodeY = node.y ?? 0;
+      const textWidth = ctx.measureText(label).width;
+      const anchors = stellarFocused
+        ? stellarFlowLabelAnchors(
+            stellarFlowTargetsRef.current.get(node.id)?.role,
+            nodeX,
+            nodeY,
+            nodeRadius(node),
+            1 / tk,
+          )
+        : [{ x: nodeX + nodeRadius(node) + 4 / tk, y: nodeY, align: "left" as const }];
+      let placement: (typeof anchors)[number] | undefined;
+      let placementBox: { left: number; right: number; top: number; bottom: number } | undefined;
+      for (const anchor of anchors) {
+        const box = {
+          left: anchor.align === "left" ? anchor.x - 2 / tk : anchor.x - textWidth - 2 / tk,
+          right: anchor.align === "left" ? anchor.x + textWidth + 2 / tk : anchor.x + 2 / tk,
+          top: anchor.y - labelHeight / 2,
+          bottom: anchor.y + labelHeight / 2,
+        };
+        const collides = occupied.some((other) => !(
+          box.right < other.left
+          || box.left > other.right
+          || box.bottom < other.top
+          || box.top > other.bottom
+        ));
+        if (!collides || node.id === selectedNodeId) {
+          placement = anchor;
+          placementBox = box;
+          break;
+        }
+      }
+      if (!placement || !placementBox) continue;
+      occupied.push(placementBox);
+      ctx.textAlign = placement.align;
       ctx.strokeStyle = "rgba(3, 8, 14, 0.94)";
       ctx.lineWidth = 3 / tk;
-      ctx.strokeText(label, x, y);
+      ctx.strokeText(label, placement.x, placement.y);
       ctx.fillStyle = node.id === selectedNodeId
         ? "rgba(236, 254, 255, 0.98)"
         : "rgba(203, 225, 236, 0.88)";
-      ctx.fillText(label, x, y);
+      ctx.fillText(label, placement.x, placement.y);
     }
     ctx.globalAlpha = previousLabelAlpha;
 
@@ -2600,8 +2783,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         if (moved < 3 && dragRef.current.node) {
           onNodeClickRef.current(dragRef.current.node as GraphNode);
         }
-        dragRef.current.node.fx = null;
-        dragRef.current.node.fy = null;
+        const keepAtOrigin = visualModeRef.current === "stellar"
+          && dragRef.current.node.id === selectedNodeIdRef.current;
+        dragRef.current.node.fx = keepAtOrigin ? 0 : null;
+        dragRef.current.node.fy = keepAtOrigin ? 0 : null;
         simRef.current?.alphaTarget(0);
       } else if (isPanning && moved < 3) {
         const pos = getGraphPos(e.clientX, e.clientY);
@@ -2658,8 +2843,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const releaseDraggedNode = () => {
       const node = dragRef.current.node;
       if (node) {
-        node.fx = null;
-        node.fy = null;
+        const keepAtOrigin = visualModeRef.current === "stellar"
+          && node.id === selectedNodeIdRef.current;
+        node.fx = keepAtOrigin ? 0 : null;
+        node.fy = keepAtOrigin ? 0 : null;
         simRef.current?.alphaTarget(0);
       }
       dragRef.current.node = null;
@@ -2966,6 +3153,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         data-layout-policy={visualMode === "stellar"
           ? selectedNodeId == null ? "hub-orbit" : "directed-focus"
           : "architecture-map"}
+        data-flow-lens={visualMode === "stellar" && selectedNodeId != null
+          ? "semantic-depth-v1"
+          : "off"}
         className="w-full h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 focus-visible:ring-inset"
         style={{
           background: visualMode === "stellar"
@@ -3029,7 +3219,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       />
       <span id={keyboardInstructionsId} className="sr-only">
         {visualMode === "stellar"
-          ? "Stellar flow graph. Press N or Shift+N to browse up to 64 representative nodes. Select a node to place incoming relations on the left and outgoing relations on the right. "
+          ? "Stellar flow graph. Press N or Shift+N to browse up to 64 representative nodes. Select a node to place incoming relations on the left and outgoing relations on the right. Numbered rails show visible hop depth; relation colors and dash patterns are named in the guide. "
           : "Architecture map. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}
         Press Enter or Space to activate the announced target.
         Arrow keys pan, plus and minus zoom, zero fits the graph, and Escape goes up.
