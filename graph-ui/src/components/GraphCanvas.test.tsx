@@ -697,6 +697,109 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(ctx.lineTo).toHaveBeenCalledTimes(4);
   });
 
+  it("keeps the default community flow backbone bounded", () => {
+    const ctx = installCanvasMock(800, 600);
+    const ref = createRef<GraphCanvasHandle>();
+    const clusterCount = 50;
+    const clusters = Array.from({ length: clusterCount }, (_, index) => {
+      const angle = (index / clusterCount) * Math.PI * 2;
+      return {
+        id: index,
+        domain_id: 0,
+        key: `src/community-${index}`,
+        x: Math.cos(angle) * 220,
+        y: Math.sin(angle) * 220,
+        radius: 8,
+        node_count: 1,
+      };
+    });
+    const nodes = clusters.map((cluster, index) => makeNode(index + 1, `node-${index + 1}`, {
+      x: cluster.x,
+      y: cluster.y,
+      cluster_id: cluster.id,
+    }));
+    const edges = Array.from({ length: clusterCount - 1 }, (_, index) => ({
+      source: index + 1,
+      target: index + 2,
+      type: "CALLS",
+    }));
+    const boundedBackboneData: GraphData = {
+      nodes,
+      edges,
+      total_nodes: nodes.length,
+      topology_revision: "bounded-community-backbone",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 10,
+        counts_scope: "returned_nodes",
+        clusters,
+        domains: [
+          { id: 0, key: "src", x: 0, y: 0, radius: 260, node_count: nodes.length, cluster_count: clusterCount },
+        ],
+      },
+    };
+
+    render(
+      <GraphCanvas
+        ref={ref}
+        data={boundedBackboneData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    ctx.quadraticCurveTo.mockClear();
+    act(() => ref.current?.zoomBy(1));
+    expect(ctx.quadraticCurveTo).toHaveBeenCalledTimes(24);
+  });
+
+  it("reveals sampled incoming and outgoing community traffic only on focus", () => {
+    const ctx = installCanvasMock(800, 600);
+    const trafficData: GraphData = {
+      nodes: [
+        makeNode(1, "left-a", { x: -160, y: 0, cluster_id: 0 }),
+        makeNode(2, "left-b", { x: -120, y: 0, cluster_id: 0 }),
+        makeNode(3, "right", { x: 140, y: 0, cluster_id: 1 }),
+      ],
+      edges: [
+        { source: 1, target: 3, type: "CALLS" },
+        { source: 2, target: 3, type: "IMPORTS" },
+        { source: 3, target: 1, type: "CALLS" },
+      ],
+      total_nodes: 3,
+      topology_revision: "community-traffic-focus",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 16,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "src/left", x: -140, y: 0, radius: 100, node_count: 2 },
+          { id: 1, domain_id: 0, key: "src/right", x: 140, y: 0, radius: 90, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "src", x: 0, y: 0, radius: 360, node_count: 3, cluster_count: 2 },
+        ],
+      },
+    };
+
+    const { getByRole } = render(
+      <GraphCanvas
+        data={trafficData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+    const summary = "2 shown nodes · 1 in · 2 out";
+    expect(ctx.fillText).not.toHaveBeenCalledWith(summary, expect.any(Number), expect.any(Number));
+
+    fireEvent.keyDown(getByRole("application"), { key: "c" });
+    expect(ctx.fillText).toHaveBeenCalledWith(summary, expect.any(Number), expect.any(Number));
+  });
+
   it("prioritizes a dense architecture scope over overlapping node hit targets at overview LOD", () => {
     installCanvasMock(800, 600);
     const onNodeClick = vi.fn();

@@ -88,6 +88,7 @@ const RAW_TOPOLOGY_MIN_PROJECTED_SPACING = 18;
 const MAX_KEYBOARD_DOMAINS = 32;
 const MAX_KEYBOARD_COMMUNITIES = 64;
 const MAX_KEYBOARD_NODES = 64;
+const MAX_COMMUNITY_BACKBONE_BUNDLES = 24;
 
 function fadeBetween(value: number, start: number, end: number): number {
   return Math.max(0, Math.min(1, (value - start) / (end - start)));
@@ -217,6 +218,17 @@ interface OverviewBundle {
   weight: number;
 }
 
+interface ScopeTraffic {
+  incoming: number;
+  outgoing: number;
+}
+
+interface OverviewBundlePlan {
+  batches: Map<string, OverviewBundle[]>;
+  traffic: Map<number, ScopeTraffic>;
+  trafficTiers: Map<number, number>;
+}
+
 function edgeGroup(type: string): EdgeGroup {
   const normalized = type.toLowerCase();
   if (normalized.includes("call")) return "calls";
@@ -236,7 +248,7 @@ function buildOverviewBundleBatches(
   centers: ReadonlyMap<number, { id: number; x: number; y: number; radius: number }>,
   scopeIdForNode: (node: SimNode) => number | undefined,
   maxBundles: number,
-): Map<string, OverviewBundle[]> {
+): OverviewBundlePlan {
   interface Accumulator {
     sourceId: number;
     targetId: number;
@@ -310,6 +322,31 @@ function buildOverviewBundleBatches(
     || EDGE_GROUP_ORDER.indexOf(left.group) - EDGE_GROUP_ORDER.indexOf(right.group)
   ));
 
+  // Traffic uses every aggregate pair from the bounded response, not just the
+  // visual backbone retained below. That lets a community's outline preserve
+  // architectural salience without putting every crossing back on screen.
+  const traffic = new Map<number, ScopeTraffic>();
+  for (const bundle of bundles) {
+    const source = traffic.get(bundle.sourceId) ?? { incoming: 0, outgoing: 0 };
+    source.outgoing += bundle.count;
+    traffic.set(bundle.sourceId, source);
+    const target = traffic.get(bundle.targetId) ?? { incoming: 0, outgoing: 0 };
+    target.incoming += bundle.count;
+    traffic.set(bundle.targetId, target);
+  }
+  const maxTraffic = Math.max(
+    1,
+    ...[...traffic.values()].map((scope) => scope.incoming + scope.outgoing),
+  );
+  const maxLogTraffic = Math.log1p(maxTraffic);
+  const trafficTiers = new Map<number, number>();
+  for (const [scopeId, scope] of traffic) {
+    const total = scope.incoming + scope.outgoing;
+    trafficTiers.set(scopeId, Math.max(1, Math.min(4, Math.ceil(
+      (Math.log1p(total) / maxLogTraffic) * 4,
+    ))));
+  }
+
   const batches = new Map<string, OverviewBundle[]>();
   for (const bundle of bundles.slice(0, maxBundles)) {
     const key = `${bundle.group}:${bundle.weight}`;
@@ -317,7 +354,7 @@ function buildOverviewBundleBatches(
     if (batch) batch.push(bundle);
     else batches.set(key, [bundle]);
   }
-  return batches;
+  return { batches, traffic, trafficTiers };
 }
 
 interface CanvasBackingStore {
@@ -430,6 +467,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const localEdgesRef = useRef<SimEdge[]>([]);
   const crossClusterEdgesRef = useRef<SimEdge[]>([]);
   const clusterBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
+  const clusterTrafficRef = useRef<Map<number, ScopeTraffic>>(new Map());
+  const clusterTrafficTiersRef = useRef<Map<number, number>>(new Map());
   const domainBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
   const labelCandidatesRef = useRef<SimNode[]>([]);
   const edgeGroupsRef = useRef<Map<EdgeGroup, SimEdge[]>>(new Map());
@@ -723,6 +762,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       localEdgesRef.current = [];
       crossClusterEdgesRef.current = [];
       clusterBundleBatchesRef.current = new Map();
+      clusterTrafficRef.current = new Map();
+      clusterTrafficTiersRef.current = new Map();
       domainBundleBatchesRef.current = new Map();
       labelCandidatesRef.current = [];
       edgeGroupsRef.current = new Map();
@@ -824,20 +865,27 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     }
     localEdgesRef.current = localEdges;
     crossClusterEdgesRef.current = crossClusterEdges;
-    clusterBundleBatchesRef.current = buildOverviewBundleBatches(
+    const clusterBundlePlan = buildOverviewBundleBatches(
       edges,
       map,
       clusterMap,
       (node) => node.cluster_id,
-      Math.min(32, Math.max(12, Math.ceil(clustersRef.current.length * 0.75))),
+      Math.min(
+        MAX_COMMUNITY_BACKBONE_BUNDLES,
+        Math.max(10, Math.ceil(clustersRef.current.length * 0.5)),
+      ),
     );
-    domainBundleBatchesRef.current = buildOverviewBundleBatches(
+    clusterBundleBatchesRef.current = clusterBundlePlan.batches;
+    clusterTrafficRef.current = clusterBundlePlan.traffic;
+    clusterTrafficTiersRef.current = clusterBundlePlan.trafficTiers;
+    const domainBundlePlan = buildOverviewBundleBatches(
       edges,
       map,
       domainMap,
       (node) => node.cluster_id == null ? undefined : clusterMap.get(node.cluster_id)?.domain_id,
       Math.min(28, Math.max(10, domainsRef.current.length * 3)),
     );
+    domainBundleBatchesRef.current = domainBundlePlan.batches;
     labelCandidatesRef.current = [...nodes]
       .sort((nodeA, nodeB) => {
         const structuralA = ["Project", "Package", "Module", "File", "Class", "Interface"].includes(nodeA.label) ? 0 : 1;
@@ -1139,6 +1187,27 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ctx.fill();
         ctx.strokeStyle = rawTopology ? palette.stroke : palette.clusterStroke;
         ctx.lineWidth = (rawTopology ? 0.75 : 1.05) / tk;
+        ctx.stroke();
+      }
+    }
+
+    if (communityBundleOpacity > 0 && clusterTrafficRef.current.size > 0) {
+      // Four batched halo tiers recover the useful V1 "hub at a glance"
+      // signal at community scale. The halo represents sampled cross-scope
+      // traffic while circle area remains reserved for code volume.
+      for (let tier = 1; tier <= 4; tier += 1) {
+        let hasTraffic = false;
+        ctx.beginPath();
+        for (const cluster of clustersRef.current) {
+          const trafficTier = clusterTrafficTiersRef.current.get(cluster.id);
+          if (trafficTier !== tier) continue;
+          ctx.moveTo(cluster.x + cluster.radius + 1.5 / tk, cluster.y);
+          ctx.arc(cluster.x, cluster.y, cluster.radius + 1.5 / tk, 0, Math.PI * 2);
+          hasTraffic = true;
+        }
+        if (!hasTraffic) continue;
+        ctx.strokeStyle = `rgba(103, 232, 249, ${0.08 + tier * 0.055})`;
+        ctx.lineWidth = (0.7 + tier * 0.48) / tk;
         ctx.stroke();
       }
     }
@@ -1458,15 +1527,24 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         const domainKey = domainById.get(cluster.domain_id)?.key;
         const prefix = domainKey && cluster.key.startsWith(`${domainKey}/`) ? `${domainKey}/` : "";
         const label = cluster.key.slice(prefix.length);
+        const showSummary = cluster.id === activeCommunityId;
+        const traffic = clusterTrafficRef.current.get(cluster.id);
+        const summary = traffic
+          ? `${compactArchitectureCount(cluster.node_count)} shown nodes · ${compactArchitectureCount(traffic.incoming)} in · ${compactArchitectureCount(traffic.outgoing)} out`
+          : `${compactArchitectureCount(cluster.node_count)} shown nodes`;
         const labelX = cluster.x;
         const labelY = cluster.y - cluster.radius + 9 / tk;
-        const width = ctx.measureText(label).width;
-        const height = 12 / tk;
+        ctx.font = `650 ${clusterFontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        const labelWidth = ctx.measureText(label).width;
+        ctx.font = `500 ${8.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
+        const summaryWidth = showSummary ? ctx.measureText(summary).width : 0;
+        const width = Math.max(labelWidth, summaryWidth);
+        const summaryY = labelY + 12 / tk;
         const box = {
           left: labelX - width / 2 - 3 / tk,
           right: labelX + width / 2 + 3 / tk,
           top: labelY - 2 / tk,
-          bottom: labelY + height,
+          bottom: showSummary ? summaryY + 11 / tk : labelY + 12 / tk,
         };
         const collides = occupied.some((other) => !(
           box.right < other.left
@@ -1476,11 +1554,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ));
         if (collides) continue;
         occupied.push(box);
+        ctx.font = `650 ${clusterFontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
         ctx.strokeStyle = "rgba(3, 8, 14, 0.92)";
         ctx.lineWidth = 3 / tk;
         ctx.strokeText(label, labelX, labelY);
         ctx.fillStyle = "rgba(165, 219, 239, 0.78)";
         ctx.fillText(label, labelX, labelY);
+        if (showSummary) {
+          ctx.font = `500 ${8.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
+          ctx.fillStyle = "rgba(125, 211, 252, 0.82)";
+          ctx.fillText(summary, labelX, summaryY);
+        }
       }
     }
 
