@@ -154,6 +154,39 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(container.querySelector("canvas")).toHaveAttribute("data-visual-mode", "stellar");
   });
 
+  it("enters exact-scope detail policy without creating a second simulation", async () => {
+    const { forceSimulation } = await import("d3-force");
+    const noop = () => {};
+    const { container, rerender } = render(
+      <GraphCanvas
+        data={dataB}
+        detailMode={false}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    const sim = (forceSimulation as any).mock.results[0].value;
+    sim.alpha.mockClear();
+    sim.restart.mockClear();
+
+    rerender(
+      <GraphCanvas
+        data={dataB}
+        detailMode
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    expect(forceSimulation).toHaveBeenCalledTimes(1);
+    expect(sim.alpha).not.toHaveBeenCalledWith(0.3);
+    expect(sim.restart).not.toHaveBeenCalled();
+  });
+
   it("reuses the same simulation across data changes (does not explode the graph)", async () => {
     const { forceSimulation } = await import("d3-force");
     const noop = () => {};
@@ -1465,6 +1498,47 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     const [translatedX, translatedY] = ctx.translate.mock.calls.at(-1) as [number, number];
     expect(translatedX).toBeCloseTo(400 - 200 * initialFitScale, 4);
     expect(translatedY).toBeCloseTo(300 - 50 * initialFitScale, 4);
+  });
+
+  it("re-fits a changed semantic frame without rebuilding or reheating d3", async () => {
+    const ctx = installCanvasMock(800, 600);
+    const { forceSimulation } = await import("d3-force");
+    const noop = () => {};
+    const ref = createRef<GraphCanvasHandle>();
+    const { rerender } = render(
+      <GraphCanvas
+        ref={ref}
+        data={dataB}
+        detailMode={false}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    const initialFitScale = ctx.scale.mock.calls.at(-1)[0] as number;
+    act(() => ref.current?.zoomBy(0.25));
+    expect(ctx.scale.mock.calls.at(-1)[0]).toBeCloseTo(initialFitScale * 0.25, 4);
+
+    const sim = (forceSimulation as any).mock.results[0].value;
+    sim.alpha.mockClear();
+    sim.restart.mockClear();
+    rerender(
+      <GraphCanvas
+        ref={ref}
+        data={dataB}
+        detailMode
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    expect(ctx.scale.mock.calls.at(-1)[0]).toBeCloseTo(initialFitScale, 4);
+    expect(forceSimulation).toHaveBeenCalledTimes(1);
+    expect(sim.alpha).not.toHaveBeenCalledWith(0.3);
+    expect(sim.restart).not.toHaveBeenCalled();
   });
 
   it("focuses immediately when reduced motion is requested", () => {

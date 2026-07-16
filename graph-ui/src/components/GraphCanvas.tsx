@@ -47,6 +47,8 @@ interface GraphCanvasProps {
   data: GraphData;
   active?: boolean;
   visualMode?: GraphVisualMode;
+  /** Render a bounded exact scope as raw topology at every zoom level. */
+  detailMode?: boolean;
   highlightedIds: Set<number> | null;
   selectedNodeId?: number | null;
   deadCodeView: boolean;
@@ -739,6 +741,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   data,
   active = true,
   visualMode = "architecture",
+  detailMode = false,
   highlightedIds,
   selectedNodeId = null,
   deadCodeView,
@@ -805,6 +808,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const hasUserInteractedRef = useRef(false);
   const activeRef = useRef(active);
   const previousActiveRef = useRef(active);
+  const previousDetailModeRef = useRef(detailMode);
   activeRef.current = active;
 
   // Exact search can select a node that is intentionally absent from the
@@ -1368,6 +1372,23 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, scheduleInitialFit, scheduleSettledFit]);
 
+  // Overview and exact scopes intentionally reuse one canvas and simulation,
+  // but they do not share a coordinate frame. Preserve pan/zoom across filters
+  // and pagination, then re-fit only when the semantic frame itself changes.
+  // Without this boundary an exact scope could inherit an overview transform
+  // and look empty until the user pressed Fit.
+  useEffect(() => {
+    if (previousDetailModeRef.current === detailMode) return;
+    previousDetailModeRef.current = detailMode;
+    cancelViewAnimation();
+    hasUserInteractedRef.current = false;
+    hasAutoFitRef.current = fitVisibleGraph();
+  }, [
+    cancelViewAnimation,
+    detailMode,
+    fitVisibleGraph,
+  ]);
+
   // App keeps a visited graph mounted so filters and positions survive tab
   // switches. Stop d3 while the panel is hidden, then resume only the remaining
   // cooling work when the user returns; do not force a new alpha/re-layout.
@@ -1458,13 +1479,18 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // structure visible before individual labels are readable.
     const projectedNodeSpacing = layoutNodeSpacingRef.current * tk;
     const domainOverview = projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING;
-    const rawTopology = projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING;
+    const rawTopology = detailMode
+      || projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING;
     const [
-      domainBundleOpacity,
-      communityBundleOpacity,
-      communityReveal,
-      rawTopologyReveal,
+      overviewDomainBundleOpacity,
+      overviewCommunityBundleOpacity,
+      overviewCommunityReveal,
+      overviewRawTopologyReveal,
     ] = computeSemanticZoomLayers(projectedNodeSpacing);
+    const domainBundleOpacity = detailMode ? 0 : overviewDomainBundleOpacity;
+    const communityBundleOpacity = detailMode ? 0 : overviewCommunityBundleOpacity;
+    const communityReveal = detailMode ? 0 : overviewCommunityReveal;
+    const rawTopologyReveal = detailMode ? 1 : overviewRawTopologyReveal;
     // Raw topology enters only after the community backbone has fully left.
     // Nodes lead their lower-contrast edges so intermediate frames disclose
     // readable symbols rather than a hairball.
@@ -2089,7 +2115,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     ctx.globalAlpha = previousLabelAlpha;
 
     ctx.restore();
-  }, [visibleHighlightedIds, selectedNodeId, deadCodeView, visualMode]);
+  }, [visibleHighlightedIds, selectedNodeId, deadCodeView, detailMode, visualMode]);
 
   // R40 (UI-3): sync drawRef AND immediately call the new draw. Previously
   // this was split into two effects: one to set drawRef.current, and a

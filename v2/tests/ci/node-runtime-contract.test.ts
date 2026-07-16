@@ -88,6 +88,9 @@ describe('repository Node.js runtime contract', () => {
     expect(script).toContain('/api/neighborhood?');
     expect(script).toContain('neighborhood.contract_version === 1');
     expect(script).toContain('neighborhood.graph_revision === search.graph_revision');
+    expect(script).toContain('/api/scope?');
+    expect(script).toContain('scope.contract_version === 1');
+    expect(script).toContain('scope.graph_revision === neighborhood.graph_revision');
     expect(script).toContain('trap cleanup EXIT');
     expect(script).toContain("trap 'exit 130' INT");
     expect(script).not.toContain('/tmp/cbm-install');

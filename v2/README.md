@@ -96,11 +96,16 @@ drill-downs across the complete indexed project:
   matches with an opaque `page.next_cursor` for the next page.
 - `GET /api/neighborhood?project=my-app&node_id=42&limit=100` returns the exact
   inbound/outbound neighborhood with stable edge-id pagination.
+- `GET /api/scope?project=my-app&kind=community&key=src/lib&limit=125`
+  reconstructs a domain or directory community on demand. Node batches are
+  id-ordered; dense internal edges use bounded continuation pages. Every edge
+  is emitted with the batch that introduces its highest-id endpoint, so merged
+  pages contain no duplicates or dangling links.
 - `GET /api/layout?project=my-app&max_nodes=2000` returns the sampled visual
   layout plus `layout.domain_catalog`, whose domain counts and representatives
   cover the complete project rather than only the visual sample.
 
-Layout, exact search, and neighborhood responses include an opaque
+Layout, exact search, neighborhood, and scope responses include an opaque
 `graph_revision`, and each response is read from one SQLite snapshot. Exact
 cursors are valid only for that revision. If indexing changes or replaces the
 graph between pages, the server responds with HTTP `409`, code

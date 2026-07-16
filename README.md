@@ -222,7 +222,10 @@ V2 includes a **native code indexer** that does NOT require the V1 C binary:
 
 - V2 native indexer is most precise on **TypeScript/JavaScript**. Other languages (Python, Go, Rust, etc.) are parsed structurally but without cross-file resolution.
 - For V1's 158-language coverage and precision, run the V1 C binary separately to produce the project database before opening it from V2.
-- Graph UI is capped at 1,000 nodes for predictable transfer and simulation cost. Use filters and the dashboard for large projects.
+- The Graph UI overview is capped at 1,000 representatives for predictable
+  transfer and simulation cost. Exact domain/directory scopes are loaded in
+  revision-bound pages from the graph breadcrumb; the full project is never
+  transferred merely to inspect one scope.
 
 ## Human memory node types
 
@@ -292,6 +295,9 @@ d3-force canvas and two rendering policies over the same graph:
   - **Architecture** (default): type colors and a quiet domain/community hierarchy
   - **Stellar** (optional, persisted locally): exact-degree spectrum, semantic
     glyphs, bounded hub bloom, and selected-flow direction markers
+  - **Exact scope** (on demand): revision-bound domain/directory pages replace
+    the representative frame inside the same canvas; raw internal topology is
+    shown immediately and dense scopes expose an explicit Load more action
 - **Projects tab**: Project list with node/edge counts and health status
 - **Control tab**: System info
 

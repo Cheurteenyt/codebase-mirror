@@ -6,6 +6,7 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { BULK_CHUNK_SIZE } from '../constants.js';
 import { resolveProjectStoragePath } from '../storage/project-path.js';
+import { graphCommunityKey, graphDomainKey } from '../graph-scope.js';
 
 export interface CodeNode {
   id: number;
@@ -53,6 +54,22 @@ export interface ExactNodeSearchPage {
   total_matches: number;
   next_after_rank: number | null;
   next_after_node_id: number | null;
+}
+
+export type ExactScopeKind = 'domain' | 'community';
+
+export interface ExactScopeCursorState {
+  after_node_id: number;
+  batch_end_node_id: number;
+  after_edge_id: number;
+}
+
+export interface ExactScopePage {
+  nodes: CodeNode[];
+  edges: CodeEdge[];
+  total_nodes: number;
+  total_internal_edges: number;
+  next_cursor: ExactScopeCursorState | null;
 }
 
 export interface ArchitectureDomainSummary {
@@ -127,6 +144,34 @@ interface DegreeCountRow {
 /** Row from `SELECT COUNT(*) AS c FROM ...`. */
 interface CountRow {
   c: number;
+}
+
+interface CodeEdgeRow {
+  id: number;
+  project: string;
+  source_id: number;
+  target_id: number;
+  type: string;
+  properties_json?: string | null;
+  properties?: string | null;
+}
+
+interface ExactScopeIndexRow {
+  id: number;
+  file_path: string | null;
+  label: string;
+}
+
+interface ExactScopeMembership {
+  nodeIds: number[];
+  nodeIdsJson: string;
+  totalInternalEdges: number | null;
+}
+
+interface ProjectExactScopeIndex {
+  graphRevision: string;
+  domains: Map<string, ExactScopeMembership>;
+  communities: Map<string, ExactScopeMembership>;
 }
 
 /** Row from `SELECT (subquery) AS n, (subquery) AS e`. */
@@ -247,6 +292,7 @@ export class CodeGraphReader {
   private readonly revisionIdentity: string;
   private cachedDataVersion = -1;
   private cachedGraphRevision = '';
+  private readonly exactScopeIndexes = new Map<string, ProjectExactScopeIndex>();
 
   // R59: hot-path prepared statements, prepared once in the constructor.
   // getNodeById and findNodeByQualifiedName are called on every MCP tool
@@ -671,6 +717,219 @@ export class CodeGraphReader {
       next_after_edge_id: hasMore && neighbors.length > 0
         ? neighbors[neighbors.length - 1].edge.id
         : null,
+    };
+  }
+
+  /**
+   * Build all exact architecture memberships in one project-node pass.
+   *
+   * The index is revision-bound and shared by every subsequent domain or
+   * community page. This avoids crossing the SQLite/JavaScript boundary once
+   * per edge endpoint while still using the same key functions as the overview.
+   */
+  private getExactScopeMembership(
+    project: string,
+    kind: ExactScopeKind,
+    key: string,
+  ): ExactScopeMembership {
+    const graphRevision = this.getGraphRevision();
+    const cacheKey = `${project}\0${graphRevision}`;
+    let index = this.exactScopeIndexes.get(cacheKey);
+    if (!index) {
+      const domainIds = new Map<string, number[]>();
+      const communityIds = new Map<string, number[]>();
+      const rows = this.db.prepare(
+        `SELECT id, file_path, label
+         FROM nodes
+         WHERE project = ?
+         ORDER BY id ASC`,
+      ).all(project) as ExactScopeIndexRow[];
+      for (const row of rows) {
+        const community = graphCommunityKey(row.file_path, row.label);
+        const domain = graphDomainKey(row.file_path, row.label);
+        const communityBucket = communityIds.get(community) ?? [];
+        communityBucket.push(row.id);
+        communityIds.set(community, communityBucket);
+        const domainBucket = domainIds.get(domain) ?? [];
+        domainBucket.push(row.id);
+        domainIds.set(domain, domainBucket);
+      }
+      const finalize = (source: Map<string, number[]>): Map<string, ExactScopeMembership> =>
+        new Map([...source].map(([scopeKey, nodeIds]) => [scopeKey, {
+          nodeIds,
+          nodeIdsJson: JSON.stringify(nodeIds),
+          totalInternalEdges: null,
+        }]));
+      index = {
+        graphRevision,
+        domains: finalize(domainIds),
+        communities: finalize(communityIds),
+      };
+      // A reader normally serves one project. Keep a small bound for legacy
+      // multi-project databases and discard stale revision entries first.
+      for (const [existingKey, existing] of this.exactScopeIndexes) {
+        if (existing.graphRevision !== graphRevision || existingKey.startsWith(`${project}\0`)) {
+          this.exactScopeIndexes.delete(existingKey);
+        }
+      }
+      while (this.exactScopeIndexes.size >= 4) {
+        const oldest = this.exactScopeIndexes.keys().next().value as string | undefined;
+        if (oldest == null) break;
+        this.exactScopeIndexes.delete(oldest);
+      }
+      this.exactScopeIndexes.set(cacheKey, index);
+    }
+    const memberships = kind === 'domain' ? index.domains : index.communities;
+    return memberships.get(key) ?? {
+      nodeIds: [],
+      nodeIdsJson: '[]',
+      totalInternalEdges: 0,
+    };
+  }
+
+  /**
+   * Exact architecture scope, reconstructed as bounded node/edge batches.
+   *
+   * Nodes are keyset-paged by id. An internal edge belongs to the batch that
+   * introduces max(source_id, target_id), so its endpoints are always already
+   * loaded and the client can merge pages without duplicates or dangling
+   * links. Dense batches use edge-only continuation pages before advancing the
+   * node frontier, keeping every response bounded.
+   */
+  getExactScopePage(
+    project: string,
+    kind: ExactScopeKind,
+    key: string,
+    cursor: ExactScopeCursorState,
+    nodeLimit = 100,
+    edgeLimit = 250,
+  ): ExactScopePage {
+    const safeNodeLimit = Number.isSafeInteger(nodeLimit)
+      ? Math.max(1, Math.min(250, nodeLimit))
+      : 100;
+    const safeEdgeLimit = Number.isSafeInteger(edgeLimit)
+      ? Math.max(1, Math.min(250, edgeLimit))
+      : 250;
+    const afterNodeId = Number.isSafeInteger(cursor.after_node_id)
+      ? Math.max(0, cursor.after_node_id)
+      : 0;
+    const requestedBatchEnd = Number.isSafeInteger(cursor.batch_end_node_id)
+      ? Math.max(0, cursor.batch_end_node_id)
+      : 0;
+    const afterEdgeId = Number.isSafeInteger(cursor.after_edge_id)
+      ? Math.max(0, cursor.after_edge_id)
+      : 0;
+    const membership = this.getExactScopeMembership(project, kind, key);
+    const totalNodes = membership.nodeIds.length;
+    if (membership.totalInternalEdges == null) {
+      membership.totalInternalEdges = (this.db.prepare(
+        `WITH scope_nodes AS MATERIALIZED (
+         SELECT CAST(value AS INTEGER) AS id FROM json_each(?)
+       )
+       SELECT COUNT(*) AS c
+       FROM edges e
+       JOIN scope_nodes source_node ON source_node.id = e.source_id
+       JOIN scope_nodes target_node ON target_node.id = e.target_id
+       WHERE e.project = ?`,
+      ).get(membership.nodeIdsJson, project) as CountRow | undefined)?.c ?? 0;
+    }
+    const totalInternalEdges = membership.totalInternalEdges;
+
+    let nodes: CodeNode[] = [];
+    let batchEndNodeId = requestedBatchEnd;
+    let hasMoreNodes = false;
+    if (batchEndNodeId === 0) {
+      // Membership IDs are sorted, so keyset pagination is a binary search plus
+      // a bounded SQLite row fetch rather than another project-wide scan.
+      let low = 0;
+      let high = membership.nodeIds.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (membership.nodeIds[middle] <= afterNodeId) low = middle + 1;
+        else high = middle;
+      }
+      const pageIds = membership.nodeIds.slice(low, low + safeNodeLimit);
+      hasMoreNodes = low + pageIds.length < membership.nodeIds.length;
+      const nodeRows = pageIds.length === 0 ? [] : this.db.prepare(
+        `SELECT *
+         FROM nodes n
+         WHERE n.project = ?
+           AND n.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+         ORDER BY n.id ASC
+         LIMIT ?`,
+      ).all(project, JSON.stringify(pageIds), safeNodeLimit) as CodeNodeRow[];
+      nodes = nodeRows.map(deserializeCodeNode);
+      batchEndNodeId = pageIds.at(-1) ?? 0;
+    } else {
+      hasMoreNodes = (membership.nodeIds.at(-1) ?? 0) > batchEndNodeId;
+    }
+
+    if (batchEndNodeId === 0) {
+      return {
+        nodes,
+        edges: [],
+        total_nodes: totalNodes,
+        total_internal_edges: totalInternalEdges,
+        next_cursor: null,
+      };
+    }
+
+    const edgeProperties = this.propertiesExpression('e', this.edgePropertiesColumn);
+    const edgeRows = this.db.prepare(
+      `WITH scope_nodes AS MATERIALIZED (
+         SELECT CAST(value AS INTEGER) AS id FROM json_each(?)
+       )
+       SELECT e.id, e.project, e.source_id, e.target_id, e.type,
+               ${edgeProperties} AS properties_json
+       FROM edges e
+       JOIN scope_nodes source_node ON source_node.id = e.source_id
+       JOIN scope_nodes target_node ON target_node.id = e.target_id
+       WHERE e.project = ?
+         AND MAX(e.source_id, e.target_id) > ?
+         AND MAX(e.source_id, e.target_id) <= ?
+         AND e.id > ?
+       ORDER BY e.id ASC
+       LIMIT ?`,
+    ).all(
+      membership.nodeIdsJson,
+      project,
+      afterNodeId,
+      batchEndNodeId,
+      afterEdgeId,
+      safeEdgeLimit + 1,
+    ) as CodeEdgeRow[];
+    const hasMoreEdges = edgeRows.length > safeEdgeLimit;
+    const pageEdgeRows = hasMoreEdges ? edgeRows.slice(0, safeEdgeLimit) : edgeRows;
+    const edges = pageEdgeRows.map((row) => ({
+      id: row.id,
+      project: row.project,
+      source_id: row.source_id,
+      target_id: row.target_id,
+      type: row.type,
+      properties_json: row.properties_json || row.properties || '{}',
+    }));
+
+    let nextCursor: ExactScopeCursorState | null = null;
+    if (hasMoreEdges && edges.length > 0) {
+      nextCursor = {
+        after_node_id: afterNodeId,
+        batch_end_node_id: batchEndNodeId,
+        after_edge_id: edges.at(-1)!.id,
+      };
+    } else if (hasMoreNodes) {
+      nextCursor = {
+        after_node_id: batchEndNodeId,
+        batch_end_node_id: 0,
+        after_edge_id: 0,
+      };
+    }
+
+    return {
+      nodes,
+      edges,
+      total_nodes: totalNodes,
+      total_internal_edges: totalInternalEdges,
+      next_cursor: nextCursor,
     };
   }
 

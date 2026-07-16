@@ -12,6 +12,10 @@ const useExactNeighborhoodMock = vi.hoisted(() => vi.fn());
 vi.mock("../hooks/useExactNeighborhood", () => ({
   useExactNeighborhood: useExactNeighborhoodMock,
 }));
+const useExactScopeMock = vi.hoisted(() => vi.fn());
+vi.mock("../hooks/useExactScope", () => ({
+  useExactScope: useExactScopeMock,
+}));
 vi.mock("./GraphCanvas", async () => {
   const React = await import("react");
   return {
@@ -36,6 +40,7 @@ vi.mock("./GraphCanvas", async () => {
     }));
     return (
       <>
+        <output data-testid="graph-canvas-node-count">{data.nodes.length}</output>
         <button
           type="button"
           aria-label="Select first graph node"
@@ -99,6 +104,37 @@ const emptyExactState = () => ({
   retry: vi.fn(),
 });
 
+const exactScopeState = (loadMore = vi.fn()) => ({
+  data: {
+    contract_version: 1 as const,
+    exact: true as const,
+    graph_revision: "graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa",
+    scope: {
+      kind: "domain" as const,
+      key: "src",
+      total_nodes: 3,
+      total_internal_edges: 1,
+    },
+    nodes: [makeNode(10, "exact-ten"), makeNode(20, "exact-twenty")],
+    edges: [{ id: 1, source: 10, target: 20, type: "CALLS" }],
+    complete: false,
+    page: {
+      node_limit: 125,
+      edge_limit: 125,
+      returned_nodes: 2,
+      returned_edges: 1,
+      next_cursor: "scope-page-2",
+    },
+  },
+  loading: false,
+  loadingMore: false,
+  error: null,
+  errorPhase: null,
+  errorStatus: null,
+  loadMore,
+  retry: vi.fn(),
+});
+
 const exactOutsideData = {
   contract_version: 1 as const,
   exact: true as const,
@@ -119,6 +155,7 @@ describe("GraphTab server-refresh state reconciliation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useExactNeighborhoodMock.mockReturnValue(emptyExactState());
+    useExactScopeMock.mockReturnValue(emptyExactState());
   });
 
   it("closes details for a node removed by a topology refresh", async () => {
@@ -286,6 +323,54 @@ describe("GraphTab server-refresh state reconciliation", () => {
 
     fireEvent.keyDown(domainControl, { key: "Escape" });
     expect(screen.queryByRole("navigation", { name: "Graph navigation" })).not.toBeInTheDocument();
+  });
+
+  it("opens a paginated exact scope in the existing canvas", async () => {
+    const nodes = [
+      { ...makeNode(1, "one"), cluster_id: 0 },
+      { ...makeNode(2, "two"), cluster_id: 0 },
+    ];
+    (useGraphData as any).mockReturnValue({
+      data: {
+        nodes,
+        edges: [],
+        total_nodes: 3,
+        graph_revision: "graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa",
+        layout: {
+          strategy: "architecture-domain-v1",
+          node_spacing: 16,
+          counts_scope: "returned_nodes",
+          clusters: [{ id: 0, domain_id: 0, key: "src/lib", x: 0, y: 0, radius: 80, node_count: 2 }],
+          domains: [{ id: 0, key: "src", x: 0, y: 0, radius: 140, node_count: 2, cluster_count: 1 }],
+        },
+      },
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+    const loadMore = vi.fn();
+    useExactScopeMock.mockImplementation((
+      _project: string,
+      _kind: string,
+      _key: string,
+      enabled: boolean,
+    ) => enabled ? exactScopeState(loadMore) : emptyExactState());
+    render(<GraphTab project="test" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select first domain" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open exact scope" }));
+
+    await waitFor(() => expect(screen.getByTestId("graph-canvas-node-count")).toHaveTextContent("2"));
+    expect(screen.getByText(/3 exact nodes/i)).toBeInTheDocument();
+    expect(useExactScopeMock).toHaveBeenLastCalledWith(
+      "test",
+      "domain",
+      "src",
+      true,
+      "test:graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa:0",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Load more exact scope" }));
+    expect(loadMore).toHaveBeenCalledTimes(1);
   });
 
   it("resolves breadcrumb scopes by stable keys after layout ids are renumbered", async () => {

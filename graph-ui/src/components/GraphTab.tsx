@@ -4,6 +4,7 @@
 
 import { lazy, Suspense, useEffect, useState, useCallback, useMemo, useRef, type KeyboardEvent } from "react";
 import { useGraphData } from "../hooks/useGraphData";
+import { useExactScope } from "../hooks/useExactScope";
 import { useWebSocket, type WsNotification } from "../hooks/useWebSocket";
 import {
   GraphCanvas,
@@ -15,7 +16,7 @@ import { Sidebar } from "./Sidebar";
 import { NodeTooltip } from "./NodeTooltip";
 import { ResizeHandle } from "./ResizeHandle";
 import { ErrorBoundary } from "./ErrorBoundary";
-import type { GraphNode, GraphData } from "../lib/types";
+import type { GraphNode, GraphData, GraphScopeData } from "../lib/types";
 import {
   loadGraphVisualMode,
   saveGraphVisualMode,
@@ -24,6 +25,7 @@ import {
 import { PanelLeftOpen, X } from "lucide-react";
 
 const NodeDetailPanel = lazy(() => import("./NodeDetailPanel"));
+const ExactScopeControls = lazy(() => import("./ExactScopeControls"));
 
 const LAYOUT_EVENTS = new Set([
   "code_graph_changed",
@@ -90,6 +92,18 @@ function visibleNeighborhood(data: GraphData, nodeId: number): Set<number> | nul
   return connectedIds;
 }
 
+function exactScopeGraphData(scope: GraphScopeData): GraphData {
+  return {
+    nodes: scope.nodes,
+    edges: scope.edges,
+    total_nodes: scope.scope.total_nodes,
+    graph_revision: scope.graph_revision,
+    // Stable across pages in one scope so GraphCanvas retains the settled
+    // physics objects while genuinely new nodes gently join the simulation.
+    topology_revision: `scope:${scope.graph_revision}:${scope.scope.kind}:${scope.scope.key}`,
+  };
+}
+
 export function GraphTab({ project, active = true }: GraphTabProps) {
   const { data, loading, error, fetchOverview } = useGraphData();
   const [highlightedIds, setHighlightedIds] = useState<Set<number> | null>(null);
@@ -104,6 +118,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   // Breadcrumb identity is path-based. Numeric layout ids are local to one
   // response and can be renumbered when a directory appears or disappears.
   const [navigationHistory, setNavigationHistory] = useState<GraphTrailItem[]>([]);
+  const [exactScopeRequest, setExactScopeRequest] = useState<GraphTrailItem | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const firstLoad = useRef(true);
   const wsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -225,11 +240,70 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   // requests immediately, including when an overview refresh fails or its
   // representative topology hash stays unchanged for an off-sample mutation.
   const exactRefreshKey = `${project ?? "none"}:${data?.graph_revision ?? data?.topology_revision ?? "unloaded"}:${exactRefreshEpoch}`;
+  const activeTrail = navigationHistory.at(-1) ?? null;
+  const exactScopeActive = Boolean(
+    exactScopeRequest
+    && activeTrail
+    && exactScopeRequest.kind === activeTrail.kind
+    && exactScopeRequest.key === activeTrail.key,
+  );
+  const exactScope = useExactScope(
+    project,
+    exactScopeRequest?.kind ?? "domain",
+    exactScopeRequest?.key ?? "",
+    exactScopeActive,
+    exactRefreshKey,
+  );
+  const exactGraphData = useMemo(
+    () => exactScopeActive && exactScope.data ? exactScopeGraphData(exactScope.data) : null,
+    [exactScope.data, exactScopeActive],
+  );
+  const exactFilteredData = useMemo(() => {
+    if (!exactGraphData) return null;
+    const statusOk = (node: GraphNode) => {
+      if (showOnlyDead && node.status !== "dead") return false;
+      if (hideEntryPoints && node.status === "entry") return false;
+      if (hideTests && node.status === "test") return false;
+      return true;
+    };
+    const nodes = exactGraphData.nodes.filter(
+      (node) => enabledLabels.has(node.label) && statusOk(node),
+    );
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const edges = exactGraphData.edges.filter(
+      (edge) => enabledEdgeTypes.has(edge.type)
+        && nodeIds.has(edge.source)
+        && nodeIds.has(edge.target),
+    );
+    return { ...exactGraphData, nodes, edges };
+  }, [enabledEdgeTypes, enabledLabels, exactGraphData, hideEntryPoints, hideTests, showOnlyDead]);
+  const canvasData = exactFilteredData ?? filteredData;
+  const filterPanelData = exactGraphData ?? data;
   const selectedNodeRequiresExactValidation = Boolean(
     selectedNode
     && selectedNodeOutsideOverviewRef.current
     && selectedNodeExactRefreshKey !== exactRefreshKey,
   );
+
+  // Exact pages can disclose labels/edge types absent from the representative
+  // overview. Enable only genuinely new values and preserve explicit filters.
+  useEffect(() => {
+    if (!exactGraphData) return;
+    const newLabels = exactGraphData.nodes
+      .map((node) => node.label)
+      .filter((label) => !knownLabelsRef.current.has(label));
+    const newEdgeTypes = exactGraphData.edges
+      .map((edge) => edge.type)
+      .filter((type) => !knownEdgeTypesRef.current.has(type));
+    if (newLabels.length > 0) {
+      for (const label of newLabels) knownLabelsRef.current.add(label);
+      setEnabledLabels((previous) => new Set([...previous, ...newLabels]));
+    }
+    if (newEdgeTypes.length > 0) {
+      for (const type of newEdgeTypes) knownEdgeTypesRef.current.add(type);
+      setEnabledEdgeTypes((previous) => new Set([...previous, ...newEdgeTypes]));
+    }
+  }, [exactGraphData]);
 
   const restoreDetailFocus = useCallback(() => {
     if (detailFocusTimerRef.current) clearTimeout(detailFocusTimerRef.current);
@@ -329,7 +403,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
         setSelectedNodeExactRefreshKey(null);
         setSelectedNode(refreshed);
         setSelectedPath(refreshed.file_path ?? null);
-        setHighlightedIds(filteredData ? visibleNeighborhood(filteredData, refreshed.id) : null);
+        setHighlightedIds(canvasData ? visibleNeighborhood(canvasData, refreshed.id) : null);
       }
     }
     if (hoveredNode) {
@@ -343,14 +417,14 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   // filters change, and do not dim the whole overview for an exact node that is
   // intentionally outside the representative map.
   useEffect(() => {
-    if (!filteredData || !selectedNode) return;
-    const next = visibleNeighborhood(filteredData, selectedNode.id);
+    if (!canvasData || !selectedNode) return;
+    const next = visibleNeighborhood(canvasData, selectedNode.id);
     if (next) {
       if (!sameNodeIds(highlightedIds, next)) setHighlightedIds(next);
     } else if (highlightedIds !== null) {
       setHighlightedIds(null);
     }
-  }, [filteredData, highlightedIds, selectedNode]);
+  }, [canvasData, highlightedIds, selectedNode]);
 
   useEffect(() => {
     wsRefreshGenerationRef.current += 1;
@@ -377,6 +451,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       setSelectedNode(null);
       selectedNodeOutsideOverviewRef.current = false;
       setNavigationHistory([]);
+      setExactScopeRequest(null);
     }
   }, [project]);
 
@@ -470,6 +545,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
     setSelectedNodeExactRefreshKey(null);
     selectedNodeOutsideOverviewRef.current = false;
     setHoveredNode(null);
+    setExactScopeRequest(null);
     setHighlightedIds(scope.nodeIds.size > 0 ? scope.nodeIds : null);
     setSelectedPath(scope.key);
     canvasRef.current?.focusNodes(scope.nodeIds, scope.kind === "domain" ? 0.52 : 1.2);
@@ -491,7 +567,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
 
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
-      if (!filteredData) return;
+      if (!canvasData || !filteredData) return;
       const activeElement = document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
@@ -508,7 +584,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       setSelectedNodeExactRefreshKey(overviewNode == null ? exactRefreshKey : null);
       setSelectedNode(resolvedNode);
 
-      setHighlightedIds(visibleNeighborhood(filteredData, resolvedNode.id));
+      setHighlightedIds(visibleNeighborhood(canvasData, resolvedNode.id));
       setSelectedPath(resolvedNode.file_path ?? null);
       if (resolvedNode.cluster_id != null && filteredData.layout) {
         const community = makeScope("community", resolvedNode.cluster_id);
@@ -518,7 +594,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
           [...(domain ? [domain] : []), ...(community ? [community] : [])]
             .map(({ kind, key }) => ({ kind, key })),
         );
-      } else {
+      } else if (!exactScopeActive) {
         // Exact project search may open a node that is intentionally absent
         // from the representative overview. Do not leave an unrelated scope
         // breadcrumb attached to that globally resolved result.
@@ -526,7 +602,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       }
       canvasRef.current?.focusNode(resolvedNode.id);
     },
-    [data, exactRefreshKey, filteredData, isDesktop, makeScope, mobilePanelOpen],
+    [canvasData, data, exactRefreshKey, exactScopeActive, filteredData, isDesktop, makeScope, mobilePanelOpen],
   );
 
   const handleSidebarNodeSelect = useCallback((node: GraphNode) => {
@@ -541,6 +617,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   const navigateHome = useCallback(() => {
     const shouldRestoreDetailFocus = selectedNode != null;
     setNavigationHistory([]);
+    setExactScopeRequest(null);
     setHighlightedIds(null);
     setSelectedPath(null);
     setSelectedNode(null);
@@ -563,6 +640,14 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       setSelectedNode(null);
       setSelectedNodeExactRefreshKey(null);
       selectedNodeOutsideOverviewRef.current = false;
+      if (exactScopeActive && exactScope.data) {
+        setHoveredNode(null);
+        setHighlightedIds(null);
+        setSelectedPath(exactScope.data.scope.key);
+        canvasRef.current?.focusNodes(exactScope.data.nodes.map((node) => node.id), 0.9);
+        restoreDetailFocus();
+        return;
+      }
       const parentItem = navigationHistory.at(-1);
       const parent = parentItem ? makeScopeByKey(parentItem) : null;
       if (parent) {
@@ -578,7 +663,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
     setNavigationHistory((previous) => previous.slice(0, -1));
     if (parent) showScope(parent);
     else navigateHome();
-  }, [makeScopeByKey, navigateHome, navigationHistory, restoreDetailFocus, selectedNode, showScope]);
+  }, [exactScope.data, exactScopeActive, makeScopeByKey, navigateHome, navigationHistory, restoreDetailFocus, selectedNode, showScope]);
 
   const handleExactValidation = useCallback((
     nodeId: number,
@@ -652,10 +737,10 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   }, []);
 
   const enableAll = useCallback(() => {
-    if (!data) return;
-    setEnabledLabels(new Set(data.nodes.map((n) => n.label)));
-    setEnabledEdgeTypes(new Set(data.edges.map((e) => e.type)));
-  }, [data]);
+    if (!filterPanelData) return;
+    setEnabledLabels(new Set(filterPanelData.nodes.map((n) => n.label)));
+    setEnabledEdgeTypes(new Set(filterPanelData.edges.map((e) => e.type)));
+  }, [filterPanelData]);
 
   const resetFilters = useCallback(() => {
     enableAll();
@@ -705,7 +790,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
     );
   }
 
-  if (!data || !filteredData || data.nodes.length === 0) {
+  if (!data || !filteredData || !canvasData || !filterPanelData || data.nodes.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
         <p className="text-foreground/30 text-sm">No nodes in this project</p>
@@ -760,7 +845,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
           <X className="h-3.5 w-3.5" />
         </button>
         <FilterPanel
-          data={data}
+          data={filterPanelData}
           enabledLabels={enabledLabels}
           enabledEdgeTypes={enabledEdgeTypes}
           onToggleLabel={toggleLabel}
@@ -779,7 +864,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
         <Sidebar
           project={project}
           exactRefreshKey={exactRefreshKey}
-          nodes={filteredData.nodes}
+          nodes={canvasData.nodes}
           selectedPath={selectedPath}
           selectedNodeId={selectedNode?.id ?? null}
           onSelectNode={handleSidebarNodeSelect}
@@ -848,9 +933,10 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
         <ErrorBoundary key={project}>
           <GraphCanvas
             ref={canvasRef}
-            data={filteredData}
+            data={canvasData}
             active={active}
             visualMode={visualMode}
+            detailMode={Boolean(exactGraphData)}
             highlightedIds={highlightedIds}
             selectedNodeId={selectedNode?.id ?? null}
             deadCodeView={deadCodeView}
@@ -863,7 +949,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
           />
         </ErrorBoundary>
 
-        {filteredData.nodes.length === 0 ? (
+        {canvasData.nodes.length === 0 ? (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#06090f]/80 backdrop-blur-[1px]">
             <div className="text-center">
               <p className="text-foreground/30 text-sm mb-3" aria-live="polite">All nodes filtered out</p>
@@ -877,56 +963,86 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
             {/* Compact fidelity HUD. The previous five-line fixed panel hid a
                 meaningful part of the architecture map. Keep the sampling
                 truth visible in one row and reveal diagnostics on demand. */}
-            <details className="group absolute left-14 top-3 z-20 max-w-[calc(100%-8rem)] overflow-hidden rounded-xl border border-white/10 bg-[#071219]/88 text-[10px] text-foreground/70 shadow-xl backdrop-blur-md lg:left-4 lg:top-4 lg:max-w-[min(760px,calc(100%-16rem))] lg:text-[11px]">
-              <summary
-                className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono marker:content-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-400/70"
-                title="Toggle graph fidelity details"
-              >
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.8)]" />
-                <span className="whitespace-nowrap">
-                  <strong className="font-semibold text-cyan-50">{filteredData.nodes.length.toLocaleString()}</strong>
-                  <span className="text-foreground/45"> / {data.total_nodes.toLocaleString()} nodes</span>
-                </span>
-                {data.layout?.domains && (
-                  <span className="hidden whitespace-nowrap text-sky-200/70 sm:inline">
-                    {(data.layout.domain_catalog?.total_domains ?? data.layout.domains.length).toLocaleString()} domains
-                    {data.layout.domain_catalog?.exact ? " exact" : ""}
-                    {" · "}{data.layout.clusters.length.toLocaleString()} represented communities
+            {!exactGraphData && (
+              <details className="group absolute left-14 top-3 z-20 max-w-[calc(100%-8rem)] overflow-hidden rounded-xl border border-white/10 bg-[#071219]/88 text-[10px] text-foreground/70 shadow-xl backdrop-blur-md lg:left-4 lg:top-4 lg:max-w-[min(760px,calc(100%-16rem))] lg:text-[11px]">
+                <summary
+                  className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono marker:content-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-400/70"
+                  title="Toggle graph fidelity details"
+                >
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.8)]" />
+                  <span className="whitespace-nowrap">
+                    <strong className="font-semibold text-cyan-50">{canvasData.nodes.length.toLocaleString()}</strong>
+                    <span className="text-foreground/45"> / {data.total_nodes.toLocaleString()} nodes</span>
                   </span>
-                )}
-                <span className={`whitespace-nowrap rounded-md border px-1.5 py-0.5 font-sans text-[9px] font-semibold uppercase tracking-[0.12em] ${data.truncated ? "border-amber-300/15 bg-amber-300/[0.06] text-amber-100/75" : "border-emerald-300/15 bg-emerald-300/[0.06] text-emerald-100/75"}`}>
-                  {data.truncated ? "covered sample" : "complete"}
-                </span>
-                {highlightedIds && highlightedIds.size > 0 && (
-                  <span className="hidden whitespace-nowrap text-cyan-300/65 md:inline">
-                    {highlightedIds.size.toLocaleString()} selected
+                  {data.layout?.domains && (
+                    <span className="hidden whitespace-nowrap text-sky-200/70 sm:inline">
+                      {(data.layout.domain_catalog?.total_domains ?? data.layout.domains.length).toLocaleString()} domains
+                      {data.layout.domain_catalog?.exact ? " exact" : ""}
+                      {" · "}{data.layout.clusters.length.toLocaleString()} represented communities
+                    </span>
+                  )}
+                  <span className={`whitespace-nowrap rounded-md border px-1.5 py-0.5 font-sans text-[9px] font-semibold uppercase tracking-[0.12em] ${data.truncated ? "border-amber-300/15 bg-amber-300/[0.06] text-amber-100/75" : "border-emerald-300/15 bg-emerald-300/[0.06] text-emerald-100/75"}`}>
+                    {data.truncated ? "covered sample" : "complete"}
                   </span>
-                )}
-                <span className="ml-auto whitespace-nowrap font-sans text-[9px] uppercase tracking-[0.14em] text-foreground/35 group-open:text-cyan-200/60">
-                  Fidelity
-                </span>
-              </summary>
-              <div className="border-t border-white/[0.07] px-3 py-2 font-mono leading-relaxed text-foreground/48">
-                <p>
-                  {filteredData.edges.length.toLocaleString()} visible edges
-                  {data.truncated
-                    ? ` · ${data.sampling?.strategy === "architecture-coverage-v1" ? "architecture-covered representatives" : (data.sampling?.strategy ?? "sampled")}`
-                    : " · complete graph"}
-                </p>
-                {data.edge_sampling?.edges_truncated && (
-                  <p className="text-amber-100/65">
-                    {data.edge_sampling.returned_edges.toLocaleString()} /{" "}
-                    {data.edge_sampling.total_induced_edges.toLocaleString()} induced edges retained
-                    {` · max ${data.edge_sampling.limit_per_direction} in/out per shown node`}
+                  {highlightedIds && highlightedIds.size > 0 && (
+                    <span className="hidden whitespace-nowrap text-cyan-300/65 md:inline">
+                      {highlightedIds.size.toLocaleString()} selected
+                    </span>
+                  )}
+                  <span className="ml-auto whitespace-nowrap font-sans text-[9px] uppercase tracking-[0.14em] text-foreground/35 group-open:text-cyan-200/60">Fidelity</span>
+                </summary>
+                <div className="border-t border-white/[0.07] px-3 py-2 font-mono leading-relaxed text-foreground/48">
+                  <p>
+                    {canvasData.edges.length.toLocaleString()} visible edges
+                    {data.truncated
+                      ? ` · ${data.sampling?.strategy === "architecture-coverage-v1" ? "architecture-covered representatives" : (data.sampling?.strategy ?? "sampled")}`
+                      : " · complete graph"}
                   </p>
-                )}
-                <p className="text-sky-200/45">
-                  Directed bundles at overview · retained raw links appear with zoom
-                  {data.layout?.domain_catalog?.exact ? " · domain totals cover all project nodes" : ""}
-                  {data.truncated ? " · community geometry and flows describe representatives" : ""}
-                </p>
-              </div>
-            </details>
+                  {data.edge_sampling?.edges_truncated && (
+                    <p className="text-amber-100/65">
+                      {data.edge_sampling.returned_edges.toLocaleString()} /{" "}
+                      {data.edge_sampling.total_induced_edges.toLocaleString()} induced edges retained
+                      {` · max ${data.edge_sampling.limit_per_direction} in/out per shown node`}
+                    </p>
+                  )}
+                  <p className="text-sky-200/45">
+                    {`Directed bundles at overview · retained raw links appear with zoom${data.layout?.domain_catalog?.exact ? " · domain totals cover all project nodes" : ""}${data.truncated ? " · community geometry and flows describe representatives" : ""}`}
+                  </p>
+                </div>
+              </details>
+            )}
+
+            {activeTrail && !selectedNode && (
+              <Suspense fallback={null}>
+                <ExactScopeControls
+                  hud={exactGraphData && exactScope.data ? {
+                    returnedNodes: canvasData.nodes.length,
+                    totalNodes: exactScope.data.scope.total_nodes,
+                    visibleEdges: canvasData.edges.length,
+                    totalInternalEdges: exactScope.data.scope.total_internal_edges,
+                    complete: exactScope.data.complete,
+                    selectedCount: highlightedIds?.size ?? 0,
+                  } : null}
+                  active={exactScopeActive}
+                  loading={exactScope.loading && !exactScope.data}
+                  loadingMore={exactScope.loadingMore}
+                  error={exactScope.error}
+                  hasMore={Boolean(exactScope.data?.page.next_cursor)}
+                  onOpen={() => {
+                    setHoveredNode(null);
+                    setHighlightedIds(null);
+                    setExactScopeRequest(activeTrail);
+                  }}
+                  onLoadMore={exactScope.loadMore}
+                  onRetry={exactScope.retry}
+                  onClose={() => {
+                    const overviewScope = makeScopeByKey(activeTrail);
+                    if (overviewScope) showScope(overviewScope);
+                    else setExactScopeRequest(null);
+                  }}
+                />
+              </Suspense>
+            )}
 
             {(navigationHistory.length > 0 || selectedNode) && (
               <nav
@@ -1034,7 +1150,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       </div>
 
       {/* Right detail panel */}
-      {selectedNode && filteredData && (
+      {selectedNode && canvasData && (
         <>
           <div className="hidden lg:contents">
             <ResizeHandle
@@ -1058,8 +1174,8 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
               <NodeDetailPanel
                 node={selectedNode}
                 overviewNodes={data.nodes}
-                allNodes={filteredData.nodes}
-                allEdges={filteredData.edges}
+                allNodes={canvasData.nodes}
+                allEdges={canvasData.edges}
                 project={project}
                 exactRefreshKey={exactRefreshKey}
                 requiresExactValidation={selectedNodeRequiresExactValidation}

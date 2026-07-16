@@ -15,6 +15,8 @@ import type {
   GraphData,
   GraphNeighborhoodData,
   GraphNodeSearchData,
+  GraphScopeData,
+  GraphScopeKind,
   Project,
   ProjectHealth,
   DashboardData,
@@ -181,6 +183,21 @@ export const api = {
     });
     if (cursor) params.set("cursor", cursor);
     return fetchJson<GraphNodeSearchData>(`${API_BASE}/api/node-search?${params}`, {
+      timeoutMs: 8_000,
+      ...opts,
+    });
+  },
+
+  getScope: (
+    project: string,
+    kind: GraphScopeKind,
+    key: string,
+    cursor?: string | null,
+    opts?: FetchOptions,
+  ) => {
+    const params = new URLSearchParams({ project, kind, key, limit: "125" });
+    if (cursor) params.set("cursor", cursor);
+    return fetchJson<GraphScopeData>(`${API_BASE}/api/scope?${params}`, {
       timeoutMs: 8_000,
       ...opts,
     });

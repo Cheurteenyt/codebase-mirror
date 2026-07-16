@@ -104,6 +104,25 @@ if (
   throw new Error("Neighborhood response is not exact or versioned");
 }
 
+const scopeKey = layout.layout.domain_catalog.domains[0]?.key;
+if (typeof scopeKey !== "string" || scopeKey.length === 0) {
+  throw new Error("Exact domain catalog returned no benchmarkable scope");
+}
+const scopePath = `/api/scope?project=${encodedProject}&kind=domain&key=${encodeURIComponent(scopeKey)}&limit=125`;
+const scopeResult = await measure(scopePath);
+const scope = scopeResult.last.json;
+if (
+  scope.contract_version !== 1
+  || scope.exact !== true
+  || scope.graph_revision !== search.graph_revision
+  || scope.scope?.kind !== "domain"
+  || scope.scope?.key !== scopeKey
+  || scope.page?.returned_nodes !== scope.nodes?.length
+  || scope.page?.returned_edges !== scope.edges?.length
+) {
+  throw new Error("Scope response is not exact, bounded, or versioned");
+}
+
 const rawBytes = identityLayout.last.wireBytes ?? identityLayout.last.decodedBytes;
 const gzipBytes = gzipLayout.last.wireBytes;
 const report = {
@@ -140,6 +159,17 @@ const report = {
     total_connections: neighborhood.anchor.total_unique_edges,
     returned_edges: neighborhood.edges.length,
     wire_bytes: neighborhoodResult.last.wireBytes,
+  },
+  exact_scope: {
+    ...scopeResult.timing,
+    kind: "domain",
+    key: scopeKey,
+    total_nodes: scope.scope.total_nodes,
+    total_internal_edges: scope.scope.total_internal_edges,
+    returned_nodes: scope.nodes.length,
+    returned_edges: scope.edges.length,
+    complete: scope.complete,
+    wire_bytes: scopeResult.last.wireBytes,
   },
 };
 

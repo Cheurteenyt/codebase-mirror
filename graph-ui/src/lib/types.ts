@@ -151,6 +151,30 @@ export interface GraphNodeSearchData {
   };
 }
 
+export type GraphScopeKind = "domain" | "community";
+
+export interface GraphScopeData {
+  contract_version: 1;
+  exact: true;
+  graph_revision: string;
+  scope: {
+    kind: GraphScopeKind;
+    key: string;
+    total_nodes: number;
+    total_internal_edges: number;
+  };
+  nodes: GraphNode[];
+  edges: Array<GraphEdge & { id: number }>;
+  complete: boolean;
+  page: {
+    node_limit: number;
+    edge_limit: number;
+    returned_nodes: number;
+    returned_edges: number;
+    next_cursor: string | null;
+  };
+}
+
 // ── Project Types ────────────────────────────────────────────────
 
 export interface Project {

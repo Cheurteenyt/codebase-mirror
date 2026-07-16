@@ -162,6 +162,7 @@ Le tableau suivant doit devenir la référence de vocabulaire du produit.
 | Recherche /api/node-search | Correspondances littérales dans tout le projet, paginées | **Exact au moment de chaque requête** |
 | Degrés d’un nœud enrichi | Comptages dans la DB du projet | **Exact au moment de la requête** |
 | /api/neighborhood | Arêtes incidentes directes, paginées | **Exact au moment de chaque requête** |
+| /api/scope | Nœuds et arêtes internes d’un domaine/dossier, paginés | **Exact à une révision**, partiel tant que `next_cursor` existe |
 | Liste déjà chargée dans le détail | Pages exactes chargées jusque-là | **Partielle mais explicitement paginée** |
 
 ### Architecture de divulgation progressive
@@ -235,31 +236,35 @@ jamais les deux niveaux.
 | Navigation ARIA de l’arbre | Sidebar.test.tsx |
 | Recherche exacte, debounce, pagination et stale requests | useExactNodeSearch.test.ts |
 | Voisinage exact, fusion, retry et unmount | useExactNeighborhood.test.ts |
+| Scope exact, fusion paginée, révision, retry et recentrage de frame | useExactScope.test.ts, GraphCanvas.test.tsx, GraphTab.reconcile.test.tsx |
 | Honnêteté du détail partiel/exact et auto-boucles | NodeDetailPanel.test.tsx |
 | ResizeHandle clavier et pointerCancel | ResizeHandle.test.tsx |
 | Packing, couverture de domaines et métadonnées du layout | tests UI V2 côté backend |
 
-Résultats courants : Graph UI **17 fichiers / 131 tests**, backend UI/SQLite/
-contrat CI **18 fichiers / 121 tests**, deux typechecks, deux builds et
-`build:package` réussis. Le build Graph UI impose les budgets gzip. Le paquet
+Résultats courants : Graph UI **18 fichiers / 138 tests**, régressions ciblées
+scope/SQLite/contrat CI **3 fichiers / 31 tests**, deux typechecks, deux builds
+et `build:package` réussis. Le build Graph UI impose les budgets gzip. Le paquet
 servi a ensuite été contrôlé dans le navigateur : overview, drill-down clavier,
-recherche exacte, voisinage, refresh avec sélection préservée et restauration
-du focus.
+scope exact paginé dans le même canvas, recentrage automatique, recherche
+exacte, voisinage, refresh avec sélection préservée et restauration du focus.
 
 La CI de la PR #25 a confirmé le backend, le frontend, Windows, le tarball
 installé, Docker et CodeQL. Le smoke du tarball a indexé une fixture TypeScript,
 chargé les assets JS/CSS du paquet et exercé layout, recherche et voisinage sur
 une révision commune.
 
-Budget courant : Graph **38,20 / 40 Kio**, entrée **70,73 / 80 Kio**, CSS total
-**11,58 / 18 Kio**, JavaScript manifeste **115,14 / 125 Kio** (gzip). Les
+Budget courant : Graph **34,78 / 40 Kio**, entrée **70,87 / 80 Kio**, CSS total
+**11,68 / 18 Kio**, JavaScript manifeste **118,05 / 125 Kio** (gzip). Le moteur
+`d3-*` stable est isolé dans un chunk asynchrone de **5,57 Kio gzip** et reste
+compté dans le budget manifeste. Les
 assets sont résolus par `index.html` et le manifeste Vite, pas par ordre de
 répertoire ou nom supposé.
 
-La suite backend Windows exhaustive a aussi été lancée : 1 509 tests passent,
-mais 532 tests POSIX-only échouent sur `chmod`, `ls`, Bash, permissions et
-symlinks Unix. Ces échecs ne touchent pas le périmètre Graph UI et ne sont pas
-masqués ; la suite Linux de la PR reste l’autorité pour ces scénarios.
+La suite backend Windows exhaustive a aussi été lancée : 1 508 tests passent,
+mais 534 tests POSIX-only échouent, avec deux erreurs non gérées, sur `chmod`,
+`ls`, Bash, permissions, exécutables `.bin` sans extension et symlinks Unix.
+Ces échecs ne touchent pas le périmètre Graph UI et ne sont pas masqués ; la
+suite Linux de la PR reste l’autorité pour ces scénarios.
 
 ## Lacunes et risques de régression
 
@@ -612,7 +617,7 @@ Critère : conclusion reproductible par un tiers sur la même révision.
 - typecheck, tests et build Graph UI ;
 - build:package ;
 - démarrage du paquet construit ;
-- smoke API layout/search/neighborhood ;
+- smoke API layout/search/neighborhood/scope ;
 - contrôle visuel desktop, mobile et trois niveaux de zoom ;
 - contrôle des logs et du CPU après refroidissement.
 
@@ -630,11 +635,25 @@ impression de modernité.
 
 ### P1 — qualité et performance nécessaires
 
-#### P1-1 — Drill-down exact de scope
+#### P1-1 — Fermé : drill-down exact de scope
 
-Ajouter un endpoint paginé pour lister les nœuds d’un domaine/dossier et
-reconstruire une communauté exacte à la demande. Conserver la carte globale
-bornée.
+- `/api/scope` liste exactement un domaine ou dossier avec curseur opaque lié à
+  `graph_revision` ;
+- les nœuds avancent par clé d’identifiant et les lots d’arêtes denses restent
+  bornés par des pages de continuation ;
+- une arête interne appartient au lot qui introduit son extrémité d’identifiant
+  maximal : aucun doublon, aucun lien pendant vers un nœud non chargé ;
+- le hook abandonne les requêtes obsolètes, refuse de fusionner deux révisions
+  et redémarre après `GRAPH_REVISION_MISMATCH` ;
+- le frame exact remplace l’overview dans le même canvas/simulation, affiche
+  `partiel exact` jusqu’à la dernière page, se recentre au changement de frame
+  et permet de revenir à l’overview ;
+- les appartenances domaine/dossier sont indexées une fois par révision puis
+  partagées par les pages : sur le graphe courant, la page chaude passe à
+  **5–13 ms** (contre 74–106 ms avant cache) ; le domaine `graph-ui` reconstruit
+  exactement **1 486 nœuds / 1 846 arêtes en 22 pages**, sans doublon.
+
+La carte globale reste bornée ; l’exhaustivité est explicite et à la demande.
 
 #### P1-2 — Optimiser la recherche après mesure
 
@@ -816,9 +835,9 @@ topologie, aucun rendu 3D/WebGL, aucun shadow blur ou gradient par nœud, et
 aucune affirmation de supériorité de performance V1/V2 avant le protocole
 same-graph navigateur.
 
-Validation de cette passe : typecheck Graph UI, **17 fichiers / 131 tests**,
-build frontend et `build:package` passent. Le chunk Graph final mesure **38,20
-Kio gzip** sur un plafond de 40 Kio ; le JavaScript manifeste mesure **115,14
+Validation courante : typecheck Graph UI, **18 fichiers / 138 tests**, build
+frontend et `build:package` passent. Le chunk Graph applicatif mesure **34,78
+Kio gzip** sur un plafond de 40 Kio ; le JavaScript manifeste mesure **118,05
 Kio gzip** sur un plafond de 125 Kio.
 
 Le contrôle à 1 280 px a également supprimé l’action `Clear selection` dupliquée

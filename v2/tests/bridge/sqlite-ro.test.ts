@@ -126,6 +126,42 @@ describe('CodeGraphReader — getNeighbors column collision regression', () => {
     expect(reader.getExactNeighborhoodPage('other', 10, 0, 10)).toBeNull();
   });
 
+  it('reconstructs an exact architecture scope incrementally without dangling or duplicate edges', () => {
+    let cursor = { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 };
+    const collectedNodes: number[] = [];
+    const collectedEdges: number[] = [];
+
+    for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
+      const page = reader.getExactScopePage('test', 'community', 'src', cursor, 1, 1);
+      expect(page.total_nodes).toBe(3);
+      expect(page.total_internal_edges).toBe(2);
+      collectedNodes.push(...page.nodes.map((node) => node.id));
+      collectedEdges.push(...page.edges.map((edge) => edge.id));
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
+
+    expect(collectedNodes).toEqual([10, 20, 30]);
+    expect(collectedEdges).toEqual([1, 2]);
+    expect(new Set(collectedEdges).size).toBe(collectedEdges.length);
+    expect(reader.getExactScopePage(
+      'test',
+      'community',
+      'src/auth',
+      { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 },
+      10,
+      10,
+    )).toMatchObject({ total_nodes: 1, total_internal_edges: 0 });
+    expect(reader.getExactScopePage(
+      'test',
+      'domain',
+      'src',
+      { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 },
+      10,
+      10,
+    ).nodes.map((node) => node.id)).toEqual([10, 20, 30, 40, 50]);
+  });
+
   it('keeps a stable graph revision and reads multi-statement pages from one snapshot', () => {
     reader.close();
     const setup = new Database(dbPath);

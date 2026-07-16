@@ -573,9 +573,28 @@ jobs:
             'Neighborhood returned an edge unrelated to its anchor',
           );
 
+          const scopeKey = catalog.domains[0].key;
+          const scope = await read(
+            `/api/scope?project=${encodeURIComponent(project)}&kind=domain&key=${encodeURIComponent(scopeKey)}&limit=10`,
+          );
+          invariant(scope.contract_version === 1, 'Scope contract version is not 1');
+          invariant(scope.exact === true, 'Scope is not exact');
+          invariant(
+            scope.graph_revision === neighborhood.graph_revision,
+            'Scope and neighborhood were not read from the same graph revision',
+          );
+          invariant(scope.scope?.kind === 'domain' && scope.scope?.key === scopeKey, 'Scope identity drifted');
+          invariant(scope.scope.total_nodes === catalog.domains[0].node_count, 'Scope total disagrees with catalog');
+          invariant(scope.page?.returned_nodes === scope.nodes?.length, 'Scope node page is inconsistent');
+          invariant(scope.page?.returned_edges === scope.edges?.length, 'Scope edge page is inconsistent');
+          invariant(
+            scope.nodes?.every((node) => Number.isSafeInteger(node.id) && Number.isFinite(node.x) && Number.isFinite(node.y)),
+            'Scope returned invalid positioned nodes',
+          );
+
           console.log(
             `Packaged Graph UI verified: ${layout.total_nodes} nodes, fixture node ${fixtureNode.id}, `
-              + `${neighborhood.page.returned} neighborhood edge(s).`,
+              + `${neighborhood.page.returned} neighborhood edge(s), ${scope.page.returned_nodes} scope node(s).`,
           );
           NODE
 

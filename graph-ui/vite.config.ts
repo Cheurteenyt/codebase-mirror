@@ -27,6 +27,16 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        // d3's force stack changes far less often than the Graph UI. Keeping it
+        // in a stable async vendor chunk improves repeat-load caching while the
+        // manifest-wide budget still accounts for every transferred byte.
+        manualChunks(id) {
+          if (id.includes("/node_modules/d3-")) return "graph-d3";
+        },
+      },
+    },
     // Bundle budgets resolve real entry and dynamic-entry assets from this
     // manifest instead of guessing from hash-prefixed directory names.
     manifest: true,

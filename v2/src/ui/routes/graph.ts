@@ -8,7 +8,8 @@ import { computeRiskScore } from '../../reports/risk.js';
 import { safeJsonParse, MAX_NODES_PER_LABEL } from '../../constants.js';
 import { sendJson, colorForLabel } from '../helpers.js';
 import type { RouteContext } from '../types.js';
-import type { CodeNode } from '../../bridge/sqlite-ro.js';
+import type { CodeNode, ExactScopeKind } from '../../bridge/sqlite-ro.js';
+import { architectureDomainKey, graphCommunityKey } from '../../graph-scope.js';
 
 const STRUCTURAL_LABELS = new Set([
   'File', 'Module', 'Package', 'Namespace', 'Class', 'Interface', 'Trait', 'Enum',
@@ -23,7 +24,6 @@ const MIN_SPATIAL_CELL_SIZE = 128;
 const DOMAIN_PADDING = 58;
 const DOMAIN_GAP = 92;
 const DOMAIN_SPIRAL_STEP = 80;
-const DIRECTORY_LABELS = new Set(['Directory', 'Folder']);
 
 function stableStringCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -113,12 +113,6 @@ function roundCoordinate(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function architectureDomainKey(clusterKey: string): string {
-  const parts = clusterKey.split('/').filter(Boolean);
-  if (parts.length === 0) return '(virtual)';
-  return parts[0];
-}
-
 export function ensureArchitectureDomainCoverage<T extends ClusterableNode>(
   selectedNodes: readonly T[],
   coverageCandidates: readonly T[],
@@ -127,7 +121,7 @@ export function ensureArchitectureDomainCoverage<T extends ClusterableNode>(
   const nodes = [...selectedNodes];
   if (nodes.length === 0 || coverageCandidates.length === 0 || maxNodes <= 0) return nodes;
 
-  const domainFor = (node: T) => architectureDomainKey(directoryClusterKey(node.file_path, node.label));
+  const domainFor = (node: T) => architectureDomainKey(graphCommunityKey(node.file_path, node.label));
   const domainCounts = new Map<string, number>();
   const labelCounts = new Map<string, number>();
   const selectedIds = new Set<number>();
@@ -285,21 +279,6 @@ function packCircleItems<T extends { key: string; radius: number; x: number; y: 
   }
 }
 
-function directoryClusterKey(filePath: string | null, label: string): string {
-  const normalized = (filePath ?? '')
-    .replace(/\\/gu, '/')
-    .replace(/^[A-Za-z]:\//u, '')
-    .replace(/^\/+|\/+$/gu, '');
-  const parts = normalized.split('/').filter(Boolean);
-  // Folder nodes already point at a directory; file and symbol nodes point at
-  // a file and therefore drop the final path segment. Treating every path as a
-  // file incorrectly collapsed `scripts` into `(root)` and `src/lib` into
-  // `src`, corrupting both community and domain hierarchy.
-  const directories = DIRECTORY_LABELS.has(label) ? parts : parts.slice(0, -1);
-  if (directories.length === 0) return normalized.length > 0 ? '(root)' : `(virtual)/${label}`;
-  return directories.slice(0, 3).join('/');
-}
-
 /**
  * Seed a deterministic 2D technical map before d3 performs its gentle local
  * refinement. V1's strongest visual property was its directory clustering;
@@ -316,7 +295,7 @@ export function buildStructuredOverview(
 } {
   const grouped = new Map<string, ClusterableNode[]>();
   for (const node of nodes) {
-    const key = directoryClusterKey(node.file_path, node.label);
+    const key = graphCommunityKey(node.file_path, node.label);
     const bucket = grouped.get(key);
     if (bucket) bucket.push(node);
     else grouped.set(key, [node]);
@@ -772,6 +751,17 @@ interface SearchCursor {
   graph_revision: string;
 }
 
+interface ScopeCursor {
+  v: 1;
+  project: string;
+  kind: ExactScopeKind;
+  key: string;
+  after_node_id: number;
+  batch_end_node_id: number;
+  after_edge_id: number;
+  graph_revision: string;
+}
+
 function isGraphRevision(value: unknown): value is string {
   return typeof value === 'string' && /^graph-reader-v1:[A-Za-z0-9_-]{22}$/u.test(value);
 }
@@ -794,6 +784,69 @@ function sendGraphRevisionMismatch(
 
 function encodeSearchCursor(cursor: SearchCursor): string {
   return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function encodeScopeCursor(cursor: ScopeCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeScopeCursor(
+  encoded: string,
+  project: string,
+  kind: ExactScopeKind,
+  key: string,
+): {
+  afterNodeId: number;
+  batchEndNodeId: number;
+  afterEdgeId: number;
+  graphRevision: string;
+} | null {
+  if (encoded.length === 0 || encoded.length > 1536) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as Partial<ScopeCursor>;
+    const afterNodeId = parsed.after_node_id ?? -1;
+    const batchEndNodeId = parsed.batch_end_node_id ?? -1;
+    const afterEdgeId = parsed.after_edge_id ?? -1;
+    const isNodeContinuation = batchEndNodeId === 0 && afterEdgeId === 0 && afterNodeId > 0;
+    const isEdgeContinuation = batchEndNodeId > afterNodeId && afterEdgeId > 0;
+    if (
+      parsed.v !== 1
+      || parsed.project !== project
+      || parsed.kind !== kind
+      || parsed.key !== key
+      || !Number.isSafeInteger(afterNodeId)
+      || !Number.isSafeInteger(batchEndNodeId)
+      || !Number.isSafeInteger(afterEdgeId)
+      || !(isNodeContinuation || isEdgeContinuation)
+      || !isGraphRevision(parsed.graph_revision)
+    ) return null;
+    return { afterNodeId, batchEndNodeId, afterEdgeId, graphRevision: parsed.graph_revision! };
+  } catch {
+    return null;
+  }
+}
+
+function positionExactScopeNodes(
+  nodes: ReturnType<typeof serializeUnpositionedGraphNodes>,
+  totalNodes: number,
+  kind: ExactScopeKind,
+  key: string,
+) {
+  const radius = Math.max(80, Math.sqrt(Math.max(1, totalNodes)) * 20);
+  return nodes.map((node) => {
+    // Two independent deterministic hashes produce a uniform disk. Positions
+    // do not depend on page order, so loading more detail never teleports the
+    // nodes already being inspected.
+    const radialUnit = stableHash(`${kind}:${key}:${node.id}:radius`) / 0x1_0000_0000;
+    const angularUnit = stableHash(`${kind}:${key}:${node.id}:angle`) / 0x1_0000_0000;
+    const nodeRadius = Math.sqrt(radialUnit) * radius;
+    const angle = angularUnit * Math.PI * 2;
+    return {
+      ...node,
+      x: roundCoordinate(Math.cos(angle) * nodeRadius),
+      y: roundCoordinate(Math.sin(angle) * nodeRadius),
+    };
+  });
 }
 
 function decodeSearchCursor(
@@ -918,6 +971,117 @@ export async function routeNodeSearch(
     page: {
       limit,
       returned: page.nodes.length,
+      next_cursor: nextCursor,
+    },
+  });
+}
+
+/** Exact, revision-bound architecture scope with bounded node/edge pages. */
+export async function routeScope(
+  ctx: RouteContext,
+  url: URL,
+  _req: IncomingMessage,
+  res: ServerResponse,
+  project: string,
+): Promise<void> {
+  if (!ctx.codeReader) {
+    sendJson(res, 404, { error: 'Code graph not available' });
+    return;
+  }
+  const rawKind = url.searchParams.get('kind');
+  if (rawKind !== 'domain' && rawKind !== 'community') {
+    sendJson(res, 400, { error: 'kind must be domain or community' });
+    return;
+  }
+  const kind: ExactScopeKind = rawKind;
+  const key = url.searchParams.get('key');
+  if (
+    key == null
+    || key.trim().length === 0
+    || key.length > 512
+    || /[\u0000-\u001f\u007f]/u.test(key)
+  ) {
+    sendJson(res, 400, { error: 'key must contain 1 to 512 printable characters' });
+    return;
+  }
+  const rawLimit = url.searchParams.get('limit') ?? '100';
+  if (!/^[1-9][0-9]*$/u.test(rawLimit)) {
+    sendJson(res, 400, { error: 'limit must be an integer between 1 and 250' });
+    return;
+  }
+  const limit = Number(rawLimit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 250) {
+    sendJson(res, 400, { error: 'limit must be an integer between 1 and 250' });
+    return;
+  }
+  const encodedCursor = url.searchParams.get('cursor');
+  const cursor = encodedCursor == null
+    ? { afterNodeId: 0, batchEndNodeId: 0, afterEdgeId: 0, graphRevision: null }
+    : decodeScopeCursor(encodedCursor, project, kind, key);
+  if (!cursor) {
+    sendJson(res, 400, { error: 'cursor is invalid for this scope or project' });
+    return;
+  }
+
+  const snapshot = ctx.codeReader.withGraphSnapshot(cursor.graphRevision, (graphRevision) => {
+    const page = ctx.codeReader!.getExactScopePage(
+      project,
+      kind,
+      key,
+      {
+        after_node_id: cursor.afterNodeId,
+        batch_end_node_id: cursor.batchEndNodeId,
+        after_edge_id: cursor.afterEdgeId,
+      },
+      limit,
+      limit,
+    );
+    const nextCursor = page.next_cursor == null
+      ? null
+      : encodeScopeCursor({
+          v: 1,
+          project,
+          kind,
+          key,
+          ...page.next_cursor,
+          graph_revision: graphRevision,
+        });
+    const serializedNodes = serializeUnpositionedGraphNodes(ctx, project, page.nodes);
+    return {
+      page,
+      nextCursor,
+      nodes: positionExactScopeNodes(serializedNodes, page.total_nodes, kind, key),
+    };
+  });
+  if (!snapshot.ok) {
+    sendGraphRevisionMismatch(res, snapshot.expected_graph_revision, snapshot.graph_revision);
+    return;
+  }
+  const { page, nextCursor, nodes } = snapshot.value;
+
+  sendJson(res, 200, {
+    contract_version: 1,
+    exact: true,
+    graph_revision: snapshot.graph_revision,
+    scope: {
+      kind,
+      key,
+      total_nodes: page.total_nodes,
+      total_internal_edges: page.total_internal_edges,
+    },
+    nodes,
+    edges: page.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source_id,
+      target: edge.target_id,
+      type: edge.type,
+    })),
+    complete: nextCursor === null,
+    page: {
+      node_limit: limit,
+      edge_limit: limit,
+      returned_nodes: page.nodes.length,
+      returned_edges: page.edges.length,
       next_cursor: nextCursor,
     },
   });

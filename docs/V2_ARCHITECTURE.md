@@ -138,7 +138,22 @@ reheat the simulation, alter collision/hit radii, change sampling, reinterpret
 exact values, or fork filtering, navigation, accessibility, and detail logic.
 Hub bloom and traffic beacons are batched Canvas paths; there are no shadows,
 per-node gradients, Three.js scene, WebGL backend, or second layout engine. The
-Graph dynamic chunk remains protected by its 40 KiB gzip budget.
+Graph application chunk remains protected by its 40 KiB gzip budget; the stable
+`d3-*` force stack is cached separately and both remain covered by the global
+JavaScript budget.
+
+The bounded overview is followed by a revision-bound exact drill-down rather
+than a second renderer. `GET /api/scope` keyset-pages a domain or directory
+community. A node batch owns every internal edge whose highest-id endpoint it
+introduces; edge-only continuation pages drain dense batches before the node
+frontier advances. This makes page merging duplicate-free and prevents a page
+from referencing a node the client has not loaded. The UI renders the merged
+frame in the existing `GraphCanvas`/d3 simulation with raw topology enabled,
+labels partial versus complete truth, re-fits only at the overview/detail frame
+boundary, and restarts from page one on `GRAPH_REVISION_MISMATCH`. The read-only
+bridge derives all domain/community memberships in one node pass per graph
+revision, then reuses that bounded cache across scopes and continuation pages;
+edge membership stays in SQLite through a materialized `json_each` CTE.
 
 The UI is built and embedded in the npm package at `dist/ui/`. Runtime
 resolution uses `import.meta.url` so it works from any working directory.

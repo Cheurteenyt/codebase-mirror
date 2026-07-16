@@ -25,6 +25,7 @@ import {
   routeLayout,
   routeNeighborhood,
   routeNodeSearch,
+  routeScope,
 } from './routes/graph.js';
 import { routeProjectDelete, routeProjectHealth, routeProjects } from './routes/project.js';
 import { routeAdrGet, routeAdrPost, routeHumanNotes } from './routes/human.js';
@@ -138,6 +139,7 @@ export class UiServer {
     ['GET /api/layout',          (ctx, u, r, s, p) => routeLayout(ctx, u, r, s, p)],
     ['GET /api/neighborhood',    (ctx, u, r, s, p) => routeNeighborhood(ctx, u, r, s, p)],
     ['GET /api/node-search',     (ctx, u, r, s, p) => routeNodeSearch(ctx, u, r, s, p)],
+    ['GET /api/scope',           (ctx, u, r, s, p) => routeScope(ctx, u, r, s, p)],
     ['GET /api/projects',        (ctx, u, r, s, p) => routeProjects(ctx, u, r, s, p)],
     ['GET /api/project-health',  (ctx, u, r, s, p) => routeProjectHealth(ctx, u, r, s, p)],
     ['GET /api/dashboard',       (ctx, u, r, s, p) => routeDashboard(ctx, u, r, s, p)],

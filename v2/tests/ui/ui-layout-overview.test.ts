@@ -405,13 +405,39 @@ describe('Graph UI balanced overview contract', () => {
     const layoutBeforeMutation = await fixture.getJson('/api/layout?max_nodes=2');
     const search = await fixture.getJson('/api/node-search?q=alpha&limit=1');
     const neighborhood = await fixture.getJson('/api/neighborhood?node_id=1&limit=1');
+    const scope = await fixture.getJson('/api/scope?kind=community&key=src&limit=1');
     expect(layoutBeforeMutation.status).toBe(200);
     expect(search.status).toBe(200);
     expect(neighborhood.status).toBe(200);
+    expect(scope.status).toBe(200);
     expect(layoutBeforeMutation.body.graph_revision).toBe(search.body.graph_revision);
     expect(search.body.graph_revision).toBe(neighborhood.body.graph_revision);
+    expect(scope.body).toMatchObject({
+      contract_version: 1,
+      exact: true,
+      graph_revision: search.body.graph_revision,
+      scope: {
+        kind: 'community',
+        key: 'src',
+        total_nodes: 3,
+        total_internal_edges: 2,
+      },
+      page: { node_limit: 1, edge_limit: 1, returned_nodes: 1, returned_edges: 0 },
+    });
+    expect(scope.body.nodes.map((node: { id: number }) => node.id)).toEqual([1]);
+    expect(scope.body.edges).toEqual([]);
     expect(search.body.page.next_cursor).toEqual(expect.any(String));
     expect(neighborhood.body.page.next_cursor).toEqual(expect.any(String));
+    expect(scope.body.page.next_cursor).toEqual(expect.any(String));
+
+    const nextScope = await fixture.getJson(
+      `/api/scope?kind=community&key=src&limit=1&cursor=${encodeURIComponent(scope.body.page.next_cursor)}`,
+    );
+    expect(nextScope.body.nodes.map((node: { id: number }) => node.id)).toEqual([2]);
+    expect(nextScope.body.edges.map((edge: { id: number }) => edge.id)).toEqual([1]);
+    expect((await fixture.getJson(
+      `/api/scope?kind=domain&key=src&limit=1&cursor=${encodeURIComponent(scope.body.page.next_cursor)}`,
+    )).status).toBe(400);
 
     const writer = new Database(dbPath);
     try {
@@ -442,7 +468,10 @@ describe('Graph UI balanced overview contract', () => {
     const staleNeighborhood = await fixture.getJson(
       `/api/neighborhood?node_id=1&limit=1&cursor=${encodeURIComponent(neighborhood.body.page.next_cursor)}`,
     );
-    for (const responseWithStaleCursor of [staleSearch, staleNeighborhood]) {
+    const staleScope = await fixture.getJson(
+      `/api/scope?kind=community&key=src&limit=1&cursor=${encodeURIComponent(nextScope.body.page.next_cursor)}`,
+    );
+    for (const responseWithStaleCursor of [staleSearch, staleNeighborhood, staleScope]) {
       expect(responseWithStaleCursor.status).toBe(409);
       expect(responseWithStaleCursor.body).toMatchObject({
         contract_version: 1,
