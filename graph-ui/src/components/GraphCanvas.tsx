@@ -67,7 +67,6 @@ interface SimEdge {
 const DEFAULT_NODE_RADIUS = 4;
 const MIN_NODE_RADIUS = 2;
 const MAX_NODE_RADIUS = 12;
-const HIGHLIGHT_SCALE = 1.5;
 // Keep architecture labels inside the viewport as well as the circles. The
 // summary line uses a constant screen-space font, so the old 48 px padding
 // could clip a small domain parked at the left or right packing extreme.
@@ -807,7 +806,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
-    if (domainsRef.current.length > 0) {
+    if (domainsRef.current.length) {
       for (const domain of domainsRef.current) {
         minX = Math.min(minX, domain.x - domain.radius);
         minY = Math.min(minY, domain.y - domain.radius);
@@ -1157,10 +1156,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     );
     domainBundleBatchesRef.current = domainBundlePlan.batches;
     domainTrafficTiersRef.current = domainBundlePlan.trafficTiers;
-    labelCandidatesRef.current = [...nodes]
+    labelCandidatesRef.current = nodes
+      // Parser-generated anonymous symbols use the stable `anonymous#N` form.
+      .filter((node) => !/^anonymous#/.test(node.name))
       .sort((nodeA, nodeB) => nodeB.rank - nodeA.rank
-        || nodeB.size - nodeA.size || nodeA.id - nodeB.id)
-      .slice(0, NEAR_LABEL_LIMIT);
+        || nodeB.size - nodeA.size || nodeA.id - nodeB.id);
     keyboardVisibleCountsRef.current = {
       domain: domainsRef.current.length,
       community: clustersRef.current.length,
@@ -1373,6 +1373,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // An empty Set is semantically the same as no selection. Treating it as
     // truthy used to dim every node and leave a phantom selection state.
     const activeHighlightedIds = visibleHighlightedIds;
+    // A folder/community selection is one scope, not dozens of exact node
+    // selections. Keep its membership contrast without multiplying rings,
+    // radii, and labels beyond the existing mid-LOD attention budget.
+    const denseSelection = activeHighlightedIds && activeHighlightedIds.size > MID_LABEL_LIMIT;
     const occupied: Array<{ left: number; right: number; top: number; bottom: number }> = [];
 
     // Directory communities are precomputed server-side and require only two
@@ -1454,7 +1458,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    if (clustersRef.current.length > 0) {
+    if (clustersRef.current.length) {
       // Community discs replace thousands of unreadable node dots in the two
       // architecture tiers. Their size and position already encode the useful
       // information; domain color preserves nesting without adding a legend.
@@ -1525,7 +1529,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       // Four batched halo tiers recover the useful V1 "hub at a glance"
       // signal at community scale. The halo represents sampled cross-scope
       // traffic while circle area remains reserved for code volume.
-      if (communityBundleOpacity > 0) {
+      if (communityBundleOpacity) {
         for (let tier = 1; tier <= 4; tier += 1) {
           let hasTraffic = false;
           ctx.beginPath();
@@ -1651,10 +1655,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.globalAlpha = 1;
     };
 
-    if (domainBundleOpacity > 0 && domainBundleBatchesRef.current.size > 0) {
+    if (domainBundleOpacity && domainBundleBatchesRef.current.size) {
       drawBundleBatches(domainBundleBatchesRef.current, 1.25, domainBundleOpacity, activeDomainId);
     }
-    if (communityBundleOpacity > 0 && clusterBundleBatchesRef.current.size > 0) {
+    if (communityBundleOpacity && clusterBundleBatchesRef.current.size) {
       const touchesActiveDomain = activeDomainId == null
         ? undefined
         : (bundle: OverviewBundle) => (
@@ -1690,12 +1694,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ? "rgba(100, 135, 158, 0.18)"
       : "rgba(100, 135, 158, 0.105)";
     ctx.lineWidth = (rawTopology ? 0.65 : 0.5) / tk;
-    if (localEdgeOpacity > 0) {
+    if (localEdgeOpacity) {
       ctx.globalAlpha = localEdgeOpacity;
       ctx.beginPath();
       traceEdges(ctx, rawEdgeLayersRef.current[0], nodeMap, selectedNodeId);
       ctx.stroke();
-      if (rawDetailReveal > 0) {
+      if (rawDetailReveal) {
         ctx.globalAlpha *= rawDetailReveal;
         ctx.beginPath();
         traceEdges(ctx, rawEdgeLayersRef.current[1], nodeMap, selectedNodeId);
@@ -1704,7 +1708,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.globalAlpha = 1;
     }
 
-    if (crossEdgeOpacity > 0) {
+    if (crossEdgeOpacity) {
       ctx.globalAlpha = crossEdgeOpacity;
       ctx.strokeStyle = "rgba(100, 135, 158, 0.18)";
       ctx.lineWidth = 0.65 / tk;
@@ -1716,7 +1720,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     // Pass 2: highlighted edges — grouped into at most five semantic stroke
     // batches. This restores relation meaning without per-edge style changes.
-    if (localEdgeOpacity > 0 && activeHighlightedIds && selectedNodeId != null) {
+    if (localEdgeOpacity && activeHighlightedIds && selectedNodeId != null) {
       ctx.globalAlpha = rawNodeOpacity;
       ctx.lineWidth = 1.2 / tk;
       for (const [group, groupedEdges] of edgeGroupsRef.current) {
@@ -1731,11 +1735,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // Draw nodes. Semantic fill is never replaced by selection or status;
     // those dimensions use outer rings so the graph remains decodable. Nodes
     // enter before dense edge layers, and are never painted in macro views.
-    const renderedNodes = rawNodeOpacity > 0 ? nodesRef.current : [];
-    for (const node of renderedNodes) {
+    for (const node of rawNodeOpacity ? nodesRef.current : []) {
       const x = node.x ?? 0;
       const y = node.y ?? 0;
-      const isHighlighted = activeHighlightedIds?.has(node.id) ?? false;
+      const isHighlighted = activeHighlightedIds?.has(node.id);
+      const individualHighlight = (isHighlighted && !denseSelection) || node.id === selectedNodeId;
       const isFocused = keyboardFocus?.kind === "node" && keyboardFocus.id === node.id;
       const priorityReveal = rawDetailReveal
         + (1 - rawDetailReveal) * (0.12 + 0.88 * node.rank);
@@ -1745,7 +1749,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       // radii. The floor is expressed in screen pixels, so it disappears as
       // soon as semantic zoom makes the real node size readable.
       const baseRadius = Math.max(nodeRadius(node), 1.2 / tk);
-      const r = isHighlighted ? baseRadius * HIGHLIGHT_SCALE : baseRadius;
+      const r = individualHighlight ? baseRadius * 1.5 : baseRadius;
 
       const color = colorForLabel(node.label);
 
@@ -1764,7 +1768,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ctx.globalAlpha = 1;
       }
 
-      if (isHighlighted) {
+      if (individualHighlight) {
         ctx.beginPath();
         ctx.arc(x, y, r + (node.id === selectedNodeId ? 4 : 2.5) / tk, 0, Math.PI * 2);
         ctx.strokeStyle = node.id === selectedNodeId
@@ -1790,7 +1794,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // Labels are painted after edges and nodes so no topology line can cut
     // through them. Domain names remain as dimmed anchors while community and
     // node labels progressively inherit the available attention budget.
-    if (domainsRef.current.length > 0) {
+    if (domainsRef.current.length) {
       const previousAlpha = ctx.globalAlpha;
       ctx.globalAlpha = previousAlpha * (1 - communityReveal * 0.55);
       ctx.textAlign = "center";
@@ -1843,7 +1847,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.globalAlpha = previousAlpha;
     }
 
-    if (communityReveal > 0 && clustersRef.current.length > 0) {
+    if (communityReveal && clustersRef.current.length) {
       const previousAlpha = ctx.globalAlpha;
       ctx.globalAlpha = previousAlpha * communityReveal * (1 - rawTopologyReveal * 0.55);
       const domainById = new Map(domainsRef.current.map((domain) => [domain.id, domain]));
@@ -1904,32 +1908,38 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     // Zoom-dependent labels with collision avoidance. The selected node is
     // always attempted first, followed by its neighborhood and ranked hubs.
-    const labelLimit = rawTopologyReveal <= 0
-      ? 0
-      : projectedNodeSpacing < 32
-        ? MID_LABEL_LIMIT
-        : NEAR_LABEL_LIMIT;
+    const labelLimit = rawTopologyReveal
+      && (denseSelection
+        ? 12
+        : projectedNodeSpacing < 32
+          ? MID_LABEL_LIMIT
+          : NEAR_LABEL_LIMIT);
     const labelNodes: SimNode[] = [];
-    const labelIds = new Set<number>();
+    const labelKeys = new Set<number | string>();
     // The exact selected node remains first in the raw-topology label budget.
     // Every other label, including a large highlighted neighborhood, shares
     // the same bounded semantic-zoom budget.
-    const selectedLabelNode = rawTopologyReveal > 0 && selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined;
-    const labelBudget = Math.max(labelLimit, selectedLabelNode ? 1 : 0);
     const addLabelNode = (node: SimNode | undefined) => {
-      if (!node || labelIds.has(node.id) || labelNodes.length >= labelBudget) return;
-      labelIds.add(node.id);
+      if (!node || labelKeys.has(denseSelection ? node.name : node.id) || labelNodes.length >= labelLimit) return;
+      labelKeys.add(denseSelection ? node.name : node.id);
       labelNodes.push(node);
     };
-    addLabelNode(selectedLabelNode);
-    if (activeHighlightedIds) {
+    addLabelNode(rawTopologyReveal && selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined);
+    if (activeHighlightedIds && !denseSelection) {
       for (const id of activeHighlightedIds) addLabelNode(nodeMap.get(id));
     }
-    for (const node of labelCandidatesRef.current.slice(0, labelLimit)) addLabelNode(node);
+    for (const node of labelCandidatesRef.current) {
+      if (denseSelection && (
+        !activeHighlightedIds.has(node.id)
+        || Math.abs((node.x ?? 0) * tk + tx) > width / backingScale.x / 2
+        || Math.abs((node.y ?? 0) * tk + ty) > height / backingScale.y / 2
+      )) continue;
+      addLabelNode(node);
+      if (labelNodes.length >= labelLimit) break;
+    }
 
-    const labelFontSize = 10.5 / tk;
     const labelHeight = 13 / tk;
-    ctx.font = `500 ${labelFontSize}px Inter, ui-sans-serif, system-ui, sans-serif`;
+    ctx.font = `500 ${10.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
     ctx.textAlign = "start";
     ctx.textBaseline = "middle";
     const previousLabelAlpha = ctx.globalAlpha;
@@ -1939,20 +1949,18 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       const label = rawLabel.length > 34 ? `${rawLabel.slice(0, 31)}…` : rawLabel;
       const x = (node.x ?? 0) + nodeRadius(node) + 4 / tk;
       const y = node.y ?? 0;
-      const width = ctx.measureText(label).width;
       const box = {
         left: x - 2 / tk,
-        right: x + width + 2 / tk,
+        right: x + ctx.measureText(label).width + 2 / tk,
         top: y - labelHeight / 2,
         bottom: y + labelHeight / 2,
       };
-      const collides = occupied.some((other) => !(
+      if (occupied.some((other) => !(
         box.right < other.left
         || box.left > other.right
         || box.bottom < other.top
         || box.top > other.bottom
-      ));
-      if (collides && node.id !== selectedNodeId) continue;
+      )) && node.id !== selectedNodeId) continue;
       occupied.push(box);
       ctx.strokeStyle = "rgba(3, 8, 14, 0.94)";
       ctx.lineWidth = 3 / tk;
@@ -2071,7 +2079,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         const dy = (node.y ?? 0) - scaledY;
         // Keep a usable 20px diameter hit target at overview scale and choose
         // the closest candidate when projected hit areas overlap.
-        const hitRadius = Math.max(nodeRadius(node) * HIGHLIGHT_SCALE, 10 / k);
+        const hitRadius = Math.max(nodeRadius(node) * 1.5, 10 / k);
         const distance = dx * dx + dy * dy;
         if (distance < hitRadius ** 2 && distance < closestDistance) {
           closest = node;
