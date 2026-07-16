@@ -693,11 +693,12 @@ Tester :
 
 Chaque variante doit être évaluée par tâche et non par préférence isolée.
 
-Le mode `Stellar` ferme une première partie sans créer un second produit : il
-réintroduit le signal degré → spectre, encode le type par forme, rend la
-direction du flux sélectionné et fait ressortir les hubs par chemins Canvas
-bornés. La profondeur d’appel 2D, la légende compacte et la comparaison aveugle
-restent ouvertes.
+Le mode `Stellar flow` ferme une partie supplémentaire sans créer un second
+produit : il réintroduit le signal degré → spectre, encode le type par forme,
+rend la direction du flux sélectionné, fait ressortir les hubs par chemins
+Canvas bornés et déroule jusqu’à quatre couches de relations dirigées visibles.
+La légende par type de relation, l’évaluation perceptuelle de cette profondeur
+et la comparaison aveugle restent ouvertes.
 
 #### P1-8 — Partiel : smoke HTTP/data automatisé, DOM CI restant
 
@@ -800,44 +801,53 @@ La conclusion démontrée à cette révision est la suivante :
 > performance et d’esthétique face à la V1 reste toutefois à prouver avec le
 > protocole same-graph cold/browser et une comparaison aveugle des tâches.
 
-## Addendum — politique Stellar sans second moteur
+## Addendum — Stellar flow sans second moteur
 
 La comparaison runtime avec la V1 a confirmé une différence précise : la V2
 est plus explicable et plus exacte, mais la vue de symboles n’exposait pas aussi
 vite les hubs et le sens du flux. La correction n’est pas un retour à Three.js
 ou à deux implémentations concurrentes.
 
-`Architecture` et `Stellar` partagent désormais strictement :
+`Architecture` et `Stellar flow` partagent désormais strictement :
 
 - le sous-graphe représentatif, ses métadonnées de fidélité et ses révisions ;
-- les objets d3, positions refroidies, forces, collisions et niveaux de zoom ;
+- les objets de nœuds d3, l’instance de simulation, le canvas et les niveaux de zoom ;
 - les filtres, sélections, voisinages exacts, recherche et panneaux ;
 - les cibles souris/tactiles/clavier et les annonces d’accessibilité.
 
-Seule la politique de peinture change. Au niveau symboles, `Stellar` utilise le
-degré exact entrant + sortant pour l’échelle spectrale de référence V1. Le type
-reste décodable sans couleur : cercle pour les appels/symboles usuels, losange
-pour classe/interface/type, carré pour fichier/dossier/module/section. Le
-statut reste un contour indépendant. Les hubs ont un seul halo additif groupé
-et les chevrons directionnels sont limités aux arêtes visibles du nœud
-sélectionné. Au niveau agrégé, la couleur représente un palier borné de trafic
-inter-scope de l’échantillon ; elle ne prétend pas être un degré exact du
-projet.
+La différence porte maintenant sur une politique de tâche, géométrie comprise.
+Sans sélection, `Stellar flow` place les hubs de degré exact au centre d’une
+constellation déterministe et conserve les communautés de répertoire sous forme
+de secteurs angulaires. Avec une sélection, le symbole devient l’origine, les
+distances dirigées visibles sont déroulées sur quatre couches au maximum —
+entrantes à gauche, sortantes à droite — et les symboles sans relation restent
+en contexte extérieur atténué. `Architecture` conserve ses ancres serveur et
+ses contours domaine/communauté.
+
+La peinture Stellar utilise toujours le degré exact entrant + sortant pour
+l’échelle spectrale de référence V1. Le type reste décodable sans couleur :
+cercle pour les appels/symboles usuels, losange pour classe/interface/type,
+carré pour fichier/dossier/module/section. Le statut reste un contour
+indépendant. Les hubs ont un halo additif groupé et les chevrons directionnels
+sont limités aux arêtes visibles du nœud sélectionné.
 
 Le choix est localement persisté et toute valeur absente/invalide revient à
-`Architecture`. Un changement de mode ne reconstruit pas et ne réchauffe pas la
-simulation. Les régressions vérifient cette invariance, l’identité du canvas,
-la persistance et le contrat couleur/forme. Le budget de 40 Kio gzip du chunk
-Graph reste un gate de build.
+`Architecture`. Un changement de vue ou de symbole focal réconfigure les forces
+de l’instance existante et la réchauffe une seule fois ; les sous-ensembles de
+filtre déjà connus ne la réchauffent pas. Les régressions vérifient les cibles
+déterministes, les couches entrantes/sortantes, l’identité du canvas, la
+persistance et le contrat couleur/forme. Le budget de 40 Kio gzip du chunk Graph
+reste un gate de build.
 
-Non-objectifs explicites : aucune profondeur d’appel fictive, aucune seconde
-topologie, aucun rendu 3D/WebGL, aucun shadow blur ou gradient par nœud, et
-aucune affirmation de supériorité de performance V1/V2 avant le protocole
-same-graph navigateur.
+Non-objectifs explicites : aucune profondeur 3D ou d’appel inventée — les
+couches proviennent uniquement des arêtes visibles —, aucune seconde topologie,
+aucun rendu 3D/WebGL, aucun shadow blur ou gradient par nœud, et aucune
+affirmation de supériorité de performance V1/V2 avant le protocole same-graph
+navigateur.
 
-Validation courante : typecheck Graph UI, **18 fichiers / 138 tests**, build
-frontend et `build:package` passent. Le chunk Graph applicatif mesure **34,78
-Kio gzip** sur un plafond de 40 Kio ; le JavaScript manifeste mesure **118,05
+Validation courante : typecheck Graph UI, **19 fichiers / 144 tests**, build
+frontend et `build:package` passent. Le chunk Graph applicatif mesure **37,28
+Kio gzip** sur un plafond de 40 Kio ; le JavaScript manifeste mesure **120,56
 Kio gzip** sur un plafond de 125 Kio.
 
 Le contrôle à 1 280 px a également supprimé l’action `Clear selection` dupliquée

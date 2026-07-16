@@ -206,7 +206,7 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     expect(actions).not.toHaveClass("xl:top-4", "xl:flex-row");
   });
 
-  it("persists the optional visual policy without replacing the graph canvas", () => {
+  it("persists the Stellar flow policy without replacing the graph canvas", () => {
     (useGraphData as any).mockReturnValue({
       data: mockData,
       loading: false,
@@ -218,15 +218,36 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     const canvas = first.container.querySelector("canvas");
     expect(canvas).toHaveAttribute("data-visual-mode", "architecture");
 
-    fireEvent.click(screen.getByRole("button", { name: "Use stellar graph style" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use Stellar flow view" }));
     expect(first.container.querySelector("canvas")).toBe(canvas);
     expect(canvas).toHaveAttribute("data-visual-mode", "stellar");
+    expect(canvas).toHaveAttribute("data-layout-policy", "hub-orbit");
+    expect(screen.getByRole("status", { name: "Stellar flow guide" })).toHaveTextContent("Hub orbit");
     expect(localStorage.getItem("cbm-graph-visual-mode")).toBe("stellar");
 
     first.unmount();
     const second = render(<GraphTab project="test-project" />);
     expect(second.container.querySelector("canvas")).toHaveAttribute("data-visual-mode", "stellar");
-    expect(screen.getByRole("button", { name: "Use architecture graph style" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Use Architecture map view" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("explains the selected incoming and outgoing Stellar frame", () => {
+    localStorage.setItem("cbm-graph-visual-mode", "stellar");
+    (useGraphData as any).mockReturnValue({
+      data: mockData,
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    const { container } = render(<GraphTab project="test-project" />);
+    fireEvent.click(screen.getByRole("button", { name: "Expand (root)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open foo" }));
+
+    expect(container.querySelector("canvas")).toHaveAttribute("data-layout-policy", "directed-focus");
+    expect(screen.getByRole("status", { name: "Stellar flow guide" })).toHaveTextContent("Incoming");
+    expect(screen.getByRole("status", { name: "Stellar flow guide" })).toHaveTextContent("foo");
+    expect(screen.getByRole("status", { name: "Stellar flow guide" })).toHaveTextContent("Outgoing");
   });
 
   it("dismisses the mobile navigation drawer after opening a node", async () => {

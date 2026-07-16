@@ -125,22 +125,28 @@ A React/Vite application (`graph-ui/`) served by the V2 backend:
 - **Control** — system information, logs, and owned index-job controls
 - **Real-time updates** via WebSocket where the active view requires them
 
-The Graph tab has one topology, one d3 simulation, and one interaction model.
-`Architecture` is the default rendering policy. The optional, locally persisted
-`Stellar` policy changes paint only: exact full-graph degree selects the V1
-reference spectral scale, node type selects a circle/diamond/square glyph,
-sampled cross-scope traffic colors aggregate beacons, and only the selected raw
-flow receives direction markers. Status remains an outer stroke. Invalid or
-unavailable local storage falls back to `Architecture`.
+The Graph tab has one topology, one d3 simulation object, and one interaction
+model. `Architecture` is the default task view and follows the server-authored
+domain/community anchors. The optional, locally persisted `Stellar flow` view
+installs deterministic targets into that same simulation. Without a focus,
+exact full-graph degree pulls hubs toward the center while directory
+communities retain angular sectors. Selecting a visible symbol places it at the
+origin, unfolds up to four visible incoming relation layers to the left and
+outgoing layers to the right, and retains unrelated symbols as dim outer
+context. Exact degree still selects the V1 reference spectral scale, node type
+selects a circle/diamond/square glyph, and only the selected flow receives
+direction markers. Status remains an outer stroke. Invalid or unavailable local
+storage falls back to `Architecture`.
 
-This policy boundary is deliberate: a style switch must not reconstruct or
-reheat the simulation, alter collision/hit radii, change sampling, reinterpret
-exact values, or fork filtering, navigation, accessibility, and detail logic.
-Hub bloom and traffic beacons are batched Canvas paths; there are no shadows,
-per-node gradients, Three.js scene, WebGL backend, or second layout engine. The
-Graph application chunk remains protected by its 40 KiB gzip budget; the stable
-`d3-*` force stack is cached separately and both remain covered by the global
-JavaScript budget.
+This boundary is deliberate: changing task view reuses every d3 node object,
+event listener, exactness contract, and canvas allocation. A view/focus change
+receives one bounded simulation reheat; known filter subsets and restorations
+remain settled. Sampling, exact values, filtering, navigation, accessibility,
+and detail logic are not forked. Hub bloom, orbit guides, and the focused flow
+axis are batched Canvas paths; there are no shadows, per-node gradients,
+Three.js scene, WebGL backend, or second layout engine. The Graph application
+chunk remains protected by its 40 KiB gzip budget; the stable `d3-*` force stack
+is cached separately and both remain covered by the global JavaScript budget.
 
 The bounded overview is followed by a revision-bound exact drill-down rather
 than a second renderer. `GET /api/scope` keyset-pages a domain or directory

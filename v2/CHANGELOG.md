@@ -22,22 +22,26 @@
 - Kept transient exact-neighborhood failures visible and retryable; only a
   current HTTP 404 can invalidate an off-overview selection.
 
-### Single-renderer visual policies
+### Single-renderer task views
 
-- Added an optional, locally persisted `Stellar` policy beside the default
-  `Architecture` policy. Both use the same bounded graph, d3 simulation,
-  selection, filters, keyboard model, and exact detail contracts; switching
-  policy only redraws the settled canvas.
+- Added an optional, locally persisted `Stellar flow` task view beside the
+  default `Architecture` map. Both use the same bounded graph, canvas, d3
+  simulation object, selection, filters, keyboard model, and exact detail
+  contracts.
 - Restored the useful V1 degree-at-a-glance spectral scale using exact V2
   in/out degree, while preserving node type without color dependence through
   circle, diamond, and square glyphs. Status continues to use an outer stroke.
-- Added batched spectral traffic beacons at aggregate zoom, one batched hub
-  bloom at symbol zoom, and bounded direction chevrons only for a selected raw
-  flow. No Three.js/WebGL dependency, shadow filter, per-node gradient, second
-  layout, or simulation reheat was introduced.
-- Added regressions for the spectral/glyph contract, style persistence, canvas
-  identity, and simulation non-reheat; the existing Graph chunk gzip budget
-  remains enforced.
+- Added a deterministic exact-degree hub orbit. Selecting a symbol unfolds up
+  to four visible incoming/outgoing layers, keeps unrelated symbols as dim
+  outer context, and renders bounded direction chevrons only for the selected
+  flow.
+- A view/focus change reconfigures and reheats the existing simulation exactly
+  once. Known filter subsets remain settled; no Three.js/WebGL dependency,
+  shadow filter, per-node gradient, second renderer, canvas, or node-object
+  graph is introduced.
+- Added regressions for deterministic flow targets, incoming/outgoing depth,
+  spectral/glyph semantics, persistence, canvas identity, bounded reheating,
+  and the existing Graph chunk gzip budget.
 - Removed the redundant selected-scope action from the top toolbar after a
   1,280 px runtime check exposed a HUD overlap. Selection clearing remains in
   the side panel and the always-visible `Architecture` breadcrumb. The action

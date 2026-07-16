@@ -38,9 +38,9 @@ export function stellarNodeDegree(node: Pick<GraphNode, "in_degree" | "out_degre
 }
 
 /**
- * V1's useful degree-at-a-glance signal, retained as a rendering policy only.
+ * V1's useful degree-at-a-glance signal, retained inside the V2 task view.
  * The thresholds match the reference spectral scale, while topology,
- * simulation, selection, status and exactness remain V2 contracts.
+ * selection, status and exactness remain V2 contracts.
  */
 export function stellarNodeColor(node: Pick<GraphNode, "in_degree" | "out_degree" | "size">): string {
   const degree = stellarNodeDegree(node);

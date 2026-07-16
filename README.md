@@ -288,22 +288,27 @@ The `## HUMAN NOTES` section is **never** overwritten by V2. Edit it freely in O
 ## Graph UI
 
 The V2 graph UI replaces V1's separate 3D Three.js scene with one bounded 2D
-d3-force canvas and two rendering policies over the same graph:
+d3-force canvas and two task views over the same graph:
 
 - **Dashboard tab** (default): KPIs, graph freshness, smart recommendations
 - **Graph tab**: 2D force-directed canvas with filters, pan/zoom, node detail panel
   - **Architecture** (default): type colors and a quiet domain/community hierarchy
-  - **Stellar** (optional, persisted locally): exact-degree spectrum, semantic
-    glyphs, bounded hub bloom, and selected-flow direction markers
+  - **Stellar flow** (optional, persisted locally): exact-degree hubs form a
+    deterministic constellation; selecting a symbol unfolds up to four visible
+    incoming/outgoing relation layers around it, with unrelated nodes retained
+    as dim outer context
   - **Exact scope** (on demand): revision-bound domain/directory pages replace
     the representative frame inside the same canvas; raw internal topology is
     shown immediately and dense scopes expose an explicit Load more action
 - **Projects tab**: Project list with node/edge counts and health status
 - **Control tab**: System info
 
-Both Graph styles share the same layout, simulation, sampling/exactness labels,
-filters, selection, keyboard model, and detail APIs. Switching style redraws the
-settled canvas; it does not rebuild or reheat the graph.
+Both Graph views share one topology, canvas, d3 simulation object,
+sampling/exactness labels, filters, selection, keyboard model, and detail APIs.
+`Architecture` follows server-authored domain/community anchors. `Stellar flow`
+reconfigures that same simulation with task-specific targets and one bounded
+reheat when the view or focused symbol changes; known filter subsets do not
+reheat and no renderer, canvas, or node object is rebuilt.
 
 ```bash
 # From v2/ in a source checkout

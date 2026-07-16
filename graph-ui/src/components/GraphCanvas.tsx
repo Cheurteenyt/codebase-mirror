@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useId, useMemo } from "react";
 import { forceSimulation, forceManyBody, forceLink, forceCollide, forceX, forceY } from "d3-force";
-import type { GraphData, GraphNode } from "../lib/types";
+import type { GraphData, GraphEdge, GraphNode } from "../lib/types";
 import { colorForLabel, colorForStatus } from "../lib/colors";
 import {
   stellarNodeColor,
@@ -13,6 +13,10 @@ import {
   stellarNodeGlyph,
   type GraphVisualMode,
 } from "../lib/graph-visual-mode";
+import {
+  computeStellarFlowLayout,
+  type StellarFlowTarget,
+} from "../lib/graph-stellar-layout";
 import {
   GRAPH_TOOLTIP_POSITION_EVENT,
   type GraphTooltipPositionDetail,
@@ -64,6 +68,8 @@ interface SimNode extends GraphNode {
   fy?: number | null;
   anchorX: number;
   anchorY: number;
+  architectureX: number;
+  architectureY: number;
   rank: number;
 }
 
@@ -84,6 +90,13 @@ const LOCAL_LINK_DISTANCE = 30;
 const CHARGE_STRENGTH = -38;
 const CHARGE_DISTANCE_MAX = 220;
 const ANCHOR_STRENGTH = 0.24;
+const STELLAR_ANCHOR_STRENGTH = 0.38;
+const STELLAR_CONTEXT_ANCHOR_STRENGTH = 0.08;
+const STELLAR_CHARGE_STRENGTH = -58;
+const STELLAR_CHARGE_DISTANCE_MAX = 320;
+const STELLAR_LINK_DISTANCE = 54;
+const STELLAR_FOCUS_LINK_DISTANCE = 112;
+const STELLAR_LAYOUT_ALPHA = 0.52;
 const SIMULATION_ALPHA_DECAY = 0.045;
 const SETTLED_FIT_DELAY_MS = 700;
 const TOUCH_TAP_SLOP_PX = 8;
@@ -98,7 +111,6 @@ const MAX_KEYBOARD_DOMAINS = 32;
 const MAX_KEYBOARD_COMMUNITIES = 64;
 const MAX_KEYBOARD_NODES = 64;
 const MAX_COMMUNITY_BACKBONE_BUNDLES = 16;
-const STELLAR_TRAFFIC_RGB = ["255,96,80", "255,192,112", "255,240,192", "128,160,255"] as const;
 
 function fadeBetween(value: number, start: number, end: number): number {
   return Math.max(0, Math.min(1, (value - start) / (end - start)));
@@ -774,6 +786,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   // per frame for a 2000-node graph). The map only changes when nodesRef
   // changes, so we rebuild it only on data updates.
   const nodeMapRef = useRef<Map<number, SimNode>>(new Map());
+  const stellarFlowTargetsRef = useRef<Map<number, StellarFlowTarget>>(new Map());
   const clustersRef = useRef<LayoutCluster[]>([]);
   const clusterMapRef = useRef<Map<number, LayoutCluster>>(new Map());
   const domainsRef = useRef<LayoutDomain[]>([]);
@@ -809,7 +822,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const activeRef = useRef(active);
   const previousActiveRef = useRef(active);
   const previousDetailModeRef = useRef(detailMode);
+  const visualModeRef = useRef(visualMode);
+  const previousFlowFrameRef = useRef({ visualMode: "architecture" as GraphVisualMode, selectedNodeId: null as number | null });
+  const dataRequiresLayoutReheatRef = useRef(false);
   activeRef.current = active;
+  visualModeRef.current = visualMode;
 
   // Exact search can select a node that is intentionally absent from the
   // representative canvas, and filters can remove a previously highlighted
@@ -884,7 +901,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
-    if (domainsRef.current.length) {
+    if (visualModeRef.current !== "stellar" && domainsRef.current.length) {
       for (const domain of domainsRef.current) {
         minX = Math.min(minX, domain.x - domain.radius);
         minY = Math.min(minY, domain.y - domain.radius);
@@ -1023,6 +1040,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   }, [animateToTransform, cancelPendingAutoFit]);
 
   const cycleKeyboardTarget = useCallback((kind: KeyboardTargetKind, direction: 1 | -1) => {
+    if (visualModeRef.current === "stellar" && kind !== "node") {
+      if (keyboardStatusRef.current) {
+        keyboardStatusRef.current.textContent = "Stellar flow browses symbols. Switch to Architecture to browse domains and communities.";
+      }
+      return;
+    }
     const targets = keyboardTargetsRef.current[kind];
     if (targets.length === 0) {
       if (keyboardStatusRef.current) {
@@ -1072,6 +1095,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       nodesRef.current = [];
       edgesRef.current = [];
       nodeMapRef.current = new Map();
+      stellarFlowTargetsRef.current = new Map();
       clustersRef.current = [];
       clusterMapRef.current = new Map();
       domainsRef.current = [];
@@ -1093,6 +1117,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       if (keyboardStatusRef.current) keyboardStatusRef.current.textContent = "";
       currentNodeIdsRef.current = new Set();
       currentEdgeKeysRef.current = new Set();
+      dataRequiresLayoutReheatRef.current = false;
       drawRef.current?.();
       return;
     }
@@ -1125,6 +1150,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const topologyAlreadyKnown = data.topology_revision != null
       ? sameServerTopology && incomingSubsetWasSeen
       : incomingSubsetWasSeen;
+    dataRequiresLayoutReheatRef.current = !topologyAlreadyKnown;
     topologyRevisionRef.current = data.topology_revision;
 
     // Reuse the cached physics object for every known node. Update semantic
@@ -1132,7 +1158,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const nodes: SimNode[] = data.nodes.map((n) => {
       const cached = nodeStateCacheRef.current.get(n.id);
       if (!cached) {
-        const created = { ...n, anchorX: n.x, anchorY: n.y } as SimNode;
+        const created = {
+          ...n,
+          anchorX: n.x,
+          anchorY: n.y,
+          architectureX: n.x,
+          architectureY: n.y,
+        } as SimNode;
         nodeStateCacheRef.current.set(n.id, created);
         return created;
       }
@@ -1144,7 +1176,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         fx: cached.fx,
         fy: cached.fy,
       };
-      Object.assign(cached, n, { anchorX: n.x, anchorY: n.y }, physics);
+      Object.assign(cached, n, {
+        architectureX: n.x,
+        architectureY: n.y,
+        ...(visualModeRef.current === "architecture" ? { anchorX: n.x, anchorY: n.y } : {}),
+      }, physics);
       return cached;
     });
     const edges: SimEdge[] = data.edges.map((e) => ({ ...e }));
@@ -1298,7 +1334,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         // A server revision with the same IDs still reinitializes forceX/Y,
         // whose target arrays are cached by d3 during initialize().
         simRef.current.nodes(nodes);
-        (simRef.current.force("link") as any).links(localEdges);
+        (simRef.current.force("link") as any).links(
+          visualModeRef.current === "stellar" ? edges : localEdges,
+        );
       }
       if (!topologyAlreadyKnown) {
         // Only genuinely new nodes/edges need a gentle topology re-layout.
@@ -1336,20 +1374,22 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         // d3's gentle local refinement inside those exact community circles so
         // the rendered node, its clickable scope, and the breadcrumb cannot
         // disagree after settling or a drag/release.
-        for (const node of nodesRef.current) {
-          if (node.cluster_id == null) continue;
-          const cluster = clusterMapRef.current.get(node.cluster_id);
-          if (!cluster) continue;
-          const dx = (node.x ?? cluster.x) - cluster.x;
-          const dy = (node.y ?? cluster.y) - cluster.y;
-          const distance = Math.hypot(dx, dy);
-          const maxDistance = Math.max(0, cluster.radius - nodeRadius(node) - 4);
-          if (distance <= maxDistance || distance === 0) continue;
-          const scale = maxDistance / distance;
-          node.x = cluster.x + dx * scale;
-          node.y = cluster.y + dy * scale;
-          node.vx = 0;
-          node.vy = 0;
+        if (visualModeRef.current !== "stellar") {
+          for (const node of nodesRef.current) {
+            if (node.cluster_id == null) continue;
+            const cluster = clusterMapRef.current.get(node.cluster_id);
+            if (!cluster) continue;
+            const dx = (node.x ?? cluster.x) - cluster.x;
+            const dy = (node.y ?? cluster.y) - cluster.y;
+            const distance = Math.hypot(dx, dy);
+            const maxDistance = Math.max(0, cluster.radius - nodeRadius(node) - 4);
+            if (distance <= maxDistance || distance === 0) continue;
+            const scale = maxDistance / distance;
+            node.x = cluster.x + dx * scale;
+            node.y = cluster.y + dy * scale;
+            node.vx = 0;
+            node.vy = 0;
+          }
         }
         if (rafIdRef.current != null) return;
         rafIdRef.current = requestAnimationFrame(() => {
@@ -1371,6 +1411,130 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // handled by the unmount-only effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, scheduleInitialFit, scheduleSettledFit]);
+
+  // Stellar is a task layout, not a second renderer. Reconfigure the existing
+  // simulation with deterministic constellation/flow targets while preserving
+  // every d3 node object, interaction listener, and canvas allocation. A mode
+  // or focus change is a real semantic-frame transition and receives one
+  // bounded reheat; known filter subsets keep their settled positions.
+  useEffect(() => {
+    const sim = simRef.current;
+    const nodes = nodesRef.current;
+    if (!sim || nodes.length === 0) return;
+
+    const previousFrame = previousFlowFrameRef.current;
+    const modeChanged = previousFrame.visualMode !== visualMode;
+    const focusChanged = visualMode === "stellar"
+      && previousFrame.selectedNodeId !== selectedNodeId;
+    const semanticFrameChanged = modeChanged || focusChanged;
+    previousFlowFrameRef.current = { visualMode, selectedNodeId };
+
+    if (visualMode === "stellar") {
+      const targets = computeStellarFlowLayout(
+        nodes,
+        data.edges as readonly GraphEdge[],
+        selectedNodeId,
+      );
+      stellarFlowTargetsRef.current = targets;
+      for (const node of nodes) {
+        const target = targets.get(node.id);
+        if (!target) continue;
+        node.anchorX = target.x;
+        node.anchorY = target.y;
+      }
+      const touchesFocus = (edge: SimEdge) => selectedNodeId != null && (
+        simEdgeNodeId(edge.source) === selectedNodeId
+        || simEdgeNodeId(edge.target) === selectedNodeId
+      );
+      sim
+        .force(
+          "charge",
+          forceManyBody<SimNode>()
+            .strength(STELLAR_CHARGE_STRENGTH)
+            .distanceMax(STELLAR_CHARGE_DISTANCE_MAX),
+        )
+        .force(
+          "link",
+          forceLink<SimNode, SimEdge>(edgesRef.current)
+            .id((node) => node.id)
+            .distance((edge) => touchesFocus(edge) ? STELLAR_FOCUS_LINK_DISTANCE : STELLAR_LINK_DISTANCE)
+            .strength((edge) => touchesFocus(edge) ? 0.34 : 0.075),
+        )
+        .force(
+          "x",
+          forceX<SimNode>((node) => node.anchorX).strength((node) => (
+            targets.get(node.id)?.role === "context"
+              ? STELLAR_CONTEXT_ANCHOR_STRENGTH
+              : STELLAR_ANCHOR_STRENGTH
+          )),
+        )
+        .force(
+          "y",
+          forceY<SimNode>((node) => node.anchorY).strength((node) => (
+            targets.get(node.id)?.role === "context"
+              ? STELLAR_CONTEXT_ANCHOR_STRENGTH
+              : STELLAR_ANCHOR_STRENGTH
+          )),
+        )
+        .force("collide", forceCollide<SimNode>((node) => nodeRadius(node) + 7));
+    } else {
+      stellarFlowTargetsRef.current = new Map();
+      for (const node of nodes) {
+        node.anchorX = node.architectureX;
+        node.anchorY = node.architectureY;
+      }
+      sim
+        .force(
+          "charge",
+          forceManyBody<SimNode>().strength(CHARGE_STRENGTH).distanceMax(CHARGE_DISTANCE_MAX),
+        )
+        .force(
+          "link",
+          forceLink<SimNode, SimEdge>(localEdgesRef.current)
+            .id((node) => node.id)
+            .distance(LOCAL_LINK_DISTANCE)
+            .strength(0.3),
+        )
+        .force("x", forceX<SimNode>((node) => node.anchorX).strength(ANCHOR_STRENGTH))
+        .force("y", forceY<SimNode>((node) => node.anchorY).strength(ANCHOR_STRENGTH))
+        .force("collide", forceCollide<SimNode>((node) => nodeRadius(node) + 4));
+    }
+
+    if (semanticFrameChanged) {
+      cancelPendingAutoFit();
+      cancelViewAnimation();
+      hasUserInteractedRef.current = false;
+      hasAutoFitRef.current = false;
+      sim.alpha(STELLAR_LAYOUT_ALPHA);
+      if (activeRef.current) sim.restart();
+      if (visualMode === "stellar" && selectedNodeId != null) {
+        animateToTransform({
+          x: 0,
+          y: 0,
+          k: Math.max(0.72, Math.min(1.05, transformRef.current.k)),
+        });
+      } else {
+        fitVisibleGraph();
+        scheduleSettledFit();
+      }
+    } else if (dataRequiresLayoutReheatRef.current && visualMode === "stellar") {
+      // The data effect already restarted genuinely new topology. Raise the
+      // remaining heat for the newly installed flow forces without a second
+      // restart call.
+      sim.alpha(0.42);
+    }
+    dataRequiresLayoutReheatRef.current = false;
+    drawRef.current?.();
+  }, [
+    animateToTransform,
+    cancelPendingAutoFit,
+    cancelViewAnimation,
+    data,
+    fitVisibleGraph,
+    scheduleSettledFit,
+    selectedNodeId,
+    visualMode,
+  ]);
 
   // Overview and exact scopes intentionally reuse one canvas and simulation,
   // but they do not share a coordinate frame. Preserve pan/zoom across filters
@@ -1473,13 +1637,18 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // radii, and labels beyond the existing mid-LOD attention budget.
     const denseSelection = activeHighlightedIds && activeHighlightedIds.size > MID_LABEL_LIMIT;
     const occupied: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+    const stellarFlow = visualMode === "stellar";
+    const stellarFocused = stellarFlow
+      && selectedNodeId != null
+      && stellarFlowTargetsRef.current.get(selectedNodeId)?.role === "focus";
 
     // Directory communities are precomputed server-side and require only two
     // batched paths here, regardless of the node count. They make overview
     // structure visible before individual labels are readable.
     const projectedNodeSpacing = layoutNodeSpacingRef.current * tk;
-    const domainOverview = projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING;
-    const rawTopology = detailMode
+    const domainOverview = !stellarFlow
+      && projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING;
+    const rawTopology = stellarFlow || detailMode
       || projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING;
     const [
       overviewDomainBundleOpacity,
@@ -1487,20 +1656,23 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       overviewCommunityReveal,
       overviewRawTopologyReveal,
     ] = computeSemanticZoomLayers(projectedNodeSpacing);
-    const domainBundleOpacity = detailMode ? 0 : overviewDomainBundleOpacity;
-    const communityBundleOpacity = detailMode ? 0 : overviewCommunityBundleOpacity;
-    const communityReveal = detailMode ? 0 : overviewCommunityReveal;
-    const rawTopologyReveal = detailMode ? 1 : overviewRawTopologyReveal;
+    const domainBundleOpacity = detailMode || stellarFlow ? 0 : overviewDomainBundleOpacity;
+    const communityBundleOpacity = detailMode || stellarFlow ? 0 : overviewCommunityBundleOpacity;
+    const communityReveal = detailMode || stellarFlow ? 0 : overviewCommunityReveal;
+    const rawTopologyReveal = detailMode || stellarFlow ? 1 : overviewRawTopologyReveal;
     // Raw topology enters only after the community backbone has fully left.
     // Nodes lead their lower-contrast edges so intermediate frames disclose
     // readable symbols rather than a hairball.
-    const rawNodeOpacity = rawTopologyReveal
-      * (0.78 + fadeBetween(projectedNodeSpacing, 22, 26) * 0.22);
-    const rawDetailReveal = fadeBetween(projectedNodeSpacing, 22, 30);
-    const localEdgeOpacity = rawTopologyReveal
-      * (0.18 + fadeBetween(projectedNodeSpacing, 22, 32) * 0.42);
-    const crossEdgeOpacity = rawTopologyReveal
-      * fadeBetween(projectedNodeSpacing, 24, 36) * 0.45;
+    const rawNodeOpacity = stellarFlow
+      ? 0.96
+      : rawTopologyReveal * (0.78 + fadeBetween(projectedNodeSpacing, 22, 26) * 0.22);
+    const rawDetailReveal = stellarFlow ? 1 : fadeBetween(projectedNodeSpacing, 22, 30);
+    const localEdgeOpacity = stellarFlow
+      ? (stellarFocused ? 0.075 : 0.19)
+      : rawTopologyReveal * (0.18 + fadeBetween(projectedNodeSpacing, 22, 32) * 0.42);
+    const crossEdgeOpacity = stellarFlow
+      ? (stellarFocused ? 0.045 : 0.13)
+      : rawTopologyReveal * fadeBetween(projectedNodeSpacing, 24, 36) * 0.45;
     const hoveredScope = hoveredScopeRef.current;
     const keyboardFocus = keyboardFocusRef.current;
     const activeDomainId = hoveredScope?.kind === "domain"
@@ -1514,7 +1686,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ? keyboardFocus.id
         : undefined;
 
-    if (domainsRef.current.length > 0) {
+    if (!stellarFlow && domainsRef.current.length > 0) {
       // A small fixed palette makes top-level architecture areas immediately
       // distinguishable. Domains are still batched by palette slot, keeping
       // the number of canvas state changes constant even for large monorepos.
@@ -1537,7 +1709,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    if (domainOverview && domainTrafficTiersRef.current.size > 0) {
+    if (!stellarFlow && domainOverview && domainTrafficTiersRef.current.size > 0) {
       // Domain area continues to encode code volume. A second, batched outline
       // adds the missing activity dimension without labels, gradients, or a
       // per-domain drawing state: only real cross-domain traffic can light it.
@@ -1552,14 +1724,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           hasTraffic = true;
         }
         if (!hasTraffic) continue;
-        const trafficRgb = visualMode === "stellar" ? STELLAR_TRAFFIC_RGB[tier - 1] : "103,232,249";
+        const trafficRgb = "103,232,249";
         ctx.strokeStyle = `rgba(${trafficRgb},${0.035 + tier * 0.045})`;
         ctx.lineWidth = (0.55 + tier * 0.4) / tk;
         ctx.stroke();
       }
     }
 
-    if (clustersRef.current.length) {
+    if (!stellarFlow && clustersRef.current.length) {
       // Community discs replace thousands of unreadable node dots in the two
       // architecture tiers. Their size and position already encode the useful
       // information; domain color preserves nesting without adding a legend.
@@ -1584,7 +1756,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    if (!rawTopology && clusterTrafficRef.current.size > 0) {
+    if (!stellarFlow && !rawTopology && clusterTrafficRef.current.size > 0) {
       // Two batched inner discs per occupied traffic tier create depth without
       // gradients, shadows, or per-community canvas state changes. This is a
       // semantic light source: quiet communities remain visually quiet while
@@ -1609,7 +1781,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           hasTraffic = true;
         }
         if (!hasTraffic) continue;
-        const trafficRgb = visualMode === "stellar" ? STELLAR_TRAFFIC_RGB[tier - 1] : "103,232,249";
+        const trafficRgb = "103,232,249";
         ctx.fillStyle = `rgba(${trafficRgb},${(0.008 + tier * 0.01) * overviewOpacity})`;
         ctx.fill();
 
@@ -1623,9 +1795,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           ctx.moveTo(cluster.x + coreRadius, cluster.y);
           ctx.arc(cluster.x, cluster.y, coreRadius, 0, Math.PI * 2);
         }
-        ctx.fillStyle = visualMode === "stellar"
-          ? `rgba(${trafficRgb},${(0.09 + tier * 0.045) * overviewOpacity})`
-          : `rgba(207,250,254,${(0.08 + tier * 0.04) * overviewOpacity})`;
+        ctx.fillStyle = `rgba(207,250,254,${(0.08 + tier * 0.04) * overviewOpacity})`;
         ctx.fill();
       }
       ctx.globalCompositeOperation = previousCompositeOperation;
@@ -1645,7 +1815,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
             hasTraffic = true;
           }
           if (!hasTraffic) continue;
-          const trafficRgb = visualMode === "stellar" ? STELLAR_TRAFFIC_RGB[tier - 1] : "103,232,249";
+          const trafficRgb = "103,232,249";
           ctx.strokeStyle = `rgba(${trafficRgb},${0.08 + tier * 0.055})`;
           ctx.lineWidth = (0.7 + tier * 0.48) / tk;
           ctx.stroke();
@@ -1653,7 +1823,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    if (hoveredScope) {
+    if (!stellarFlow && hoveredScope) {
       const hoveredCircle = hoveredScope.kind === "domain"
         ? domainsRef.current.find((domain) => domain.id === hoveredScope.id)
         : clustersRef.current.find((cluster) => cluster.id === hoveredScope.id);
@@ -1674,7 +1844,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    if (keyboardFocus && keyboardFocus.kind !== "node") {
+    if (!stellarFlow && keyboardFocus && keyboardFocus.kind !== "node") {
       const focusedCircle = keyboardFocus.kind === "domain"
         ? domainsRef.current.find((domain) => domain.id === keyboardFocus.id)
         : clustersRef.current.find((cluster) => cluster.id === keyboardFocus.id);
@@ -1683,6 +1853,54 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ctx.arc(focusedCircle.x, focusedCircle.y, focusedCircle.radius + 3 / tk, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(236, 254, 255, 0.98)";
         ctx.lineWidth = 2.6 / tk;
+        ctx.stroke();
+      }
+    }
+
+    if (stellarFlow) {
+      // The guide is semantic, not decorative: without a focus, concentric
+      // bands communicate degree-to-center. With a focus, the single axis
+      // makes incoming/selected/outgoing placement readable before labels.
+      const targets = stellarFlowTargetsRef.current;
+      if (stellarFocused) {
+        let minX = 0;
+        let maxX = 0;
+        let minY = 0;
+        for (const target of targets.values()) {
+          if (target.role === "context") continue;
+          minX = Math.min(minX, target.x);
+          maxX = Math.max(maxX, target.x);
+          minY = Math.min(minY, target.y);
+        }
+        const labelY = minY - 42 / tk;
+        ctx.beginPath();
+        ctx.moveTo(minX - 24 / tk, 0);
+        ctx.lineTo(maxX + 24 / tk, 0);
+        ctx.strokeStyle = "rgba(165, 180, 252, 0.15)";
+        ctx.lineWidth = 0.8 / tk;
+        ctx.stroke();
+        ctx.font = `650 ${9.5 / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "rgba(165, 180, 252, 0.68)";
+        if (minX < 0) ctx.fillText("INCOMING", minX, labelY);
+        ctx.fillStyle = "rgba(236, 254, 255, 0.82)";
+        ctx.fillText("FOCUS", 0, labelY);
+        ctx.fillStyle = "rgba(125, 211, 252, 0.68)";
+        if (maxX > 0) ctx.fillText("OUTGOING", maxX, labelY);
+      } else if (targets.size > 0) {
+        let maxRadius = 0;
+        for (const target of targets.values()) {
+          maxRadius = Math.max(maxRadius, Math.hypot(target.x, target.y));
+        }
+        ctx.beginPath();
+        for (const fraction of [0.28, 0.56, 0.84]) {
+          const radius = maxRadius * fraction;
+          ctx.moveTo(radius, 0);
+          ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        }
+        ctx.strokeStyle = "rgba(129, 140, 248, 0.055)";
+        ctx.lineWidth = 0.75 / tk;
         ctx.stroke();
       }
     }
@@ -1881,10 +2099,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       const isHighlighted = activeHighlightedIds?.has(node.id);
       const individualHighlight = (isHighlighted && !denseSelection) || node.id === selectedNodeId;
       const isFocused = keyboardFocus?.kind === "node" && keyboardFocus.id === node.id;
-      const priorityReveal = rawDetailReveal
-        + (1 - rawDetailReveal) * (0.12 + 0.88 * node.rank);
+      const flowTarget = stellarFlowTargetsRef.current.get(node.id);
+      const priorityReveal = stellarFlow
+        ? 0.28 + 0.72 * node.rank
+        : rawDetailReveal + (1 - rawDetailReveal) * (0.12 + 0.88 * node.rank);
       const nodeOpacity = rawNodeOpacity
-        * (isHighlighted || isFocused || node.id === selectedNodeId ? 1 : priorityReveal);
+        * (isHighlighted || isFocused || node.id === selectedNodeId ? 1 : priorityReveal)
+        * (stellarFocused && flowTarget?.role === "context" ? 0.2 : 1);
       // Keep overview dots legible without inflating simulation collision
       // radii. The floor is expressed in screen pixels, so it disappears as
       // soon as semantic zoom makes the real node size readable.
@@ -1898,7 +2119,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.beginPath();
       traceNodePath(ctx, node, x, y, r, visualMode);
       ctx.fillStyle = color;
-      ctx.globalAlpha = nodeOpacity * (activeHighlightedIds && !isHighlighted ? 0.3 : 1);
+      const selectionAttenuation = activeHighlightedIds && !isHighlighted && node.id !== selectedNodeId
+        ? stellarFlow
+          ? flowTarget?.role === "context" ? 0.2 : 0.58
+          : 0.3
+        : 1;
+      ctx.globalAlpha = nodeOpacity * selectionAttenuation;
       ctx.fill();
       ctx.globalAlpha = 1;
 
@@ -1936,7 +2162,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // Labels are painted after edges and nodes so no topology line can cut
     // through them. Domain names remain as dimmed anchors while community and
     // node labels progressively inherit the available attention budget.
-    if (domainsRef.current.length) {
+    if (!stellarFlow && domainsRef.current.length) {
       const previousAlpha = ctx.globalAlpha;
       ctx.globalAlpha = previousAlpha * (1 - communityReveal * 0.55);
       ctx.textAlign = "center";
@@ -1989,7 +2215,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.globalAlpha = previousAlpha;
     }
 
-    if (communityReveal && clustersRef.current.length) {
+    if (!stellarFlow && communityReveal && clustersRef.current.length) {
       const previousAlpha = ctx.globalAlpha;
       ctx.globalAlpha = previousAlpha * communityReveal * (1 - rawTopologyReveal * 0.55);
       const domainById = new Map(domainsRef.current.map((domain) => [domain.id, domain]));
@@ -2050,12 +2276,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     // Zoom-dependent labels with collision avoidance. The selected node is
     // always attempted first, followed by its neighborhood and ranked hubs.
-    const labelLimit = rawTopologyReveal
-      && (denseSelection
-        ? 12
-        : projectedNodeSpacing < 32
-          ? MID_LABEL_LIMIT
-          : NEAR_LABEL_LIMIT);
+    const labelLimit = stellarFlow
+      ? (stellarFocused ? 32 : 18)
+      : rawTopologyReveal
+        && (denseSelection
+          ? 12
+          : projectedNodeSpacing < 32
+            ? MID_LABEL_LIMIT
+            : NEAR_LABEL_LIMIT);
     const labelNodes: SimNode[] = [];
     const labelKeys = new Set<number | string>();
     // The exact selected node remains first in the raw-topology label budget.
@@ -2069,6 +2297,21 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     addLabelNode(rawTopologyReveal && selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined);
     if (activeHighlightedIds && !denseSelection) {
       for (const id of activeHighlightedIds) addLabelNode(nodeMap.get(id));
+    }
+    if (stellarFocused) {
+      const flowNodes = nodesRef.current
+        .filter((node) => {
+          const role = stellarFlowTargetsRef.current.get(node.id)?.role;
+          return role != null && role !== "context" && role !== "focus";
+        })
+        .sort((left, right) => {
+          const leftTarget = stellarFlowTargetsRef.current.get(left.id)!;
+          const rightTarget = stellarFlowTargetsRef.current.get(right.id)!;
+          return (leftTarget.depth ?? 0) - (rightTarget.depth ?? 0)
+            || right.rank - left.rank
+            || left.id - right.id;
+        });
+      for (const node of flowNodes) addLabelNode(node);
     }
     for (const node of labelCandidatesRef.current) {
       if (denseSelection && (
@@ -2232,7 +2475,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     };
 
     const findScopeAt = (mx: number, my: number): Omit<GraphScopeSelection, "nodeIds"> | null => {
-      if (!onScopeSelectRef.current) return null;
+      if (!onScopeSelectRef.current || visualModeRef.current === "stellar") return null;
       const k = transformRef.current.k;
       const projectedNodeSpacing = layoutNodeSpacingRef.current * k;
       if (projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING) return null;
@@ -2720,6 +2963,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       <canvas
         ref={canvasRef}
         data-visual-mode={visualMode}
+        data-layout-policy={visualMode === "stellar"
+          ? selectedNodeId == null ? "hub-orbit" : "directed-focus"
+          : "architecture-map"}
         className="w-full h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 focus-visible:ring-inset"
         style={{
           background: visualMode === "stellar"
@@ -2730,7 +2976,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         }}
         role="application"
         aria-roledescription="interactive code graph"
-        aria-label={`Code graph: ${data?.nodes.length ?? 0} nodes and ${data?.edges.length ?? 0} edges`}
+        aria-label={`${visualMode === "stellar" ? "Stellar flow" : "Architecture map"}: ${data?.nodes.length ?? 0} nodes and ${data?.edges.length ?? 0} edges`}
         aria-describedby={keyboardInstructionsId}
         aria-keyshortcuts="D Shift+D C Shift+C N Shift+N Enter Space"
         tabIndex={0}
@@ -2782,9 +3028,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         }}
       />
       <span id={keyboardInstructionsId} className="sr-only">
-        Interactive graph. Press D or Shift+D to browse up to 32 visible domains,
-        C or Shift+C for up to 64 communities, and N or Shift+N for up to 64
-        representative nodes. Press Enter or Space to activate the announced target.
+        {visualMode === "stellar"
+          ? "Stellar flow graph. Press N or Shift+N to browse up to 64 representative nodes. Select a node to place incoming relations on the left and outgoing relations on the right. "
+          : "Architecture map. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}
+        Press Enter or Space to activate the announced target.
         Arrow keys pan, plus and minus zoom, zero fits the graph, and Escape goes up.
       </span>
       <span

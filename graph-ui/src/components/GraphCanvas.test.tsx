@@ -120,7 +120,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(stellarNodeGlyph("File")).toBe("square");
   });
 
-  it("switches visual policy without rebuilding or reheating the simulation", async () => {
+  it("switches to Stellar flow by reheating the existing simulation exactly once", async () => {
     const { forceSimulation } = await import("d3-force");
     const noop = () => {};
     const { container, rerender } = render(
@@ -150,8 +150,49 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
 
     expect(forceSimulation).toHaveBeenCalledTimes(1);
     expect(sim.alpha).not.toHaveBeenCalledWith(0.3);
-    expect(sim.restart).not.toHaveBeenCalled();
+    expect(sim.alpha).toHaveBeenCalledWith(0.52);
+    expect(sim.restart).toHaveBeenCalledTimes(1);
     expect(container.querySelector("canvas")).toHaveAttribute("data-visual-mode", "stellar");
+    expect(container.querySelector("canvas")).toHaveAttribute("data-layout-policy", "hub-orbit");
+  });
+
+  it("unfolds a selected Stellar node without replacing the simulation", async () => {
+    const { forceSimulation } = await import("d3-force");
+    const noop = () => {};
+    const { container, rerender } = render(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        selectedNodeId={null}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    const sim = (forceSimulation as any).mock.results[0].value;
+    sim.alpha.mockClear();
+    sim.restart.mockClear();
+
+    rerender(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        selectedNodeId={1}
+        highlightedIds={new Set([1, 2])}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    const physicsNodes = (forceSimulation as any).mock.calls[0][0] as Array<{ id: number; anchorX: number }>;
+    expect(forceSimulation).toHaveBeenCalledTimes(1);
+    expect(sim.alpha).toHaveBeenCalledWith(0.52);
+    expect(sim.restart).toHaveBeenCalledTimes(1);
+    expect(physicsNodes.find((node) => node.id === 1)?.anchorX).toBe(0);
+    expect(physicsNodes.find((node) => node.id === 2)!.anchorX).toBeGreaterThan(0);
+    expect(container.querySelector("canvas")).toHaveAttribute("data-layout-policy", "directed-focus");
   });
 
   it("enters exact-scope detail policy without creating a second simulation", async () => {
@@ -277,6 +318,55 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     );
 
     expect(sim.alpha).not.toHaveBeenCalledWith(0.3);
+    expect(sim.restart).not.toHaveBeenCalled();
+  });
+
+  it("keeps known Stellar filter subsets settled", async () => {
+    const { forceSimulation } = await import("d3-force");
+    const noop = () => {};
+    const filteredDataB: GraphData = {
+      ...dataB,
+      nodes: [dataB.nodes[0]],
+      edges: [],
+    };
+    const { rerender } = render(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    const sim = (forceSimulation as any).mock.results[0].value;
+    sim.alpha.mockClear();
+    sim.restart.mockClear();
+
+    rerender(
+      <GraphCanvas
+        data={filteredDataB}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    rerender(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    expect(forceSimulation).toHaveBeenCalledTimes(1);
+    expect(sim.alpha).not.toHaveBeenCalledWith(0.3);
+    expect(sim.alpha).not.toHaveBeenCalledWith(0.52);
     expect(sim.restart).not.toHaveBeenCalled();
   });
 
@@ -1587,7 +1677,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     const tap = makeTouch(1, 400, 300);
 
     expect((canvas as HTMLCanvasElement).style.touchAction).toBe("none");
-    expect(canvas).toHaveAccessibleName(/Code graph: 1 nodes and 0 edges/i);
+    expect(canvas).toHaveAccessibleName(/Architecture map: 1 nodes and 0 edges/i);
     expect(canvas).toHaveAccessibleDescription(/Arrow keys pan, plus and minus zoom/i);
     fireEvent.touchStart(canvas, { touches: [tap], changedTouches: [tap] });
     fireEvent.touchEnd(canvas, { touches: [], changedTouches: [tap] });

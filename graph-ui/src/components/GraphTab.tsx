@@ -915,7 +915,9 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       <div
         ref={graphRegionRef}
         tabIndex={-1}
-        aria-label="Architecture graph canvas region"
+        aria-label={visualMode === "stellar"
+          ? "Stellar flow graph canvas region"
+          : "Architecture graph canvas region"}
         inert={!isDesktop && mobilePanelOpen ? true : undefined}
         className="flex-1 relative overflow-hidden focus:outline-none"
       >
@@ -1106,12 +1108,16 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                   return next;
                 })}
                 className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors ${visualMode === "stellar" ? "border-indigo-300/20 bg-indigo-300/[0.1] text-indigo-100" : "border-white/[0.06] bg-white/[0.04] text-foreground/55 hover:bg-white/[0.08]"}`}
-                aria-label={`Use ${visualMode === "architecture" ? "stellar" : "architecture"} graph style`}
+                aria-label={visualMode === "architecture"
+                  ? "Use Stellar flow view"
+                  : "Use Architecture map view"}
                 aria-pressed={visualMode === "stellar"}
-                title="Switch visual style without changing graph data or layout"
+                title={visualMode === "architecture"
+                  ? "Arrange exact-degree hubs in an orbit; selecting a node separates incoming and outgoing relations"
+                  : "Return to the domain and community architecture map"}
               >
                 <span aria-hidden="true" className={visualMode === "stellar" ? "text-indigo-200" : "text-cyan-300/60"}>✦</span>
-                {visualMode === "stellar" ? "Stellar" : "Architecture"}
+                {visualMode === "stellar" ? "Stellar flow" : "Architecture"}
               </button>
               <button
                 onClick={() => fetchOverview(project)}
@@ -1143,6 +1149,29 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                 +
               </button>
             </div>
+
+            {visualMode === "stellar" && (
+              <div
+                role="status"
+                aria-label="Stellar flow guide"
+                aria-live="polite"
+                className="pointer-events-none absolute bottom-4 left-1/2 z-20 flex max-w-[min(34rem,calc(100%-2rem))] -translate-x-1/2 items-center gap-2 rounded-full border border-indigo-300/15 bg-[#080b1b]/82 px-3 py-1.5 text-[10px] font-medium tracking-wide text-indigo-100/72 shadow-lg backdrop-blur-md"
+              >
+                {selectedNode ? (
+                  <>
+                    <span className="text-indigo-200/65">Incoming</span>
+                    <span aria-hidden="true">&larr;</span>
+                    <strong className="max-w-52 truncate font-semibold text-cyan-50" title={selectedNode.name}>
+                      {selectedNode.name}
+                    </strong>
+                    <span aria-hidden="true">&rarr;</span>
+                    <span className="text-cyan-200/65">Outgoing</span>
+                  </>
+                ) : (
+                  <span>Hub orbit &middot; select a node to unfold incoming and outgoing relations</span>
+                )}
+              </div>
+            )}
 
             {hoveredNode && <NodeTooltip node={hoveredNode} x={tooltipPos.x} y={tooltipPos.y} />}
           </>
