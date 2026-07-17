@@ -23,6 +23,7 @@ interface WorkflowStep {
 
 interface WorkflowJob {
   name?: string;
+  env?: Record<string, string>;
   steps: WorkflowStep[];
 }
 
@@ -69,6 +70,8 @@ describe('repository Node.js runtime contract', () => {
       step => step.name === 'Embedded packaged Graph UI data contract smoke'
     );
 
+    expect(workflow.jobs['package-smoke'].env?.PLAYWRIGHT_BROWSERS_PATH)
+      .toBe('${{ runner.temp }}/ms-playwright');
     expect(install?.run).toContain('$RUNNER_TEMP/cbm-install');
     expect(installBrowser?.['working-directory']).toBe('v2');
     expect(installBrowser?.run).toContain('npx playwright-core install --with-deps chromium');

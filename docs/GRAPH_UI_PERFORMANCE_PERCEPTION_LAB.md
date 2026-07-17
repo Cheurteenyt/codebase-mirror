@@ -537,9 +537,11 @@ restored, and console errors, uncaught page errors, and failed HTTP responses ar
 all empty.
 
 The npm-package job installs the Chromium revision associated with the locked
-`playwright-core` dependency and invokes this script against the indexed tarball
-fixture after the existing HTTP/data assertions. Unit regressions lock both the
-workflow wiring and the fail-closed observation contract. A local packaged run
+`playwright-core` dependency into an explicit `PLAYWRIGHT_BROWSERS_PATH`, kept
+independent from the isolated application `XDG_CACHE_HOME`, and invokes this
+script against the indexed tarball fixture after the existing HTTP/data
+assertions. Unit regressions lock both the workflow wiring and the fail-closed
+observation contract. A local packaged run
 passed with Edge 150 on a 1,176 x 904 canvas and the 10,319-node project index;
 the visible in-app run also switched views with no browser warnings or errors.
 
