@@ -143,6 +143,15 @@ selects a circle/diamond/square glyph, and only the selected flow receives
 direction markers. Status remains an outer stroke. Invalid or unavailable local
 storage falls back to `Architecture`.
 
+The focused camera is composed from directed targets only; the 1,000-node dim
+context cannot shrink the active neighborhood. Screen-space safe insets reserve
+the fidelity HUD, action rail, guide, breadcrumb, and label overhang. A
+`ResizeObserver` recomposes an untouched focus after viewport or panel changes
+without reheating the simulation. Depth one keeps the full lane separation;
+depths two through four advance monotonically with sublinear spacing. Labels
+are ranked once per semantic-frame change, receive a viewport-derived bounded
+budget, and are omitted before they can cross the safe screen rectangle.
+
 This boundary is deliberate: changing task view reuses every d3 node object,
 event listener, exactness contract, and canvas allocation. A view/focus change
 receives one bounded simulation reheat; known filter subsets and restorations

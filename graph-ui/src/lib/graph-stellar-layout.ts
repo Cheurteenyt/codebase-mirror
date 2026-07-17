@@ -239,7 +239,9 @@ export function computeStellarFlowLayout(
         ? (index % 2 === 0 ? -1 : 1) * (80 + depth * 28)
         : 0;
       constellation.set(node.id, {
-        x: side * depth * FLOW_COLUMN_GAP + bidirectionalOffset + lane.x,
+        // Preserve the first-hop separation, then compress distant depths so
+        // a four-hop frame stays legible beside the detail panel.
+        x: side * depth ** 0.82 * FLOW_COLUMN_GAP + bidirectionalOffset + lane.x,
         y: lane.y,
         role,
         depth,

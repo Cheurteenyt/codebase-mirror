@@ -845,10 +845,10 @@ aucun rendu 3D/WebGL, aucun shadow blur ou gradient par nœud, et aucune
 affirmation de supériorité de performance V1/V2 avant le protocole same-graph
 navigateur.
 
-Validation courante : typecheck Graph UI, **21 fichiers / 153 tests**, build
-frontend et `build:package` passent. Le chunk Graph applicatif mesure **39,30
+Validation courante : typecheck Graph UI, **22 fichiers / 159 tests**, build
+frontend et `build:package` passent. Le chunk Graph applicatif mesure **39,96
 Kio** selon le gate sur un plafond de 40 Kio ; le JavaScript manifeste mesure
-**122,58 Kio** sur un plafond de 125 Kio.
+**123,23 Kio** sur un plafond de 125 Kio.
 
 Le contrôle à 1 280 px a également supprimé l’action `Clear selection` dupliquée
 dans la barre supérieure : avec le nouveau sélecteur visuel, elle chevauchait le
@@ -923,6 +923,41 @@ filtres et les données exactes restent partagés avec `Architecture`.
 Les régressions couvrent la classification insensible à la casse, le décodage
 hors couleur, la légende limitée au focus, les profondeurs réelles, le rejet des
 cross-links, le regroupement module, les ancres de labels et le verrouillage puis
-la libération de l'origine. La validation courante passe **21 fichiers / 153
+la libération de l'origine. La validation courante passe **22 fichiers / 159
 tests**, le typecheck, le build frontend et le paquet complet. Les gates restent
-respectés : Graph **39,30 / 40 Kio**, JavaScript manifeste **122,58 / 125 Kio**.
+respectés : Graph **39,96 / 40 Kio**, JavaScript manifeste **123,23 / 125 Kio**.
+
+## Addendum — Stellar Focus Composer responsive (2026-07-17)
+
+Le contrôle du paquet fusionné à 1 280 px a exposé le problème suivant : ouvrir
+le détail réduisait correctement le canvas, mais la caméra restait centrée sur
+`(0,0)` à un zoom quasi fixe. Les couches trois et quatre, les labels sortants et
+les contrôles occupaient alors la même largeur ; les entrées pouvaient être
+coupées à gauche. Ajuster uniquement les couleurs ou la répulsion n'aurait pas
+corrigé cette cause géométrique.
+
+Le Focus Composer introduit un contrat de caméra testable et sans second moteur :
+
+- seuls le focus et ses couches dirigées définissent les bornes ; les nœuds de
+  contexte restent visibles mais ne peuvent plus réduire le voisinage utile ;
+- les zones du HUD, de la barre d'actions, du guide et du fil d'Ariane sont
+  réservées en pixels écran, indépendamment du DPR et du zoom monde ;
+- un redimensionnement de viewport ou de panneau recompose une caméra encore
+  intacte sans reconstruire les nœuds, relancer la simulation ou perdre un pan
+  volontaire de l'utilisateur ; `Fit`, `Reset` et la touche `0` partagent ce
+  même contrat ;
+- la première couche garde son espacement complet. Les profondeurs deux à quatre
+  progressent toujours vers l'extérieur avec une distance sous-linéaire, ce qui
+  garde les rails ordonnés sans sacrifier la taille perceptuelle du voisinage ;
+- les labels exacts/directs sont prioritaires, le budget dépend de la surface
+  écran utile et toute boîte qui croiserait les bords ou le chrome persistant est
+  omise avant peinture ;
+- le tri des candidats de labels est exécuté au changement de frame sémantique,
+  pas pendant chaque tick/paint Canvas.
+
+Les régressions couvrent les viewports desktop étroits et larges, les flux
+asymétriques, les quatre profondeurs, le rejet des labels hors zone sûre, le
+budget d'attention et la progression distante monotone. La validation courante
+passe **22 fichiers / 159 tests**, le typecheck, le build frontend et le paquet
+complet. Les budgets frontend mesurés sont Graph **39,96 / 40 Kio** et
+JavaScript manifeste **123,23 / 125 Kio**.

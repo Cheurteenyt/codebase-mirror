@@ -59,6 +59,15 @@
 - Move the selected Stellar guide above the breadcrumb and show only relation
   groups that actually touch the focus, avoiding both HUD overlap and a global
   legend that would consume attention without answering the active task.
+- Added the responsive Stellar Focus Composer. It fits directed targets—not
+  dim project context—inside screen-space safe bounds reserved for graph chrome,
+  recomposes after untouched panel/viewport resizes without reheating d3, and
+  gives distant depths monotonic compressed spacing so the first hop remains
+  readable beside the detail panel.
+- Rank flow-label candidates on semantic-frame changes instead of every Canvas
+  paint. The focus label budget now follows usable viewport area, exact/direct
+  neighbors lead, unrelated context labels stay out of the selected frame, and
+  any label that would be clipped or hidden by persistent controls is omitted.
 
 ### Performance and delivery gates
 

@@ -300,7 +300,12 @@ d3-force canvas and two task views over the same graph:
     expose hop depth, repeated directory lanes expose module context, and
     relation colors plus dash patterns are decoded by a selection-only legend.
     Incoming labels open to the left and outgoing labels to the right through
-    three deterministic collision candidates
+    three deterministic collision candidates. The selected frame is recomposed
+    inside the canvas area left free by the fidelity HUD, action rail, guide,
+    breadcrumb, and detail panel; panel/viewport resizes update that camera
+    without reheating d3. Distant depths use a monotonic compressed spacing,
+    while the label budget follows available screen area and rejects text that
+    would be clipped or hidden under persistent graph controls
   - **Exact scope** (on demand): revision-bound domain/directory pages replace
     the representative frame inside the same canvas; raw internal topology is
     shown immediately and dense scopes expose an explicit Load more action
@@ -315,7 +320,8 @@ reheat when the view or focused symbol changes; known filter subsets do not
 reheat and no renderer, canvas, or node object is rebuilt. Direct relations lead
 the focused frame while real depths 2–4 retain their semantic line grammar at a
 lower weight; cross-links that do not advance toward or away from the focus are
-not promoted as flow.
+not promoted as flow. Focus-label ranking is precomputed on semantic-frame
+changes rather than sorted during every Canvas paint.
 
 ```bash
 # From v2/ in a source checkout

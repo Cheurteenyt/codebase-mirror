@@ -71,6 +71,7 @@ describe("Stellar flow layout", () => {
     expect(layout.get(3)!.x).toBeGreaterThan(0);
     expect(layout.get(4)).toMatchObject({ role: "outgoing", depth: 2 });
     expect(layout.get(4)!.x).toBeGreaterThan(layout.get(3)!.x);
+    expect(layout.get(4)!.x).toBeLessThan(layout.get(3)!.x * 2);
     expect(layout.get(5)!.role).toBe("context");
     expect(stellarFlowEdgeDepth(1, 3, layout)).toBe(1);
     expect(stellarFlowEdgeDepth(3, 4, layout)).toBe(2);

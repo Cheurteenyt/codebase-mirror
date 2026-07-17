@@ -193,7 +193,43 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(physicsNodes.find((node) => node.id === 1)?.anchorX).toBe(0);
     expect(physicsNodes.find((node) => node.id === 2)!.anchorX).toBeGreaterThan(0);
     expect(container.querySelector("canvas")).toHaveAttribute("data-layout-policy", "directed-focus");
-    expect(container.querySelector("canvas")).toHaveAttribute("data-flow-lens", "semantic-depth-v1");
+    expect(container.querySelector("canvas")).toHaveAttribute("data-flow-lens", "semantic-depth-v2");
+  });
+
+  it("fits all four directed depths into the safe viewport without fitting context", () => {
+    const ctx = installCanvasMock(720, 900);
+    const ref = createRef<GraphCanvasHandle>();
+    const nodes = Array.from({ length: 10 }, (_, index) => makeNode(index + 1, `node-${index + 1}`));
+    const deepFlow: GraphData = {
+      nodes,
+      edges: nodes.slice(0, -1).map((node, index) => ({
+        source: node.id,
+        target: nodes[index + 1].id,
+        type: "calls",
+      } as GraphEdge)),
+      total_nodes: nodes.length,
+      topology_revision: "safe-focus-viewport",
+    };
+
+    const { container } = render(
+      <GraphCanvas
+        ref={ref}
+        data={deepFlow}
+        visualMode="stellar"
+        selectedNodeId={5}
+        highlightedIds={new Set([4, 5, 6])}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    act(() => ref.current?.fitView());
+
+    const focusScale = ctx.scale.mock.calls.at(-1)[0] as number;
+    expect(focusScale).toBeGreaterThan(0.25);
+    expect(focusScale).toBeLessThan(0.5);
+    expect(container.querySelector("canvas")).toHaveAttribute("data-flow-lens", "semantic-depth-v2");
   });
 
   it("pins only the active Stellar focus at the semantic origin", async () => {

@@ -21,6 +21,11 @@ import {
 } from "../lib/graph-stellar-layout";
 import { stellarFlowLabelAnchors } from "../lib/graph-flow-labels";
 import {
+  composeStellarFocusViewport,
+  stellarFocusLabelBudget,
+  stellarFocusWorldBoxFitsViewport,
+} from "../lib/graph-focus-composer";
+import {
   GRAPH_EDGE_GROUP_META,
   GRAPH_EDGE_GROUP_ORDER,
   graphEdgeGroup,
@@ -777,6 +782,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     layers: [],
     modules: [],
   });
+  const stellarFlowLabelCandidatesRef = useRef<SimNode[]>([]);
   const stellarFlowEdgeGroupsRef = useRef<Map<GraphEdgeGroup, StellarFlowEdgeBatch>>(new Map());
   const clustersRef = useRef<LayoutCluster[]>([]);
   const clusterMapRef = useRef<Map<number, LayoutCluster>>(new Map());
@@ -874,6 +880,40 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     };
     viewAnimationRafRef.current = requestAnimationFrame(step);
   }, [cancelViewAnimation]);
+
+  /**
+   * Compose only the selected directed frame into the usable canvas area.
+   * Persistent HUD/control/breadcrumb space is reserved in CSS pixels by the
+   * pure composer; no simulation node or renderer is recreated here.
+   */
+  const fitStellarFocus = useCallback((animate = false): boolean => {
+    const canvas = canvasRef.current;
+    if (
+      !canvas
+      || visualModeRef.current !== "stellar"
+      || selectedNodeIdRef.current == null
+    ) return false;
+
+    const rect = canvas.getBoundingClientRect();
+    const backingScale = backingScaleRef.current;
+    const viewport = {
+      width: rect.width || canvas.clientWidth || canvas.width / backingScale.x,
+      height: rect.height || canvas.clientHeight || canvas.height / backingScale.y,
+    };
+    const transform = composeStellarFocusViewport(
+      stellarFlowTargetsRef.current.values(),
+      viewport,
+    );
+    if (!transform) return false;
+
+    hasAutoFitRef.current = true;
+    if (animate) animateToTransform(transform);
+    else {
+      transformRef.current = transform;
+      drawRef.current?.();
+    }
+    return true;
+  }, [animateToTransform]);
 
   /**
    * Fit visible node bounds into CSS-pixel canvas bounds. Returns false while
@@ -1090,6 +1130,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       nodeMapRef.current = new Map();
       stellarFlowTargetsRef.current = new Map();
       stellarFlowLanesRef.current = { layers: [], modules: [] };
+      stellarFlowLabelCandidatesRef.current = [];
       stellarFlowEdgeGroupsRef.current = new Map();
       clustersRef.current = [];
       clusterMapRef.current = new Map();
@@ -1448,6 +1489,20 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       );
       stellarFlowTargetsRef.current = targets;
       stellarFlowLanesRef.current = summarizeStellarFlowLanes(targets);
+      stellarFlowLabelCandidatesRef.current = selectedNodeId == null
+        ? []
+        : nodes
+            .filter((node) => {
+              const role = targets.get(node.id)?.role;
+              return role != null && role !== "context" && role !== "focus";
+            })
+            .sort((left, right) => {
+              const leftTarget = targets.get(left.id)!;
+              const rightTarget = targets.get(right.id)!;
+              return (leftTarget.depth ?? 0) - (rightTarget.depth ?? 0)
+                || right.rank - left.rank
+                || left.id - right.id;
+            });
       const flowEdgeGroups = new Map<GraphEdgeGroup, StellarFlowEdgeBatch>();
       for (const edge of edgesRef.current) {
         const depth = stellarFlowEdgeDepth(
@@ -1523,6 +1578,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     } else {
       stellarFlowTargetsRef.current = new Map();
       stellarFlowLanesRef.current = { layers: [], modules: [] };
+      stellarFlowLabelCandidatesRef.current = [];
       stellarFlowEdgeGroupsRef.current = new Map();
       for (const node of nodes) {
         if (node.id === previousFocusedNodeId) {
@@ -1557,11 +1613,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       sim.alpha(STELLAR_LAYOUT_ALPHA);
       if (activeRef.current) sim.restart();
       if (visualMode === "stellar" && selectedNodeId != null) {
-        animateToTransform({
-          x: 0,
-          y: 0,
-          k: Math.max(0.72, Math.min(1.05, transformRef.current.k)),
-        });
+        if (!fitStellarFocus(true)) {
+          animateToTransform({
+            x: 0,
+            y: 0,
+            k: Math.max(0.72, Math.min(1.05, transformRef.current.k)),
+          });
+        }
       } else {
         fitVisibleGraph();
         scheduleSettledFit();
@@ -1579,6 +1637,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     cancelPendingAutoFit,
     cancelViewAnimation,
     data,
+    fitStellarFocus,
     fitVisibleGraph,
     scheduleSettledFit,
     selectedNodeId,
@@ -2420,8 +2479,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     // Zoom-dependent labels with collision avoidance. The selected node is
     // always attempted first, followed by its neighborhood and ranked hubs.
+    const viewport = {
+      width: width / backingScale.x,
+      height: height / backingScale.y,
+    };
     const labelLimit = stellarFlow
-      ? (stellarFocused ? 32 : 18)
+      ? (stellarFocused ? stellarFocusLabelBudget(viewport) : 18)
       : rawTopologyReveal
         && (denseSelection
           ? 12
@@ -2438,33 +2501,30 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       labelKeys.add(denseSelection ? node.name : node.id);
       labelNodes.push(node);
     };
-    addLabelNode(rawTopologyReveal && selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined);
-    if (activeHighlightedIds && !denseSelection) {
-      for (const id of activeHighlightedIds) addLabelNode(nodeMap.get(id));
-    }
     if (stellarFocused) {
-      const flowNodes = nodesRef.current
-        .filter((node) => {
-          const role = stellarFlowTargetsRef.current.get(node.id)?.role;
-          return role != null && role !== "context" && role !== "focus";
-        })
-        .sort((left, right) => {
-          const leftTarget = stellarFlowTargetsRef.current.get(left.id)!;
-          const rightTarget = stellarFlowTargetsRef.current.get(right.id)!;
-          return (leftTarget.depth ?? 0) - (rightTarget.depth ?? 0)
-            || right.rank - left.rank
-            || left.id - right.id;
-        });
-      for (const node of flowNodes) addLabelNode(node);
+      addLabelNode(selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined);
+      if (activeHighlightedIds) {
+        for (const node of stellarFlowLabelCandidatesRef.current) {
+          if (activeHighlightedIds.has(node.id)) addLabelNode(node);
+        }
+      }
+      for (const node of stellarFlowLabelCandidatesRef.current) addLabelNode(node);
+    } else {
+      addLabelNode(rawTopologyReveal && selectedNodeId != null ? nodeMap.get(selectedNodeId) : undefined);
+      if (activeHighlightedIds && !denseSelection) {
+        for (const id of activeHighlightedIds) addLabelNode(nodeMap.get(id));
+      }
     }
-    for (const node of labelCandidatesRef.current) {
-      if (denseSelection && (
-        !activeHighlightedIds.has(node.id)
-        || Math.abs((node.x ?? 0) * tk + tx) > width / backingScale.x / 2
-        || Math.abs((node.y ?? 0) * tk + ty) > height / backingScale.y / 2
-      )) continue;
-      addLabelNode(node);
-      if (labelNodes.length >= labelLimit) break;
+    if (!stellarFocused) {
+      for (const node of labelCandidatesRef.current) {
+        if (denseSelection && (
+          !activeHighlightedIds.has(node.id)
+          || Math.abs((node.x ?? 0) * tk + tx) > width / backingScale.x / 2
+          || Math.abs((node.y ?? 0) * tk + ty) > height / backingScale.y / 2
+        )) continue;
+        addLabelNode(node);
+        if (labelNodes.length >= labelLimit) break;
+      }
     }
 
     const labelHeight = 13 / tk;
@@ -2515,6 +2575,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           top: anchor.y - labelHeight / 2,
           bottom: anchor.y + labelHeight / 2,
         };
+        if (
+          stellarFocused
+          && !stellarFocusWorldBoxFitsViewport(box, transformRef.current, viewport)
+        ) continue;
         const collides = occupied.some((other) => !(
           box.right < other.left
           || box.left > other.right
@@ -2576,7 +2640,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       canvas.height = backingStore.height;
       canvas.style.width = parent.clientWidth + 'px';
       canvas.style.height = parent.clientHeight + 'px';
-      if (!hasAutoFitRef.current && !hasUserInteractedRef.current && fitVisibleGraph()) {
+      if (!hasUserInteractedRef.current && fitStellarFocus()) {
+        cancelPendingAutoFit();
+      } else if (!hasAutoFitRef.current && !hasUserInteractedRef.current && fitVisibleGraph()) {
         hasAutoFitRef.current = true;
         cancelPendingAutoFit();
       } else {
@@ -2588,7 +2654,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const observer = new ResizeObserver(resize);
     observer.observe(canvas.parentElement!);
     return () => observer.disconnect();
-  }, [cancelPendingAutoFit, fitVisibleGraph]);
+  }, [cancelPendingAutoFit, fitStellarFocus, fitVisibleGraph]);
 
   // Mouse and touch interaction (pan, zoom, click/tap, drag, pinch)
   useEffect(() => {
@@ -3073,7 +3139,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       hasAutoFitRef.current = true;
       cancelPendingAutoFit();
       cancelViewAnimation();
-      if (!fitVisibleGraph()) {
+      if (!fitStellarFocus() && !fitVisibleGraph()) {
         transformRef.current = { x: 0, y: 0, k: 1 };
         drawRef.current?.();
       }
@@ -3083,7 +3149,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       hasAutoFitRef.current = true;
       cancelPendingAutoFit();
       cancelViewAnimation();
-      if (!fitVisibleGraph()) {
+      if (!fitStellarFocus() && !fitVisibleGraph()) {
         transformRef.current = { x: 0, y: 0, k: 1 };
         drawRef.current?.();
       }
@@ -3143,7 +3209,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       const centerY = (minY + maxY) / 2;
       animateToTransform({ x: -centerX * k, y: -centerY * k, k });
     },
-  }), [animateToTransform, cancelPendingAutoFit, cancelViewAnimation, fitVisibleGraph]);
+  }), [animateToTransform, cancelPendingAutoFit, cancelViewAnimation, fitStellarFocus, fitVisibleGraph]);
 
   return (
     <>
@@ -3154,7 +3220,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           ? selectedNodeId == null ? "hub-orbit" : "directed-focus"
           : "architecture-map"}
         data-flow-lens={visualMode === "stellar" && selectedNodeId != null
-          ? "semantic-depth-v1"
+          ? "semantic-depth-v2"
           : "off"}
         className="w-full h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 focus-visible:ring-inset"
         style={{
@@ -3197,7 +3263,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           } else if (event.key === "-" || event.key === "_") {
             transform.k = Math.max(0.1, transform.k / 1.15);
           } else if (event.key === "0") {
-            fitVisibleGraph();
+            if (!fitStellarFocus()) fitVisibleGraph();
           } else if (event.key === "ArrowLeft") {
             transform.x += 40;
           } else if (event.key === "ArrowRight") {
@@ -3222,7 +3288,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           ? "Stellar flow graph. Press N or Shift+N to browse up to 64 representative nodes. Select a node to place incoming relations on the left and outgoing relations on the right. Numbered rails show visible hop depth; relation colors and dash patterns are named in the guide. "
           : "Architecture map. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}
         Press Enter or Space to activate the announced target.
-        Arrow keys pan, plus and minus zoom, zero fits the graph, and Escape goes up.
+        Arrow keys pan, plus and minus zoom, zero fits the active frame, and Escape goes up.
       </span>
       <span
         id={keyboardStatusId}
