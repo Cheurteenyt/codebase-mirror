@@ -143,6 +143,15 @@ selects a circle/diamond/square glyph, and only the selected flow receives
 direction markers. Status remains an outer stroke. Invalid or unavailable local
 storage falls back to `Architecture`.
 
+In the unfocused frame, top-level project paths form contiguous elliptical
+sectors and small path families collapse into one quiet `other` sector. Colored
+boundary arcs and exact representative counts expose project structure without
+duplicating the Architecture domain renderer. The hub halo and stronger
+backbone remain batched; a separate 12-label overview budget uses radial
+collision candidates and excludes low-information names. Sector summaries,
+hub membership, and label candidates are all precomputed on semantic-frame
+changes, so the additional hierarchy does not add a graph scan per paint.
+
 The focused camera is composed from directed targets only; the 1,000-node dim
 context cannot shrink the active neighborhood. Screen-space safe insets reserve
 the fidelity HUD, action rail, guide, breadcrumb, and label overhang. A

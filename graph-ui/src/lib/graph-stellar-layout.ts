@@ -16,6 +16,16 @@ export interface StellarFlowTarget {
   depth: number | null;
   /** Stable directory lane used only by the focused flow disclosure. */
   laneKey: string | null;
+  /** Shared top-level sector; rendering can summarize it without regrouping nodes. */
+  sector: { key: string; start: number; span: number } | null;
+}
+
+export interface StellarConstellationSummary {
+  key: string;
+  start: number;
+  span: number;
+  mid: number;
+  count: number;
 }
 
 type DirectedFlowRole = Extract<StellarFlowRole, "incoming" | "outgoing" | "bidirectional">;
@@ -33,16 +43,20 @@ export interface StellarFlowModuleSummary extends StellarFlowLaneSummary {
   laneKey: string;
 }
 
-const GOLDEN_FRACTION = 0.6180339887498949;
 const FLOW_COLUMN_GAP = 180;
 const MAX_FLOW_DEPTH = 4;
 const MIN_CONTEXT_RADIUS = 520;
+const CONSTELLATION_Y_SCALE = 0.82;
+const CONSTELLATION_FAMILY_GAP = 0.13;
 
-function groupKey(node: GraphNode): string {
-  if (node.cluster_id != null) return `cluster:${node.cluster_id}`;
+function rawConstellationKey(node: GraphNode): string {
   const path = node.file_path?.replaceAll("\\", "/");
   const topLevel = path?.split("/").find(Boolean);
-  return topLevel ? `path:${topLevel}` : `type:${node.label}`;
+  return topLevel ?? "unmapped";
+}
+
+function constellationGroupKey(node: GraphNode): string {
+  return node.cluster_id != null ? `cluster:${node.cluster_id}` : `type:${node.label}`;
 }
 
 function flowLaneKey(node: GraphNode): string {
@@ -71,52 +85,70 @@ function computeConstellation(nodes: readonly GraphNode[]): Map<number, StellarF
   );
   const maxRadius = Math.max(360, Math.min(760, 340 + Math.sqrt(nodes.length) * 12));
   const hubThreshold = Math.max(18, maxDegree * 0.18);
-  const grouped = new Map<string, GraphNode[]>();
+  const rawFamilyCounts = new Map<string, number>();
   for (const node of nodes) {
-    const key = groupKey(node);
-    const group = grouped.get(key);
-    if (group) group.push(node);
-    else grouped.set(key, [node]);
+    const key = rawConstellationKey(node);
+    rawFamilyCounts.set(key, (rawFamilyCounts.get(key) ?? 0) + 1);
+  }
+  const minimumFamilySize = Math.max(4, Math.ceil(nodes.length * 0.015));
+  const collapseSmallFamilies = rawFamilyCounts.size > 1;
+  const groupedFamilies = new Map<string, GraphNode[]>();
+  for (const node of nodes) {
+    const rawFamily = rawConstellationKey(node);
+    const familyKey = collapseSmallFamilies
+      && (rawFamilyCounts.get(rawFamily) ?? 0) < minimumFamilySize
+      ? "other"
+      : rawFamily;
+    const family = groupedFamilies.get(familyKey);
+    if (family) family.push(node);
+    else groupedFamilies.set(familyKey, [node]);
   }
 
-  const groups = [...grouped.entries()]
+  const families = [...groupedFamilies.entries()]
     .map(([key, members]) => ({
       key,
-      members: members.sort(byImportance),
-      peakDegree: members.reduce(
-        (maximum, member) => Math.max(maximum, stellarNodeDegree(member)),
-        0,
-      ),
+      members: members.sort((left, right) => (
+        constellationGroupKey(left).localeCompare(constellationGroupKey(right))
+        || byImportance(left, right)
+      )),
       weight: Math.sqrt(members.length),
     }))
     .sort((left, right) => (
-      right.peakDegree - left.peakDegree
+      Number(left.key === "other") - Number(right.key === "other")
       || right.members.length - left.members.length
       || left.key.localeCompare(right.key)
     ));
-  const totalWeight = groups.reduce((sum, group) => sum + group.weight, 0);
-  let sectorStart = -Math.PI / 2;
+  const totalWeight = families.reduce((sum, family) => sum + family.weight, 0);
+  const familyGap = families.length > 1
+    ? Math.min(CONSTELLATION_FAMILY_GAP, Math.PI / (families.length * 3))
+    : 0;
+  const drawableSpan = Math.PI * 2 - familyGap * families.length;
+  let familyStart = -Math.PI / 2 + familyGap / 2;
 
-  for (const group of groups) {
-    const sectorSpan = Math.PI * 2 * group.weight / totalWeight;
-    for (let index = 0; index < group.members.length; index += 1) {
-      const node = group.members[index];
+  for (const family of families) {
+    const familySpan = drawableSpan * family.weight / totalWeight;
+    const sector = { key: family.key, start: familyStart, span: familySpan };
+    for (let index = 0; index < family.members.length; index += 1) {
+      const node = family.members[index];
       const degree = stellarNodeDegree(node);
       const importance = Math.log1p(degree) / Math.log1p(maxDegree);
       const radius = 48
         + Math.pow(1 - importance, 1.35) * (maxRadius - 48)
         + ((index % 5) - 2) * 4;
-      const withinSector = 0.1 + 0.8 * ((index * GOLDEN_FRACTION + stableFraction(node.id)) % 1);
-      const angle = sectorStart + sectorSpan * withinSector;
+      const orderedPosition = (index + 0.5) / family.members.length;
+      const jitter = (stableFraction(node.id) - 0.5)
+        * Math.min(0.015, 0.5 / family.members.length);
+      const angle = familyStart + familySpan * (0.06 + 0.88 * (orderedPosition + jitter));
       targets.set(node.id, {
         x: Math.cos(angle) * radius,
-        y: Math.sin(angle) * radius * 0.82,
+        y: Math.sin(angle) * radius * CONSTELLATION_Y_SCALE,
         role: degree >= hubThreshold ? "hub" : "context",
         depth: null,
         laneKey: null,
+        sector,
       });
     }
-    sectorStart += sectorSpan;
+    familyStart += familySpan + familyGap;
   }
 
   return targets;
@@ -233,6 +265,7 @@ export function computeStellarFlowLayout(
     const depth = Number(rawDepth);
     for (let index = 0; index < layer.length; index += 1) {
       const node = layer[index];
+      const current = constellation.get(node.id)!;
       const side = role === "incoming" ? -1 : role === "outgoing" ? 1 : 0;
       const lane = lanePosition(index, layer.length);
       const bidirectionalOffset = role === "bidirectional"
@@ -246,6 +279,7 @@ export function computeStellarFlowLayout(
         role,
         depth,
         laneKey: flowLaneKey(node),
+        sector: current.sector,
       });
     }
   }
@@ -253,28 +287,58 @@ export function computeStellarFlowLayout(
   for (const node of nodes) {
     if (node.id === selectedNodeId || roles.has(node.id)) continue;
     const current = constellation.get(node.id)!;
-    const currentRadius = Math.hypot(current.x, current.y);
+    const currentRadius = Math.hypot(current.x, current.y / CONSTELLATION_Y_SCALE);
     const angle = currentRadius > 0
-      ? Math.atan2(current.y, current.x)
+      ? Math.atan2(current.y / CONSTELLATION_Y_SCALE, current.x)
       : stableFraction(node.id) * Math.PI * 2;
     const radius = Math.max(MIN_CONTEXT_RADIUS, currentRadius * 1.16);
     constellation.set(node.id, {
       x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius * 0.82,
+      y: Math.sin(angle) * radius * CONSTELLATION_Y_SCALE,
       role: "context",
       depth: null,
       laneKey: null,
+      sector: current.sector,
     });
   }
 
+  const selectedConstellation = constellation.get(selectedNodeId)!;
   constellation.set(selectedNodeId, {
     x: 0,
     y: 0,
     role: "focus",
     depth: 0,
     laneKey: null,
+    sector: selectedConstellation.sector,
   });
   return constellation;
+}
+
+/** Summarize precomputed top-level sectors without regrouping graph nodes. */
+export function summarizeStellarConstellation(
+  targets: ReadonlyMap<number, StellarFlowTarget>,
+): { sectors: StellarConstellationSummary[]; radius: number } {
+  const summaries = new Map<string, StellarConstellationSummary>();
+  let maxRadius = 0;
+  for (const target of targets.values()) {
+    if (!target.sector) continue;
+    const radius = Math.hypot(target.x, target.y / CONSTELLATION_Y_SCALE);
+    maxRadius = Math.max(maxRadius, radius);
+    const current = summaries.get(target.sector.key);
+    if (current) {
+      current.count += 1;
+      continue;
+    }
+    summaries.set(target.sector.key, {
+      ...target.sector,
+      mid: target.sector.start + target.sector.span / 2,
+      count: 1,
+    });
+  }
+  return {
+    sectors: [...summaries.values()].sort((left, right) => left.start - right.start),
+    radius: maxRadius,
+  };
 }
 
 /** Return the visible directed depth for one real edge, or null for cross-links. */

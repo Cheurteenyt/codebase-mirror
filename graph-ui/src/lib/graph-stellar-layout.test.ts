@@ -3,6 +3,7 @@ import type { GraphEdge, GraphNode } from "./types";
 import {
   computeStellarFlowLayout,
   stellarFlowEdgeDepth,
+  summarizeStellarConstellation,
   summarizeStellarFlowLanes,
 } from "./graph-stellar-layout";
 
@@ -46,6 +47,47 @@ describe("Stellar flow layout", () => {
     expect(Math.hypot(hub.x, hub.y)).toBeLessThan(Math.hypot(leaf.x, leaf.y));
     expect([...first]).toEqual([...second]);
     expect([...first.values()].every((target) => Number.isFinite(target.x) && Number.isFinite(target.y))).toBe(true);
+  });
+
+  it("keeps top-level project families contiguous and folds tiny paths into one quiet sector", () => {
+    const nodes: GraphNode[] = [];
+    let id = 1;
+    const addFamily = (family: string, count: number, clusterId: number) => {
+      for (let index = 0; index < count; index += 1) {
+        nodes.push({
+          ...node(id, index % 7, index % 5, clusterId),
+          file_path: `${family}/src/file-${index}.ts`,
+        });
+        id += 1;
+      }
+    };
+    addFamily("v2", 10, 10);
+    addFamily("graph-ui", 8, 20);
+    addFamily("docs", 2, 30);
+    addFamily("scripts", 1, 40);
+
+    const layout = computeStellarFlowLayout(nodes, [], null);
+    const constellation = summarizeStellarConstellation(layout);
+    const sectors = constellation.sectors;
+
+    expect(sectors.map((sector) => [sector.key, sector.count])).toEqual([
+      ["v2", 10],
+      ["graph-ui", 8],
+      ["other", 3],
+    ]);
+    for (let index = 1; index < sectors.length; index += 1) {
+      expect(sectors[index].start).toBeGreaterThan(
+        sectors[index - 1].start + sectors[index - 1].span,
+      );
+    }
+    for (const target of layout.values()) {
+      const sector = sectors.find((candidate) => candidate.key === target.sector?.key)!;
+      let angle = Math.atan2(target.y / 0.82, target.x);
+      while (angle < sector.start) angle += Math.PI * 2;
+      expect(angle).toBeGreaterThan(sector.start);
+      expect(angle).toBeLessThan(sector.start + sector.span);
+    }
+    expect(summarizeStellarConstellation(computeStellarFlowLayout(nodes, [], null))).toEqual(constellation);
   });
 
   it("separates incoming and outgoing layers around the selected node", () => {

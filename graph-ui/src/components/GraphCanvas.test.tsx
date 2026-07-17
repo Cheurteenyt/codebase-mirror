@@ -258,6 +258,43 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(ctx.fill.mock.calls.length).toBeLessThan(50);
   });
 
+  it("labels architectural sectors while omitting low-information overview names", () => {
+    const ctx = installCanvasMock(800, 600);
+    const nodes = [
+      ...Array.from({ length: 14 }, (_, index) => makeNode(index + 1, index === 0 ? "now" : index === 1 ? "CodeGraphReader" : `backend-${index}`, {
+        file_path: `v2/src/backend-${index}.ts`,
+        in_degree: index < 2 ? 60 - index : index % 5,
+        out_degree: index < 2 ? 40 - index : index % 3,
+      })),
+      ...Array.from({ length: 12 }, (_, index) => makeNode(index + 15, `frontend-${index}`, {
+        file_path: `graph-ui/src/frontend-${index}.tsx`,
+        in_degree: index % 4,
+        out_degree: index % 2,
+      })),
+      ...Array.from({ length: 2 }, (_, index) => makeNode(index + 27, `doc-${index}`, {
+        file_path: `docs/doc-${index}.md`,
+      })),
+    ];
+
+    render(
+      <GraphCanvas
+        data={{ nodes, edges: [], total_nodes: nodes.length, topology_revision: "stellar-sectors" }}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    const labels = ctx.fillText.mock.calls.map((call) => call[0]);
+    expect(labels).toContain("v2 · 14");
+    expect(labels).toContain("graph-ui · 12");
+    expect(labels.some((label) => /^(?:backend|frontend)-/u.test(String(label)))).toBe(true);
+    expect(labels).not.toContain("now");
+    expect(labels.some((label) => String(label).startsWith("other ·"))).toBe(false);
+  });
+
   it("initializes a Stellar simulation without constructing discarded Architecture forces", async () => {
     const { forceSimulation } = await import("d3-force");
     render(

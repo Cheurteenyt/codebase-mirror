@@ -990,3 +990,35 @@ adaptatifs existants.
 
 Le protocole, les commandes, les limites et les résultats détaillés sont dans
 [`GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md`](./GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md).
+
+## Addendum — hiérarchie visuelle Stellar (2026-07-17)
+
+Le contrôle produit à 1 000 nœuds montrait encore un anneau de particules : les
+répertoires principaux étaient mélangés, le centre attirait l’œil sans expliquer
+l’architecture, les arêtes utiles disparaissaient et des noms génériques comme
+`now`, `close` ou `handle` consommaient le budget de labels.
+
+La correction conserve le moteur et le contrat de performance existants :
+
+- les familles de chemin de premier niveau occupent des secteurs elliptiques
+  contigus ; les familles sous le seuil adaptatif sont regroupées dans un seul
+  secteur `other` volontairement non étiqueté ;
+- les communautés restent contiguës à l’intérieur de leur famille, tandis que
+  des arcs bornés et les comptes représentatifs exacts rendent visibles `v2`,
+  `v1-reference` et `graph-ui` sans ajouter de hull ou de gradient par nœud ;
+- le backbone relié aux hubs est plus lisible que les arêtes secondaires, mais
+  les deux restent des chemins Canvas groupés ;
+- le budget global descend de 18 à 12 labels. Les candidats sont classés une
+  fois par degré exact, ancrés radialement, confrontés aux boîtes des hubs et
+  filtrés lorsque leur nom n’apporte aucune information structurelle ;
+- les secteurs, hubs et candidats sont pré-calculés au changement de frame
+  sémantique. La boucle de peinture ne trie ni ne regroupe les 1 000 nœuds.
+
+Les régressions couvrent la contiguïté et le repli des secteurs, leur rendu
+Canvas, l’absence des labels génériques, les ancres radiales et la conservation
+de tous les symboles. La validation navigateur a ouvert `UiServer` en Stellar
+avec 22 nœuds sélectionnés puis est revenue à Architecture avec les mêmes
+1 000 nœuds / 1 458 arêtes et le voisinage exact de 26 connexions. La suite
+frontend passe **22 fichiers / 169 tests**, le typecheck V2 et `build:package`
+passent, et les budgets restent inchangés : Graph **39,05 / 40 Kio** et
+JavaScript manifeste **124,98 / 125 Kio**.

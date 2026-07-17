@@ -332,6 +332,15 @@ the complete node set to the same simulation before applying that view's
 forces. This adaptive boundary reduces sustained CPU without changing the API
 sample, exact-neighborhood behavior, filters, or hit targets.
 
+The quiet constellation is also an architecture map rather than an undifferentiated
+particle ring. Major top-level paths occupy contiguous elliptical sectors with
+bounded colored arcs and exact representative counts; tiny paths collapse into
+one unlabeled `other` sector. Hub halos and the backbone remain visible, while
+the overview admits at most 12 radially anchored, collision-checked symbol
+labels and rejects generic names such as `now`, `close`, and `handle`. Sector,
+hub, and label plans are computed only when the semantic frame changes, not on
+Canvas paints.
+
 ```bash
 # From v2/ in a source checkout
 npm run build:package

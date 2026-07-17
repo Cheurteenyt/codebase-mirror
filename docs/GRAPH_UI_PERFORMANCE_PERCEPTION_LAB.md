@@ -298,3 +298,18 @@ That task belongs to the combined initial React/UI commit rather than sustained
 Stellar relaxation, so this follow-up does not claim the strict product-scale
 long-task target is solved. It does establish a protected reduction in ongoing
 CPU and rendering work without hiding topology or relaxing a bundle budget.
+
+## Stellar visual-hierarchy follow-up - 2026-07-17
+
+The later visual pass groups top-level paths into contiguous elliptical sectors,
+strengthens only the hub backbone, and precomputes a 12-item informative-label
+plan. Sector summaries, hub membership and label candidates are rebuilt on a
+semantic-frame change; no 1,000-node grouping or sort was added to Canvas paints.
+
+The unchanged five-run API benchmark on the current 10,319-node index returned
+the 1,000-node / 1,458-edge sample with layout gzip p50 **91.182 ms** and
+**88.38%** wire savings. Exact search p50 was **15.255 ms** and the exact
+`UiServer` neighborhood p50 **1.554 ms** for 26 connections. These timings guard
+the data path but do not replace a browser frame-time trace. The production
+build remains inside the unchanged limits: Graph **39.05 / 40 KiB** and manifest
+JavaScript **124.98 / 125 KiB**.
