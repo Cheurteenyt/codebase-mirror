@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   analyzeFrames,
+  assertGraphBrowserSmoke,
   assertSameCompleteTopology,
   blindLabels,
   isHelpRequest,
@@ -88,5 +89,30 @@ describe('graph UI comparison lab contract', () => {
     expect(isHelpRequest(['--help'])).toBe(true);
     expect(isHelpRequest(['-h'])).toBe(true);
     expect(isHelpRequest(['--project', 'help'])).toBe(false);
+  });
+
+  it('fails closed when the packaged browser smoke does not exercise the graph', () => {
+    const valid = {
+      graphTabSelected: true,
+      projectVisible: true,
+      canvas: { cssWidth: 1200, cssHeight: 800, pixelWidth: 1200, pixelHeight: 800 },
+      initial: { visualMode: 'architecture', viewPressed: true, flowLens: 'off' },
+      dependencies: { visualMode: 'stellar', viewPressed: true, flowLens: 'semantic-depth-v2' },
+      keyboardAnnouncement: 'Node packagedGraphCaller, 1 of 2. Press Enter to activate.',
+      restored: { visualMode: 'architecture', viewPressed: true, flowLens: 'off' },
+      consoleErrors: [],
+      pageErrors: [],
+      failedResponses: [],
+    } as const;
+
+    expect(() => assertGraphBrowserSmoke(valid)).not.toThrow();
+    expect(() => assertGraphBrowserSmoke({
+      ...valid,
+      graphTabSelected: false,
+      dependencies: { visualMode: 'architecture', viewPressed: false, flowLens: 'off' },
+      keyboardAnnouncement: 'No visible node targets.',
+      consoleErrors: ['render failed'],
+      failedResponses: [{ status: 500, url: 'http://127.0.0.1/api/layout' }],
+    })).toThrow(/graph tab is not selected.*Dependencies view did not activate.*keyboard traversal.*console error.*HTTP response/si);
   });
 });

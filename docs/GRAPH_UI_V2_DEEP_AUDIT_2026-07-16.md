@@ -602,14 +602,21 @@ une vérité projet sans mention de son périmètre.
 
 Critère : une séquence paginée dite exacte ne mélange jamais deux index.
 
-#### P0-3 — Partiel : V2 warm mesurée, comparaison V1 restante
+#### P0-3 — Fermé pour la performance runtime : comparaison V1/V2 same-graph
 
-- remplir les tableaux backend, transport, navigateur et tâches utilisateur ;
-- conserver scripts, fixture, versions et sorties brutes ;
-- comparer cold et warm ;
-- interdire toute affirmation « plus rapide » non reliée à ce rapport.
+Le laboratoire épingle la V1, conserve scripts, fixture, environnement, sorties
+brutes et captures anonymes, alterne l'ordre V1/V2 et sépare cold de warm. Sur
+la fixture contrôlée, les deux serveurs ont rendu exactement **38 nœuds / 84
+arêtes** avec des empreintes de topologie identiques. Les cinq passes par phase
+et par mode montrent un premier graphe utile V2 environ quatre fois plus rapide,
+un refroidissement atteint dans chaque passe V2 et aucune erreur runtime.
 
-Critère : conclusion reproductible par un tiers sur la même révision.
+Le run produit est explicitement classé exploratoire lorsque les politiques
+d'échantillonnage divergent. Aucune préférence esthétique n'est déduite de ces
+mesures ; elle reste dans P0-5.
+
+Critère : conclusion runtime reproductible par un tiers sur la même révision,
+avec refus automatique de comparer deux topologies incomplètes ou différentes.
 
 #### P0-4 — Fermé : validation locale et CI de PR
 
@@ -704,11 +711,19 @@ Canvas bornés et déroule jusqu’à quatre couches de relations dirigées visi
 La légende par type de relation, l’évaluation perceptuelle de cette profondeur
 et la comparaison aveugle restent ouvertes.
 
-#### P1-8 — Partiel : smoke HTTP/data automatisé, DOM CI restant
+#### P1-8 — Fermé : smoke HTTP/data et navigateur réel dans le gate du paquet
 
 Le démarrage du paquet installé, le chargement HTTP des assets et les principales
-APIs sont maintenant automatisés après `build:package`. Il reste à exécuter le
-JavaScript dans un navigateur CI et à valider au moins une interaction DOM.
+APIs restent automatisés après `build:package`. Le même job installe désormais le
+Chromium correspondant à la version verrouillée de `playwright-core`, exécute le
+JavaScript du paquet installé et refuse de passer si React ne monte pas un canvas
+utile, si le projet ou l'onglet Graph dérive, ou si le navigateur remonte une
+erreur console/page/HTTP.
+
+Le parcours DOM bascule de Structure vers Dependencies, parcourt un symbole au
+clavier, l'active, vérifie la lentille dirigée `semantic-depth-v2`, revient à
+Structure et exécute Fit. Le validateur est fail-closed et protégé par une
+régression distincte du benchmark perceptuel lourd.
 
 ### P2 — approfondissements après preuve
 
@@ -754,7 +769,6 @@ la matrice native complète.
 ### Ce qui manque pour dire « mise à jour facile »
 
 - fixture de compatibilité ancienne DB → nouvelle UI ;
-- test e2e navigateur des parcours Graph dans la CI ;
 - gate `npm audit` et rapport périodique des majors ignorées ;
 - playbooks de migration Vite/plugin React, TypeScript, jsdom et
   better-sqlite3 avec matrice Node minimale/package/Docker ;
@@ -786,15 +800,11 @@ Le Graph UI V2 peut être considéré au niveau visé lorsque :
 
 ## Prochaine séquence après intégration
 
-1. Exécuter le benchmark V1/V2 sur le même graphe : cold et warm, navigateur,
-   FPS, long tasks et deuxième page de recherche/voisinage.
-2. Organiser une comparaison aveugle des tâches, puis valider le parcours avec
-   lecteur d’écran et les contrastes.
-3. Définir et appliquer un budget adaptatif uniquement à partir des mesures
-   nœuds, arêtes, labels, viewport et DPR.
-4. Ajouter au gate du paquet un navigateur CI qui exécute le JavaScript et une
-   interaction DOM réelle.
-5. Écrire les playbooks de migration des dépendances majeures avant toute montée
+1. Organiser une comparaison aveugle des tâches à partir des captures strictes.
+2. Valider le parcours avec lecteur d’écran, contrastes et cibles minimales.
+3. Profiler le cas dense croisé nœuds, arêtes, labels, viewport et DPR avant de
+   modifier les représentants, budgets ou autres niveaux de détail.
+4. Écrire les playbooks de migration des dépendances majeures avant toute montée
    Vite/plugin React, TypeScript, jsdom ou better-sqlite3.
 
 La conclusion démontrée à cette révision est la suivante :

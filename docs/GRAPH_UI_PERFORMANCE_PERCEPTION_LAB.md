@@ -519,3 +519,31 @@ pass. Unchanged limits remain green at Graph **39.15 / 40 KiB**, manifest CSS
 **11.63 KiB**, and manifest JavaScript **125.00 / 125 KiB**. The final packaged
 asset was served locally; keyboard preview, zoom, and view switching produced no
 browser log errors.
+
+## Packaged browser gate follow-up - 2026-07-17
+
+The package smoke previously proved that the installed tarball served its HTML,
+hashed JavaScript/CSS assets, and exact layout/search/neighborhood/scope API
+contracts. It did not execute React in a browser, so a broken dynamic import,
+canvas mount, keyboard path, or view-control interaction could still pass CI.
+
+`npm run smoke:graph-ui:browser -- --project <name> --base-url <url>` now runs a
+bounded Playwright smoke against an already running packaged server. It requires
+a useful non-empty Canvas, the selected project and Graph tab, then exercises
+Structure -> Dependencies -> keyboard node preview -> Enter selection ->
+Structure -> Fit. The run fails closed unless the selected dependency frame
+exposes `semantic-depth-v2`, the keyboard status announces a node, Structure is
+restored, and console errors, uncaught page errors, and failed HTTP responses are
+all empty.
+
+The npm-package job installs the Chromium revision associated with the locked
+`playwright-core` dependency and invokes this script against the indexed tarball
+fixture after the existing HTTP/data assertions. Unit regressions lock both the
+workflow wiring and the fail-closed observation contract. A local packaged run
+passed with Edge 150 on a 1,176 x 904 canvas and the 10,319-node project index;
+the visible in-app run also switched views with no browser warnings or errors.
+
+Frontend **22 files / 181 tests**, focused V2 contract tests, frontend and V2
+typechecks, and `build:package` pass. No runtime UI code or bundle allowance was
+added: the strict limits remain Graph **39.15 / 40 KiB**, manifest CSS
+**11.63 KiB**, and manifest JavaScript **125.00 / 125 KiB**.
