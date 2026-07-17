@@ -961,3 +961,32 @@ budget d'attention et la progression distante monotone. La validation courante
 passe **22 fichiers / 159 tests**, le typecheck, le build frontend et le paquet
 complet. Les budgets frontend mesurés sont Graph **39,96 / 40 Kio** et
 JavaScript manifeste **123,23 / 125 Kio**.
+
+## Addendum — Performance & Perception Lab reproductible (2026-07-17)
+
+Un laboratoire reproductible compare désormais la référence V1 épinglée au
+commit `345425a1bbf73fa29f76067a91f6d16dcf6f11a8` et la V2. Il alterne les
+ordres de passage froid/chaud, collecte first-useful, FPS, long tasks, cooldown,
+CPU et heap, conserve les preuves brutes et anonymise les captures A/B. Une
+empreinte stricte des nœuds et arêtes interdit toute conclusion renderer-only
+si les topologies divergent.
+
+Sur le fixture complet identique de 38 nœuds / 84 arêtes, V2 atteint un graphe
+utile en environ **0,41 s** contre **1,7 s** pour V1, refroidit dans **5/5**
+exécutions contre **0/5**, et conserve une cadence d'interaction équivalente.
+Architecture V2 ne produit aucun long task, tandis que Stellar conserve un coût
+d'initialisation de **50–64 ms**. Le run produit, explicitement classé sampled
+car les sélections à 1000 nœuds divergent, confirme un first-useful V2 voisin
+de **0,62 s** contre **3,08 s** ou plus pour V1, mais Stellar V2 y produit des
+long tasks de **62–124 ms**.
+
+Après garbage collection explicite, le heap retenu médian est d'environ
+**8,07 Mio** pour V1, **5,02 Mio** pour V2 Architecture et **5,34 Mio** pour
+V2 Stellar. La V2 est donc meilleure sur les axes runtime mesurés, mais aucun
+vainqueur esthétique ou métier n'est déclaré sans les tâches A/B anonymes. Le
+prochain travail prioritaire est de profiler puis réduire le coût synchrone et
+les allocations transitoires propres à Stellar, sans relâcher les budgets
+adaptatifs existants.
+
+Le protocole, les commandes, les limites et les résultats détaillés sont dans
+[`GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md`](./GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md).

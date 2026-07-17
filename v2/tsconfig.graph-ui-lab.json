@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": [
+    "scripts/graph-ui-comparison-lab.ts",
+    "scripts/graph-ui-lab-core.ts"
+  ]
+}
