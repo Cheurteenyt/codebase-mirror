@@ -31,6 +31,8 @@ describe('source-discovery coverage modes', () => {
       'tests/main.test.ts',
       'tests/helper.ts',
       'migrations/001-create-table.ts',
+      '.codex-runtime/graph-ui-lab/report.json',
+      '.codex-runtime/graph-ui-lab/v1-source/harness.ts',
       'node_modules/dependency/index.ts',
       'vendor/library.ts',
       '.hidden/secret.ts',
@@ -111,6 +113,16 @@ describe('source-discovery coverage modes', () => {
     ]);
     expect(result.skippedPolicyPaths).toBeGreaterThanOrEqual(7);
     expect(projectRelative(discoverSourceFilesWasm(projectDir, 'fast'))).toEqual(projectRelative(result.files));
+  });
+
+  it('always excludes generated .codex-runtime artifacts from the product graph', () => {
+    for (const mode of ['full', 'fast'] as const) {
+      const result = discoverSourceFilesStructured(projectDir, undefined, mode);
+      const discovered = projectRelative(result.files);
+
+      expect(result.complete).toBe(true);
+      expect(discovered.some(path => path.startsWith('.codex-runtime/'))).toBe(false);
+    }
   });
 
   it('keeps the V1 fast exclusions for JSON manifests and VS Code configuration', () => {
