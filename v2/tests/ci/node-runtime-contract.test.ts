@@ -23,7 +23,6 @@ interface WorkflowStep {
 
 interface WorkflowJob {
   name?: string;
-  env?: Record<string, string>;
   steps: WorkflowStep[];
 }
 
@@ -63,6 +62,9 @@ describe('repository Node.js runtime contract', () => {
     expect(workflow.jobs['package-smoke'].name).toBe('npm pack + install + CLI smoke');
     const steps = workflow.jobs['package-smoke'].steps;
     const install = steps.find(step => step.name === 'Install tarball in temp directory');
+    const configureBrowserCache = steps.find(
+      step => step.name === 'Configure Playwright browser cache'
+    );
     const installBrowser = steps.find(
       step => step.name === 'Install pinned Chromium for packaged Graph UI smoke'
     );
@@ -70,9 +72,10 @@ describe('repository Node.js runtime contract', () => {
       step => step.name === 'Embedded packaged Graph UI data contract smoke'
     );
 
-    expect(workflow.jobs['package-smoke'].env?.PLAYWRIGHT_BROWSERS_PATH)
-      .toBe('${{ runner.temp }}/ms-playwright');
     expect(install?.run).toContain('$RUNNER_TEMP/cbm-install');
+    expect(configureBrowserCache?.run)
+      .toContain('PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/ms-playwright');
+    expect(configureBrowserCache?.run).toContain('$GITHUB_ENV');
     expect(installBrowser?.['working-directory']).toBe('v2');
     expect(installBrowser?.run).toContain('npx playwright-core install --with-deps chromium');
     expect(graphSmoke?.shell).toBe('bash');

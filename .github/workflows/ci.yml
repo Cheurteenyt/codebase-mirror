@@ -326,8 +326,6 @@ jobs:
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -397,6 +395,9 @@ jobs:
           mkdir -p "$INSTALL_DIR"
           npm install --prefix "$INSTALL_DIR" "${{ env.TARBALL }}"
           echo "CBM_INSTALL_DIR=$INSTALL_DIR" >> "$GITHUB_ENV"
+
+      - name: Configure Playwright browser cache
+        run: echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/ms-playwright" >> "$GITHUB_ENV"
 
       - name: Install pinned Chromium for packaged Graph UI smoke
         working-directory: v2
