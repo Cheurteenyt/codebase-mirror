@@ -121,6 +121,8 @@ const SETTLED_FIT_DELAY_MS = 700;
 const TOUCH_TAP_SLOP_PX = 8;
 const MAX_RENDER_DPR = 2;
 const MAX_CANVAS_PIXELS = 16_000_000;
+const DEFERRED_INITIAL_FIT_NODE_THRESHOLD = 500;
+const STELLAR_OVERVIEW_SIMULATION_NODE_THRESHOLD = 500;
 const MID_LABEL_LIMIT = 24;
 const NEAR_LABEL_LIMIT = 64;
 const DEFAULT_LAYOUT_NODE_SPACING = 16;
@@ -778,6 +780,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   // changes, so we rebuild it only on data updates.
   const nodeMapRef = useRef<Map<number, SimNode>>(new Map());
   const stellarFlowTargetsRef = useRef<Map<number, StellarFlowTarget>>(new Map());
+  const stellarNodeBatchesRef = useRef<Map<string, SimNode[]>>(new Map());
+  const stellarSimulationReducedRef = useRef(false);
   const stellarFlowLanesRef = useRef<ReturnType<typeof summarizeStellarFlowLanes>>({
     layers: [],
     modules: [],
@@ -791,6 +795,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const layoutNodeSpacingRef = useRef(DEFAULT_LAYOUT_NODE_SPACING);
   const localEdgesRef = useRef<SimEdge[]>([]);
   const rawEdgeLayersRef = useRef<[SimEdge[], SimEdge[]]>([[], []]);
+  const stellarEdgeLayersRef = useRef<[SimEdge[], SimEdge[]]>([[], []]);
   const crossClusterEdgesRef = useRef<SimEdge[]>([]);
   const clusterBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
   const clusterTrafficRef = useRef<Map<number, ScopeTraffic>>(new Map());
@@ -890,6 +895,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const canvas = canvasRef.current;
     if (
       !canvas
+      || !canvas.style.width
       || visualModeRef.current !== "stellar"
       || selectedNodeIdRef.current == null
     ) return false;
@@ -922,7 +928,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const fitVisibleGraph = useCallback((): boolean => {
     const canvas = canvasRef.current;
     const nodes = nodesRef.current;
-    if (!canvas || nodes.length === 0) return false;
+    // React's semantic-layout effect runs before the resize effect on mount.
+    // Do not scan all bounds against the browser's disposable 300x150 canvas;
+    // resize owns the first fit once the CSS and backing-store sizes agree.
+    if (!canvas || !canvas.style.width || nodes.length === 0) return false;
 
     const rect = canvas.getBoundingClientRect();
     const backingScale = backingScaleRef.current;
@@ -1129,6 +1138,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       edgesRef.current = [];
       nodeMapRef.current = new Map();
       stellarFlowTargetsRef.current = new Map();
+      stellarNodeBatchesRef.current = new Map();
+      stellarSimulationReducedRef.current = false;
       stellarFlowLanesRef.current = { layers: [], modules: [] };
       stellarFlowLabelCandidatesRef.current = [];
       stellarFlowEdgeGroupsRef.current = new Map();
@@ -1139,6 +1150,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       layoutNodeSpacingRef.current = DEFAULT_LAYOUT_NODE_SPACING;
       localEdgesRef.current = [];
       rawEdgeLayersRef.current = [[], []];
+      stellarEdgeLayersRef.current = [[], []];
       crossClusterEdgesRef.current = [];
       clusterBundleBatchesRef.current = new Map();
       clusterTrafficRef.current = new Map();
@@ -1269,6 +1281,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     let maxDegree = 1;
     for (const node of nodes) maxDegree = Math.max(maxDegree, node.rank);
     for (const node of nodes) node.rank = Math.sqrt(node.rank / maxDegree);
+    const stellarNodeBatches = new Map<string, SimNode[]>();
+    for (const node of nodes) {
+      const key = stellarNodeColor(node) + Math.min(3, Math.floor(node.rank * 4));
+      const batch = stellarNodeBatches.get(key);
+      if (batch) batch.push(node);
+      else stellarNodeBatches.set(key, [node]);
+    }
+    stellarNodeBatchesRef.current = stellarNodeBatches;
     const localBackboneEdges: SimEdge[] = [];
     const localDetailEdges: SimEdge[] = [];
     for (const edge of localEdges) {
@@ -1279,6 +1299,16 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         : localDetailEdges).push(edge);
     }
     rawEdgeLayersRef.current = [localBackboneEdges, localDetailEdges];
+    const stellarBackboneEdges: SimEdge[] = [];
+    const stellarDetailEdges: SimEdge[] = [];
+    for (const edge of edges) {
+      const source = map.get(simEdgeNodeId(edge.source))!;
+      const target = map.get(simEdgeNodeId(edge.target))!;
+      (source.rank > 0.51 || target.rank > 0.51
+        ? stellarBackboneEdges
+        : stellarDetailEdges).push(edge);
+    }
+    stellarEdgeLayersRef.current = [stellarBackboneEdges, stellarDetailEdges];
     crossClusterEdgesRef.current = crossClusterEdges;
     const clusterBundlePlan = buildOverviewBundleBatches(
       edges,
@@ -1370,6 +1400,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         // A server revision with the same IDs still reinitializes forceX/Y,
         // whose target arrays are cached by d3 during initialize().
         simRef.current.nodes(nodes);
+        stellarSimulationReducedRef.current = false;
         (simRef.current.force("link") as any).links(
           visualModeRef.current === "stellar" ? edges : localEdges,
         );
@@ -1383,24 +1414,31 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     } else {
       const sim = forceSimulation(nodes)
-        .force(
-          "charge",
-          forceManyBody().strength(CHARGE_STRENGTH).distanceMax(CHARGE_DISTANCE_MAX),
-        )
-        .force(
-          "link",
-          forceLink<SimNode, SimEdge>(localEdges)
-            .id((d) => d.id)
-            .distance(LOCAL_LINK_DISTANCE)
-            .strength(0.3),
-        )
-        // Preserve the server's directory map while allowing gentle local
-        // relaxation. This is the key distinction from a global force blob.
-        .force("x", forceX<SimNode>((node) => node.anchorX).strength(ANCHOR_STRENGTH))
-        .force("y", forceY<SimNode>((node) => node.anchorY).strength(ANCHOR_STRENGTH))
-        .force("collide", forceCollide<SimNode>((node) => nodeRadius(node) + 4))
         .alpha(1)
         .alphaDecay(SIMULATION_ALPHA_DECAY);
+
+      // The following visual-mode effect installs Stellar forces directly.
+      // Initializing Architecture here first would traverse every node/link
+      // twice only to discard those force instances in the same commit.
+      if (visualModeRef.current !== "stellar") {
+        sim
+          .force(
+            "charge",
+            forceManyBody().strength(CHARGE_STRENGTH).distanceMax(CHARGE_DISTANCE_MAX),
+          )
+          .force(
+            "link",
+            forceLink<SimNode, SimEdge>(localEdges)
+              .id((d) => d.id)
+              .distance(LOCAL_LINK_DISTANCE)
+              .strength(0.3),
+          )
+          // Preserve the server's directory map while allowing gentle local
+          // relaxation. This is the key distinction from a global force blob.
+          .force("x", forceX<SimNode>((node) => node.anchorX).strength(ANCHOR_STRENGTH))
+          .force("y", forceY<SimNode>((node) => node.anchorY).strength(ANCHOR_STRENGTH))
+          .force("collide", forceCollide<SimNode>((node) => nodeRadius(node) + 4));
+      }
 
       // R40 (UI-6): batch tick-driven draws via requestAnimationFrame.
       // d3 ticks much faster than 60fps during initial layout; without
@@ -1436,11 +1474,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
       simRef.current = sim as any;
     }
-    // A known filter restoration deliberately does not reheat/restart d3. If
-    // the previous view was empty, however, the simulation is stopped and no
-    // future tick will repaint the restored topology. Draw explicitly after
-    // swapping refs so every non-empty view change is immediately visible.
-    drawRef.current?.();
+    // The visual-mode effect below also depends on `data` and owns the single
+    // synchronous repaint after these refs are swapped. Painting here as well
+    // doubled every non-empty data refresh, including initial GraphTab setup.
     scheduleInitialFit();
     if (!topologyAlreadyKnown) scheduleSettledFit();
     // No cleanup here — the sim is preserved across data changes. Cleanup is
@@ -1487,6 +1523,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         data.edges as readonly GraphEdge[],
         selectedNodeId,
       );
+      const reduceOverviewSimulation = selectedNodeId == null
+        && nodes.length >= STELLAR_OVERVIEW_SIMULATION_NODE_THRESHOLD;
       stellarFlowTargetsRef.current = targets;
       stellarFlowLanesRef.current = summarizeStellarFlowLanes(targets);
       stellarFlowLabelCandidatesRef.current = selectedNodeId == null
@@ -1525,7 +1563,15 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         if (!target) continue;
         node.anchorX = target.x;
         node.anchorY = target.y;
-        if (target.role === "focus") {
+        if (reduceOverviewSimulation) {
+          // The overview layout is already deterministic. Keep micro-symbols
+          // on those exact coordinates and spend d3 work only on the hubs that
+          // benefit perceptually from local collision/relaxation.
+          node.x = target.x;
+          node.y = target.y;
+          node.vx = 0;
+          node.vy = 0;
+        } else if (target.role === "focus") {
           // The selected symbol is the semantic origin, not merely a soft
           // suggestion to d3. High fan-out link forces must never pull the
           // focus into an incoming/outgoing lane.
@@ -1544,6 +1590,26 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         simEdgeNodeId(edge.source) === selectedNodeId
         || simEdgeNodeId(edge.target) === selectedNodeId
       );
+      let simulationNodes = nodes;
+      let simulationEdges = edgesRef.current;
+      if (reduceOverviewSimulation) {
+        simulationNodes = nodes.filter((node) => targets.get(node.id)?.role === "hub");
+        if (simulationNodes.length === 0) {
+          simulationNodes = [nodes.reduce((best, node) => node.rank > best.rank ? node : best)];
+        }
+        const simulationNodeIds = new Set(simulationNodes.map((node) => node.id));
+        simulationEdges = edgesRef.current.filter((edge) => (
+          simulationNodeIds.has(simEdgeNodeId(edge.source))
+          && simulationNodeIds.has(simEdgeNodeId(edge.target))
+        ));
+      }
+      if (reduceOverviewSimulation) {
+        sim.nodes(simulationNodes);
+        stellarSimulationReducedRef.current = true;
+      } else if (stellarSimulationReducedRef.current) {
+        sim.nodes(nodes);
+        stellarSimulationReducedRef.current = false;
+      }
       sim
         .force(
           "charge",
@@ -1553,7 +1619,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         )
         .force(
           "link",
-          forceLink<SimNode, SimEdge>(edgesRef.current)
+          forceLink<SimNode, SimEdge>(simulationEdges)
             .id((node) => node.id)
             .distance((edge) => touchesFocus(edge) ? STELLAR_FOCUS_LINK_DISTANCE : STELLAR_LINK_DISTANCE)
             .strength((edge) => touchesFocus(edge) ? 0.34 : 0.075),
@@ -1576,6 +1642,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         )
         .force("collide", forceCollide<SimNode>((node) => nodeRadius(node) + 7));
     } else {
+      if (stellarSimulationReducedRef.current) {
+        sim.nodes(nodes);
+        stellarSimulationReducedRef.current = false;
+      }
       stellarFlowTargetsRef.current = new Map();
       stellarFlowLanesRef.current = { layers: [], modules: [] };
       stellarFlowLabelCandidatesRef.current = [];
@@ -1605,6 +1675,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         .force("collide", forceCollide<SimNode>((node) => nodeRadius(node) + 4));
     }
 
+    let frameDrawn = false;
     if (semanticFrameChanged) {
       cancelPendingAutoFit();
       cancelViewAnimation();
@@ -1621,7 +1692,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           });
         }
       } else {
-        fitVisibleGraph();
+        frameDrawn = fitVisibleGraph();
         scheduleSettledFit();
       }
     } else if (dataRequiresLayoutReheatRef.current && visualMode === "stellar") {
@@ -1631,7 +1702,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       sim.alpha(0.42);
     }
     dataRequiresLayoutReheatRef.current = false;
-    drawRef.current?.();
+    if (!frameDrawn) drawRef.current?.();
   }, [
     animateToTransform,
     cancelPendingAutoFit,
@@ -1749,6 +1820,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const stellarFocused = stellarFlow
       && selectedNodeId != null
       && stellarFlowTargetsRef.current.get(selectedNodeId)?.role === "focus";
+    const stellarOverview = stellarFlow && !stellarFocused;
 
     // Directory communities are precomputed server-side and require only two
     // batched paths here, regardless of the node count. They make overview
@@ -1774,7 +1846,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const rawNodeOpacity = stellarFlow
       ? 0.96
       : rawTopologyReveal * (0.78 + fadeBetween(projectedNodeSpacing, 22, 26) * 0.22);
-    const rawDetailReveal = stellarFlow ? 1 : fadeBetween(projectedNodeSpacing, 22, 30);
+    const rawDetailReveal = stellarFlow
+      ? (stellarFocused ? 1 : fadeBetween(projectedNodeSpacing, 4, 10))
+      : fadeBetween(projectedNodeSpacing, 22, 30);
     const localEdgeOpacity = stellarFlow
       ? (stellarFocused ? 0.075 : 0.19)
       : rawTopologyReveal * (0.18 + fadeBetween(projectedNodeSpacing, 22, 32) * 0.42);
@@ -2195,20 +2269,21 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       : "rgba(100, 135, 158, 0.105)";
     ctx.lineWidth = (rawTopology ? 0.65 : 0.5) / tk;
     if (localEdgeOpacity) {
+      const edgeLayers = stellarOverview ? stellarEdgeLayersRef.current : rawEdgeLayersRef.current;
       ctx.globalAlpha = localEdgeOpacity;
       ctx.beginPath();
-      traceEdges(ctx, rawEdgeLayersRef.current[0], nodeMap, selectedNodeId);
+      traceEdges(ctx, edgeLayers[0], nodeMap, selectedNodeId);
       ctx.stroke();
       if (rawDetailReveal) {
         ctx.globalAlpha *= rawDetailReveal;
         ctx.beginPath();
-        traceEdges(ctx, rawEdgeLayersRef.current[1], nodeMap, selectedNodeId);
+        traceEdges(ctx, edgeLayers[1], nodeMap, selectedNodeId);
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
     }
 
-    if (crossEdgeOpacity) {
+    if (crossEdgeOpacity && !stellarOverview) {
       ctx.globalAlpha = crossEdgeOpacity;
       ctx.strokeStyle = "rgba(100, 135, 158, 0.18)";
       ctx.lineWidth = 0.65 / tk;
@@ -2293,10 +2368,36 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
+    // The quiet Stellar overview quantizes rank opacity into four perceptual
+    // tiers and batches each spectral color. All symbols remain present, but a
+    // 1,000-node frame now needs at most 40 fills instead of 1,000.
+    const batchStellarNodes = stellarFlow && !stellarFocused
+      && !activeHighlightedIds && !deadCodeView && keyboardFocus?.kind !== "node";
+    if (batchStellarNodes) {
+      for (const [key, nodes] of stellarNodeBatchesRef.current) {
+        ctx.beginPath();
+        for (const node of nodes) {
+          const x = node.x ?? 0;
+          const y = node.y ?? 0;
+          const radius = Math.max(nodeRadius(node), 1.2 / tk);
+          if (stellarOverview && nodeRadius(node) * tk < 2.4) {
+            ctx.rect(x - radius, y - radius, radius * 2, radius * 2);
+          } else {
+            ctx.moveTo(x + radius, y);
+            traceNodePath(ctx, node, x, y, radius, visualMode);
+          }
+        }
+        ctx.fillStyle = key.slice(0, 7);
+        ctx.globalAlpha = rawNodeOpacity * (0.37 + Number(key[7]) * 0.21);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // Draw nodes. Semantic fill is never replaced by selection or status;
     // those dimensions use outer rings so the graph remains decodable. Nodes
     // enter before dense edge layers, and are never painted in macro views.
-    for (const node of rawNodeOpacity ? nodesRef.current : []) {
+    for (const node of rawNodeOpacity && !batchStellarNodes ? nodesRef.current : []) {
       const x = node.x ?? 0;
       const y = node.y ?? 0;
       const isHighlighted = activeHighlightedIds?.has(node.id);
@@ -2618,7 +2719,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   // always called AFTER being installed.
   useEffect(() => {
     drawRef.current = draw;
-    draw();
+    // The browser creates canvases at 300x150. The resize effect below sizes
+    // the backing store and performs the first real paint; drawing here before
+    // that point traversed the complete graph into a frame that was discarded.
+    if (canvasRef.current?.style.width) draw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draw]);
 
@@ -2635,16 +2739,31 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       // at 1x and the browser stretches it to fill the CSS box, producing
       // blurry nodes and edges.
       const backingStore = boundedCanvasBackingStore(parent.clientWidth, parent.clientHeight);
+      const cssWidth = parent.clientWidth + 'px';
+      const cssHeight = parent.clientHeight + 'px';
+      if (
+        canvas.width === backingStore.width
+        && canvas.height === backingStore.height
+        && canvas.style.width === cssWidth
+        && canvas.style.height === cssHeight
+      ) return;
       backingScaleRef.current = { x: backingStore.scaleX, y: backingStore.scaleY };
       canvas.width = backingStore.width;
       canvas.height = backingStore.height;
-      canvas.style.width = parent.clientWidth + 'px';
-      canvas.style.height = parent.clientHeight + 'px';
+      canvas.style.width = cssWidth;
+      canvas.style.height = cssHeight;
       if (!hasUserInteractedRef.current && fitStellarFocus()) {
         cancelPendingAutoFit();
-      } else if (!hasAutoFitRef.current && !hasUserInteractedRef.current && fitVisibleGraph()) {
-        hasAutoFitRef.current = true;
-        cancelPendingAutoFit();
+      } else if (!hasAutoFitRef.current && !hasUserInteractedRef.current) {
+        if (nodesRef.current.length >= DEFERRED_INITIAL_FIT_NODE_THRESHOLD) {
+          // Sizing is part of React's passive-effect flush. Keep a large O(n)
+          // bounds scan out of that already busy task and fit on the next
+          // visual frame. This coalesces with the data effect's pending fit.
+          scheduleInitialFit();
+        } else if (fitVisibleGraph()) {
+          hasAutoFitRef.current = true;
+          cancelPendingAutoFit();
+        }
       } else {
         drawRef.current?.();
       }
@@ -2654,7 +2773,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const observer = new ResizeObserver(resize);
     observer.observe(canvas.parentElement!);
     return () => observer.disconnect();
-  }, [cancelPendingAutoFit, fitStellarFocus, fitVisibleGraph]);
+  }, [cancelPendingAutoFit, fitStellarFocus, fitVisibleGraph, scheduleInitialFit]);
 
   // Mouse and touch interaction (pan, zoom, click/tap, drag, pinch)
   useEffect(() => {

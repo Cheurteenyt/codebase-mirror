@@ -120,6 +120,183 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(stellarNodeGlyph("File")).toBe("square");
   });
 
+  it("sizes the canvas backing store before its first graph paint", () => {
+    const ctx = installCanvasMock(800, 600);
+    const bounds = vi.mocked(HTMLCanvasElement.prototype.getBoundingClientRect);
+
+    render(
+      <GraphCanvas
+        data={dataA}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    expect(ctx.clearRect.mock.calls[0]).toEqual([0, 0, 800, 600]);
+    expect(ctx.clearRect).not.toHaveBeenCalledWith(0, 0, 300, 150);
+    expect(bounds).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves a large initial bounds scan onto the next visual frame", () => {
+    vi.useFakeTimers();
+    installCanvasMock(800, 600);
+    const bounds = vi.mocked(HTMLCanvasElement.prototype.getBoundingClientRect);
+    const nodes = Array.from({ length: 501 }, (_, index) => makeNode(index + 1, `node-${index}`));
+
+    render(
+      <GraphCanvas
+        data={{ nodes, edges: [], total_nodes: nodes.length, topology_revision: "deferred-fit" }}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    expect(bounds).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(20));
+    expect(bounds).toHaveBeenCalledTimes(1);
+  });
+
+  it("relaxes only semantic hubs in a large Stellar overview", async () => {
+    const { forceSimulation } = await import("d3-force");
+    const noop = () => {};
+    const nodes = Array.from({ length: 501 }, (_, index) => makeNode(index + 1, `node-${index}`, {
+      in_degree: index === 0 ? 100 : index % 4,
+      out_degree: index === 0 ? 100 : index % 3,
+    }));
+    const largeData = {
+      nodes,
+      edges: [],
+      total_nodes: nodes.length,
+      topology_revision: "hub-simulation",
+    };
+
+    const { rerender } = render(
+      <GraphCanvas
+        data={largeData}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    const sim = (forceSimulation as any).mock.results[0].value;
+    const simulatedNodes = sim.nodes.mock.calls.at(-1)[0] as GraphNode[];
+    expect(simulatedNodes.length).toBeGreaterThan(0);
+    expect(simulatedNodes.length).toBeLessThan(nodes.length);
+    expect(simulatedNodes).toContainEqual(expect.objectContaining({ id: nodes[0].id }));
+
+    rerender(
+      <GraphCanvas
+        data={largeData}
+        visualMode="architecture"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    expect((sim.nodes.mock.calls.at(-1)[0] as GraphNode[])).toHaveLength(nodes.length);
+  });
+
+  it("paints a Stellar data refresh only once after layout refs are replaced", () => {
+    const ctx = installCanvasMock(800, 600);
+    const noop = () => {};
+    const { rerender } = render(
+      <GraphCanvas
+        data={dataA}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+    ctx.clearRect.mockClear();
+
+    rerender(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    expect(ctx.clearRect).toHaveBeenCalledTimes(1);
+  });
+
+  it("batches the quiet Stellar overview without dropping any node symbol", () => {
+    const ctx = installCanvasMock(800, 600);
+    const nodes = Array.from({ length: 100 }, (_, index) => makeNode(index + 1, `node-${index}`, {
+      in_degree: index % 60,
+      out_degree: index % 7,
+    }));
+
+    render(
+      <GraphCanvas
+        data={{ nodes, edges: [], total_nodes: nodes.length, topology_revision: "stellar-batches" }}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    expect(ctx.rect.mock.calls.length).toBeGreaterThanOrEqual(nodes.length);
+    expect(ctx.fill.mock.calls.length).toBeGreaterThan(0);
+    expect(ctx.fill.mock.calls.length).toBeLessThan(50);
+  });
+
+  it("initializes a Stellar simulation without constructing discarded Architecture forces", async () => {
+    const { forceSimulation } = await import("d3-force");
+    render(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    const sim = (forceSimulation as any).mock.results[0].value;
+    expect(sim.force.mock.calls.filter((call: unknown[]) => call.length === 2)).toHaveLength(5);
+  });
+
+  it("starts every batched Stellar circle as an isolated canvas subpath", () => {
+    const ctx = installCanvasMock(800, 600);
+    const nodes = [
+      makeNode(1, "left", { size: 12, x: -40, y: 0 }),
+      makeNode(2, "right", { size: 12, x: 40, y: 0 }),
+    ];
+
+    render(
+      <GraphCanvas
+        data={{ nodes, edges: [], total_nodes: 2, topology_revision: "isolated-stellar-paths" }}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    expect(ctx.moveTo).toHaveBeenCalledWith(-28, 0);
+    expect(ctx.moveTo).toHaveBeenCalledWith(52, 0);
+  });
+
   it("switches to Stellar flow by reheating the existing simulation exactly once", async () => {
     const { forceSimulation } = await import("d3-force");
     const noop = () => {};
@@ -322,7 +499,9 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
       />,
     );
 
-    expect(ctx.setLineDash.mock.calls).toContainEqual([[7, 4]]);
+    expect(ctx.setLineDash.mock.calls.some(([dash]) => (
+      dash.length === 2 && Math.abs(dash[0] / dash[1] - 7 / 4) < 1e-6
+    ))).toBe(true);
     expect(ctx.setLineDash.mock.calls).toContainEqual([[]]);
   });
 

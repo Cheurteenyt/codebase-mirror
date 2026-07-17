@@ -323,6 +323,15 @@ lower weight; cross-links that do not advance toward or away from the focus are
 not promoted as flow. Focus-label ranking is precomputed on semantic-frame
 changes rather than sorted during every Canvas paint.
 
+Large unselected Stellar overviews keep every sampled node visible and
+clickable, but only semantic hubs participate in d3 relaxation. Micro-symbols
+remain on their deterministic constellation targets, nodes are painted in
+spectral/rank batches, and secondary edges appear only when projected spacing
+makes them useful. Selecting a symbol or returning to `Architecture` restores
+the complete node set to the same simulation before applying that view's
+forces. This adaptive boundary reduces sustained CPU without changing the API
+sample, exact-neighborhood behavior, filters, or hit targets.
+
 ```bash
 # From v2/ in a source checkout
 npm run build:package
