@@ -62,11 +62,22 @@ describe('repository Node.js runtime contract', () => {
     expect(workflow.jobs['package-smoke'].name).toBe('npm pack + install + CLI smoke');
     const steps = workflow.jobs['package-smoke'].steps;
     const install = steps.find(step => step.name === 'Install tarball in temp directory');
+    const configureBrowserCache = steps.find(
+      step => step.name === 'Configure Playwright browser cache'
+    );
+    const installBrowser = steps.find(
+      step => step.name === 'Install pinned Chromium for packaged Graph UI smoke'
+    );
     const graphSmoke = steps.find(
       step => step.name === 'Embedded packaged Graph UI data contract smoke'
     );
 
     expect(install?.run).toContain('$RUNNER_TEMP/cbm-install');
+    expect(configureBrowserCache?.run)
+      .toContain('PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/ms-playwright');
+    expect(configureBrowserCache?.run).toContain('$GITHUB_ENV');
+    expect(installBrowser?.['working-directory']).toBe('v2');
+    expect(installBrowser?.run).toContain('npx playwright-core install --with-deps chromium');
     expect(graphSmoke?.shell).toBe('bash');
     expect(graphSmoke?.['working-directory']).toBe('${{ runner.temp }}');
 
@@ -91,6 +102,9 @@ describe('repository Node.js runtime contract', () => {
     expect(script).toContain('/api/scope?');
     expect(script).toContain('scope.contract_version === 1');
     expect(script).toContain('scope.graph_revision === neighborhood.graph_revision');
+    expect(script).toContain('scripts/graph-ui-browser-smoke.ts');
+    expect(script).toContain('--base-url "$BASE_URL"');
+    expect(script).toContain('--project "$PROJECT"');
     expect(script).toContain('trap cleanup EXIT');
     expect(script).toContain("trap 'exit 130' INT");
     expect(script).not.toContain('/tmp/cbm-install');

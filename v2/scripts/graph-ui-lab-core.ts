@@ -59,6 +59,36 @@ export interface PerceptionTask {
   completionEvidence: string;
 }
 
+export interface GraphBrowserSmokeObservation {
+  graphTabSelected: boolean;
+  projectVisible: boolean;
+  canvas: {
+    cssWidth: number;
+    cssHeight: number;
+    pixelWidth: number;
+    pixelHeight: number;
+  };
+  initial: {
+    visualMode: string | null;
+    viewPressed: boolean;
+    flowLens: string | null;
+  };
+  dependencies: {
+    visualMode: string | null;
+    viewPressed: boolean;
+    flowLens: string | null;
+  };
+  keyboardAnnouncement: string;
+  restored: {
+    visualMode: string | null;
+    viewPressed: boolean;
+    flowLens: string | null;
+  };
+  consoleErrors: readonly string[];
+  pageErrors: readonly string[];
+  failedResponses: ReadonlyArray<{ status: number; url: string }>;
+}
+
 export const PERCEPTION_TASKS: readonly PerceptionTask[] = [
   {
     id: 'largest-areas',
@@ -211,4 +241,56 @@ export function analyzeFrames(timestamps: readonly number[]): FrameSummary {
 export function blindLabels(seed: string): Readonly<Record<'v1' | 'v2', 'A' | 'B'>> {
   const firstByte = createHash('sha256').update(seed).digest()[0]!;
   return firstByte % 2 === 0 ? { v1: 'A', v2: 'B' } : { v1: 'B', v2: 'A' };
+}
+
+export function assertGraphBrowserSmoke(observation: GraphBrowserSmokeObservation): void {
+  const failures: string[] = [];
+  if (!observation.graphTabSelected) failures.push('graph tab is not selected after navigation');
+  if (!observation.projectVisible) failures.push('selected project is not visible in the application shell');
+  if (
+    observation.canvas.cssWidth < 320
+    || observation.canvas.cssHeight < 200
+    || observation.canvas.pixelWidth < 320
+    || observation.canvas.pixelHeight < 200
+  ) {
+    failures.push(`graph canvas is not usefully sized (${JSON.stringify(observation.canvas)})`);
+  }
+  if (
+    observation.initial.visualMode !== 'architecture'
+    || !observation.initial.viewPressed
+    || observation.initial.flowLens !== 'off'
+  ) {
+    failures.push('Structure view did not mount as the initial active graph');
+  }
+  if (
+    observation.dependencies.visualMode !== 'stellar'
+    || !observation.dependencies.viewPressed
+    || observation.dependencies.flowLens !== 'semantic-depth-v2'
+  ) {
+    failures.push('Dependencies view did not activate a keyboard-selected semantic flow');
+  }
+  if (!/^Node\b/u.test(observation.keyboardAnnouncement)) {
+    failures.push(`keyboard traversal did not announce a node (${observation.keyboardAnnouncement || 'empty'})`);
+  }
+  if (
+    observation.restored.visualMode !== 'architecture'
+    || !observation.restored.viewPressed
+    || observation.restored.flowLens !== 'off'
+  ) {
+    failures.push('Structure view was not restored after the dependency-flow interaction');
+  }
+  if (observation.consoleErrors.length > 0) {
+    failures.push(`browser console error(s): ${observation.consoleErrors.join(' | ')}`);
+  }
+  if (observation.pageErrors.length > 0) {
+    failures.push(`uncaught page error(s): ${observation.pageErrors.join(' | ')}`);
+  }
+  if (observation.failedResponses.length > 0) {
+    failures.push(`failed HTTP response(s): ${observation.failedResponses
+      .map((response) => `${response.status} ${response.url}`)
+      .join(' | ')}`);
+  }
+  if (failures.length > 0) {
+    throw new Error(`Packaged Graph UI browser smoke failed:\n- ${failures.join('\n- ')}`);
+  }
 }

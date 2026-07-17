@@ -396,6 +396,13 @@ jobs:
           npm install --prefix "$INSTALL_DIR" "${{ env.TARBALL }}"
           echo "CBM_INSTALL_DIR=$INSTALL_DIR" >> "$GITHUB_ENV"
 
+      - name: Configure Playwright browser cache
+        run: echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/ms-playwright" >> "$GITHUB_ENV"
+
+      - name: Install pinned Chromium for packaged Graph UI smoke
+        working-directory: v2
+        run: npx playwright-core install --with-deps chromium
+
       - name: CLI smoke test from arbitrary cwd
         working-directory: ${{ runner.temp }}
         run: |
@@ -597,6 +604,11 @@ jobs:
               + `${neighborhood.page.returned} neighborhood edge(s), ${scope.page.returned_nodes} scope node(s).`,
           );
           NODE
+
+          "$GITHUB_WORKSPACE/v2/node_modules/.bin/tsx" \
+            "$GITHUB_WORKSPACE/v2/scripts/graph-ui-browser-smoke.ts" \
+            --base-url "$BASE_URL" \
+            --project "$PROJECT"
 
   # ── Docker: image + CLI + non-root smoke ───────────────────────
   docker-smoke:

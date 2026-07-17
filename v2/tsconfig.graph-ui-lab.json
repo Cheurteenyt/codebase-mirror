@@ -6,6 +6,7 @@
     "rootDir": "."
   },
   "include": [
+    "scripts/graph-ui-browser-smoke.ts",
     "scripts/graph-ui-comparison-lab.ts",
     "scripts/graph-ui-lab-core.ts"
   ]

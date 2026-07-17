@@ -24,6 +24,7 @@
     "bench:tokens": "tsx scripts/token-payload-benchmark.ts",
     "bench:graph-ui": "node scripts/graph-ui-runtime-benchmark.mjs",
     "bench:graph-ui:compare": "tsx scripts/graph-ui-comparison-lab.ts",
+    "smoke:graph-ui:browser": "tsx scripts/graph-ui-browser-smoke.ts",
     "build:backend": "npm run clean && tsc -p tsconfig.json",
     "build:package": "node scripts/build-package.mjs",
     "prepack": "npm run build:package",
