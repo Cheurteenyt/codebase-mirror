@@ -51,6 +51,7 @@ if (typeof HTMLCanvasElement !== "undefined") {
       scale: () => {},
       translate: () => {},
       beginPath: () => {},
+      rect: () => {},
       arc: () => {},
       fill: () => {},
       stroke: () => {},

@@ -250,3 +250,51 @@ so this distinction cannot be hidden.
   sheet is completed; the runner intentionally leaves `automaticWinner` null.
 - Existing adaptive rendering budgets remain unchanged until a trace identifies
   the Stellar bottleneck and a regression test protects the fix.
+
+## Stellar rendering follow-up - 2026-07-17
+
+The earlier result above is retained as the before-state. A source-mapped CPU
+profile, Canvas operation counters and repeated cold-page runs isolated two
+separate costs: discarded startup work and sustained full-topology relaxation.
+
+The implementation now:
+
+- refuses to fit or paint the browser's disposable 300 x 150 Canvas;
+- makes resize idempotent and coalesces the initial large-graph fit;
+- avoids constructing Architecture forces immediately before Stellar replaces
+  them;
+- paints quiet Stellar symbols in spectral/rank batches (at most 40 fills for
+  the current ten-color, four-tier palette) while preserving every node and hit
+  target;
+- exposes secondary edges by projected-spacing LOD while retaining a hub
+  backbone at overview scale;
+- keeps deterministic micro-symbols fixed and relaxes only semantic hubs when
+  an unselected Stellar overview contains at least 500 nodes; selecting a node
+  or switching to Architecture restores the complete simulation node set.
+
+Targeted regressions cover first-size paint ordering, a single data-refresh
+paint, isolated batched subpaths, full node representation, force construction,
+deferred large fits, reduced hub simulation and restoration of the complete
+simulation. The focused `UiServer` browser check retained its exact 26-edge
+neighborhood, and switching back to Architecture retained 1000 nodes / 1458
+edges.
+
+### Follow-up measurements
+
+- Controlled 38-node fixture: Stellar produced **0 long tasks in 6 starts**;
+  Architecture produced one 51 ms cold outlier in 6 starts.
+- Product 1000-node sample: first-window Stellar Canvas clears fell from 143 to
+  138. Architecture fell from 158 to 154 through the shared startup changes.
+- A 2.4 s source-mapped Stellar profile reduced sampled d3 force self-time from
+  roughly **590 ms to 75 ms** (about 87%) after hub-only overview relaxation.
+- `traceNodePath` self-time fell from roughly 20 ms to 5 ms after batched
+  micro-symbol rendering.
+- The production bundle remains inside the unchanged budgets: Graph 38.44 KiB,
+  main 70.89 KiB, CSS 11.87 KiB and manifest JavaScript 124.11 KiB.
+
+The product-scale run still records a roughly 50-77 ms startup task under the
+strict 50 ms observer threshold, with occasional Architecture outliers as well.
+That task belongs to the combined initial React/UI commit rather than sustained
+Stellar relaxation, so this follow-up does not claim the strict product-scale
+long-task target is solved. It does establish a protected reduction in ongoing
+CPU and rendering work without hiding topology or relaxing a bundle budget.

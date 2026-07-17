@@ -34,6 +34,10 @@ export default defineConfig({
         // manifest-wide budget still accounts for every transferred byte.
         manualChunks(id) {
           if (id.includes("/node_modules/d3-")) return "graph-d3";
+          if (
+            id.endsWith("/src/lib/graph-stellar-layout.ts")
+            || id.endsWith("/src/lib/graph-visual-mode.ts")
+          ) return "graph-stellar";
         },
       },
     },
