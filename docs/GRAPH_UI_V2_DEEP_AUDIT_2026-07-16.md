@@ -1022,3 +1022,26 @@ avec 22 nœuds sélectionnés puis est revenue à Architecture avec les mêmes
 frontend passe **22 fichiers / 169 tests**, le typecheck V2 et `build:package`
 passent, et les budgets restent inchangés : Graph **39,05 / 40 Kio** et
 JavaScript manifeste **124,98 / 125 Kio**.
+
+## Addendum — légendes de communautés Stellar (2026-07-17)
+
+Le niveau interne des secteurs restait implicite : les branches étaient visibles,
+mais l’utilisateur devait encore deviner quelles communautés elles représentaient.
+La correction ne crée ni hull, ni nouveau moteur, ni regroupement par frame :
+
+- les communautés proviennent directement du catalogue hiérarchique du serveur ;
+- seules les six plus grandes communautés représentées contenant au moins quatre
+  nœuds affichés peuvent recevoir une légende chemin/compte ;
+- l’ancre est le symbole informatif le mieux classé de la communauté dans le plan
+  Stellar déjà pré-calculé ;
+- les légendes partagent les boîtes de collision des secteurs, hubs et symboles ;
+- les trois anneaux internes purement décoratifs sont supprimés. Les arcs de
+  secteurs restent la seule orbite persistante.
+
+La factorisation de la collision évite cinq implémentations identiques du même
+test de rectangle. Les régressions protègent la contiguïté des communautés, la
+limite de six légendes, l’absence des noms génériques et la conservation de tous
+les symboles. La validation navigateur couvre Stellar global, le focus exact
+`UiServer` (22 nœuds sélectionnés, 26 connexions), puis le retour Architecture.
+La suite frontend passe **22 fichiers / 170 tests** ; `build:package` passe avec
+Graph **39,07 / 40 Kio** et JavaScript manifeste **124,99 / 125 Kio**.

@@ -339,7 +339,12 @@ one unlabeled `other` sector. Hub halos and the backbone remain visible, while
 the overview admits at most 12 radially anchored, collision-checked symbol
 labels and rejects generic names such as `now`, `close`, and `handle`. Sector,
 hub, and label plans are computed only when the semantic frame changes, not on
-Canvas paints.
+Canvas paints. Inside those sectors, at most six server-authored communities
+with four or more shown nodes receive a muted path/count caption anchored to
+their highest-ranked informative symbol. These captions reuse the same collision
+boxes as sector, hub, and symbol labels. Non-semantic inner guide rings are
+omitted, so every persistent mark now carries project, community, degree, type,
+status, or relation meaning.
 
 ```bash
 # From v2/ in a source checkout

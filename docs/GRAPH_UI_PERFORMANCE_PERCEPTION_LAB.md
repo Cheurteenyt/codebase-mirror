@@ -313,3 +313,20 @@ the 1,000-node / 1,458-edge sample with layout gzip p50 **91.182 ms** and
 the data path but do not replace a browser frame-time trace. The production
 build remains inside the unchanged limits: Graph **39.05 / 40 KiB** and manifest
 JavaScript **124.98 / 125 KiB**.
+
+## Stellar community-caption follow-up - 2026-07-17
+
+The interior hierarchy now reuses the server-authored community catalog instead
+of adding a second client grouping structure. On a semantic-frame change, the
+six largest represented communities with at least four shown nodes select their
+highest-ranked informative symbol as a stable angular anchor. Canvas paints
+visit only that bounded six-item plan; captions share the existing collision
+boxes with sectors, hubs, and symbols.
+
+The three generic inner guide rings were removed because they encoded no project
+fact. The product check still showed all 1,000 nodes / 1,458 edges, exposed
+community captions such as `graph-ui/src/components`, `v2/src/storage`, and
+`v2/tests/storage`, opened the exact `UiServer` focus with 22 selected nodes and
+26 connections, and returned to Architecture without losing selection. The
+frontend passes **22 files / 170 tests**. The unchanged budgets pass at Graph
+**39.07 / 40 KiB** and manifest JavaScript **124.99 / 125 KiB**.

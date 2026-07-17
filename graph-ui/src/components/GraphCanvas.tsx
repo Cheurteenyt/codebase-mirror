@@ -102,6 +102,22 @@ interface StellarFlowEdgeBatch {
   transit: SimEdge[];
 }
 
+interface CollisionBox {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+function hitsOccupied(box: CollisionBox, occupied: readonly CollisionBox[]): boolean {
+  return occupied.some((other) => (
+    box.right >= other.left
+    && box.left <= other.right
+    && box.bottom >= other.top
+    && box.top <= other.bottom
+  ));
+}
+
 const DEFAULT_NODE_RADIUS = 4;
 const MIN_NODE_RADIUS = 2;
 const MAX_NODE_RADIUS = 12;
@@ -792,6 +808,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   });
   const stellarOverviewHubsRef = useRef<SimNode[]>([]);
   const stellarOverviewLabelCandidatesRef = useRef<SimNode[]>([]);
+  const stellarOverviewCommunityLabelsRef = useRef<SimNode[]>([]);
   const stellarNodeBatchesRef = useRef<Map<string, SimNode[]>>(new Map());
   const stellarSimulationReducedRef = useRef(false);
   const stellarFlowLanesRef = useRef<ReturnType<typeof summarizeStellarFlowLanes>>({
@@ -1153,6 +1170,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       stellarConstellationRef.current = { sectors: [], radius: 0 };
       stellarOverviewHubsRef.current = [];
       stellarOverviewLabelCandidatesRef.current = [];
+      stellarOverviewCommunityLabelsRef.current = [];
       stellarNodeBatchesRef.current = new Map();
       stellarSimulationReducedRef.current = false;
       stellarFlowLanesRef.current = { layers: [], modules: [] };
@@ -1557,6 +1575,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
               || left.id - right.id
             ))
         : [];
+      stellarOverviewCommunityLabelsRef.current = selectedNodeId == null
+        ? clustersRef.current
+            .filter((cluster) => cluster.node_count >= 4)
+            .slice(0, 6)
+            .flatMap((cluster) => stellarOverviewLabelCandidatesRef.current
+              .find((candidate) => candidate.cluster_id === cluster.id) ?? [])
+        : [];
       stellarFlowLanesRef.current = summarizeStellarFlowLanes(targets);
       stellarFlowLabelCandidatesRef.current = selectedNodeId == null
         ? []
@@ -1681,6 +1706,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       stellarConstellationRef.current = { sectors: [], radius: 0 };
       stellarOverviewHubsRef.current = [];
       stellarOverviewLabelCandidatesRef.current = [];
+      stellarOverviewCommunityLabelsRef.current = [];
       stellarFlowLanesRef.current = { layers: [], modules: [] };
       stellarFlowLabelCandidatesRef.current = [];
       stellarFlowEdgeGroupsRef.current = new Map();
@@ -1849,7 +1875,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // selections. Keep its membership contrast without multiplying rings,
     // radii, and labels beyond the existing mid-LOD attention budget.
     const denseSelection = activeHighlightedIds && activeHighlightedIds.size > MID_LABEL_LIMIT;
-    const occupied: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+    const occupied: CollisionBox[] = [];
     const stellarFlow = visualMode === "stellar";
     const stellarFocused = stellarFlow
       && selectedNodeId != null
@@ -2152,12 +2178,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
             top: labelY - 6 / tk,
             bottom: labelY + 6 / tk,
           };
-          if (occupied.some((other) => !(
-            box.right < other.left
-            || box.left > other.right
-            || box.bottom < other.top
-            || box.top > other.bottom
-          ))) continue;
+          if (hitsOccupied(box, occupied)) continue;
           occupied.push(box);
           ctx.strokeStyle = "rgba(3, 8, 14, 0.94)";
           ctx.lineWidth = 2.5 / tk;
@@ -2178,16 +2199,6 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           // with unrelated circular decoration.
           ctx.save();
           ctx.scale(1, 0.82);
-
-          ctx.beginPath();
-          for (const fraction of [0.28, 0.56, 0.84]) {
-            const radius = maxRadius * fraction;
-            ctx.moveTo(radius, 0);
-            ctx.arc(0, 0, radius, 0, Math.PI * 2);
-          }
-          ctx.strokeStyle = "rgba(129, 140, 248, 0.07)";
-          ctx.lineWidth = 0.75 / tk;
-          ctx.stroke();
 
           for (let index = 0; index < sectors.length; index += 1) {
             const sector = sectors[index];
@@ -2558,12 +2569,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           top: titleY - 4 / tk,
           bottom: showSummary ? summaryY + 13 / tk : titleY + 15 / tk,
         };
-        const collides = occupied.some((other) => !(
-          box.right < other.left
-          || box.left > other.right
-          || box.bottom < other.top
-          || box.top > other.bottom
-        ));
+        const collides = hitsOccupied(box, occupied);
         if (collides) continue;
         occupied.push(box);
         ctx.font = `750 ${13 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
@@ -2617,12 +2623,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           top: labelY - 2 / tk,
           bottom: showSummary ? summaryY + 11 / tk : labelY + 12 / tk,
         };
-        const collides = occupied.some((other) => !(
-          box.right < other.left
-          || box.left > other.right
-          || box.bottom < other.top
-          || box.top > other.bottom
-        ));
+        const collides = hitsOccupied(box, occupied);
         if (collides) continue;
         occupied.push(box);
         ctx.font = `650 ${clusterFontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
@@ -2644,34 +2645,51 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       // Sector and node labels share the hub obstacles recorded by the halo
       // pass instead of constructing a second collision map.
       const { sectors, radius: maxRadius } = stellarConstellationRef.current;
-      ctx.font = `700 ${10.5 / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
+      const captions: [string, number, number, string, boolean][] = [];
       for (let index = 0; index < sectors.length; index += 1) {
         const sector = sectors[index];
-        if (sector.key === "other") continue;
-        const label = `${sector.key} · ${compactArchitectureCount(sector.count)}`;
-        const labelRadius = maxRadius * 0.94;
-        const labelX = Math.cos(sector.mid) * labelRadius;
-        const labelY = Math.sin(sector.mid) * labelRadius * 0.82;
+        if (sector.key !== "other") captions.push([
+          `${sector.key} · ${compactArchitectureCount(sector.count)}`,
+          sector.mid,
+          0.94,
+          domainPalette(index).title,
+          true,
+        ]);
+      }
+      for (const node of stellarOverviewCommunityLabelsRef.current) {
+        const target = stellarFlowTargetsRef.current.get(node.id)!;
+        const community = clusterMapRef.current.get(node.cluster_id!)!;
+        const key = community.key;
+        captions.push([
+          `${key.length > 25 ? `…${key.slice(-24)}` : key} · ${compactArchitectureCount(community.node_count)}`,
+          Math.atan2(target.y / 0.82, target.x),
+          0.82,
+          "rgba(148, 197, 218, 0.7)",
+          false,
+        ]);
+      }
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const [label, angle, radius, color, major] of captions) {
+        ctx.font = `${major ? 700 : 650} ${(major ? 10.5 : 9) / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        const labelRadius = maxRadius * radius;
+        const labelX = Math.cos(angle) * labelRadius;
+        const labelY = Math.sin(angle) * labelRadius * 0.82;
         const labelWidth = ctx.measureText(label).width;
+        const padding = (major ? 4 : 3) / tk;
+        const halfHeight = (major ? 8 : 7) / tk;
         const box = {
-          left: labelX - labelWidth / 2 - 4 / tk,
-          right: labelX + labelWidth / 2 + 4 / tk,
-          top: labelY - 8 / tk,
-          bottom: labelY + 8 / tk,
+          left: labelX - labelWidth / 2 - padding,
+          right: labelX + labelWidth / 2 + padding,
+          top: labelY - halfHeight,
+          bottom: labelY + halfHeight,
         };
-        if (occupied.some((other) => !(
-          box.right < other.left
-          || box.left > other.right
-          || box.bottom < other.top
-          || box.top > other.bottom
-        ))) continue;
+        if (hitsOccupied(box, occupied)) continue;
         occupied.push(box);
         ctx.strokeStyle = "rgba(3, 8, 14, 0.96)";
-        ctx.lineWidth = 4 / tk;
+        ctx.lineWidth = (major ? 4 : 3) / tk;
         ctx.strokeText(label, labelX, labelY);
-        ctx.fillStyle = domainPalette(index).title;
+        ctx.fillStyle = color;
         ctx.fillText(label, labelX, labelY);
       }
     }
@@ -2788,12 +2806,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           stellarFocused
           && !stellarFocusWorldBoxFitsViewport(box, transformRef.current, viewport)
         ) continue;
-        const collides = occupied.some((other) => !(
-          box.right < other.left
-          || box.left > other.right
-          || box.bottom < other.top
-          || box.top > other.bottom
-        ));
+        const collides = hitsOccupied(box, occupied);
         if (!collides || node.id === selectedNodeId) {
           placement = anchor;
           placementBox = box;

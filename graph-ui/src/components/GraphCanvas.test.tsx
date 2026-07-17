@@ -263,22 +263,43 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     const nodes = [
       ...Array.from({ length: 14 }, (_, index) => makeNode(index + 1, index === 0 ? "now" : index === 1 ? "CodeGraphReader" : `backend-${index}`, {
         file_path: `v2/src/backend-${index}.ts`,
+        cluster_id: index < 8 ? 1 : 2,
         in_degree: index < 2 ? 60 - index : index % 5,
         out_degree: index < 2 ? 40 - index : index % 3,
       })),
       ...Array.from({ length: 12 }, (_, index) => makeNode(index + 15, `frontend-${index}`, {
         file_path: `graph-ui/src/frontend-${index}.tsx`,
+        cluster_id: index < 7 ? 3 : 4,
         in_degree: index % 4,
         out_degree: index % 2,
       })),
       ...Array.from({ length: 2 }, (_, index) => makeNode(index + 27, `doc-${index}`, {
         file_path: `docs/doc-${index}.md`,
+        cluster_id: 5 + index,
       })),
     ];
+    const layout = {
+      strategy: "architecture-domain-v1" as const,
+      node_spacing: 16,
+      counts_scope: "returned_nodes" as const,
+      clusters: [
+        { id: 1, domain_id: 1, key: "v2/src/backend-core", x: 0, y: 0, radius: 20, node_count: 8 },
+        { id: 2, domain_id: 1, key: "v2/src/backend-api", x: 0, y: 0, radius: 20, node_count: 6 },
+        { id: 3, domain_id: 2, key: "graph-ui/src/canvas", x: 0, y: 0, radius: 20, node_count: 7 },
+        { id: 4, domain_id: 2, key: "graph-ui/src/panels", x: 0, y: 0, radius: 20, node_count: 5 },
+        { id: 5, domain_id: 3, key: "docs/guide", x: 0, y: 0, radius: 20, node_count: 1 },
+        { id: 6, domain_id: 3, key: "docs/audit", x: 0, y: 0, radius: 20, node_count: 1 },
+      ],
+      domains: [
+        { id: 1, key: "v2", x: 0, y: 0, radius: 40, node_count: 14, cluster_count: 2 },
+        { id: 2, key: "graph-ui", x: 0, y: 0, radius: 40, node_count: 12, cluster_count: 2 },
+        { id: 3, key: "docs", x: 0, y: 0, radius: 40, node_count: 2, cluster_count: 2 },
+      ],
+    };
 
     render(
       <GraphCanvas
-        data={{ nodes, edges: [], total_nodes: nodes.length, topology_revision: "stellar-sectors" }}
+        data={{ nodes, edges: [], total_nodes: nodes.length, topology_revision: "stellar-sectors", layout }}
         visualMode="stellar"
         highlightedIds={null}
         deadCodeView={false}
@@ -290,6 +311,10 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     const labels = ctx.fillText.mock.calls.map((call) => call[0]);
     expect(labels).toContain("v2 · 14");
     expect(labels).toContain("graph-ui · 12");
+    expect(labels).toContain("v2/src/backend-core · 8");
+    expect(labels.filter((label) => String(label).includes("src/")).length).toBeLessThanOrEqual(6);
+    expect(labels).not.toContain("docs/guide · 1");
+    expect(labels).not.toContain("docs/audit · 1");
     expect(labels.some((label) => /^(?:backend|frontend)-/u.test(String(label)))).toBe(true);
     expect(labels).not.toContain("now");
     expect(labels.some((label) => String(label).startsWith("other ·"))).toBe(false);

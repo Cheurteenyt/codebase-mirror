@@ -151,6 +151,11 @@ backbone remain batched; a separate 12-label overview budget uses radial
 collision candidates and excludes low-information names. Sector summaries,
 hub membership, and label candidates are all precomputed on semantic-frame
 changes, so the additional hierarchy does not add a graph scan per paint.
+The six largest represented communities containing at least four shown nodes
+may also receive a subdued path/count caption. Each is anchored to the
+highest-ranked informative symbol already present in the precomputed overview
+plan and participates in the shared collision pass. Decorative inner rings are
+not rendered; the sector boundary remains the only persistent orbit.
 
 The focused camera is composed from directed targets only; the 1,000-node dim
 context cannot shrink the active neighborhood. Screen-space safe insets reserve

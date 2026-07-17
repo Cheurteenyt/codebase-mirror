@@ -90,6 +90,46 @@ describe("Stellar flow layout", () => {
     expect(summarizeStellarConstellation(computeStellarFlowLayout(nodes, [], null))).toEqual(constellation);
   });
 
+  it("keeps directory communities contiguous without hiding nodes", () => {
+    const nodes: GraphNode[] = [];
+    let id = 1;
+    for (let clusterId = 1; clusterId <= 20; clusterId += 1) {
+      const count = clusterId === 20 ? 3 : 4;
+      for (let index = 0; index < count; index += 1) {
+        nodes.push({
+          ...node(id, index, clusterId % 3, clusterId),
+          file_path: `v2/src/community-${clusterId}/file-${index}.ts`,
+        });
+        id += 1;
+      }
+    }
+
+    const layout = computeStellarFlowLayout(nodes, [], null);
+    const allCommunities = new Map<number, { start: number; end: number }>();
+    for (const graphNode of nodes) {
+      const target = layout.get(graphNode.id)!;
+      const community = graphNode.cluster_id;
+      if (community == null) continue;
+      let angle = Math.atan2(target.y / 0.82, target.x);
+      while (angle < target.sector!.start) angle += Math.PI * 2;
+      const current = allCommunities.get(community);
+      if (current) {
+        current.start = Math.min(current.start, angle);
+        current.end = Math.max(current.end, angle);
+      } else allCommunities.set(community, { start: angle, end: angle });
+    }
+    const orderedCommunities = [...allCommunities.values()]
+      .sort((left, right) => left.start - right.start);
+
+    expect(layout.size).toBe(nodes.length);
+    expect(allCommunities.size).toBe(20);
+    for (let index = 1; index < orderedCommunities.length; index += 1) {
+      expect(orderedCommunities[index].start).toBeGreaterThan(
+        orderedCommunities[index - 1].end,
+      );
+    }
+  });
+
   it("separates incoming and outgoing layers around the selected node", () => {
     const nodes = [
       node(1, 2, 2),
