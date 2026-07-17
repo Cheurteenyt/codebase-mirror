@@ -372,3 +372,26 @@ edges, 22 selected nodes and 26 exact connections. The four directed depths
 remain inside the safe frame while the protected narrow-canvas zoom rises to
 **0.59**. The frontend passes **22 files / 173 tests**, V2 typecheck and build
 pass, and no per-frame work was added.
+
+## Structure exact-directory follow-up - 2026-07-17
+
+The filesystem tree previously reused a layout community whenever both had the
+same path key. On the product database, selecting `v2/src` therefore described
+325 sampled tree items but focused a two-node representative community; its
+manual exact action returned only 22 nodes. The tree now issues a distinct
+`directory` scope and community selection enters exact symbols immediately.
+
+The product endpoint reports **1,634 exact nodes / 3,022 internal edges** for
+`v2/src`. Its bounded first page returns 125 nodes and 125 edges in 55,095
+bytes, with an explicit continuation cursor. The local cold request measured
+48.9 ms and two warm requests measured 8.1 ms and 7.0 ms. Browser interaction
+to the first useful exact frame measured about 1.2 s for the directory and
+0.96 s for a community, including UI interaction and paint.
+
+No Canvas paint-loop work was added. Directory membership is queried only on
+explicit drill-down, cached in a 24-entry revision-bound LRU, and pages retain
+the existing 125-node client limit. The frontend passes **22 files / 175
+tests**. Targeted backend scope/route tests, both typechecks, the Graph UI build,
+and `build:package` pass. Existing gzip limits remain unchanged at Graph
+**39.09 / 40 KiB**, manifest CSS **11.81 KiB**, and manifest JavaScript
+**124.99 / 125 KiB**.

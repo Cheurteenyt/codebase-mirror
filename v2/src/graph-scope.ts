@@ -35,3 +35,18 @@ export function graphDomainKey(
 ): string {
   return architectureDomainKey(graphCommunityKey(filePath, label));
 }
+
+/** Whether a graph node belongs to a directory subtree selected by the UI. */
+export function graphNodeBelongsToDirectory(
+  filePath: string | null | undefined,
+  label: string,
+  directoryKey: string,
+): boolean {
+  const normalizedPath = normalizeGraphPath(filePath);
+  const normalizedKey = normalizeGraphPath(directoryKey);
+  const parts = normalizedPath.split('/').filter(Boolean);
+  const nodeDirectory = (DIRECTORY_LABELS.has(label) ? parts : parts.slice(0, -1)).join('/');
+  if (normalizedKey === '(root)') return nodeDirectory.length === 0;
+  return normalizedKey.length > 0
+    && (nodeDirectory === normalizedKey || nodeDirectory.startsWith(`${normalizedKey}/`));
+}

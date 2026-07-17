@@ -160,6 +160,47 @@ describe('CodeGraphReader — getNeighbors column collision regression', () => {
       10,
       10,
     ).nodes.map((node) => node.id)).toEqual([10, 20, 30, 40, 50]);
+
+    // A directory is not the homonymous three-segment community. It contains
+    // every descendant path, including portable Windows separators.
+    const directory = reader.getExactScopePage(
+      'test',
+      'directory',
+      'src',
+      { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 },
+      10,
+      10,
+    );
+    expect(directory.nodes.map((node) => node.id)).toEqual([10, 20, 30, 40, 50]);
+    expect(directory.total_nodes).toBe(5);
+    expect(directory.total_internal_edges).toBe(2);
+  });
+
+  it('does not confuse a same-named file with the selected directory', () => {
+    reader.close();
+    const db = new Database(dbPath);
+    const insertNode = db.prepare(
+      `INSERT INTO nodes (
+        id, project, label, name, qualified_name, file_path,
+        start_line, end_line, properties_json
+      ) VALUES (?, 'test', ?, ?, ?, 'src', 1, 2, '{}')`,
+    );
+    insertNode.run(60, 'File', 'src', 'test::src');
+    insertNode.run(70, 'Directory', 'src', 'test::directory:src');
+    db.close();
+    reader = new CodeGraphReader(dbPath);
+
+    const directory = reader.getExactScopePage(
+      'test',
+      'directory',
+      'src',
+      { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 },
+      20,
+      20,
+    );
+
+    expect(directory.nodes.map((node) => node.id)).toEqual([10, 20, 30, 40, 50, 70]);
+    expect(directory.nodes.map((node) => node.id)).not.toContain(60);
   });
 
   it('keeps a stable graph revision and reads multi-statement pages from one snapshot', () => {

@@ -72,6 +72,16 @@ vi.mock("./GraphCanvas", async () => {
             nodeIds: new Set(data.nodes.map((node) => node.id)),
           })}
         />
+        <button
+          type="button"
+          aria-label="Select first community"
+          onClick={() => onScopeSelect?.({
+            kind: "community",
+            id: 0,
+            key: "src/lib",
+            nodeIds: new Set(data.nodes.map((node) => node.id)),
+          })}
+        />
       </>
     );
   }),
@@ -371,6 +381,91 @@ describe("GraphTab server-refresh state reconciliation", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Load more exact scope" }));
     expect(loadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens exact symbols immediately after an explicit community drill-down", async () => {
+    const nodes = [
+      { ...makeNode(1, "one"), cluster_id: 0 },
+      { ...makeNode(2, "two"), cluster_id: 0 },
+    ];
+    (useGraphData as any).mockReturnValue({
+      data: {
+        nodes,
+        edges: [],
+        total_nodes: 2,
+        graph_revision: "graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa",
+        layout: {
+          strategy: "architecture-domain-v1",
+          node_spacing: 16,
+          counts_scope: "returned_nodes",
+          clusters: [{ id: 0, domain_id: 0, key: "src/lib", x: 0, y: 0, radius: 80, node_count: 2 }],
+          domains: [{ id: 0, key: "src", x: 0, y: 0, radius: 140, node_count: 2, cluster_count: 1 }],
+        },
+      },
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+    useExactScopeMock.mockImplementation((
+      _project: string,
+      _kind: string,
+      _key: string,
+      enabled: boolean,
+    ) => enabled ? exactScopeState() : emptyExactState());
+    render(<GraphTab project="test" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select first community" }));
+
+    await waitFor(() => expect(useExactScopeMock).toHaveBeenLastCalledWith(
+      "test",
+      "community",
+      "src/lib",
+      true,
+      "test:graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa:0",
+    ));
+    expect(screen.queryByRole("button", { name: "Open exact scope" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a sidebar directory distinct from a homonymous community", async () => {
+    const nodes = [
+      { ...makeNode(1, "one"), file_path: "src/lib/one.ts", cluster_id: 0 },
+      { ...makeNode(2, "two"), file_path: "src/lib/nested/two.ts", cluster_id: 1 },
+    ];
+    (useGraphData as any).mockReturnValue({
+      data: {
+        nodes,
+        edges: [],
+        total_nodes: 20,
+        graph_revision: "graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa",
+        layout: {
+          strategy: "architecture-domain-v1",
+          node_spacing: 16,
+          counts_scope: "returned_nodes",
+          clusters: [
+            { id: 0, domain_id: 0, key: "src/lib", x: 0, y: 0, radius: 80, node_count: 1 },
+            { id: 1, domain_id: 0, key: "src/lib/nested", x: 100, y: 0, radius: 80, node_count: 1 },
+          ],
+          domains: [{ id: 0, key: "src", x: 0, y: 0, radius: 160, node_count: 2, cluster_count: 2 }],
+        },
+      },
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+    useExactScopeMock.mockReturnValue(emptyExactState());
+    render(<GraphTab project="test" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand src" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select src/lib" }));
+
+    await waitFor(() => expect(useExactScopeMock).toHaveBeenLastCalledWith(
+      "test",
+      "directory",
+      "src/lib",
+      true,
+      "test:graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa:0",
+    ));
+    expect(screen.getByRole("button", { name: "lib" })).toHaveAttribute("aria-current", "page");
   });
 
   it("resolves breadcrumb scopes by stable keys after layout ids are renumbered", async () => {

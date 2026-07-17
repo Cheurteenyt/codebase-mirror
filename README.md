@@ -223,9 +223,11 @@ V2 includes a **native code indexer** that does NOT require the V1 C binary:
 - V2 native indexer is most precise on **TypeScript/JavaScript**. Other languages (Python, Go, Rust, etc.) are parsed structurally but without cross-file resolution.
 - For V1's 158-language coverage and precision, run the V1 C binary separately to produce the project database before opening it from V2.
 - The Graph UI overview is capped at 1,000 representatives for predictable
-  transfer and simulation cost. Exact domain/directory scopes are loaded in
-  revision-bound pages from the graph breadcrumb; the full project is never
-  transferred merely to inspect one scope.
+  transfer and simulation cost. Exact domain, community, and directory scopes
+  are loaded in revision-bound pages; the full project is never transferred
+  merely to inspect one scope. Selecting a community opens its exact symbols
+  immediately, while the filesystem tree requests a distinct directory
+  subtree so an identically named layout community cannot replace it.
 
 ## Human memory node types
 
@@ -309,15 +311,19 @@ d3-force canvas and two task views over the same graph:
     the directed frame without merging rails. The label budget follows
     available screen area and rejects text that would be clipped or hidden
     under persistent graph controls
-  - **Exact scope** (on demand): revision-bound domain/directory pages replace
-    the representative frame inside the same canvas; raw internal topology is
-    shown immediately and dense scopes expose an explicit Load more action
+  - **Exact scope** (on demand): selecting a community or filesystem directory
+    replaces the representative frame with a revision-bound exact page inside
+    the same canvas; raw internal topology is shown immediately and dense
+    scopes expose an explicit Load more action
 - **Projects tab**: Project list with node/edge counts and health status
 - **Control tab**: System info
 
 Both Graph views share one topology, canvas, d3 simulation object,
 sampling/exactness labels, filters, selection, keyboard model, and detail APIs.
-`Structure` follows server-authored domain/community anchors. `Dependencies`
+`Structure` follows server-authored domain/community anchors. Filesystem tree
+paths remain a separate exact `directory` scope even when a community has the
+same key; its breadcrumb returns to the parent domain without relabeling
+sampled data as exact. `Dependencies`
 reconfigures that same simulation with task-specific targets and one bounded
 reheat when the view or focused symbol changes; known filter subsets do not
 reheat and no renderer, canvas, or node object is rebuilt. Direct relations lead

@@ -6,7 +6,12 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { BULK_CHUNK_SIZE } from '../constants.js';
 import { resolveProjectStoragePath } from '../storage/project-path.js';
-import { graphCommunityKey, graphDomainKey } from '../graph-scope.js';
+import {
+  graphCommunityKey,
+  graphDomainKey,
+  graphNodeBelongsToDirectory,
+  normalizeGraphPath,
+} from '../graph-scope.js';
 
 export interface CodeNode {
   id: number;
@@ -56,7 +61,7 @@ export interface ExactNodeSearchPage {
   next_after_node_id: number | null;
 }
 
-export type ExactScopeKind = 'domain' | 'community';
+export type ExactScopeKind = 'domain' | 'community' | 'directory';
 
 export interface ExactScopeCursorState {
   after_node_id: number;
@@ -172,7 +177,11 @@ interface ProjectExactScopeIndex {
   graphRevision: string;
   domains: Map<string, ExactScopeMembership>;
   communities: Map<string, ExactScopeMembership>;
+  directories: Map<string, ExactScopeMembership>;
+  structuredReady: boolean;
 }
+
+const MAX_EXACT_DIRECTORY_MEMBERSHIPS = 24;
 
 /** Row from `SELECT (subquery) AS n, (subquery) AS e`. */
 interface CountAllRow {
@@ -723,9 +732,10 @@ export class CodeGraphReader {
   /**
    * Build all exact architecture memberships in one project-node pass.
    *
-   * The index is revision-bound and shared by every subsequent domain or
-   * community page. This avoids crossing the SQLite/JavaScript boundary once
-   * per edge endpoint while still using the same key functions as the overview.
+   * Domain/community membership is built in one project-node pass. Directory
+   * membership is queried only after an explicit tree drill-down and cached in
+   * a small revision-bound LRU, avoiding both a full descendant map and repeated
+   * scans of the same subtree.
    */
   private getExactScopeMembership(
     project: string,
@@ -736,6 +746,77 @@ export class CodeGraphReader {
     const cacheKey = `${project}\0${graphRevision}`;
     let index = this.exactScopeIndexes.get(cacheKey);
     if (!index) {
+      index = {
+        graphRevision,
+        domains: new Map(),
+        communities: new Map(),
+        directories: new Map(),
+        structuredReady: false,
+      };
+      // A reader normally serves one project. Keep a small bound for legacy
+      // multi-project databases and discard stale revision entries first.
+      for (const [existingKey, existing] of this.exactScopeIndexes) {
+        if (existing.graphRevision !== graphRevision || existingKey.startsWith(`${project}\0`)) {
+          this.exactScopeIndexes.delete(existingKey);
+        }
+      }
+      while (this.exactScopeIndexes.size >= 4) {
+        const oldest = this.exactScopeIndexes.keys().next().value as string | undefined;
+        if (oldest == null) break;
+        this.exactScopeIndexes.delete(oldest);
+      }
+      this.exactScopeIndexes.set(cacheKey, index);
+    }
+
+    const finalizeMembership = (nodeIds: number[]): ExactScopeMembership => ({
+      nodeIds,
+      nodeIdsJson: JSON.stringify(nodeIds),
+      totalInternalEdges: null,
+    });
+
+    if (kind === 'directory') {
+      const normalizedKey = normalizeGraphPath(key);
+      const cached = index.directories.get(normalizedKey);
+      if (cached) {
+        // Refresh insertion order so the bounded map behaves as an LRU.
+        index.directories.delete(normalizedKey);
+        index.directories.set(normalizedKey, cached);
+        return cached;
+      }
+
+      const rows = normalizedKey === '(root)'
+        ? this.db.prepare(
+            `SELECT id, file_path, label FROM nodes WHERE project = ? ORDER BY id ASC`,
+          ).all(project) as ExactScopeIndexRow[]
+        : this.db.prepare(
+            `SELECT id, file_path, label
+             FROM nodes
+             WHERE project = ?
+               AND (
+                 file_path = ? OR file_path LIKE ? ESCAPE '\\'
+                 OR file_path = ? OR file_path LIKE ? ESCAPE '\\'
+               )
+             ORDER BY id ASC`,
+          ).all(
+            project,
+            normalizedKey,
+            `${escapeLike(normalizedKey)}/%`,
+            normalizedKey.replace(/\//gu, '\\'),
+            `${escapeLike(normalizedKey.replace(/\//gu, '\\'))}\\\\%`,
+          ) as ExactScopeIndexRow[];
+      const membership = finalizeMembership(rows
+        .filter((row) => graphNodeBelongsToDirectory(row.file_path, row.label, normalizedKey))
+        .map((row) => row.id));
+      while (index.directories.size >= MAX_EXACT_DIRECTORY_MEMBERSHIPS) {
+        const oldest = index.directories.keys().next().value as string | undefined;
+        if (oldest == null) break;
+        index.directories.delete(oldest);
+      }
+      index.directories.set(normalizedKey, membership);
+      return membership;
+    }
+
+    if (!index.structuredReady) {
       const domainIds = new Map<string, number[]>();
       const communityIds = new Map<string, number[]>();
       const rows = this.db.prepare(
@@ -754,30 +835,11 @@ export class CodeGraphReader {
         domainBucket.push(row.id);
         domainIds.set(domain, domainBucket);
       }
-      const finalize = (source: Map<string, number[]>): Map<string, ExactScopeMembership> =>
-        new Map([...source].map(([scopeKey, nodeIds]) => [scopeKey, {
-          nodeIds,
-          nodeIdsJson: JSON.stringify(nodeIds),
-          totalInternalEdges: null,
-        }]));
-      index = {
-        graphRevision,
-        domains: finalize(domainIds),
-        communities: finalize(communityIds),
-      };
-      // A reader normally serves one project. Keep a small bound for legacy
-      // multi-project databases and discard stale revision entries first.
-      for (const [existingKey, existing] of this.exactScopeIndexes) {
-        if (existing.graphRevision !== graphRevision || existingKey.startsWith(`${project}\0`)) {
-          this.exactScopeIndexes.delete(existingKey);
-        }
-      }
-      while (this.exactScopeIndexes.size >= 4) {
-        const oldest = this.exactScopeIndexes.keys().next().value as string | undefined;
-        if (oldest == null) break;
-        this.exactScopeIndexes.delete(oldest);
-      }
-      this.exactScopeIndexes.set(cacheKey, index);
+      index.domains = new Map([...domainIds]
+        .map(([scopeKey, nodeIds]) => [scopeKey, finalizeMembership(nodeIds)]));
+      index.communities = new Map([...communityIds]
+        .map(([scopeKey, nodeIds]) => [scopeKey, finalizeMembership(nodeIds)]));
+      index.structuredReady = true;
     }
     const memberships = kind === 'domain' ? index.domains : index.communities;
     return memberships.get(key) ?? {
