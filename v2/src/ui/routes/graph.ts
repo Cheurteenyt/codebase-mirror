@@ -989,8 +989,8 @@ export async function routeScope(
     return;
   }
   const rawKind = url.searchParams.get('kind');
-  if (rawKind !== 'domain' && rawKind !== 'community') {
-    sendJson(res, 400, { error: 'kind must be domain or community' });
+  if (rawKind !== 'domain' && rawKind !== 'community' && rawKind !== 'directory') {
+    sendJson(res, 400, { error: 'kind must be domain, community, or directory' });
     return;
   }
   const kind: ExactScopeKind = rawKind;

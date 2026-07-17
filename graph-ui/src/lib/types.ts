@@ -151,7 +151,7 @@ export interface GraphNodeSearchData {
   };
 }
 
-export type GraphScopeKind = "domain" | "community";
+export type GraphScopeKind = "domain" | "community" | "directory";
 
 export interface GraphScopeData {
   contract_version: 1;

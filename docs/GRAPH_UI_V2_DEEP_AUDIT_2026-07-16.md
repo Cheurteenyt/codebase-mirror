@@ -1103,3 +1103,36 @@ quatre profondeurs de la zone sûre. Le contrôle navigateur `UiServer` conserve
 1 000 nœuds, 1 458 arêtes, 22 nœuds sélectionnés et 26 connexions exactes avec
 les deux panneaux ouverts. La suite frontend passe **22 fichiers / 173 tests**,
 le typecheck et le build V2 passent, et aucun travail par frame n'est ajouté.
+
+## Addendum — identité exacte des répertoires Structure (2026-07-17)
+
+Le parcours réel `Structure → v2 → v2/src` a révélé une collision d'identité :
+l'arbre latéral désignait un sous-arbre de fichiers, mais le frontend réutilisait
+la communauté sémantique portant la même clé. Le compteur de l'arbre annonçait
+325 éléments représentés, tandis que le cadre sélectionné ne contenait que deux
+nœuds et que l'ancien passage exact n'en chargeait que 22. L'interface était
+donc visuellement pauvre parce qu'elle montrait le mauvais objet, pas seulement
+par manque de décoration.
+
+Le contrat comprend désormais trois identités séparées : `domain`, `community`
+et `directory`. Un clic sur une communauté ouvre directement ses symboles
+exacts. Un clic sur un chemin non-domain de l'arbre demande le sous-arbre exact,
+conserve un fil d'Ariane domaine → répertoire et revient au domaine à la
+fermeture. Les répertoires ne sont jamais résolus contre les identifiants locaux
+du layout représentatif.
+
+Côté lecture SQLite, les appartenances domaine/communauté restent construites
+en une passe paresseuse. Un répertoire déclenche uniquement une requête de
+préfixe portable `/` et `\`, suivie d'une validation sémantique qui exclut un
+fichier portant le même nom. Le cache LRU est borné à 24 répertoires par
+révision. Pagination, snapshot, curseurs et limite de 125 nœuds côté client
+restent inchangés.
+
+Sur la base produit, `v2/src` contient **1 634 nœuds exacts / 3 022 arêtes
+internes**. La première page contient 125 nœuds et 125 arêtes, pèse 55 095
+octets et garde `Load more` explicite. L'API locale a mesuré 48,9 ms à froid,
+puis 8,1 ms et 7,0 ms à chaud ; le premier cadre utile a été visible en environ
+1,2 s dans le navigateur. La suite frontend passe **22 fichiers / 175 tests**,
+les régressions backend ciblées passent, `build:package` passe et les budgets
+restent inchangés : Graph **39,09 / 40 Kio**, CSS manifeste **11,81 Kio** et
+JavaScript manifeste **124,99 / 125 Kio**.

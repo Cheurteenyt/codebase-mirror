@@ -20,7 +20,7 @@ interface ExactScopeHudProps {
   selectedCount: number;
 }
 
-export function ExactScopeHud({
+function ExactScopeHud({
   returnedNodes,
   totalNodes,
   visibleEdges,
@@ -82,12 +82,14 @@ export default function ExactScopeControls({
           </button>
         ) : (
           <>
-            {loading && <span role="status" className="text-cyan-100/75">Loading exact scope…</span>}
-            {error && <span className="max-w-48 truncate text-amber-200">{error}</span>}
+            {loading && "Loading exact scope…"}
             {error && (
-              <button onClick={onRetry} className="rounded-lg bg-amber-300/[0.1] px-2 py-1 text-amber-100 hover:bg-amber-300/[0.16]">
-                Retry
-              </button>
+              <>
+                <span className="max-w-48 truncate text-amber-200">{error}</span>
+                <button onClick={onRetry} className="rounded-lg bg-amber-300/[0.1] px-2 py-1 text-amber-100 hover:bg-amber-300/[0.16]">
+                  Retry
+                </button>
+              </>
             )}
             {hasMore && !error && (
               <button

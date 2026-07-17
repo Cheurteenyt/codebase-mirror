@@ -16,7 +16,7 @@ import { Sidebar } from "./Sidebar";
 import { NodeTooltip } from "./NodeTooltip";
 import { ResizeHandle } from "./ResizeHandle";
 import { ErrorBoundary } from "./ErrorBoundary";
-import type { GraphNode, GraphData, GraphScopeData } from "../lib/types";
+import type { GraphNode, GraphData, GraphScopeData, GraphScopeKind } from "../lib/types";
 import {
   loadGraphVisualMode,
   saveGraphVisualMode,
@@ -76,7 +76,7 @@ interface GraphTabProps {
   active?: boolean;
 }
 
-type GraphTrailItem = Pick<GraphScopeSelection, "kind" | "key">;
+type GraphTrailItem = { kind: GraphScopeKind; key: string };
 
 function sameNodeIds(left: ReadonlySet<number> | null, right: ReadonlySet<number>): boolean {
   if (!left || left.size !== right.size) return false;
@@ -540,7 +540,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   }, [filteredData]);
 
   const makeScopeByKey = useCallback((trailItem: GraphTrailItem) => {
-    if (!filteredData?.layout) return null;
+    if (!filteredData?.layout || trailItem.kind === "directory") return null;
     const match = trailItem.kind === "domain"
       ? filteredData.layout.domains.find((candidate) => candidate.key === trailItem.key)
       : filteredData.layout.clusters.find((candidate) => candidate.key === trailItem.key);
@@ -553,7 +553,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
     setSelectedNodeExactRefreshKey(null);
     selectedNodeOutsideOverviewRef.current = false;
     setHoveredNode(null);
-    setExactScopeRequest(null);
+    setExactScopeRequest(scope.kind === "community" ? scope : null);
     setHighlightedIds(scope.nodeIds.size > 0 ? scope.nodeIds : null);
     setSelectedPath(scope.key);
     canvasRef.current?.focusNodes(scope.nodeIds, scope.kind === "domain" ? 0.52 : 1.2);
@@ -562,14 +562,16 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
 
   const handleScopeSelect = useCallback((incoming: GraphScopeSelection) => {
     const scope = makeScope(incoming.kind, incoming.id) ?? incoming;
-    const trail: GraphScopeSelection[] = [];
+    const trail: GraphTrailItem[] = [];
     if (scope.kind === "community" && filteredData?.layout) {
       const community = filteredData.layout.clusters.find((candidate) => candidate.id === scope.id);
-      const parent = community ? makeScope("domain", community.domain_id) : null;
-      if (parent) trail.push(parent);
+      const parent = community
+        ? filteredData.layout.domains.find((candidate) => candidate.id === community.domain_id)
+        : null;
+      if (parent) trail.push({ kind: "domain", key: parent.key });
     }
-    trail.push(scope);
-    setNavigationHistory(trail.map(({ kind, key }) => ({ kind, key })));
+    trail.push({ kind: scope.kind, key: scope.key });
+    setNavigationHistory(trail);
     showScope(scope);
   }, [filteredData, makeScope, showScope]);
 
@@ -637,7 +639,8 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   }, [restoreDetailFocus, selectedNode]);
 
   const navigateToHistoryIndex = useCallback((index: number) => {
-    const scope = navigationHistory[index] ? makeScopeByKey(navigationHistory[index]) : null;
+    const item = navigationHistory[index];
+    const scope = item ? makeScopeByKey(item) : null;
     if (!scope) return;
     setNavigationHistory((previous) => previous.slice(0, index + 1));
     showScope(scope);
@@ -667,7 +670,8 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       navigateHome();
       return;
     }
-    const parent = makeScopeByKey(navigationHistory[navigationHistory.length - 2]);
+    const parentItem = navigationHistory[navigationHistory.length - 2];
+    const parent = makeScopeByKey(parentItem);
     setNavigationHistory((previous) => previous.slice(0, -1));
     if (parent) showScope(parent);
     else navigateHome();
@@ -701,6 +705,9 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   // path is truncated cleanly rather than silently pointing at another scope.
   useEffect(() => {
     if (navigationHistory.length === 0 || !filteredData?.layout) return;
+    // Exact directory breadcrumbs are independent of response-local layout
+    // ids. The revision-bound scope hook owns their reconciliation.
+    if (activeTrail?.kind === "directory") return;
     const resolved: GraphScopeSelection[] = [];
     for (const item of navigationHistory) {
       const scope = makeScopeByKey(item);
@@ -882,25 +889,23 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                return;
              }
              const domain = filteredData.layout?.domains.find((candidate) => candidate.key === path);
-             const community = filteredData.layout?.clusters.find((candidate) => candidate.key === path);
-             if (community) handleScopeSelect({
-               kind: "community",
-               id: community.id,
-               key: community.key,
-               nodeIds: ids,
-             });
-             else if (domain) handleScopeSelect({
+             if (domain) handleScopeSelect({
                kind: "domain",
                id: domain.id,
                key: domain.key,
                nodeIds: ids,
              });
              else {
+               const request = { kind: "directory" as const, key: path };
+               setNavigationHistory([
+                 { kind: "domain", key: path.split("/", 1)[0] },
+                 request,
+               ]);
                setSelectedNode(null);
-               setNavigationHistory([]);
+               setHoveredNode(null);
+               setHighlightedIds(null);
                setSelectedPath(path);
-               setHighlightedIds(ids);
-               canvasRef.current?.focusNodes(ids, 0.7);
+               setExactScopeRequest(request);
              }
              closeMobilePanel(false);
           }}
@@ -1044,9 +1049,13 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                   onLoadMore={exactScope.loadMore}
                   onRetry={exactScope.retry}
                   onClose={() => {
+                    if (activeTrail.kind === "directory") {
+                      navigateUp();
+                      return;
+                    }
                     const overviewScope = makeScopeByKey(activeTrail);
                     if (overviewScope) showScope(overviewScope);
-                    else setExactScopeRequest(null);
+                    setExactScopeRequest(null);
                   }}
                 />
               </Suspense>
