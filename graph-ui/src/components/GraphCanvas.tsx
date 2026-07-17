@@ -697,14 +697,64 @@ function traceNodePath(
   ctx.arc(x, y, radius, 0, Math.PI * 2);
 }
 
+function traceDirectionMarker(
+  ctx: CanvasRenderingContext2D,
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number,
+  size: number,
+): boolean {
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const length = Math.hypot(dx, dy);
+  if (length < size * 2) return false;
+  const unitX = dx / length;
+  const unitY = dy / length;
+  const tipX = sourceX + dx * 0.62;
+  const tipY = sourceY + dy * 0.62;
+  const baseX = tipX - unitX * size;
+  const baseY = tipY - unitY * size;
+  const wing = size * 0.55;
+  ctx.moveTo(baseX - unitY * wing, baseY + unitX * wing);
+  ctx.lineTo(tipX, tipY);
+  ctx.lineTo(baseX + unitY * wing, baseY - unitX * wing);
+  return true;
+}
+
+function paintStellarFirstHopPreview(
+  ctx: CanvasRenderingContext2D,
+  focus: SimNode,
+  scale: number,
+): void {
+  const focusX = focus.x ?? 0;
+  const focusY = focus.y ?? 0;
+  ctx.beginPath();
+  ctx.arc(focusX, focusY, nodeRadius(focus) + 5 / scale, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(236, 254, 255, 0.98)";
+  ctx.lineWidth = 2 / scale;
+  ctx.stroke();
+  ctx.font = `650 ${9 / scale}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.strokeStyle = "rgba(3, 8, 14, 0.94)";
+  ctx.lineWidth = 3 / scale;
+  const label = "VISIBLE FIRST HOP";
+  const labelY = focusY - nodeRadius(focus) - 15 / scale;
+  ctx.strokeText(label, focusX, labelY);
+  ctx.fillStyle = "rgba(203, 225, 236, 0.9)";
+  ctx.fillText(label, focusX, labelY);
+}
+
 function traceEdges(
   ctx: CanvasRenderingContext2D,
   edges: SimEdge[],
   nodeMap: Map<number, SimNode>,
   selectedNodeId: number | null,
   selectionOnly = false,
+  limit = Number.POSITIVE_INFINITY,
 ) {
-  let hasPath = false;
+  let count = 0;
   for (const edge of edges) {
     const source = nodeMap.get(simEdgeNodeId(edge.source));
     const target = nodeMap.get(simEdgeNodeId(edge.target));
@@ -714,9 +764,10 @@ function traceEdges(
     if (selectionOnly !== touchesSelection) continue;
     ctx.moveTo(source.x ?? 0, source.y ?? 0);
     ctx.lineTo(target.x ?? 0, target.y ?? 0);
-    hasPath = true;
+    count += 1;
+    if (count >= limit) break;
   }
-  return hasPath;
+  return count;
 }
 
 function traceSelectedDirectionMarkers(
@@ -725,31 +776,24 @@ function traceSelectedDirectionMarkers(
   nodeMap: Map<number, SimNode>,
   selectedNodeId: number,
   markerSize: number,
+  limit = Number.POSITIVE_INFINITY,
 ): boolean {
   let hasPath = false;
+  let count = 0;
   for (const edge of edges) {
     const source = nodeMap.get(simEdgeNodeId(edge.source));
     const target = nodeMap.get(simEdgeNodeId(edge.target));
     if (!source || !target || (source.id !== selectedNodeId && target.id !== selectedNodeId)) continue;
-    const sourceX = source.x ?? 0;
-    const sourceY = source.y ?? 0;
-    const targetX = target.x ?? 0;
-    const targetY = target.y ?? 0;
-    const dx = targetX - sourceX;
-    const dy = targetY - sourceY;
-    const length = Math.hypot(dx, dy);
-    if (length < markerSize * 2) continue;
-    const unitX = dx / length;
-    const unitY = dy / length;
-    const tipX = sourceX + dx * 0.62;
-    const tipY = sourceY + dy * 0.62;
-    const baseX = tipX - unitX * markerSize;
-    const baseY = tipY - unitY * markerSize;
-    const wing = markerSize * 0.55;
-    ctx.moveTo(baseX - unitY * wing, baseY + unitX * wing);
-    ctx.lineTo(tipX, tipY);
-    ctx.lineTo(baseX + unitY * wing, baseY - unitX * wing);
-    hasPath = true;
+    hasPath = traceDirectionMarker(
+      ctx,
+      source.x ?? 0,
+      source.y ?? 0,
+      target.x ?? 0,
+      target.y ?? 0,
+      markerSize,
+    ) || hasPath;
+    count += 1;
+    if (count >= limit) break;
   }
   return hasPath;
 }
@@ -817,6 +861,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   });
   const stellarFlowLabelCandidatesRef = useRef<SimNode[]>([]);
   const stellarFlowEdgeGroupsRef = useRef<Map<GraphEdgeGroup, StellarFlowEdgeBatch>>(new Map());
+  const stellarFlowRelationLabelRef = useRef("");
+  const stellarPreviewRef = useRef<number | null>(null);
   const clustersRef = useRef<LayoutCluster[]>([]);
   const clusterMapRef = useRef<Map<number, LayoutCluster>>(new Map());
   const domainsRef = useRef<LayoutDomain[]>([]);
@@ -841,6 +887,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     node: 0,
   });
   const keyboardFocusRef = useRef<KeyboardTarget | null>(null);
+  const lastHoverIdRef = useRef<number | null>(null);
   // R40 (UI-6): rAF-batched tick handler. d3-force ticks much faster than
   // 60fps during initial layout; without batching, draw() runs multiple
   // times per frame, wasting CPU on a canvas redraw that the user never sees.
@@ -1042,12 +1089,31 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     startX: 0,
     startY: 0,
   });
-  // R40 (UI-4): track the last hovered node id to avoid calling onNodeHover
-  // (which calls setState in the parent) on every mouse move. The previous
-  // code called onNodeHover on every mousemove event even when the hovered
-  // node was unchanged, causing the whole GraphTab tree to re-render
-  // continuously while the cursor was over the canvas.
-  const lastHoverIdRef = useRef<number | null>(null);
+  const setStellarPreviewFocus = useCallback((nodeId: number | null, redraw = true) => {
+    const preview = visualModeRef.current === "stellar"
+      && selectedNodeIdRef.current == null
+      && nodeId != null
+      && nodeMapRef.current.has(nodeId)
+      ? nodeId
+      : null;
+    stellarPreviewRef.current = preview;
+    if (redraw) drawRef.current?.();
+  }, []);
+
+  useEffect(() => {
+    const previousFrame = previousFlowFrameRef.current;
+    if (
+      lastHoverIdRef.current != null
+      && (previousFrame.visualMode !== visualMode || previousFrame.selectedNodeId !== selectedNodeId)
+    ) {
+      lastHoverIdRef.current = null;
+      onNodeHoverRef.current(null);
+    }
+    const keyboardFocus = keyboardFocusRef.current;
+    const previewNodeId = lastHoverIdRef.current
+      ?? (keyboardFocus?.kind === "node" ? keyboardFocus.id : null);
+    setStellarPreviewFocus(previewNodeId);
+  }, [selectedNodeId, setStellarPreviewFocus, visualMode]);
 
   const activateScope = useCallback((scope: Omit<GraphScopeSelection, "nodeIds">) => {
     const clusterDomain = new Map(
@@ -1080,6 +1146,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         y = node.y ?? y;
         radius = nodeRadius(node);
       }
+      if (lastHoverIdRef.current == null) setStellarPreviewFocus(target.id, false);
     }
 
     const rect = canvas?.getBoundingClientRect();
@@ -1110,7 +1177,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     if (keyboardStatusRef.current) {
       keyboardStatusRef.current.textContent = `${kindLabel} ${target.label}, ${index + 1} of ${targets.length}.${boundedNote} Press Enter to activate.`;
     }
-  }, [animateToTransform, cancelPendingAutoFit]);
+  }, [animateToTransform, cancelPendingAutoFit, setStellarPreviewFocus]);
 
   const cycleKeyboardTarget = useCallback((kind: KeyboardTargetKind, direction: 1 | -1) => {
     if (kind !== "node" && visualModeRef.current === "stellar") {
@@ -1142,12 +1209,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     if (target.kind === "node") {
       const node = nodeMapRef.current.get(target.id);
       if (!node) return false;
+      setStellarPreviewFocus(null);
       onNodeClickRef.current(node as GraphNode);
       return true;
     }
     activateScope({ kind: target.kind, id: target.id, key: target.label });
     return true;
-  }, [activateScope]);
+  }, [activateScope, setStellarPreviewFocus]);
 
   // Update simulation when data changes.
   // R40 (UI-2): previously this effect tore down the entire simulation and
@@ -1178,6 +1246,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       stellarFlowLanesRef.current = { layers: [], modules: [] };
       stellarFlowLabelCandidatesRef.current = [];
       stellarFlowEdgeGroupsRef.current = new Map();
+      stellarFlowRelationLabelRef.current = "";
+      stellarPreviewRef.current = null;
       clustersRef.current = [];
       clusterMapRef.current = new Map();
       domainsRef.current = [];
@@ -1197,10 +1267,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       keyboardTargetsRef.current = emptyKeyboardTargets();
       keyboardVisibleCountsRef.current = { domain: 0, community: 0, node: 0 };
       keyboardFocusRef.current = null;
+      if (lastHoverIdRef.current != null) onNodeHoverRef.current(null);
+      lastHoverIdRef.current = null;
       if (keyboardStatusRef.current) keyboardStatusRef.current.textContent = "";
       currentNodeIdsRef.current = new Set();
       currentEdgeKeysRef.current = new Set();
       dataRequiresLayoutReheatRef.current = false;
+      setStellarPreviewFocus(null, false);
       drawRef.current?.();
       return;
     }
@@ -1425,6 +1498,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       keyboardFocusRef.current = refreshedFocus ?? null;
       if (!refreshedFocus && keyboardStatusRef.current) keyboardStatusRef.current.textContent = "";
     }
+    if (lastHoverIdRef.current != null && (serverTopologyChanged || !map.has(lastHoverIdRef.current))) {
+      lastHoverIdRef.current = null;
+      onNodeHoverRef.current(null);
+    }
     const edgeGroups = new Map<GraphEdgeGroup, SimEdge[]>();
     for (const edge of edges) {
       const group = graphEdgeGroup(edge.type);
@@ -1433,6 +1510,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       else edgeGroups.set(group, [edge]);
     }
     edgeGroupsRef.current = edgeGroups;
+    const refreshedKeyboardFocus = keyboardFocusRef.current;
+    setStellarPreviewFocus(
+      lastHoverIdRef.current
+        ?? (refreshedKeyboardFocus?.kind === "node" ? refreshedKeyboardFocus.id : null),
+      false,
+    );
 
     if (simRef.current) {
       if (!topologyIdentical || serverTopologyChanged) {
@@ -1523,7 +1606,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // No cleanup here — the sim is preserved across data changes. Cleanup is
     // handled by the unmount-only effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, scheduleInitialFit, scheduleSettledFit]);
+  }, [data, scheduleInitialFit, scheduleSettledFit, setStellarPreviewFocus]);
 
   // Stellar is a task layout, not a second renderer. Reconfigure the existing
   // simulation with deterministic constellation/flow targets while preserving
@@ -1622,6 +1705,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         (depth === 1 ? batch.direct : batch.transit).push(edge);
       }
       stellarFlowEdgeGroupsRef.current = flowEdgeGroups;
+      stellarFlowRelationLabelRef.current = GRAPH_EDGE_GROUP_ORDER.flatMap((group) => {
+        const batch = flowEdgeGroups.get(group);
+        const count = batch?.direct.length ?? 0;
+        return count ? [`${GRAPH_EDGE_GROUP_META[group].label} ${count}`] : [];
+      }).join(" · ");
       for (const node of nodes) {
         const target = targets.get(node.id);
         if (!target) continue;
@@ -1718,6 +1806,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       stellarFlowLanesRef.current = { layers: [], modules: [] };
       stellarFlowLabelCandidatesRef.current = [];
       stellarFlowEdgeGroupsRef.current = new Map();
+      stellarFlowRelationLabelRef.current = "";
       for (const node of nodes) {
         if (node.id === previousFocusedNodeId) {
           node.fx = null;
@@ -1889,6 +1978,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       && selectedNodeId != null
       && stellarFlowTargetsRef.current.get(selectedNodeId)?.role === "focus";
     const stellarOverview = stellarFlow && !stellarFocused;
+    const stellarPreviewNodeId = stellarOverview ? stellarPreviewRef.current : null;
+    const relationFocusId = selectedNodeId ?? stellarPreviewNodeId;
 
     // Directory communities are precomputed server-side and require only two
     // batched paths here, regardless of the node count. They make overview
@@ -2183,7 +2274,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         const focusLabelY = minY - 42 / tk;
         ctx.font = `650 ${9 / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
         ctx.fillStyle = "rgba(236, 254, 255, 0.78)";
-        ctx.fillText("FOCUS", 0, focusLabelY);
+        const relationLabel = stellarFlowRelationLabelRef.current;
+        ctx.fillText(relationLabel ? `VISIBLE · ${relationLabel}` : "FOCUS", 0, focusLabelY);
       } else if (targets.size > 0) {
         const { sectors, radius: maxRadius } = stellarConstellationRef.current;
         if (maxRadius > 0) {
@@ -2355,7 +2447,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     // Pass 2: highlighted edges — grouped into at most five semantic stroke
     // batches. This restores relation meaning without per-edge style changes.
-    if (localEdgeOpacity && activeHighlightedIds && selectedNodeId != null) {
+    if (localEdgeOpacity && relationFocusId != null && (activeHighlightedIds || stellarPreviewNodeId != null)) {
       if (stellarFocused) {
         // Multi-hop flow edges are pre-batched when focus changes. Direct
         // relations lead; depths 2–4 retain the same semantic pattern at a
@@ -2379,7 +2471,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.beginPath();
-            if (traceSelectedDirectionMarkers(ctx, batch.direct, nodeMap, selectedNodeId, 4.5 / tk)) {
+            if (traceSelectedDirectionMarkers(ctx, batch.direct, nodeMap, relationFocusId, 4.5 / tk)) {
               ctx.lineWidth = 0.9 / tk;
               ctx.stroke();
             }
@@ -2388,17 +2480,28 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       } else {
         ctx.globalAlpha = rawNodeOpacity;
         ctx.lineWidth = 1.2 / tk;
+        const limit = stellarPreviewNodeId != null ? 2 : Number.POSITIVE_INFINITY;
         for (const [group, groupedEdges] of edgeGroupsRef.current) {
           const meta = GRAPH_EDGE_GROUP_META[group];
           ctx.setLineDash(meta.dash.map((segment) => segment / tk));
           ctx.beginPath();
-          if (!traceEdges(ctx, groupedEdges, nodeMap, selectedNodeId, true)) continue;
+          if (!traceEdges(ctx, groupedEdges, nodeMap, relationFocusId, true, limit)) continue;
           ctx.strokeStyle = meta.stroke;
           ctx.stroke();
+          if (stellarPreviewNodeId != null) {
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            if (traceSelectedDirectionMarkers(ctx, groupedEdges, nodeMap, relationFocusId, 4.5 / tk, limit)) ctx.stroke();
+          }
         }
       }
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
+    }
+
+    if (stellarPreviewNodeId != null) {
+      const previewNode = nodeMap.get(stellarPreviewNodeId);
+      if (previewNode) paintStellarFirstHopPreview(ctx, previewNode, tk);
     }
 
     // One batched additive path recovers the useful V1 hub-at-a-glance signal
@@ -3065,6 +3168,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         const hoverId = node?.id ?? null;
         if (hoverId !== lastHoverIdRef.current) {
           lastHoverIdRef.current = hoverId;
+          const keyboardFocus = keyboardFocusRef.current;
+          setStellarPreviewFocus(
+            hoverId ?? (keyboardFocus?.kind === "node" ? keyboardFocus.id : null),
+          );
           onNodeHoverRef.current(node ?? null, screenPos);
         }
         if (node) queueTooltipPosition(screenPos);
@@ -3078,6 +3185,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       updateHoveredScope(null);
       if (lastHoverIdRef.current != null) {
         lastHoverIdRef.current = null;
+        const keyboardFocus = keyboardFocusRef.current;
+        setStellarPreviewFocus(keyboardFocus?.kind === "node" ? keyboardFocus.id : null);
         onNodeHoverRef.current(null);
       }
       canvas.style.cursor = "default";
@@ -3087,6 +3196,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       const moved = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
       if (dragRef.current.node) {
         if (moved < 3 && dragRef.current.node) {
+          setStellarPreviewFocus(null);
           onNodeClickRef.current(dragRef.current.node as GraphNode);
         }
         const keepAtOrigin = visualModeRef.current === "stellar"
@@ -3320,6 +3430,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         }
         const node = dragRef.current.node;
         if (node && touchMaxMovement <= TOUCH_TAP_SLOP_PX) {
+          setStellarPreviewFocus(null);
           onNodeClickRef.current(node as GraphNode);
         }
         releaseDraggedNode();
@@ -3370,7 +3481,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       releaseDraggedNode();
       resetTouchState();
     };
-  }, [activateScope, cancelPendingAutoFit, cancelViewAnimation]); // callbacks are accessed via refs
+  }, [activateScope, cancelPendingAutoFit, cancelViewAnimation, setStellarPreviewFocus]); // callbacks are accessed via refs
 
   // Expose fit/reset/zoom without lifting transformRef out of the canvas.
   useImperativeHandle(ref, () => ({
@@ -3525,7 +3636,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       />
       <span id={keyboardInstructionsId} className="sr-only">
         {visualMode === "stellar"
-          ? "Dependencies graph. Press N or Shift+N to browse up to 64 representative nodes. Select a node to place incoming relations on the left and outgoing relations on the right. Numbered rails show visible hop depth; relation colors and dash patterns are named in the guide. "
+          ? "Dependencies graph. Hover a symbol or press N or Shift+N to preview its visible first hop without graph changes. Activate it for the complete visible flow: incoming left, outgoing right. Numbered rails show hop depth and the focus label names relation types. "
           : detailMode
             ? "Exact Structure. N browses symbols. "
             : "Structure map. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}

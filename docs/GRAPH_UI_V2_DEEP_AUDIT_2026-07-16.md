@@ -1214,3 +1214,29 @@ ni mutation de simulation, ni passe par nœud. La suite frontend passe **22
 fichiers / 177 tests**, le typecheck V2 et `build:package` passent, et les
 budgets gzip restent identiques : Graph **39,14 / 40 Kio**, CSS manifeste
 **11,76 Kio** et JavaScript manifeste **124,98 / 125 Kio**.
+
+## Addendum — aperçu progressif du premier saut Dependencies (2026-07-17)
+
+L'overview Dependencies montrait désormais les hubs, secteurs et communautés,
+mais demandait encore un clic avant de révéler pourquoi un symbole comptait. Une
+carte flottante aurait dupliqué les nœuds, masqué le graphe et introduit une
+seconde grammaire de placement. L'aperçu retenu reste donc dans la constellation
+existante et dans les positions réellement stabilisées.
+
+Le survol ou le focus clavier peint au maximum deux relations incidentes pour
+chacun des cinq groupes sémantiques, soit dix arêtes transitoires au plus. Il
+réutilise couleurs, tirets et marqueurs de direction du flux exact, ajoute un
+anneau de focus et le libellé `VISIBLE FIRST HOP`, sans requête, restart d3,
+mutation de coordonnées, filtre ou navigation. Le clic ou Entrée efface cet
+aperçu avant d'ouvrir le focus multi-saut existant.
+
+Le focus pointeur est invalidé lors d'un changement de mode, de sélection exacte
+ou de révision serveur ; le focus clavier intentionnel redevient la source après
+la sortie du pointeur. Le guide DOM permanent et son scan d'arêtes dupliqué ont
+été supprimés. Les groupes/comptes directement incidents au symbole sélectionné
+sont maintenant dérivés des lots de flux déjà calculés et affichés uniquement
+dans le libellé Canvas du focus.
+
+La suite frontend passe **22 fichiers / 180 tests**. Le typecheck et le build de
+production passent sans relever les plafonds : Graph **39,15 / 40 Kio**, CSS
+manifeste **11,63 Kio** et JavaScript manifeste **125,00 / 125 Kio**.

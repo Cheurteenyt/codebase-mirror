@@ -132,15 +132,20 @@ not require a migration. `Structure` is the default and follows the
 server-authored domain/community anchors. At macro scale it labels only the 12
 largest communities whose projected circles can carry text, using the existing
 collision budget. `Dependencies` installs deterministic targets into that same
-simulation. Without a focus,
-exact full-graph degree pulls hubs toward the center while directory
-communities retain angular sectors. Selecting a visible symbol pins it to the
-semantic origin, unfolds up to four visible incoming relation layers to the left and
+  simulation. Without a focus, exact full-graph degree pulls hubs toward the
+  center while directory communities retain angular sectors. Hover or virtual
+  keyboard node focus adds a read-only first-hop paint lens over that settled
+  frame. It traces at most two incident edges per semantic group from topology
+  already loaded in the Canvas, adds direction markers and a focus ring, and
+  never changes d3 coordinates, filters, navigation, or network state. Pointer
+  focus is invalidated on semantic-frame and server-revision changes; keyboard
+  focus remains the intentional fallback. Selecting a visible symbol pins it to
+  the semantic origin, unfolds up to four visible incoming relation layers to the left and
 outgoing layers to the right, and retains unrelated symbols as dim outer
 context. Numbered rails come only from real directed paths. Repeated directory
 lanes receive a bounded module label; direct and transit edges share one
-five-group color/dash grammar, and the DOM guide lists only relation groups
-incident to the selected node. Incoming labels prefer left-facing anchors,
+  five-group color/dash grammar, and a focus-only Canvas label lists visible relation
+  groups incident to the selected node. Incoming labels prefer left-facing anchors,
 outgoing labels prefer right-facing anchors, and each has two deterministic
 vertical fallbacks before omission. Exact degree still selects the V1 reference spectral scale, node type
 selects a circle/diamond/square glyph, and only the selected flow receives

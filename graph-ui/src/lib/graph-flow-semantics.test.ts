@@ -15,9 +15,8 @@ describe("Stellar flow relation semantics", () => {
   });
 
   it("keeps every relation group decodable without color", () => {
-    const patterns = Object.values(GRAPH_EDGE_GROUP_META).map((meta) => meta.pattern);
+    const patterns = Object.values(GRAPH_EDGE_GROUP_META).map((meta) => meta.dash.join(","));
     expect(new Set(patterns).size).toBe(patterns.length);
-    expect(Object.values(GRAPH_EDGE_GROUP_META).every((meta) => meta.glyph.length > 0)).toBe(true);
   });
 
   it("summarizes only relations incident to the selected symbol", () => {
@@ -33,4 +32,5 @@ describe("Stellar flow relation semantics", () => {
       { group: "imports", count: 1 },
     ]);
   });
+
 });

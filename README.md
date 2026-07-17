@@ -300,14 +300,20 @@ d3-force canvas and two task views over the same graph:
     volume summary and related bundles remain visible while community captions
     are limited to that domain; the idle overview gains no permanent annotation
   - **Dependencies** (optional, persisted locally): exact-degree hubs form a
-    deterministic constellation; selecting a symbol unfolds up to four visible
-    incoming/outgoing relation layers around a focus pinned to the semantic
-    origin, with unrelated nodes retained as dim outer context. Numbered rails
-    expose hop depth, repeated directory lanes expose module context, and
-    relation colors plus dash patterns are decoded by a selection-only legend.
+    deterministic constellation. Before selection, pointer hover or keyboard
+    node focus paints a transient visible-first-hop lens in the settled frame:
+    at most two incident edges from each of the five semantic relation groups,
+    with the real color/dash grammar and direction markers. It uses only the
+    loaded topology, performs no request or simulation mutation, and disappears
+    across layout, exact-focus, filter-removal, and server-revision transitions.
+    Selecting a symbol then unfolds up to four visible incoming/outgoing
+    relation layers around a focus pinned to the semantic origin, with unrelated
+    nodes retained as dim outer context. Numbered rails expose hop depth,
+    repeated directory lanes expose module context, and the focus-only Canvas
+    label lists visible relation groups incident to the selected symbol.
     Incoming labels open to the left and outgoing labels to the right through
     three deterministic collision candidates. The selected frame is recomposed
-    inside the canvas area left free by the fidelity HUD, action rail, guide,
+    inside the canvas area left free by the fidelity HUD, action rail,
     breadcrumb, and detail panel; panel/viewport resizes update that camera
     without reheating d3. Distant depths use monotonic compressed spacing and
     moderate fan-outs expand vertically, so constrained canvases can enlarge

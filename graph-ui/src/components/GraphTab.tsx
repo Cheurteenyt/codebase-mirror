@@ -22,10 +22,6 @@ import {
   saveGraphVisualMode,
   type GraphVisualMode,
 } from "../lib/graph-visual-mode";
-import {
-  GRAPH_EDGE_GROUP_META,
-  summarizeSelectedEdgeGroups,
-} from "../lib/graph-flow-semantics";
 import { PanelLeftOpen, X } from "lucide-react";
 
 const NodeDetailPanel = lazy(() => import("./NodeDetailPanel"));
@@ -284,10 +280,6 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   }, [enabledEdgeTypes, enabledLabels, exactGraphData, hideEntryPoints, hideTests, showOnlyDead]);
   const canvasData = exactFilteredData ?? filteredData;
   const filterPanelData = exactGraphData ?? data;
-  const stellarRelationSummary = useMemo(
-    () => summarizeSelectedEdgeGroups(canvasData?.edges ?? [], selectedNode?.id ?? null),
-    [canvasData?.edges, selectedNode?.id],
-  );
   const selectedNodeRequiresExactValidation = Boolean(
     selectedNode
     && selectedNodeOutsideOverviewRef.current
@@ -1171,49 +1163,6 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
               >
                 +
               </button>
-            </div>
-
-            <div
-              role="status"
-              aria-label="Graph view guide"
-              aria-live="polite"
-              className={`pointer-events-none absolute left-1/2 z-20 flex max-w-[min(42rem,calc(100%-2rem))] -translate-x-1/2 items-center border border-white/10 bg-[#071219]/86 px-3 py-1.5 text-[10px] font-medium tracking-wide text-slate-300/70 shadow-lg backdrop-blur-md ${visualMode === "stellar" && selectedNode ? "bottom-16 flex-col gap-1 rounded-xl" : "bottom-4 gap-2 rounded-full"}`}
-            >
-              {visualMode === "stellar" && selectedNode ? (
-                  <>
-                    <span className="flex items-center gap-2">
-                      <span className="text-indigo-200/65">Incoming</span>
-                      <span aria-hidden="true">&larr;</span>
-                      <strong className="max-w-52 truncate font-semibold text-cyan-50" title={selectedNode.name}>
-                        {selectedNode.name}
-                      </strong>
-                      <span aria-hidden="true">&rarr;</span>
-                      <span className="text-cyan-200/65">Outgoing</span>
-                    </span>
-                    {stellarRelationSummary.length > 0 && (
-                      <ul aria-label="Visible relation types" className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 font-mono text-[9px] tracking-normal">
-                        {stellarRelationSummary.map(({ group, count }) => {
-                          const meta = GRAPH_EDGE_GROUP_META[group];
-                          return (
-                            <li
-                              key={group}
-                              className="flex items-center gap-1 whitespace-nowrap"
-                              aria-label={`${meta.label}: ${count.toLocaleString()}; ${meta.pattern} line`}
-                              title={`${meta.label}: ${meta.pattern} line`}
-                            >
-                              <span aria-hidden="true" style={{ color: meta.stroke }}>{meta.glyph}</span>
-                              <span>{meta.label} {count.toLocaleString()}</span>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </>
-              ) : (
-                <span>{visualMode === "stellar"
-                  ? "Dependencies · select a symbol · incoming ← focus → outgoing"
-                  : "Structure · domains → communities → symbols"}</span>
-              )}
             </div>
 
             {hoveredNode && <NodeTooltip node={hoveredNode} x={tooltipPos.x} y={tooltipPos.y} />}

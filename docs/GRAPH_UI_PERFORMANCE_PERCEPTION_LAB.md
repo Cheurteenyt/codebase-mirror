@@ -468,3 +468,28 @@ bounded caption pass; it adds no request, renderer, simulation mutation, or
 per-node paint pass. The frontend passes **22 files / 177 tests**, V2 typecheck
 and `build:package` pass, and gzip remains unchanged at Graph **39.14 / 40 KiB**,
 manifest CSS **11.76 KiB**, and manifest JavaScript **124.98 / 125 KiB**.
+
+## Dependencies first-hop preview follow-up - 2026-07-17
+
+The quiet Dependencies overview exposed importance and project sectors, but it
+still required a click before showing why a symbol mattered. A large floating
+preview would have duplicated nodes, hidden topology, and added another layout
+grammar. The retained design therefore stays inside the existing constellation.
+
+Pointer hover and virtual keyboard node focus now brighten a bounded first hop
+in the nodes' real settled positions. Each of the five existing semantic edge
+groups contributes at most two incident relations, so the transient layer paints
+no more than ten edges. It reuses the group color/dash grammar and the exact-flow
+direction marker, adds one focus ring and one `VISIBLE FIRST HOP` label, and
+performs no request, d3 restart, coordinate mutation, filter change, or navigation.
+Click/Enter removes the preview before the existing multi-hop exact focus opens.
+
+Pointer state is cleared when the visual mode, selected focus, or authoritative
+server revision changes, while an intentional keyboard target remains the
+fallback after pointer exit. The former persistent DOM guide and its duplicate
+edge scan were removed; selected direct-relation groups/counts now come from the
+already precomputed flow batches and appear only in the Canvas focus label.
+
+The frontend passes **22 files / 180 tests**. Typecheck and production build
+pass without raising budgets: Graph **39.15 / 40 KiB**, manifest CSS
+**11.63 KiB**, and manifest JavaScript **125.00 / 125 KiB**.

@@ -435,6 +435,156 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(container.querySelector("canvas")).toHaveAttribute("data-flow-lens", "semantic-depth-v2");
   });
 
+  it("previews a bounded first hop without mutating or reheating Stellar physics", async () => {
+    const { forceSimulation } = await import("d3-force");
+    const ctx = installCanvasMock(800, 600);
+    const onNodeClick = vi.fn();
+    const { getByRole, rerender } = render(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        selectedNodeId={null}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={onNodeClick}
+        onNodeHover={() => {}}
+      />,
+    );
+    const canvas = getByRole("application");
+    const sim = (forceSimulation as any).mock.results[0].value;
+    const physicsNodes = (forceSimulation as any).mock.calls[0][0] as Array<{
+      id: number;
+      x: number;
+      y: number;
+      fx?: number | null;
+      fy?: number | null;
+    }>;
+    const positions = physicsNodes.map(({ id, x, y, fx, fy }) => ({ id, x, y, fx, fy }));
+    sim.alpha.mockClear();
+    sim.restart.mockClear();
+    ctx.fillText.mockClear();
+
+    fireEvent.keyDown(canvas, { key: "n" });
+
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "VISIBLE FIRST HOP")).toBe(true);
+    expect(sim.alpha).not.toHaveBeenCalled();
+    expect(sim.restart).not.toHaveBeenCalled();
+    expect(physicsNodes.map(({ id, x, y, fx, fy }) => ({ id, x, y, fx, fy }))).toEqual(positions);
+
+    fireEvent.keyDown(canvas, { key: "Enter" });
+    expect(onNodeClick).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
+    ctx.fillText.mockClear();
+    rerender(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        selectedNodeId={1}
+        highlightedIds={new Set([1, 2])}
+        deadCodeView={false}
+        onNodeClick={onNodeClick}
+        onNodeHover={() => {}}
+      />,
+    );
+    expect(canvas).toHaveAttribute("data-flow-lens", "semantic-depth-v2");
+    expect(ctx.fillText.mock.calls.some(([text]) => String(text).includes("VISIBLE FIRST HOP"))).toBe(false);
+  });
+
+  it("caps a transient preview at two relations per semantic group", () => {
+    const ctx = installCanvasMock(800, 600);
+    const nodes = Array.from({ length: 6 }, (_, index) => makeNode(index + 1, `node-${index + 1}`));
+    const { getByRole } = render(
+      <GraphCanvas
+        data={{
+          nodes,
+          edges: nodes.slice(1).map((node) => ({ source: 1, target: node.id, type: "calls" })),
+          total_nodes: nodes.length,
+          topology_revision: "bounded-preview",
+        }}
+        visualMode="stellar"
+        selectedNodeId={null}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+    const canvas = getByRole("application");
+
+    ctx.lineTo.mockClear();
+    fireEvent.keyDown(canvas, { key: "ArrowLeft" });
+    const overviewLineCount = ctx.lineTo.mock.calls.length;
+    ctx.lineTo.mockClear();
+    fireEvent.keyDown(canvas, { key: "n" });
+
+    // Two bounded relation segments plus two two-segment direction markers.
+    expect(ctx.lineTo.mock.calls.length - overviewLineCount).toBe(6);
+  });
+
+  it("clears transient Stellar previews on pointer leave, mode change, and filtering", () => {
+    const ctx = installCanvasMock(800, 600);
+    const { getByRole, rerender } = render(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        selectedNodeId={null}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+    const canvas = getByRole("application");
+
+    fireEvent.keyDown(canvas, { key: "n" });
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 300 });
+    fireEvent.mouseLeave(canvas);
+    ctx.fillText.mockClear();
+    fireEvent.keyDown(canvas, { key: "ArrowLeft" });
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "VISIBLE FIRST HOP")).toBe(true);
+
+    ctx.fillText.mockClear();
+    rerender(
+      <GraphCanvas
+        data={dataB}
+        visualMode="architecture"
+        selectedNodeId={null}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+    expect(ctx.fillText.mock.calls.some(([text]) => String(text).includes("VISIBLE FIRST HOP"))).toBe(false);
+
+    rerender(
+      <GraphCanvas
+        data={dataB}
+        visualMode="stellar"
+        selectedNodeId={null}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+    ctx.fillText.mockClear();
+    fireEvent.keyDown(canvas, { key: "n" });
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "VISIBLE FIRST HOP")).toBe(true);
+    ctx.fillText.mockClear();
+    rerender(
+      <GraphCanvas
+        data={{ ...dataB, nodes: [dataB.nodes[0]], edges: [] }}
+        visualMode="stellar"
+        selectedNodeId={null}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+    expect(ctx.fillText.mock.calls.some(([text]) => String(text).includes("VISIBLE FIRST HOP"))).toBe(false);
+  });
+
   it("fits all four directed depths into the safe viewport without fitting context", () => {
     const ctx = installCanvasMock(720, 900);
     const ref = createRef<GraphCanvasHandle>();
@@ -565,6 +715,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
       dash.length === 2 && Math.abs(dash[0] / dash[1] - 7 / 4) < 1e-6
     ))).toBe(true);
     expect(ctx.setLineDash.mock.calls).toContainEqual([[]]);
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "VISIBLE · Calls 1 · Imports 1")).toBe(true);
   });
 
   it("enters exact-scope detail policy without creating a second simulation", async () => {
@@ -1953,6 +2104,38 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
 
     expect(onNodeHover).toHaveBeenLastCalledWith(null);
     expect((canvas as HTMLCanvasElement).style.cursor).toBe("default");
+  });
+
+  it("clears stale pointer focus across layout frames and server revisions", () => {
+    installCanvasMock(800, 600);
+    const onNodeHover = vi.fn();
+    const props = {
+      highlightedIds: null,
+      deadCodeView: false,
+      onNodeClick: () => {},
+      onNodeHover,
+    };
+    const { getByRole, rerender } = render(
+      <GraphCanvas {...props} data={dataA} visualMode="stellar" />,
+    );
+    const canvas = getByRole("application");
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 300 });
+    expect(onNodeHover).toHaveBeenLastCalledWith(expect.objectContaining({ id: 1 }), { x: 400, y: 300 });
+
+    rerender(<GraphCanvas {...props} data={dataA} visualMode="architecture" />);
+    expect(onNodeHover).toHaveBeenLastCalledWith(null);
+
+    rerender(<GraphCanvas {...props} data={dataA} visualMode="stellar" />);
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 300 });
+    expect(onNodeHover).toHaveBeenLastCalledWith(expect.objectContaining({ id: 1 }), { x: 400, y: 300 });
+    rerender(
+      <GraphCanvas
+        {...props}
+        data={{ ...dataA, topology_revision: "revision-a-reindexed" }}
+        visualMode="stellar"
+      />,
+    );
+    expect(onNodeHover).toHaveBeenLastCalledWith(null);
   });
 
   it("moves a tooltip over the same node without re-emitting expensive hover state", async () => {
