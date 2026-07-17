@@ -836,7 +836,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
         ref={mobileDrawerRef}
         role={!isDesktop && mobilePanelOpen ? "dialog" : undefined}
         aria-modal={!isDesktop && mobilePanelOpen ? true : undefined}
-        aria-label={!isDesktop && mobilePanelOpen ? "Graph filters and architecture search" : undefined}
+        aria-label={!isDesktop && mobilePanelOpen ? "Graph filters and structure search" : undefined}
         aria-hidden={!isDesktop && !mobilePanelOpen ? true : undefined}
         inert={!isDesktop && !mobilePanelOpen ? true : undefined}
         tabIndex={!isDesktop && mobilePanelOpen ? -1 : undefined}
@@ -923,9 +923,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       <div
         ref={graphRegionRef}
         tabIndex={-1}
-        aria-label={visualMode === "stellar"
-          ? "Stellar flow graph canvas region"
-          : "Architecture graph canvas region"}
+        aria-label="Graph canvas region"
         inert={!isDesktop && mobilePanelOpen ? true : undefined}
         className="flex-1 relative overflow-hidden focus:outline-none"
       >
@@ -1005,7 +1003,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                   <p>
                     {canvasData.edges.length.toLocaleString()} visible edges
                     {data.truncated
-                      ? ` · ${data.sampling?.strategy === "architecture-coverage-v1" ? "architecture-covered representatives" : (data.sampling?.strategy ?? "sampled")}`
+                      ? ` · ${data.sampling?.strategy === "architecture-coverage-v1" ? "structure-covered representatives" : (data.sampling?.strategy ?? "sampled")}`
                       : " · complete graph"}
                   </p>
                   {data.edge_sampling?.edges_truncated && (
@@ -1062,7 +1060,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                 <button
                   onClick={navigateUp}
                   className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-cyan-200/75 hover:bg-white/[0.08] hover:text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
-                  aria-label="Go up one architecture level"
+                  aria-label="Go up one structure level"
                   title="Go up (Escape)"
                 >
                   ←
@@ -1071,7 +1069,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                   onClick={navigateHome}
                   className="shrink-0 rounded-lg px-2 py-1.5 text-slate-400 hover:bg-white/[0.06] hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
                 >
-                  Architecture
+                  Structure
                 </button>
                 {navigationHistory.map((scope, index) => (
                   <span key={`${scope.kind}:${scope.key}`} className="flex min-w-0 items-center gap-1">
@@ -1109,24 +1107,32 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
               aria-label="Graph actions"
               className={`absolute right-3 top-20 z-20 flex flex-col items-end gap-1.5 ${selectedNode ? "2xl:right-4 2xl:top-4 2xl:flex-row 2xl:items-center 2xl:gap-2" : "xl:right-4 xl:top-4 xl:flex-row xl:items-center xl:gap-2"}`}
             >
-              <button
-                onClick={() => setVisualMode((current) => {
-                  const next = current === "architecture" ? "stellar" : "architecture";
-                  saveGraphVisualMode(next);
-                  return next;
-                })}
-                className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors ${visualMode === "stellar" ? "border-indigo-300/20 bg-indigo-300/[0.1] text-indigo-100" : "border-white/[0.06] bg-white/[0.04] text-foreground/55 hover:bg-white/[0.08]"}`}
-                aria-label={visualMode === "architecture"
-                  ? "Use Stellar flow view"
-                  : "Use Architecture map view"}
-                aria-pressed={visualMode === "stellar"}
-                title={visualMode === "architecture"
-                  ? "Arrange exact-degree hubs in an orbit; selecting a node separates incoming and outgoing relations"
-                  : "Return to the domain and community architecture map"}
+              <div
+                role="group"
+                aria-label="Graph view"
+                className="flex h-8 items-center rounded-lg border border-white/[0.07] bg-[#070d15]/82 p-0.5 shadow-lg backdrop-blur-md"
               >
-                <span aria-hidden="true" className={visualMode === "stellar" ? "text-indigo-200" : "text-cyan-300/60"}>✦</span>
-                {visualMode === "stellar" ? "Stellar flow" : "Architecture"}
-              </button>
+                <button
+                  onClick={() => {
+                    saveGraphVisualMode("architecture");
+                    setVisualMode("architecture");
+                  }}
+                  className={`h-7 rounded-md px-2.5 text-[10px] font-semibold tracking-wide transition-colors ${visualMode === "architecture" ? "bg-cyan-300/[0.12] text-cyan-50 shadow-sm" : "text-foreground/42 hover:text-foreground/70"}`}
+                  aria-pressed={visualMode === "architecture"}
+                >
+                  Structure
+                </button>
+                <button
+                  onClick={() => {
+                    saveGraphVisualMode("stellar");
+                    setVisualMode("stellar");
+                  }}
+                  className={`h-7 rounded-md px-2.5 text-[10px] font-semibold tracking-wide transition-colors ${visualMode === "stellar" ? "bg-indigo-300/[0.12] text-indigo-50 shadow-sm" : "text-foreground/42 hover:text-foreground/70"}`}
+                  aria-pressed={visualMode === "stellar"}
+                >
+                  Dependencies
+                </button>
+              </div>
               <button
                 onClick={() => fetchOverview(project)}
                 className="px-3 py-1.5 rounded-lg bg-white/[0.04] text-foreground/50 hover:bg-white/[0.08] text-[12px]"
@@ -1158,14 +1164,13 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
               </button>
             </div>
 
-            {visualMode === "stellar" && (
-              <div
-                role="status"
-                aria-label="Stellar flow guide"
-                aria-live="polite"
-                className={`pointer-events-none absolute left-1/2 z-20 flex max-w-[min(42rem,calc(100%-2rem))] -translate-x-1/2 items-center border border-indigo-300/15 bg-[#080b1b]/86 px-3 py-1.5 text-[10px] font-medium tracking-wide text-indigo-100/72 shadow-lg backdrop-blur-md ${selectedNode ? "bottom-16 flex-col gap-1 rounded-xl" : "bottom-4 gap-2 rounded-full"}`}
-              >
-                {selectedNode ? (
+            <div
+              role="status"
+              aria-label="Graph view guide"
+              aria-live="polite"
+              className={`pointer-events-none absolute left-1/2 z-20 flex max-w-[min(42rem,calc(100%-2rem))] -translate-x-1/2 items-center border border-white/10 bg-[#071219]/86 px-3 py-1.5 text-[10px] font-medium tracking-wide text-slate-300/70 shadow-lg backdrop-blur-md ${visualMode === "stellar" && selectedNode ? "bottom-16 flex-col gap-1 rounded-xl" : "bottom-4 gap-2 rounded-full"}`}
+            >
+              {visualMode === "stellar" && selectedNode ? (
                   <>
                     <span className="flex items-center gap-2">
                       <span className="text-indigo-200/65">Incoming</span>
@@ -1195,11 +1200,12 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                       </ul>
                     )}
                   </>
-                ) : (
-                  <span>Hub orbit &middot; select a node to unfold incoming and outgoing relations</span>
-                )}
-              </div>
-            )}
+              ) : (
+                <span>{visualMode === "stellar"
+                  ? "Dependencies · select a symbol · incoming ← focus → outgoing"
+                  : "Structure · domains → communities → symbols"}</span>
+              )}
+            </div>
 
             {hoveredNode && <NodeTooltip node={hoveredNode} x={tooltipPos.x} y={tooltipPos.y} />}
           </>

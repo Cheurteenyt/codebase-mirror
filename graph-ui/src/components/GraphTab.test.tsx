@@ -206,7 +206,7 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     expect(actions).not.toHaveClass("xl:top-4", "xl:flex-row");
   });
 
-  it("persists the Stellar flow policy without replacing the graph canvas", () => {
+  it("persists the Dependencies policy without replacing the graph canvas", () => {
     (useGraphData as any).mockReturnValue({
       data: mockData,
       loading: false,
@@ -217,18 +217,22 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     const first = render(<GraphTab project="test-project" />);
     const canvas = first.container.querySelector("canvas");
     expect(canvas).toHaveAttribute("data-visual-mode", "architecture");
+    expect(screen.getByRole("tree", { name: "Structure tree" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Structure" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status", { name: "Graph view guide" })).toHaveTextContent("domains → communities → symbols");
 
-    fireEvent.click(screen.getByRole("button", { name: "Use Stellar flow view" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dependencies" }));
     expect(first.container.querySelector("canvas")).toBe(canvas);
     expect(canvas).toHaveAttribute("data-visual-mode", "stellar");
     expect(canvas).toHaveAttribute("data-layout-policy", "hub-orbit");
-    expect(screen.getByRole("status", { name: "Stellar flow guide" })).toHaveTextContent("Hub orbit");
+    expect(screen.getByRole("status", { name: "Graph view guide" })).toHaveTextContent("Dependencies");
     expect(localStorage.getItem("cbm-graph-visual-mode")).toBe("stellar");
 
     first.unmount();
     const second = render(<GraphTab project="test-project" />);
     expect(second.container.querySelector("canvas")).toHaveAttribute("data-visual-mode", "stellar");
-    expect(screen.getByRole("button", { name: "Use Architecture map view" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Dependencies" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Structure" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("explains the selected incoming and outgoing Stellar frame", () => {
@@ -245,7 +249,7 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     fireEvent.click(screen.getByRole("button", { name: "Open foo" }));
 
     expect(container.querySelector("canvas")).toHaveAttribute("data-layout-policy", "directed-focus");
-    const guide = screen.getByRole("status", { name: "Stellar flow guide" });
+    const guide = screen.getByRole("status", { name: "Graph view guide" });
     expect(guide).toHaveTextContent("Incoming");
     expect(guide).toHaveTextContent("foo");
     expect(guide).toHaveTextContent("Outgoing");
@@ -322,7 +326,7 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     expect(screen.queryByRole("button", { name: "None" })).not.toBeInTheDocument();
 
     fireEvent.click(trigger);
-    const dialog = screen.getByRole("dialog", { name: "Graph filters and architecture search" });
+    const dialog = screen.getByRole("dialog", { name: "Graph filters and structure search" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(dialog).not.toHaveAttribute("aria-hidden");
     await waitFor(() => expect(screen.getByRole("button", { name: "Close graph filters" })).toHaveFocus());

@@ -292,8 +292,9 @@ d3-force canvas and two task views over the same graph:
 
 - **Dashboard tab** (default): KPIs, graph freshness, smart recommendations
 - **Graph tab**: 2D force-directed canvas with filters, pan/zoom, node detail panel
-  - **Architecture** (default): type colors and a quiet domain/community hierarchy
-  - **Stellar flow** (optional, persisted locally): exact-degree hubs form a
+  - **Structure** (default): domains contain bounded, informative community
+    captions before zoom reveals individual symbols
+  - **Dependencies** (optional, persisted locally): exact-degree hubs form a
     deterministic constellation; selecting a symbol unfolds up to four visible
     incoming/outgoing relation layers around a focus pinned to the semantic
     origin, with unrelated nodes retained as dim outer context. Numbered rails
@@ -314,7 +315,7 @@ d3-force canvas and two task views over the same graph:
 
 Both Graph views share one topology, canvas, d3 simulation object,
 sampling/exactness labels, filters, selection, keyboard model, and detail APIs.
-`Architecture` follows server-authored domain/community anchors. `Stellar flow`
+`Structure` follows server-authored domain/community anchors. `Dependencies`
 reconfigures that same simulation with task-specific targets and one bounded
 reheat when the view or focused symbol changes; known filter subsets do not
 reheat and no renderer, canvas, or node object is rebuilt. Direct relations lead
@@ -323,17 +324,18 @@ lower weight; cross-links that do not advance toward or away from the focus are
 not promoted as flow. Focus-label ranking is precomputed on semantic-frame
 changes rather than sorted during every Canvas paint.
 
-Large unselected Stellar overviews keep every sampled node visible and
+Large unselected Dependencies overviews keep every sampled node visible and
 clickable, but only semantic hubs participate in d3 relaxation. Micro-symbols
 remain on their deterministic constellation targets, nodes are painted in
 spectral/rank batches, and secondary edges appear only when projected spacing
-makes them useful. Selecting a symbol or returning to `Architecture` restores
+makes them useful. Selecting a symbol or returning to `Structure` restores
 the complete node set to the same simulation before applying that view's
 forces. This adaptive boundary reduces sustained CPU without changing the API
 sample, exact-neighborhood behavior, filters, or hit targets.
 
-The quiet constellation is also an architecture map rather than an undifferentiated
-particle ring. Major top-level paths occupy contiguous elliptical sectors with
+The quiet Dependencies constellation is also a project map rather than an
+undifferentiated particle ring. Major top-level paths occupy contiguous
+elliptical sectors with
 bounded colored arcs and exact representative counts; tiny paths collapse into
 one unlabeled `other` sector. Hub halos and the backbone remain visible, while
 the overview admits at most 12 radially anchored, collision-checked symbol

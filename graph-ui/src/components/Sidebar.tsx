@@ -484,7 +484,7 @@ export function Sidebar({
           ref={treeRef}
           className="py-1"
           role={searchResults !== null ? undefined : "tree"}
-          aria-label={searchResults !== null ? undefined : "Architecture tree"}
+          aria-label={searchResults !== null ? undefined : "Structure tree"}
         >
           {searchResults !== null ? (
             <>

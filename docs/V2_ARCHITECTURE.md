@@ -126,9 +126,13 @@ A React/Vite application (`graph-ui/`) served by the V2 backend:
 - **Real-time updates** via WebSocket where the active view requires them
 
 The Graph tab has one topology, one d3 simulation object, and one interaction
-model. `Architecture` is the default task view and follows the server-authored
-domain/community anchors. The optional, locally persisted `Stellar flow` view
-installs deterministic targets into that same simulation. Without a focus,
+model. The user-facing views are `Structure` and `Dependencies`; the persisted
+internal values remain `architecture` and `stellar` so existing preferences do
+not require a migration. `Structure` is the default and follows the
+server-authored domain/community anchors. At macro scale it labels only the 12
+largest communities whose projected circles can carry text, using the existing
+collision budget. `Dependencies` installs deterministic targets into that same
+simulation. Without a focus,
 exact full-graph degree pulls hubs toward the center while directory
 communities retain angular sectors. Selecting a visible symbol pins it to the
 semantic origin, unfolds up to four visible incoming relation layers to the left and
@@ -141,12 +145,12 @@ outgoing labels prefer right-facing anchors, and each has two deterministic
 vertical fallbacks before omission. Exact degree still selects the V1 reference spectral scale, node type
 selects a circle/diamond/square glyph, and only the selected flow receives
 direction markers. Status remains an outer stroke. Invalid or unavailable local
-storage falls back to `Architecture`.
+storage falls back to `Structure`.
 
 In the unfocused frame, top-level project paths form contiguous elliptical
 sectors and small path families collapse into one quiet `other` sector. Colored
 boundary arcs and exact representative counts expose project structure without
-duplicating the Architecture domain renderer. The hub halo and stronger
+duplicating the Structure domain renderer. The hub halo and stronger
 backbone remain batched; a separate 12-label overview budget uses radial
 collision candidates and excludes low-information names. Sector summaries,
 hub membership, and label candidates are all precomputed on semantic-frame

@@ -904,6 +904,49 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(ctx.fillText).toHaveBeenCalledWith("12.5k nodes · 1 group", 0, expect.any(Number));
   });
 
+  it("labels significant communities in the Structure overview without labeling tiny scopes", () => {
+    const ctx = installCanvasMock(800, 600);
+    const nodes = [
+      makeNode(1, "major-node", { x: -500, y: 0, cluster_id: 0 }),
+      makeNode(2, "secondary-node", { x: 500, y: 0, cluster_id: 1 }),
+      makeNode(3, "tiny-node", { x: 0, y: 500, cluster_id: 2 }),
+    ];
+    const overviewData: GraphData = {
+      nodes,
+      edges: [],
+      total_nodes: nodes.length,
+      topology_revision: "structure-overview-labels",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 16,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "src/major", x: -500, y: 0, radius: 180, node_count: 10 },
+          { id: 1, domain_id: 0, key: "src/secondary", x: 500, y: 0, radius: 160, node_count: 8 },
+          { id: 2, domain_id: 0, key: "src/tiny", x: 0, y: 500, radius: 20, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "src", x: 0, y: 0, radius: 1_400, node_count: 19, cluster_count: 3 },
+        ],
+      },
+    };
+
+    render(
+      <GraphCanvas
+        data={overviewData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    const labels = ctx.fillText.mock.calls.map(([label]) => label);
+    expect(labels).toContain("major");
+    expect(labels).toContain("secondary");
+    expect(labels).not.toContain("tiny");
+  });
+
   it("keeps raw nodes out of macro tiers and reveals them at symbol scale", () => {
     const ctx = installCanvasMock(800, 600);
     const ref = createRef<GraphCanvasHandle>();
@@ -2049,7 +2092,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     const tap = makeTouch(1, 400, 300);
 
     expect((canvas as HTMLCanvasElement).style.touchAction).toBe("none");
-    expect(canvas).toHaveAccessibleName(/Architecture map: 1 nodes and 0 edges/i);
+    expect(canvas).toHaveAccessibleName(/Structure map: 1 nodes and 0 edges/i);
     expect(canvas).toHaveAccessibleDescription(/Arrow keys pan, plus and minus zoom/i);
     fireEvent.touchStart(canvas, { touches: [tap], changedTouches: [tap] });
     fireEvent.touchEnd(canvas, { touches: [], changedTouches: [tap] });

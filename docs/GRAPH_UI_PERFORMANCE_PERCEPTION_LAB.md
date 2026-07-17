@@ -330,3 +330,24 @@ community captions such as `graph-ui/src/components`, `v2/src/storage`, and
 26 connections, and returned to Architecture without losing selection. The
 frontend passes **22 files / 170 tests**. The unchanged budgets pass at Graph
 **39.07 / 40 KiB** and manifest JavaScript **124.99 / 125 KiB**.
+
+## Structure / Dependencies clarity follow-up - 2026-07-17
+
+The product vocabulary now names the two tasks rather than their rendering
+implementation: `Structure` exposes containment and `Dependencies` exposes a
+directed neighborhood. Stored `architecture` / `stellar` values remain stable.
+A persistent two-option segment and one compact live guide make both choices
+discoverable without adding a panel or duplicating graph state.
+
+At domain overview scale, Structure paints at most 12 pre-sorted community
+captions and rejects circles smaller than 18 projected pixels. Captions reuse
+the domain collision boxes. The same change removes the former per-paint
+cluster clone/sort and domain `Map` allocation; the active community is visited
+first over the already sorted server plan.
+
+The 1,000-node / 1,458-edge product frame retained seven domains and 52
+represented communities while exposing useful interior labels in `v2`,
+`v1-reference`, and `graph-ui`. The frontend passes **22 files / 171 tests**,
+V2 typecheck and build pass, and the unchanged production limits pass at Graph
+**39.06 / 40 KiB**, manifest CSS **11.83 KiB**, and manifest JavaScript
+**124.99 / 125 KiB**.

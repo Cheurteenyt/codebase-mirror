@@ -1113,7 +1113,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const cycleKeyboardTarget = useCallback((kind: KeyboardTargetKind, direction: 1 | -1) => {
     if (visualModeRef.current === "stellar" && kind !== "node") {
       if (keyboardStatusRef.current) {
-        keyboardStatusRef.current.textContent = "Stellar flow browses symbols. Switch to Architecture to browse domains and communities.";
+        keyboardStatusRef.current.textContent = "Dependencies browses symbols. Switch to Structure to browse domains and communities.";
       }
       return;
     }
@@ -2587,21 +2587,26 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.globalAlpha = previousAlpha;
     }
 
-    if (!stellarFlow && communityReveal && clustersRef.current.length) {
+    const structureLabelReveal = domainOverview ? 0.62 : communityReveal;
+    if (!stellarFlow && structureLabelReveal && clustersRef.current.length) {
       const previousAlpha = ctx.globalAlpha;
-      ctx.globalAlpha = previousAlpha * communityReveal * (1 - rawTopologyReveal * 0.55);
-      const domainById = new Map(domainsRef.current.map((domain) => [domain.id, domain]));
-      const clusterLimit = Math.round(28 + (64 - 28) * rawTopologyReveal);
+      ctx.globalAlpha = previousAlpha * structureLabelReveal * (1 - rawTopologyReveal * 0.55);
+      const clusterLimit = domainOverview ? 12 : Math.round(28 + (64 - 28) * rawTopologyReveal);
+      const activeCluster = activeCommunityId == null
+        ? undefined
+        : clusterMapRef.current.get(activeCommunityId);
       const clusterFontSize = 10 / tk;
       ctx.font = `650 ${clusterFontSize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      for (const cluster of [...clustersRef.current]
-        .sort((left, right) => (
-          Number(right.id === activeCommunityId) - Number(left.id === activeCommunityId)
-        ))
-        .slice(0, clusterLimit)) {
-        const domainKey = domainById.get(cluster.domain_id)?.key;
+      // The plan is already sorted by represented node count. Paint the
+      // active community first without cloning, mapping, or sorting per frame.
+      for (let order = -1, considered = 0; considered < clusterLimit && order < clustersRef.current.length; order += 1) {
+        const cluster = order < 0 ? activeCluster : clustersRef.current[order];
+        if (!cluster || (order >= 0 && cluster.id === activeCommunityId)) continue;
+        considered += 1;
+        if (domainOverview && cluster.radius * tk < 18) continue;
+        const domainKey = domainsRef.current.find((domain) => domain.id === cluster.domain_id)?.key;
         const prefix = domainKey && cluster.key.startsWith(`${domainKey}/`) ? `${domainKey}/` : "";
         const label = cluster.key.slice(prefix.length);
         const showSummary = cluster.id === activeCommunityId;
@@ -3472,7 +3477,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         }}
         role="application"
         aria-roledescription="interactive code graph"
-        aria-label={`${visualMode === "stellar" ? "Stellar flow" : "Architecture map"}: ${data?.nodes.length ?? 0} nodes and ${data?.edges.length ?? 0} edges`}
+        aria-label={`${visualMode === "stellar" ? "Dependencies" : "Structure map"}: ${data?.nodes.length ?? 0} nodes and ${data?.edges.length ?? 0} edges`}
         aria-describedby={keyboardInstructionsId}
         aria-keyshortcuts="D Shift+D C Shift+C N Shift+N Enter Space"
         tabIndex={0}
@@ -3525,8 +3530,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       />
       <span id={keyboardInstructionsId} className="sr-only">
         {visualMode === "stellar"
-          ? "Stellar flow graph. Press N or Shift+N to browse up to 64 representative nodes. Select a node to place incoming relations on the left and outgoing relations on the right. Numbered rails show visible hop depth; relation colors and dash patterns are named in the guide. "
-          : "Architecture map. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}
+          ? "Dependencies graph. Press N or Shift+N to browse up to 64 representative nodes. Select a node to place incoming relations on the left and outgoing relations on the right. Numbered rails show visible hop depth; relation colors and dash patterns are named in the guide. "
+          : "Structure map. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}
         Press Enter or Space to activate the announced target.
         Arrow keys pan, plus and minus zoom, zero fits the active frame, and Escape goes up.
       </span>

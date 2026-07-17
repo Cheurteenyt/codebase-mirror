@@ -1045,3 +1045,36 @@ les symboles. La validation navigateur couvre Stellar global, le focus exact
 `UiServer` (22 nœuds sélectionnés, 26 connexions), puis le retour Architecture.
 La suite frontend passe **22 fichiers / 170 tests** ; `build:package` passe avec
 Graph **39,07 / 40 Kio** et JavaScript manifeste **124,99 / 125 Kio**.
+
+## Addendum — vues Structure / Dependencies et intérieur Structure (2026-07-17)
+
+Le basculement unique `Architecture` / `Stellar flow` cachait la seconde tâche
+et ne permettait pas de comprendre pourquoi les géométries différaient. Les
+noms produit sont désormais explicites : `Structure` répond à « où se trouve le
+code ? », tandis que `Dependencies` répond à « qu'est-ce qui entre et sort de ce
+symbole ? ». Les identifiants persistés `architecture` et `stellar` restent
+inchangés afin de préserver les préférences locales et les intégrations.
+
+Le contrôle est maintenant un segment à deux choix toujours visibles. Un guide
+compact, commun aux deux vues, expose respectivement la hiérarchie
+domaines → communautés → symboles ou le flux entrant ← focus → sortant. La
+recherche latérale, l'arbre, le fil d'Ariane, le dialogue mobile et les noms
+accessibles emploient le même vocabulaire.
+
+La vue Structure au grand angle n'est plus une collection de cercles vides :
+
+- le plan serveur reste trié par nombre de nœuds représentés ;
+- douze communautés au maximum sont candidates ;
+- un rayon projeté inférieur à 18 px supprime le libellé plutôt que de produire
+  du bruit illisible ;
+- les boîtes de collision existantes donnent la priorité aux domaines et à la
+  communauté active ;
+- la boucle Canvas ne clone, ne trie et ne reconstruit plus une table de
+  domaines à chaque peinture.
+
+Le contrôle produit à 1 000 nœuds / 1 458 arêtes montre les communautés utiles
+dans `v2`, `v1-reference` et `graph-ui`, conserve les sept domaines et 52
+communautés représentées, et laisse silencieux les petits scopes. La suite
+frontend passe **22 fichiers / 171 tests**. Le typecheck et le build V2 passent,
+et les budgets restent inchangés : Graph **39,06 / 40 Kio**, CSS manifeste
+**11,83 Kio** et JavaScript manifeste **124,99 / 125 Kio**.

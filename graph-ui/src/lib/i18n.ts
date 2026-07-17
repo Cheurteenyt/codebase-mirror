@@ -23,7 +23,7 @@ const MESSAGES: UiMessages = {
   tabs: { graph: "Graph", projects: "Projects", control: "Control" },
   graph: {
     selectedLabel: "Project",
-    folders: "Architecture",
+    folders: "Structure",
     search: "Search paths or symbols…",
     clearSelection: "Clear selection",
   },
