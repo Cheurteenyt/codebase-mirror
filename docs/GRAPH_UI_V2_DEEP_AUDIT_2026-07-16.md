@@ -1169,3 +1169,27 @@ fichiers / 176 tests**, les régressions V2 ciblées et les deux
 typechecks passent, `build:package` passe, et les limites restent strictes :
 Graph **39,14 / 40 Kio**, CSS manifeste **11,76 Kio**, JavaScript manifeste
 **124,98 / 125 Kio**.
+
+## Addendum — focus symbole dans un scope Structure exact (2026-07-17)
+
+La hiérarchie complète rendait enfin `v2/src` compréhensible, mais sélectionner
+un symbole cassait encore son contrat : `registerObsidianCommand` reconstruisait
+la navigation depuis l'overview et remplaçait silencieusement les 125 / 1 634
+nœuds exacts par l'échantillon global de 1 000 / 10 319 nœuds. Le panneau
+restait ouvert, ce qui masquait cette perte de contexte et ne mettait en valeur
+que huit représentants échantillonnés.
+
+La sélection résout désormais le nœud dans la page exacte active, conserve le
+scope et son fil d'Ariane, puis calcule la mise en évidence sur la topologie
+exacte déjà fusionnée. Le contrôle produit reste à **125 nœuds / 125 arêtes**,
+affiche `Structure -> v2 -> src -> registerObsidianCommand` et ouvre les **100
+connexions exactes** du symbole sans revenir à l'overview. Les surfaces
+répertoire/fichier non chargées restent visibles comme contexte architectural,
+mais la navigation clavier ne cible que les neuf groupes fichier contenant des
+symboles chargés ; aucun zoom vide n'est donc proposé.
+
+Le correctif n'ajoute ni endpoint, ni requête, ni renderer, ni scan dans la
+boucle Canvas. La suite frontend passe **22 fichiers / 176 tests**, les
+typechecks frontend et V2 passent, `build:package` passe, et les budgets gzip
+restent stricts : Graph **39,14 / 40 Kio**, CSS manifeste **11,76 Kio** et
+JavaScript manifeste **124,98 / 125 Kio**.

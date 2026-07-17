@@ -317,7 +317,10 @@ d3-force canvas and two task views over the same graph:
     symbol plan computed from the complete exact membership, so the first page
     already shows the whole bounded architecture while drawing only the loaded
     symbols. Raw internal topology remains available immediately and dense
-    scopes expose an explicit Load more action
+    scopes expose an explicit Load more action. Selecting a loaded symbol keeps
+    that exact scope mounted, opens its detail, and emphasizes only the visible
+    incident relations; keyboard community browsing skips file surfaces whose
+    symbols have not been loaded yet
 - **Projects tab**: Project list with node/edge counts and health status
 - **Control tab**: System info
 

@@ -24,10 +24,14 @@ vi.mock("./GraphCanvas", async () => {
       data,
       onNodeClick,
       onScopeSelect,
+      selectedNodeId,
+      highlightedIds,
     }: {
       data: { nodes: any[]; layout?: { strategy: string } };
       onNodeClick: (node: any) => void;
       onScopeSelect?: (scope: any) => void;
+      selectedNodeId?: number | null;
+      highlightedIds?: Set<number> | null;
     },
     ref: React.ForwardedRef<unknown>,
   ) {
@@ -42,6 +46,8 @@ vi.mock("./GraphCanvas", async () => {
       <>
         <output data-testid="graph-canvas-node-count">{data.nodes.length}</output>
         <output data-testid="graph-canvas-layout">{data.layout?.strategy ?? "flat"}</output>
+        <output data-testid="graph-canvas-selected-node">{selectedNodeId ?? "none"}</output>
+        <output data-testid="graph-canvas-highlight-count">{highlightedIds?.size ?? 0}</output>
         <button
           type="button"
           aria-label="Select first graph node"
@@ -393,6 +399,18 @@ describe("GraphTab server-refresh state reconciliation", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Load more exact scope" }));
     expect(loadMore).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select first graph node" }));
+    expect(screen.getByTestId("graph-canvas-layout")).toHaveTextContent("exact-directory-file-v1");
+    expect(screen.getByTestId("graph-canvas-selected-node")).toHaveTextContent("10");
+    expect(screen.getByTestId("graph-canvas-highlight-count")).toHaveTextContent("2");
+    expect(useExactScopeMock).toHaveBeenLastCalledWith(
+      "test",
+      "domain",
+      "src",
+      true,
+      "test:graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa:0",
+    );
   });
 
   it("opens exact symbols immediately after an explicit community drill-down", async () => {

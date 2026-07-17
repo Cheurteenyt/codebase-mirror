@@ -627,7 +627,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
       },
     };
 
-    const { container } = render(
+    const { container, getByRole } = render(
       <GraphCanvas
         data={hierarchy}
         detailMode
@@ -646,6 +646,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(ctx.fillText.mock.calls.some(([text]) => text === "audit.ts")).toBe(true);
 
     fireEvent.keyDown(canvas, { key: "c" });
+    expect(getByRole("status")).toHaveTextContent("Community src/auth/login.ts, 1 of 2");
     fireEvent.keyDown(canvas, { key: "Enter" });
     expect(onScopeSelect).not.toHaveBeenCalled();
   });

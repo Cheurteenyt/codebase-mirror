@@ -217,6 +217,15 @@ uses the existing domain/community paths, collision packing, Canvas, and d3
 simulation. It adds no renderer, per-paint graph scan, eager descendant index,
 or extra frontend request.
 
+Symbol selection is local to this exact frame. `GraphTab` resolves the selected
+node from the active exact page, preserves the scope request and breadcrumb,
+and derives the highlighted neighborhood from the currently merged exact
+nodes/edges. It does not rebuild overview navigation or fall back to sampled
+layout data while the detail panel is open. The complete directory/file
+surfaces remain visible as architectural context, but keyboard domain/community
+browsing includes only surfaces that contain loaded symbols; this prevents an
+unloaded file group from becoming an empty zoom target.
+
 The UI is built and embedded in the npm package at `dist/ui/`. Runtime
 resolution uses `import.meta.url` so it works from any working directory.
 The loopback server keeps an idle LRU budget of four project-store entries;

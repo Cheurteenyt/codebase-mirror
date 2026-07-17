@@ -590,14 +590,14 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
               : graphRegionRef.current);
       }
       const overviewNode = data?.nodes.find((candidate) => candidate.id === node.id);
-      const resolvedNode = overviewNode ?? node;
+      const resolvedNode = exactScopeActive ? node : overviewNode ?? node;
       selectedNodeOutsideOverviewRef.current = overviewNode == null;
       setSelectedNodeExactRefreshKey(overviewNode == null ? exactRefreshKey : null);
       setSelectedNode(resolvedNode);
 
       setHighlightedIds(visibleNeighborhood(canvasData, resolvedNode.id));
       setSelectedPath(resolvedNode.file_path ?? null);
-      if (resolvedNode.cluster_id != null && filteredData.layout) {
+      if (!exactScopeActive && resolvedNode.cluster_id != null && filteredData.layout) {
         const community = makeScope("community", resolvedNode.cluster_id);
         const cluster = filteredData.layout.clusters.find((candidate) => candidate.id === resolvedNode.cluster_id);
         const domain = cluster ? makeScope("domain", cluster.domain_id) : null;

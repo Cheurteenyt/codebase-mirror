@@ -425,3 +425,26 @@ The frontend passes **22 files / 176 tests**; the targeted V2 layout/route
 regressions pass, both V2 typechecks pass, and `build:package` passes. The
 unchanged limits remain green at Graph **39.14 / 40 KiB**, manifest CSS
 **11.76 KiB**, and manifest JavaScript **124.98 / 125 KiB**.
+
+## Structure exact-symbol focus follow-up - 2026-07-17
+
+Selecting `registerObsidianCommand` inside the exact `v2/src` frame previously
+reconstructed overview navigation and silently replaced the 125 / 1,634 exact
+scope with the 1,000 / 10,319 representative frame. Only eight sampled nodes
+were then highlighted, so the detail appeared useful while its visual context
+was no longer the requested directory.
+
+Selection now preserves the exact scope and derives emphasis from its merged
+visible topology. The product check remains at **125 nodes / 125 edges**, keeps
+the `Structure -> v2 -> src -> registerObsidianCommand` breadcrumb, and opens
+the detail with **100 exact connections**. Unloaded directory/file surfaces are
+still drawn from the complete bounded plan, but keyboard community browsing
+only targets the nine file groups that currently contain loaded symbols; it no
+longer zooms into a large empty file surface.
+
+No endpoint, simulation, renderer, or Canvas paint-loop scan was added. The
+frontend passes **22 files / 176 tests**, including regressions for exact-scope
+retention, visible relation emphasis, and loaded-only keyboard targets. Both
+frontend and V2 typechecks pass, `build:package` passes, and the unchanged gzip
+limits remain green at Graph **39.14 / 40 KiB**, manifest CSS **11.76 KiB**, and
+manifest JavaScript **124.98 / 125 KiB**.
