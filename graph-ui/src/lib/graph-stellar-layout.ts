@@ -43,7 +43,7 @@ export interface StellarFlowModuleSummary extends StellarFlowLaneSummary {
   laneKey: string;
 }
 
-const FLOW_COLUMN_GAP = 180;
+const FLOW_COLUMN_GAP = 156;
 const MAX_FLOW_DEPTH = 4;
 const MIN_CONTEXT_RADIUS = 520;
 const CONSTELLATION_Y_SCALE = 0.82;
@@ -183,7 +183,7 @@ function lanePosition(index: number, count: number): { x: number; y: number } {
   const column = index % columns;
   const row = Math.floor(index / columns);
   const columnSpacing = columns <= 1 ? 0 : Math.min(30, 130 / (columns - 1));
-  const rowSpacing = rows <= 1 ? 0 : Math.max(18, Math.min(48, 760 / (rows - 1)));
+  const rowSpacing = rows <= 1 ? 0 : Math.max(18, Math.min(60, 760 / (rows - 1)));
   return {
     x: (column - (columns - 1) / 2) * columnSpacing,
     y: (row - (rows - 1) / 2) * rowSpacing,
@@ -273,8 +273,9 @@ export function computeStellarFlowLayout(
         : 0;
       constellation.set(node.id, {
         // Preserve the first-hop separation, then compress distant depths so
-        // a four-hop frame stays legible beside the detail panel.
-        x: side * depth ** 0.82 * FLOW_COLUMN_GAP + bidirectionalOffset + lane.x,
+        // the camera can enlarge symbols without collapsing the screen-space
+        // rail gaps. Moderate fan-outs use the recovered vertical space.
+        x: side * depth ** 0.72 * FLOW_COLUMN_GAP + bidirectionalOffset + lane.x,
         y: lane.y,
         role,
         depth,

@@ -160,6 +160,38 @@ describe("Stellar flow layout", () => {
     expect(stellarFlowEdgeDepth(2, 4, layout)).toBeNull();
   });
 
+  it("compresses distant depths while preserving four ordered rails", () => {
+    const nodes = Array.from({ length: 5 }, (_, index) => node(index + 1, 1, 1));
+    const edges = nodes.slice(0, -1).map((source, index) => ({
+      source: source.id,
+      target: nodes[index + 1].id,
+      type: "calls",
+    }));
+
+    const layout = computeStellarFlowLayout(nodes, edges, 1);
+    const railX = nodes.slice(1).map((current) => layout.get(current.id)!.x);
+
+    expect(railX).toEqual([...railX].sort((left, right) => left - right));
+    expect(railX[3] / railX[0]).toBeLessThan(2.8);
+  });
+
+  it("uses vertical space for a moderate directed fan-out", () => {
+    const nodes = [node(1, 0, 24)];
+    const edges: GraphEdge[] = [];
+    for (let id = 2; id <= 25; id += 1) {
+      nodes.push(node(id, 1, 0));
+      edges.push({ source: 1, target: id, type: "calls" });
+    }
+
+    const layout = computeStellarFlowLayout(nodes, edges, 1);
+    const outgoing = [...layout.values()].filter((target) => target.role === "outgoing");
+    const verticalSpan = Math.max(...outgoing.map((target) => target.y))
+      - Math.min(...outgoing.map((target) => target.y));
+
+    expect(verticalSpan).toBeGreaterThanOrEqual(300);
+    expect(verticalSpan).toBeLessThanOrEqual(760);
+  });
+
   it("groups directed lanes by module and exposes bounded depth summaries", () => {
     const nodes = [
       { ...node(1, 0, 4), file_path: "v2/src/mcp/focus.ts" },

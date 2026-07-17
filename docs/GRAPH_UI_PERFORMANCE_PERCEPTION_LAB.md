@@ -351,3 +351,24 @@ represented communities while exposing useful interior labels in `v2`,
 V2 typecheck and build pass, and the unchanged production limits pass at Graph
 **39.06 / 40 KiB**, manifest CSS **11.83 KiB**, and manifest JavaScript
 **124.99 / 125 KiB**.
+
+## Dependencies focus-density follow-up - 2026-07-17
+
+The constrained two-panel product frame showed that the camera already consumed
+nearly all safe horizontal width. The remaining empty area came from the world
+geometry: depth four was **3.117x** farther than depth one, while a representative
+24-node fan-out occupied only **240** vertical world units. Fitting that wide,
+shallow box necessarily made symbols look small.
+
+The directed plan now uses a 156-unit first column and a 0.72 depth exponent.
+Four rails remain strictly ordered, but depth four falls below **2.8x** depth
+one. Moderate layers may use 60 units between rows and therefore occupy at
+least **300** vertical units in the protected fixture; the existing 760-unit
+cap still bounds very large fan-outs. The Canvas transform remains uniform and
+no node, edge, depth, or label is hidden.
+
+The narrow `UiServer` product check retained all 1,000 overview nodes, 1,458
+edges, 22 selected nodes and 26 exact connections. The four directed depths
+remain inside the safe frame while the protected narrow-canvas zoom rises to
+**0.59**. The frontend passes **22 files / 173 tests**, V2 typecheck and build
+pass, and no per-frame work was added.

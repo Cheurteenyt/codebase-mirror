@@ -304,9 +304,11 @@ d3-force canvas and two task views over the same graph:
     three deterministic collision candidates. The selected frame is recomposed
     inside the canvas area left free by the fidelity HUD, action rail, guide,
     breadcrumb, and detail panel; panel/viewport resizes update that camera
-    without reheating d3. Distant depths use a monotonic compressed spacing,
-    while the label budget follows available screen area and rejects text that
-    would be clipped or hidden under persistent graph controls
+    without reheating d3. Distant depths use monotonic compressed spacing and
+    moderate fan-outs expand vertically, so constrained canvases can enlarge
+    the directed frame without merging rails. The label budget follows
+    available screen area and rejects text that would be clipped or hidden
+    under persistent graph controls
   - **Exact scope** (on demand): revision-bound domain/directory pages replace
     the representative frame inside the same canvas; raw internal topology is
     shown immediately and dense scopes expose an explicit Load more action

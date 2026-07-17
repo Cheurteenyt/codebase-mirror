@@ -1078,3 +1078,28 @@ communautés représentées, et laisse silencieux les petits scopes. La suite
 frontend passe **22 fichiers / 171 tests**. Le typecheck et le build V2 passent,
 et les budgets restent inchangés : Graph **39,06 / 40 Kio**, CSS manifeste
 **11,83 Kio** et JavaScript manifeste **124,99 / 125 Kio**.
+
+## Addendum — densité du focus Dependencies (2026-07-17)
+
+Le contrôle avec les deux panneaux ouverts a invalidé l'hypothèse d'une caméra
+trop prudente : elle utilisait déjà presque toute la largeur sûre. Le rectangle
+monde restait cependant très horizontal. La profondeur quatre se trouvait à
+**3,117 fois** la distance de la première, tandis qu'un fan-out représentatif
+de 24 nœuds n'occupait que **240 unités** verticales. Agrandir uniquement la
+caméra aurait donc coupé les rails extrêmes.
+
+La correction agit sur le plan sémantique pré-calculé :
+
+- la première colonne reste explicitement séparée à 156 unités ;
+- les profondeurs deux à quatre progressent avec un exposant de 0,72 et restent
+  strictement ordonnées ;
+- les fan-outs modérés utilisent jusqu'à 60 unités entre lignes, soit
+  **300 unités** sur le fixture protégé ;
+- les très grands fan-outs conservent la borne verticale de 760 unités ;
+- le transform Canvas reste uniforme et aucune donnée n'est masquée.
+
+Le test Canvas étroit atteint désormais un zoom de **0,59** sans sortir les
+quatre profondeurs de la zone sûre. Le contrôle navigateur `UiServer` conserve
+1 000 nœuds, 1 458 arêtes, 22 nœuds sélectionnés et 26 connexions exactes avec
+les deux panneaux ouverts. La suite frontend passe **22 fichiers / 173 tests**,
+le typecheck et le build V2 passent, et aucun travail par frame n'est ajouté.

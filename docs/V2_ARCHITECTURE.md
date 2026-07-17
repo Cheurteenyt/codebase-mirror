@@ -166,9 +166,13 @@ context cannot shrink the active neighborhood. Screen-space safe insets reserve
 the fidelity HUD, action rail, guide, breadcrumb, and label overhang. A
 `ResizeObserver` recomposes an untouched focus after viewport or panel changes
 without reheating the simulation. Depth one keeps the full lane separation;
-depths two through four advance monotonically with sublinear spacing. Labels
-are ranked once per semantic-frame change, receive a viewport-derived bounded
-budget, and are omitted before they can cross the safe screen rectangle.
+depths two through four advance monotonically with stronger sublinear spacing.
+Moderate fan-outs use up to 60 world units between rows, while very large
+fan-outs retain the existing 760-unit vertical cap. This balances the directed
+frame before the camera fit instead of hiding nodes or applying a non-uniform
+transform. Labels are ranked once per semantic-frame change, receive a
+viewport-derived bounded budget, and are omitted before they can cross the safe
+screen rectangle.
 
 This boundary is deliberate: changing task view reuses every d3 node object,
 event listener, exactness contract, and canvas allocation. A view/focus change

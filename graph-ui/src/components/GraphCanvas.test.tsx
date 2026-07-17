@@ -466,8 +466,8 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     act(() => ref.current?.fitView());
 
     const focusScale = ctx.scale.mock.calls.at(-1)[0] as number;
-    expect(focusScale).toBeGreaterThan(0.25);
-    expect(focusScale).toBeLessThan(0.5);
+    expect(focusScale).toBeGreaterThan(0.5);
+    expect(focusScale).toBeLessThan(0.7);
     expect(container.querySelector("canvas")).toHaveAttribute("data-flow-lens", "semantic-depth-v2");
   });
 
