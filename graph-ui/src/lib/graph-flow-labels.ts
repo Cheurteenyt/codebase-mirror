@@ -18,16 +18,20 @@ export function stellarOverviewLabelAnchors(
   screenUnit: number,
 ): StellarFlowLabelAnchor[] {
   const length = Math.max(1, Math.hypot(x, y / 0.82));
-  const radialX = x / length;
-  const radialY = (y / 0.82) / length;
-  const offset = radius + 7 * screenUnit;
-  const anchorX = x + radialX * offset;
-  const anchorY = y + radialY * offset * 0.82;
-  const verticalOffset = 14 * screenUnit;
+  // High-degree hubs deliberately occupy the center, but their names should
+  // not recreate the same dense knot in text. Keep those labels on a quiet
+  // screen-space orbit while preserving the natural radial anchor of nodes
+  // that are already farther out in the constellation.
+  const radialScale = Math.max(
+    length + radius + 7 * screenUnit,
+    72 * screenUnit,
+  ) / length;
+  const anchorX = x * radialScale;
+  const anchorY = y * radialScale;
   const align = x < 0 ? "right" : "left";
   return [
     { x: anchorX, y: anchorY, align },
-    { x: anchorX, y: anchorY - verticalOffset, align },
+    { x: anchorX, y: anchorY - 14 * screenUnit, align },
   ];
 }
 

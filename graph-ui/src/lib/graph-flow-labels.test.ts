@@ -50,4 +50,11 @@ describe("Stellar flow label anchors", () => {
     ]);
     expect(stellarOverviewLabelAnchors(-180, 40, 8, 1)).toEqual(left);
   });
+
+  it("keeps central hub labels outside a quiet screen-space core", () => {
+    const [anchor] = stellarOverviewLabelAnchors(12, 0, 8, 2);
+    const screenRadius = Math.hypot(anchor.x, anchor.y / 0.82) / 2;
+
+    expect(screenRadius).toBeGreaterThanOrEqual(72);
+  });
 });

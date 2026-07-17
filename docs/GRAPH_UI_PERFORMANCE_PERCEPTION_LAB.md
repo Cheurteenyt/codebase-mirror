@@ -549,3 +549,26 @@ Frontend **22 files / 181 tests**, focused V2 contract tests, frontend and V2
 typechecks, and `build:package` pass. No runtime UI code or bundle allowance was
 added: the strict limits remain Graph **39.15 / 40 KiB**, manifest CSS
 **11.63 KiB**, and manifest JavaScript **125.00 / 125 KiB**.
+
+## Dependencies hub-label orbit follow-up - 2026-07-18
+
+The product Dependencies frame selected useful hubs, but each name was offset
+only from its own symbol. Because high-degree symbols intentionally occupy the
+center, their labels recreated a dense text knot in the same narrow area. A
+protected central fixture placed its label only **17 screen pixels** from the
+semantic origin.
+
+Overview hub names now retain their deterministic radial direction but remain
+outside a **72-pixel screen-space quiet core**. Symbols already beyond that
+orbit keep their previous anchor. The rule scales through the existing zoom
+unit, changes no node or edge coordinate, and adds no request, graph scan,
+simulation work, label count, or continuous optimizer. Focused Dependencies
+and Structure keep their existing placement grammars.
+
+The same 1,000 / 10,319-node product frame keeps all seven exact domains and 52
+represented communities while giving central symbols and their names separate
+attention layers. The frontend passes **22 files / 182 tests**; the packaged
+browser path, keyboard flow, frontend typecheck, production build, and
+`build:package` pass with no browser warning or error. Existing gzip limits
+remain green at Graph **39.14 / 40 KiB**, manifest CSS **11.63 KiB**, and
+manifest JavaScript **124.98 / 125 KiB**.
