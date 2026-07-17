@@ -21,6 +21,7 @@ import {
   type StellarFlowTarget,
 } from "../lib/graph-stellar-layout";
 import {
+  LOW_CONTEXT_STELLAR_OVERVIEW_LABEL,
   stellarFlowLabelAnchors,
   stellarOverviewLabelAnchors,
 } from "../lib/graph-flow-labels";
@@ -143,7 +144,6 @@ const MAX_CANVAS_PIXELS = 16_000_000;
 const DEFERRED_INITIAL_FIT_NODE_THRESHOLD = 500;
 const STELLAR_OVERVIEW_SIMULATION_NODE_THRESHOLD = 500;
 const MID_LABEL_LIMIT = 24;
-const LOW_INFORMATION_STELLAR_LABEL = /^(?:anonymous#|add$|close(?:sync)?$|get$|handle$|now$|push$|request$|run$|set$|start$|stop$)/iu;
 const DEFAULT_LAYOUT_NODE_SPACING = 16;
 const DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING = 7;
 const RAW_TOPOLOGY_MIN_PROJECTED_SPACING = 18;
@@ -1655,7 +1655,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         : [];
       stellarOverviewLabelCandidatesRef.current = selectedNodeId == null
         ? nodes
-            .filter((node) => !LOW_INFORMATION_STELLAR_LABEL.test(node.name))
+            .filter((node) => !LOW_CONTEXT_STELLAR_OVERVIEW_LABEL.test(node.name))
             .sort((left, right) => (
               stellarNodeDegree(right) - stellarNodeDegree(left)
               || right.rank - left.rank

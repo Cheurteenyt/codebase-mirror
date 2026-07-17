@@ -572,3 +572,34 @@ browser path, keyboard flow, frontend typecheck, production build, and
 `build:package` pass with no browser warning or error. Existing gzip limits
 remain green at Graph **39.14 / 40 KiB**, manifest CSS **11.63 KiB**, and
 manifest JavaScript **124.98 / 125 KiB**.
+
+## Dependencies semantic-label follow-up - 2026-07-18
+
+The 72-pixel orbit separated names from the topology, but the product overview
+still spent scarce attention on short, context-free identifiers such as
+`option` and `commit`. This weakened anonymous task 5 (identify and justify a
+hub) even though the underlying degree ranking was correct.
+
+Project-scale Dependencies labels now reject anonymous names and a narrow
+taxonomy of generic operation identifiers. Specific compound names such as
+`runBenchmark`, `CodeGraphReader`, and `registerHumanCommand`, as well as short
+technical terms such as `sqlite`, remain eligible. The rejected symbols are
+not hidden: search, semantic zoom, keyboard
+browsing, hover preview, and exact focus still expose them. The classifier runs
+only when the semantic frame changes; the label count, bounded candidate scan,
+Canvas paint, node positions, edge batches, requests, and simulation are
+unchanged. The orbit normalization also covers sub-unit central coordinates,
+which previously reached only 36 of the required 72 screen pixels.
+
+On the same 1,000 / 10,319-node product frame, a fresh Dependencies capture no
+longer gives overview slots to `option` or `commit`; more specific symbols and
+module captions backfill the existing placement budget. This is a focused V2
+task-readability improvement, not a new V1/V2 superiority claim: the pinned
+controlled comparison above remains the reference for cross-version runtime
+claims.
+
+The frontend passes **22 files / 199 tests**, its typecheck, `build:package`,
+and the packaged browser smoke. The smoke preserves keyboard access to generic
+symbols and reports no console, page, or HTTP error. Strict gzip limits remain
+green at Graph **39.14 / 40 KiB**, manifest CSS **11.63 KiB**, and manifest
+JavaScript **124.99 / 125 KiB**.

@@ -7,6 +7,13 @@ export interface StellarFlowLabelAnchor {
 }
 
 /**
+ * Reserve the project-overview attention budget for names that carry context.
+ * Generic operation identifiers remain available through search, zoom and
+ * focus, but do not displace specific names in the initial constellation.
+ */
+export const LOW_CONTEXT_STELLAR_OVERVIEW_LABEL = /^(?:anonymous.*|add|close(?:sync)?|commit|[gs]et|handle|now|option|push|request|run|st(?:art|op))$/i;
+
+/**
  * Put overview labels on the outside of the constellation. The radial anchor
  * makes the node-to-name relationship immediate; stable vertical
  * fallbacks resolve nearby hubs without running a label optimizer per frame.
@@ -17,7 +24,7 @@ export function stellarOverviewLabelAnchors(
   radius: number,
   screenUnit: number,
 ): StellarFlowLabelAnchor[] {
-  const length = Math.max(1, Math.hypot(x, y / 0.82));
+  const length = Math.hypot(x, y / 0.82) || 1;
   // High-degree hubs deliberately occupy the center, but their names should
   // not recreate the same dense knot in text. Keep those labels on a quiet
   // screen-space orbit while preserving the natural radial anchor of nodes

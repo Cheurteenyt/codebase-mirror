@@ -1,8 +1,37 @@
 import { describe, expect, it } from "vitest";
 import {
+  LOW_CONTEXT_STELLAR_OVERVIEW_LABEL,
   stellarFlowLabelAnchors,
   stellarOverviewLabelAnchors,
 } from "./graph-flow-labels";
+
+describe("Stellar overview label information", () => {
+  it.each([
+    "anonymous#17",
+    "add",
+    "closeSync",
+    "commit",
+    "handle",
+    "option",
+    "request",
+    "run",
+  ])("rejects low-context project labels such as %s", (label) => {
+    expect(LOW_CONTEXT_STELLAR_OVERVIEW_LABEL.test(label)).toBe(true);
+  });
+
+  it.each([
+    "GraphTab",
+    "CodeGraphReader",
+    "parser",
+    "runBenchmark",
+    "schema",
+    "sqlite",
+    "registerHumanCommand",
+    "applyGenerationOrphanRecovery",
+  ])("keeps specific project labels such as %s", (label) => {
+    expect(LOW_CONTEXT_STELLAR_OVERVIEW_LABEL.test(label)).toBe(false);
+  });
+});
 
 describe("Stellar flow label anchors", () => {
   it("places incoming and outgoing labels away from the focus", () => {
@@ -53,6 +82,13 @@ describe("Stellar flow label anchors", () => {
 
   it("keeps central hub labels outside a quiet screen-space core", () => {
     const [anchor] = stellarOverviewLabelAnchors(12, 0, 8, 2);
+    const screenRadius = Math.hypot(anchor.x, anchor.y / 0.82) / 2;
+
+    expect(screenRadius).toBeGreaterThanOrEqual(72);
+  });
+
+  it("normalizes sub-unit hub positions to the same quiet core", () => {
+    const [anchor] = stellarOverviewLabelAnchors(0.5, 0, 8, 2);
     const screenRadius = Math.hypot(anchor.x, anchor.y / 0.82) / 2;
 
     expect(screenRadius).toBeGreaterThanOrEqual(72);
