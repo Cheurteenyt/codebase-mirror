@@ -32,9 +32,10 @@ cbm-v2 index --project my-app --root /path/to/repo --discovery-mode fast
 - `--discovery-mode <full|fast>` — `full` is the correctness-first default and
   includes supported files under hidden application directories, docs, tests,
   scripts, tools, and migrations (except explicit VCS/cache/vendor policy
-  directories). `fast` applies the reduced V1-compatible skip policy for
-  generated, documentation, fixture, build, and test-artifact names. It does
-  not blanket-exclude directories named `test` or `tests`, so structurally
+  directories, including generated `.codex-runtime` evidence). `fast` applies
+  the reduced V1-compatible skip policy for generated, documentation, fixture,
+  build, and test-artifact names. It does not blanket-exclude directories named
+  `test` or `tests`, so structurally
   relevant helpers can remain visible. Fast mode must be selected explicitly
   and is rejected with `--incremental`: an omitted file cannot be updated or
   safely classified as deleted. Use a fast full rebuild or a full-coverage

@@ -34,7 +34,9 @@ comparison.
 
 The reference source is MIT licensed but is not vendored a second time into
 this repository. A local clone/build belongs in the ignored
-`.codex-runtime/graph-ui-lab/v1-source` directory.
+`.codex-runtime/graph-ui-lab/v1-source` directory. V2 discovery always excludes
+`.codex-runtime`, so raw measurements and the reference clone cannot pollute or
+block the product graph.
 
 ## The strict same-graph rule
 

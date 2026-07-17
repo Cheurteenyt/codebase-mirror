@@ -125,7 +125,7 @@ const ALWAYS_SKIP_DIRS = new Set([
   // Deploy
   '.vercel', '.netlify', 'deploy', 'deployed',
   // Misc
-  '.qdrant_code_embeddings', '.tmp', 'vendor', 'vendored',
+  '.codex-runtime', '.qdrant_code_embeddings', '.tmp', 'vendor', 'vendored',
 ]);
 
 const FAST_SKIP_DIRS = new Set([
