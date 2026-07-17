@@ -2073,36 +2073,21 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    if (!stellarFlow && hoveredScope) {
-      const hoveredCircle = hoveredScope.kind === "domain"
-        ? domainsRef.current.find((domain) => domain.id === hoveredScope.id)
-        : clustersRef.current.find((cluster) => cluster.id === hoveredScope.id);
-      if (hoveredCircle) {
-        const palette = hoveredScope.kind === "domain"
-          ? domainPalette(hoveredCircle.id)
-          : {
-              hoverFill: "rgba(14, 165, 233, 0.075)",
-              hoverStroke: "rgba(125, 211, 252, 0.82)",
-            };
+    const focusedScope = hoveredScope || keyboardFocus;
+    if (!stellarFlow && focusedScope && focusedScope.kind !== "node") {
+      const focusedCircle = focusedScope.kind === "domain"
+        ? domainsRef.current.find((domain) => domain.id === focusedScope.id)
+        : clustersRef.current.find((cluster) => cluster.id === focusedScope.id);
+      if (focusedCircle) {
+        const palette = focusedScope.kind === "domain"
+          ? domainPalette(focusedCircle.id)
+          : { hoverFill: "rgba(14, 165, 233, 0.075)", hoverStroke: "rgba(125, 211, 252, 0.82)" };
         ctx.beginPath();
-        ctx.arc(hoveredCircle.x, hoveredCircle.y, hoveredCircle.radius, 0, Math.PI * 2);
+        ctx.arc(focusedCircle.x, focusedCircle.y, focusedCircle.radius, 0, Math.PI * 2);
         ctx.fillStyle = palette.hoverFill;
         ctx.fill();
         ctx.strokeStyle = palette.hoverStroke;
         ctx.lineWidth = 2.2 / tk;
-        ctx.stroke();
-      }
-    }
-
-    if (!stellarFlow && keyboardFocus && keyboardFocus.kind !== "node") {
-      const focusedCircle = keyboardFocus.kind === "domain"
-        ? domainsRef.current.find((domain) => domain.id === keyboardFocus.id)
-        : clustersRef.current.find((cluster) => cluster.id === keyboardFocus.id);
-      if (focusedCircle) {
-        ctx.beginPath();
-        ctx.arc(focusedCircle.x, focusedCircle.y, focusedCircle.radius + 3 / tk, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(236, 254, 255, 0.98)";
-        ctx.lineWidth = 2.6 / tk;
         ctx.stroke();
       }
     }
@@ -2612,6 +2597,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       for (let order = -1, considered = 0; considered < clusterLimit && order < clustersRef.current.length; order += 1) {
         const cluster = order < 0 ? activeCluster : clustersRef.current[order];
         if (!cluster || (order >= 0 && cluster.id === activeCommunityId)) continue;
+        if (activeDomainId != null && cluster.domain_id !== activeDomainId) continue;
         considered += 1;
         if (domainOverview && cluster.radius * tk < 18) continue;
         const domainKey = domainsRef.current.find((domain) => domain.id === cluster.domain_id)?.key;

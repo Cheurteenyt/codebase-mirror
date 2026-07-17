@@ -295,7 +295,10 @@ d3-force canvas and two task views over the same graph:
 - **Dashboard tab** (default): KPIs, graph freshness, smart recommendations
 - **Graph tab**: 2D force-directed canvas with filters, pan/zoom, node detail panel
   - **Structure** (default): domains contain bounded, informative community
-    captions before zoom reveals individual symbols
+    captions before zoom reveals individual symbols. Hovering or focusing a
+    domain with the keyboard activates one progressive insight lens: its exact
+    volume summary and related bundles remain visible while community captions
+    are limited to that domain; the idle overview gains no permanent annotation
   - **Dependencies** (optional, persisted locally): exact-degree hubs form a
     deterministic constellation; selecting a symbol unfolds up to four visible
     incoming/outgoing relation layers around a focus pinned to the semantic

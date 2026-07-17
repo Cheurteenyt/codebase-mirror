@@ -147,6 +147,14 @@ selects a circle/diamond/square glyph, and only the selected flow receives
 direction markers. Status remains an outer stroke. Invalid or unavailable local
 storage falls back to `Structure`.
 
+`Structure` uses progressive domain focus rather than another overlay or
+renderer. Pointer hover and keyboard domain browsing share one focused-scope
+paint path. The active domain receives the existing semantic fill/stroke and
+its related bundles retain priority; community caption candidates are limited
+to that domain while other domain titles remain as orientation anchors. Its
+summary uses the exact top-level catalog when available. Idle rendering is
+unchanged, and the lens adds no per-node paint pass or simulation mutation.
+
 In the unfocused frame, top-level project paths form contiguous elliptical
 sectors and small path families collapse into one quiet `other` sector. Colored
 boundary arcs and exact representative counts expose project structure without

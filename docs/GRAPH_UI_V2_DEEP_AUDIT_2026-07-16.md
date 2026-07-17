@@ -1193,3 +1193,24 @@ boucle Canvas. La suite frontend passe **22 fichiers / 176 tests**, les
 typechecks frontend et V2 passent, `build:package` passe, et les budgets gzip
 restent stricts : Graph **39,14 / 40 Kio**, CSS manifeste **11,76 Kio** et
 JavaScript manifeste **124,98 / 125 Kio**.
+
+## Addendum — lentille sémantique de domaine Structure (2026-07-17)
+
+L'overview Structure était devenu exact dans ses parcours, mais sa lecture au
+repos demandait encore de relier mentalement le titre d'un domaine, plusieurs
+communautés et des bundles discrets. Ajouter une carte permanente ou davantage
+de labels aurait répété l'information et dégradé le cadre global.
+
+Le survol et le parcours clavier partagent désormais une seule lentille
+progressive. Sur le graphe produit de 10 319 nœuds, le focus `v2` conserve
+l'overview échantillonné de 1 000 nœuds et les autres domaines comme repères,
+mais donne à `v2` la surface sémantique active, affiche son résumé exact de
+**6,1k nœuds / 25 groupes**, priorise ses bundles dirigés et limite les légendes
+de communautés à ce domaine. La sortie du focus restaure l'overview inchangé.
+
+L'implémentation fusionne les deux anciens chemins de peinture du focus et
+filtre la passe de légendes déjà bornée. Elle n'ajoute ni requête, ni renderer,
+ni mutation de simulation, ni passe par nœud. La suite frontend passe **22
+fichiers / 177 tests**, le typecheck V2 et `build:package` passent, et les
+budgets gzip restent identiques : Graph **39,14 / 40 Kio**, CSS manifeste
+**11,76 Kio** et JavaScript manifeste **124,98 / 125 Kio**.

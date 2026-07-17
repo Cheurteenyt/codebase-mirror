@@ -955,6 +955,67 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(ctx.fillText).toHaveBeenCalledWith("12.5k nodes · 1 group", 0, expect.any(Number));
   });
 
+  it("turns a focused Structure domain into a bounded semantic lens", () => {
+    const ctx = installCanvasMock(800, 600);
+    const lensData: GraphData = {
+      nodes: [
+        makeNode(1, "core-a", { x: -380, y: -60, cluster_id: 0 }),
+        makeNode(2, "core-b", { x: -320, y: -60, cluster_id: 0 }),
+        makeNode(3, "storage", { x: -120, y: 100, cluster_id: 1 }),
+        makeNode(4, "outside", { x: 420, y: 0, cluster_id: 2 }),
+      ],
+      edges: [
+        { source: 1, target: 4, type: "CALLS" },
+        { source: 2, target: 4, type: "IMPORTS" },
+        { source: 4, target: 3, type: "CALLS" },
+      ],
+      total_nodes: 12_501,
+      topology_revision: "structure-domain-insight-lens",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 4,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "src/core", x: -350, y: -60, radius: 120, node_count: 2 },
+          { id: 1, domain_id: 0, key: "src/storage", x: -120, y: 100, radius: 105, node_count: 1 },
+          { id: 2, domain_id: 1, key: "tools/outside", x: 420, y: 0, radius: 120, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "src", x: -220, y: 0, radius: 380, node_count: 3, cluster_count: 2 },
+          { id: 1, key: "tools", x: 420, y: 0, radius: 220, node_count: 1, cluster_count: 1 },
+        ],
+        domain_catalog: {
+          exact: true,
+          counts_scope: "all_nodes",
+          total_domains: 2,
+          domains: [
+            { key: "src", node_count: 12_500, file_count: 100, representative_node_id: 1 },
+            { key: "tools", node_count: 1, file_count: 1, representative_node_id: 4 },
+          ],
+        },
+      },
+    };
+
+    const { getByRole } = render(
+      <GraphCanvas
+        data={lensData}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    ctx.fillText.mockClear();
+    fireEvent.keyDown(getByRole("application"), { key: "d" });
+
+    const labels = ctx.fillText.mock.calls.map(([label]) => label);
+    expect(labels).toContain("12.5k nodes · 2 groups");
+    expect(labels).toContain("core");
+    expect(labels).toContain("storage");
+    expect(labels).not.toContain("outside");
+  });
+
   it("labels significant communities in the Structure overview without labeling tiny scopes", () => {
     const ctx = installCanvasMock(800, 600);
     const nodes = [

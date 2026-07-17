@@ -448,3 +448,23 @@ retention, visible relation emphasis, and loaded-only keyboard targets. Both
 frontend and V2 typechecks pass, `build:package` passes, and the unchanged gzip
 limits remain green at Graph **39.14 / 40 KiB**, manifest CSS **11.76 KiB**, and
 manifest JavaScript **124.98 / 125 KiB**.
+
+## Structure domain-insight follow-up - 2026-07-17
+
+The truthful Structure overview still required the user to mentally connect a
+domain title, several community captions, and faint macro bundles. Adding a
+persistent card or more idle labels would have duplicated information and made
+the seven-domain frame noisier.
+
+Pointer and keyboard focus now share one progressive domain lens. On the
+10,319-node product graph, focusing `v2` keeps the sampled 1,000-node overview
+and surrounding domains as context, but gives `v2` the active semantic surface,
+shows its exact **6.1k-node / 25-group** summary, prioritizes related directed
+bundles, and limits community captions to that domain. Leaving focus restores
+the unchanged idle overview.
+
+The implementation merges two former focus paint paths and filters the existing
+bounded caption pass; it adds no request, renderer, simulation mutation, or
+per-node paint pass. The frontend passes **22 files / 177 tests**, V2 typecheck
+and `build:package` pass, and gzip remains unchanged at Graph **39.14 / 40 KiB**,
+manifest CSS **11.76 KiB**, and manifest JavaScript **124.98 / 125 KiB**.
