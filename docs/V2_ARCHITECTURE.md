@@ -245,8 +245,26 @@ surfaces remain visible as architectural context, but keyboard domain/community
 browsing includes only surfaces that contain loaded symbols; this prevents an
 unloaded file group from becoming an empty zoom target.
 
+Path explanation is a separate explicit read, not another visualization mode.
+`GET /api/path` opens one stable graph snapshot and runs a deterministic,
+edge-id-ordered breadth-first search across inbound and outbound relationships.
+This undirected traversal answers architectural coupling while the returned
+edges retain their stored direction and type. The default depth is six hops;
+the public maximum is eight, with hard ceilings of 5,000 visited nodes and
+20,000 inspected edges. `found` and exhausted `not_found` results are exact.
+`max_hops` and `limit_reached` are deliberately incomplete and the client says
+so instead of turning a safety stop into a false disconnection. The Graph UI
+starts no request until the user chooses `Trace connection from here` and then
+reuses the existing exact project search to select the target.
+
 The UI is built and embedded in the npm package at `dist/ui/`. Runtime
 resolution uses `import.meta.url` so it works from any working directory.
+The browser bundle targets ES2022, matching its TypeScript contract and the
+documented Chromium-family local runtime. Tailwind v4 receives an explicit
+semantic color mapping, so `foreground`, `primary`, `accent`, `border`, and
+related opacity utilities are present in production CSS rather than silently
+discarded. Static node-detail and graph-control styles remain in CSS to protect
+the JavaScript transfer budget.
 The loopback server keeps an idle LRU budget of four project-store entries;
 code and human SQLite connections use 64 MiB and 8 MiB page-cache ceilings.
 Control browsing/indexing is confined to the user's home directory, the

@@ -1,6 +1,18 @@
 /* graph-ui/src/styles/globals.css */
 @import "tailwindcss";
 
+/* Expose the semantic palette to Tailwind v4. Without this mapping, classes
+   such as text-foreground and border-border are silently omitted. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-accent: var(--accent);
+  --color-destructive: var(--destructive);
+  --color-muted: var(--muted);
+}
+
 :root {
   --background: #050910;
   --foreground: #e9f1f8;
@@ -64,6 +76,76 @@ input:focus-visible,
   background-size: 40px 40px;
   mask-image: linear-gradient(to bottom, black, transparent 58%);
 }
+
+/* Keep the lazy node-detail chunk lean: these static styles belong in CSS. */
+.nd-panel { @apply flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#0b1920]/95 backdrop-blur-xl; }
+.nd-header { @apply border-b border-border/30 px-4 pb-3 pt-4; }
+.nd-heading-row { @apply mb-2 flex items-start justify-between gap-2; }
+.nd-grow { @apply min-w-0 flex-1; }
+.nd-min { @apply min-w-0; }
+.nd-title-row { @apply mb-1.5 flex items-center gap-2; }
+.nd-dot { @apply h-2.5 w-2.5 shrink-0 rounded-full; }
+.nd-title { @apply truncate text-[13px] font-semibold text-foreground; }
+.nd-label { @apply inline-block rounded-md px-2 py-0.5 text-[10px] font-medium; }
+.nd-file { @apply mt-2 break-all font-mono text-[11px] leading-relaxed text-foreground/30; }
+.nd-line { @apply text-foreground/45; }
+.nd-close { @apply p-1 text-[16px] leading-none text-foreground/20 transition-colors hover:text-foreground/50; }
+.nd-flow { @apply mt-3 rounded-lg bg-white/[0.04] p-2; }
+.nd-between { @apply flex items-center justify-between gap-2; }
+.nd-between-start { @apply flex items-start justify-between gap-2; }
+.nd-kicker { @apply text-[9px] uppercase tracking-widest text-foreground/30; }
+.nd-role { @apply text-[12px] font-semibold text-primary; }
+.nd-coverage { @apply text-[9px] uppercase tracking-wider text-foreground/45; }
+.nd-stats { @apply mt-2 flex flex-wrap gap-1.5 text-[10px] tabular-nums text-foreground/65; }
+.nd-pill { @apply rounded bg-white/[0.04] px-1.5 py-0.5; }
+.nd-dominant { @apply mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-foreground/40; }
+.nd-note { @apply mt-2 rounded-md border px-2 py-1.5 text-[10px] leading-relaxed; }
+.nd-note-sky { @apply border-sky-300/15 bg-sky-300/[0.05] text-sky-100/70; }
+.nd-note-violet { @apply border-violet-300/15 bg-violet-300/[0.05] text-violet-100/70; }
+.nd-alert { @apply mt-2 flex items-center justify-between gap-2 rounded-md border border-amber-300/15 bg-amber-200/[0.04] px-2 py-1.5 text-[10px] leading-relaxed text-amber-100/75; }
+.nd-retry { @apply shrink-0 rounded-md border border-amber-300/25 px-2 py-1 font-medium text-amber-50 transition-colors hover:bg-amber-200/10 focus-visible:ring-2 focus-visible:ring-amber-200/50; }
+.nd-more { @apply min-h-10 w-full rounded-lg border border-sky-300/20 bg-sky-300/[0.06] px-3 py-2 text-[12px] font-medium text-sky-100/80 transition-colors hover:bg-sky-300/[0.11] focus-visible:ring-2 focus-visible:ring-sky-200/50 disabled:cursor-wait disabled:opacity-50; }
+.nd-partial { @apply mt-2 text-[10px] leading-relaxed text-sky-200/70; }
+.nd-scroll { @apply min-h-0 flex-1; }
+.nd-connections { @apply space-y-4 px-4 py-3; }
+.nd-empty { @apply py-8 text-center text-[12px] text-foreground/30; }
+.nd-connection { @apply flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-sky-200/40; }
+.nd-connection-more { @apply min-h-8 w-full rounded-md px-2 py-1 text-left text-[10px] font-medium text-sky-200/60 transition-colors hover:bg-sky-200/[0.05] hover:text-sky-100/80 focus-visible:ring-2 focus-visible:ring-sky-200/40; }
+.nd-section-title { @apply mb-2 text-[11px] font-medium text-foreground/40; }
+.nd-section-count { @apply text-foreground/15; }
+.nd-group { @apply mb-2; }
+.nd-relation-type { @apply mb-1 text-[9px] font-medium uppercase tracking-wider text-foreground/25; }
+.nd-relation-list { @apply space-y-px; }
+.nd-connection-icon { @apply text-[10px] text-foreground/25 group-hover:text-foreground/40; }
+.nd-connection-dot { @apply h-[5px] w-[5px] shrink-0 rounded-full; }
+.nd-connection-name { @apply min-w-0 flex-1 truncate text-foreground/65 group-hover:text-foreground/85; }
+.nd-occurrences { @apply shrink-0 text-[9px] tabular-nums text-sky-200/55; }
+.nd-connection-label { @apply shrink-0 text-[10px] text-foreground/25; }
+.path-trigger { @apply mt-2 min-h-9 w-full rounded-lg border border-cyan-300/15 bg-cyan-300/[0.04] px-3 py-2 text-left text-[11px] font-medium text-cyan-100/70 transition-colors hover:bg-cyan-300/[0.08] focus-visible:ring-2 focus-visible:ring-cyan-200/40; }
+.path-card { @apply mt-2 rounded-lg border border-cyan-300/15 bg-cyan-300/[0.04] p-2.5; }
+.path-clear { @apply shrink-0 rounded px-1.5 py-1 text-[10px] text-foreground/45 hover:bg-white/[0.06] hover:text-foreground/75 focus-visible:ring-2 focus-visible:ring-cyan-200/40; }
+.path-kicker { @apply text-[9px] uppercase tracking-widest text-cyan-100/40; }
+.path-source { @apply truncate text-[11px] font-medium text-cyan-100/75; }
+.path-prompt { @apply mt-1 text-[10px] leading-relaxed text-foreground/40; }
+.path-route { @apply truncate text-[10px] text-cyan-100/65; }
+.path-loading { @apply mt-2 text-[10px] text-foreground/45; }
+.path-alert { @apply mt-2 flex items-center justify-between gap-2 text-[10px] text-amber-100/75; }
+.path-retry { @apply rounded border border-amber-200/20 px-2 py-1; }
+.path-result { @apply mt-2; }
+.path-result-title { @apply text-[10px] font-medium text-emerald-100/75; }
+.path-list { @apply mt-2 space-y-1; }
+.path-step { @apply w-full rounded px-1.5 py-1 text-left hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-cyan-200/40; }
+.path-step-name { @apply block truncate text-[11px] font-medium text-foreground/75; }
+.path-step-file { @apply block truncate font-mono text-[9px] text-foreground/30; }
+.path-relation { @apply px-2 text-[9px] uppercase tracking-wide text-cyan-100/45; }
+.path-status { @apply mt-2 text-[10px] leading-relaxed text-foreground/50; }
+.path-warning { @apply text-amber-100/65; }
+
+.graph-fidelity { @apply absolute left-14 top-3 z-20 max-w-[calc(100%-8rem)] overflow-hidden rounded-xl border border-white/10 bg-[#071219]/88 text-[10px] text-foreground/70 shadow-xl backdrop-blur-md lg:left-4 lg:top-4 lg:max-w-[min(760px,calc(100%-16rem))] lg:text-[11px]; }
+.graph-fidelity-summary { @apply flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono marker:content-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-400/70; }
+.graph-breadcrumb { @apply absolute bottom-4 left-4 z-20 flex max-w-[calc(100%-2rem)] items-center gap-1 overflow-hidden rounded-xl border border-white/10 bg-[#071219]/90 p-1.5 text-[12px] text-slate-300 shadow-xl backdrop-blur-md; }
+.graph-up { @apply grid h-8 w-8 shrink-0 place-items-center rounded-lg text-cyan-200/75 hover:bg-white/[0.08] hover:text-cyan-100 focus-visible:ring-2 focus-visible:ring-cyan-400/70; }
+.graph-detail-panel { @apply absolute inset-y-0 right-0 z-30 h-full max-w-[92vw] shrink-0 overflow-hidden border-l border-white/10 bg-[#081720]/98 shadow-2xl lg:relative lg:z-auto lg:bg-transparent lg:shadow-none; }
 
 ::-webkit-scrollbar {
   width: 6px;

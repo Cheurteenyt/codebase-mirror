@@ -332,6 +332,12 @@ d3-force canvas and two task views over the same graph:
     that exact scope mounted, opens its detail, and emphasizes only the visible
     incident relations; keyboard community browsing skips file surfaces whose
     symbols have not been loaded yet
+  - **Explain a coupling path** (on demand): arm the selected symbol as a path
+    start, then choose any other symbol with the existing project search or
+    map. The detail panel shows the exact shortest source-to-target chain,
+    every intermediate file, and the stored direction/type of each relation.
+    This uses the complete project database rather than the representative
+    frame; bounded-search outcomes never claim that two symbols are disconnected
 - **Projects tab**: Project list with node/edge counts and health status
 - **Control tab**: System info
 

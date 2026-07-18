@@ -106,6 +106,13 @@ const budgets = {
 };
 const totalJsGzip = javascriptAssets.reduce((sum, asset) => sum + asset.gzip, 0);
 const totalCssGzip = stylesheetAssets.reduce((sum, asset) => sum + asset.gzip, 0);
+const productionCss = readFileSync(resolve(distDir, mainCssPath), "utf8");
+
+for (const selector of [".text-foreground", ".text-primary", ".border-border"]) {
+  if (!productionCss.includes(selector)) {
+    fail(`semantic selector ${selector} is missing from ${cssAsset.name}`);
+  }
+}
 
 if (graphAsset.gzip > budgets.graphGzip) {
   fail(`${graphAsset.name} is ${kib(graphAsset.gzip)} (limit ${kib(budgets.graphGzip)})`);

@@ -110,6 +110,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   const [highlightedIds, setHighlightedIds] = useState<Set<number> | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const [pathSource, setPathSource] = useState<GraphNode | null>(null);
   // A project-wide search or exact neighborhood can open a node that is not
   // part of the representative overview. Its absence from the next layout is
   // not evidence that it was deleted.
@@ -394,6 +395,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       const refreshed = data.nodes.find((node) => node.id === selectedNode.id);
       if (!refreshed && !selectedNodeOutsideOverviewRef.current) {
         setSelectedNode(null);
+        setPathSource(null);
         setSelectedNodeExactRefreshKey(null);
         selectedNodeOutsideOverviewRef.current = false;
         setHighlightedIds(null);
@@ -441,6 +443,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
     detailReturnFocusRef.current = null;
     setMobilePanelOpen(false);
     setSelectedNodeExactRefreshKey(null);
+    setPathSource(null);
     if (project) {
       firstLoad.current = true;
       // R32 (B-new-2 fix): reset the known-sets on project change so the
@@ -543,6 +546,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   const showScope = useCallback((scope: GraphScopeSelection) => {
     const shouldRestoreDetailFocus = selectedNode != null;
     setSelectedNode(null);
+    setPathSource(null);
     setSelectedNodeExactRefreshKey(null);
     selectedNodeOutsideOverviewRef.current = false;
     setHoveredNode(null);
@@ -624,6 +628,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
     setHighlightedIds(null);
     setSelectedPath(null);
     setSelectedNode(null);
+    setPathSource(null);
     setSelectedNodeExactRefreshKey(null);
     selectedNodeOutsideOverviewRef.current = false;
     setHoveredNode(null);
@@ -640,6 +645,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   }, [makeScopeByKey, navigationHistory, showScope]);
 
   const navigateUp = useCallback(() => {
+    setPathSource(null);
     if (selectedNode) {
       setSelectedNode(null);
       setSelectedNodeExactRefreshKey(null);
@@ -684,6 +690,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
       return;
     }
     setSelectedNode(null);
+    setPathSource(null);
     setSelectedNodeExactRefreshKey(null);
     selectedNodeOutsideOverviewRef.current = false;
     setHighlightedIds(null);
@@ -970,9 +977,9 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                 meaningful part of the architecture map. Keep the sampling
                 truth visible in one row and reveal diagnostics on demand. */}
             {!exactGraphData && (
-              <details className="group absolute left-14 top-3 z-20 max-w-[calc(100%-8rem)] overflow-hidden rounded-xl border border-white/10 bg-[#071219]/88 text-[10px] text-foreground/70 shadow-xl backdrop-blur-md lg:left-4 lg:top-4 lg:max-w-[min(760px,calc(100%-16rem))] lg:text-[11px]">
+              <details className="graph-fidelity group">
                 <summary
-                  className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono marker:content-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-400/70"
+                  className="graph-fidelity-summary"
                   title="Toggle graph fidelity details"
                 >
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.8)]" />
@@ -1056,11 +1063,11 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
             {(navigationHistory.length > 0 || selectedNode) && (
               <nav
                 aria-label="Graph navigation"
-                className="absolute bottom-4 left-4 z-20 flex max-w-[calc(100%-2rem)] items-center gap-1 overflow-hidden rounded-xl border border-white/10 bg-[#071219]/90 p-1.5 text-[12px] text-slate-300 shadow-xl backdrop-blur-md"
+                className="graph-breadcrumb"
               >
                 <button
                   onClick={navigateUp}
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-cyan-200/75 hover:bg-white/[0.08] hover:text-cyan-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70"
+                  className="graph-up"
                   aria-label="Go up one structure level"
                   title="Go up (Escape)"
                 >
@@ -1188,7 +1195,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
           <div
             ref={detailPanelRef}
             inert={!isDesktop && mobilePanelOpen ? true : undefined}
-            className="absolute inset-y-0 right-0 z-30 h-full max-w-[92vw] shrink-0 overflow-hidden border-l border-white/10 bg-[#081720]/98 shadow-2xl lg:relative lg:z-auto lg:bg-transparent lg:shadow-none"
+            className="graph-detail-panel"
             style={{ width: rightWidth }}
           >
             <Suspense fallback={<p role="status" className="p-4 text-xs text-foreground/40">Loading node details…</p>}>
@@ -1202,6 +1209,8 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                 requiresExactValidation={selectedNodeRequiresExactValidation}
                 onExactValidation={handleExactValidation}
                 onNavigate={handleNodeClick}
+                pathSource={pathSource}
+                onPathSourceChange={setPathSource}
                 onClose={() => {
                   navigateUp();
                 }}

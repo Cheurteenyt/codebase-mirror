@@ -633,3 +633,34 @@ build, and `build:package`. The packaged 1,000 / 10,319-node frame exposes the
 new profile through the accessibility tree. Strict gzip limits remain green at
 Graph **39.11 / 40 KiB**, manifest CSS **11.54 KiB**, and manifest JavaScript
 **124.95 / 125 KiB**.
+
+## Exact coupling-path follow-up - 2026-07-18
+
+The selected-symbol profile explained immediate flow, but it could not answer
+why two non-adjacent symbols were related. Trying to infer that answer from the
+1,000-node representative frame would be incorrect: an intermediate symbol or
+relation can be absent from the sample even when the complete graph connects
+the endpoints.
+
+The detail panel now exposes one explicit `Trace connection from here` action.
+The next symbol chosen through the existing exact project search or map becomes
+the target. A revision-stable backend BFS returns the deterministic shortest
+coupling chain, ordered symbols, intermediate file paths, and original relation
+directions. It traverses relations in either direction because the task is
+architectural coupling, not call-flow execution. Six hops, 5,000 visited nodes,
+and 20,000 inspected edges bound event-loop and SQLite work. Exhaustion is an
+exact `not_found`; depth and safety stops remain visibly inconclusive.
+
+The budget pass also confirmed that Tailwind v4 had no semantic color theme:
+production CSS omitted classes such as `text-foreground`, `text-primary`, and
+`border-border`. The palette is now registered explicitly. Static detail and
+graph-control styling moved from lazy JavaScript into CSS, and the Vite target
+now matches the existing ES2022 TypeScript/browser contract. The resulting
+production assets stay below every unchanged limit: Graph **38.03 / 40 KiB**,
+manifest CSS **14.84 / 15 KiB**, and manifest JavaScript **124.11 / 125 KiB**.
+The frontend passes **23 files / 214 tests** and the focused reader/HTTP
+contract passes **29 tests**. On the 10,319-node local product graph, a known
+two-hop path inspected 203 relationships in **14.09 ms**; an inconclusive
+six-hop search inspected 4,617 relationships in **54.29 ms**. These are smoke
+observations, not cross-version benchmark claims. The packaged Edge smoke and
+the visible in-app workflow report no console, page, or HTTP failure.

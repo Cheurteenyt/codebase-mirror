@@ -132,6 +132,31 @@ export interface GraphNeighborhoodData {
   };
 }
 
+export interface GraphPathData {
+  contract_version: 1;
+  /** False only when a safety bound prevented a complete answer. */
+  exact: boolean;
+  graph_revision: string;
+  strategy: "bounded-undirected-bfs-v1";
+  status: "found" | "not_found" | "max_hops" | "limit_reached";
+  source_id: number;
+  target_id: number;
+  hops: number | null;
+  /** Ordered source-to-target only when status is found. */
+  nodes: GraphNode[];
+  edges: Array<GraphEdge & { id: number }>;
+  search: {
+    complete: boolean;
+    visited_nodes: number;
+    visited_edges: number;
+  };
+  limits: {
+    max_hops: number;
+    max_visited_nodes: number;
+    max_visited_edges: number;
+  };
+}
+
 export interface GraphNodeSearchData {
   contract_version: 1;
   exact: true;

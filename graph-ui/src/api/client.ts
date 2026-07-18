@@ -14,6 +14,7 @@
 import type {
   GraphData,
   GraphNeighborhoodData,
+  GraphPathData,
   GraphNodeSearchData,
   GraphScopeData,
   GraphScopeKind,
@@ -174,6 +175,13 @@ export const api = {
       ...opts,
     });
   },
+
+  getPath: (project: string, sourceId: number, targetId: number, opts?: FetchOptions) => (
+    fetchJson<GraphPathData>(`${API_BASE}/api/path?project=${encodeURIComponent(project)}&source_id=${sourceId}&target_id=${targetId}&max_hops=6`, {
+      timeoutMs: 8_000,
+      ...opts,
+    })
+  ),
 
   searchNodes: (project: string, query: string, cursor?: string | null, opts?: FetchOptions) => {
     const params = new URLSearchParams({

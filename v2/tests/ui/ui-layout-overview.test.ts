@@ -175,6 +175,37 @@ describe('Graph UI balanced overview contract', () => {
     );
     expect(wrongAnchorCursor.status).toBe(400);
 
+    const path = await fixture.getJson('/api/path?source_id=7&target_id=10&max_hops=2');
+    expect(path.status).toBe(200);
+    expect(path.body).toMatchObject({
+      contract_version: 1,
+      exact: true,
+      graph_revision: neighborhood.body.graph_revision,
+      strategy: 'bounded-undirected-bfs-v1',
+      status: 'found',
+      source_id: 7,
+      target_id: 10,
+      hops: 2,
+      limits: {
+        max_hops: 2,
+        max_visited_nodes: 5000,
+        max_visited_edges: 20000,
+      },
+    });
+    expect(path.body.nodes.map((node: { id: number }) => node.id)).toEqual([7, 6, 10]);
+    expect(path.body.edges.map((edge: { id: number }) => edge.id)).toEqual([1, 4]);
+    expect((await fixture.getJson('/api/path?source_id=7&target_id=10&max_hops=1')).body)
+      .toMatchObject({
+        exact: false,
+        status: 'max_hops',
+        hops: null,
+        search: { complete: false },
+      });
+    expect((await fixture.getJson('/api/path?source_id=7&target_id=7')).body)
+      .toMatchObject({ status: 'found', hops: 0, edges: [] });
+    expect((await fixture.getJson('/api/path?source_id=7&target_id=100')).status).toBe(404);
+    expect((await fixture.getJson('/api/path?source_id=7&target_id=10&max_hops=9')).status).toBe(400);
+
     const search = await fixture.getJson('/api/node-search?q=Function&limit=2');
     expect(search.status).toBe(200);
     expect(search.body).toMatchObject({

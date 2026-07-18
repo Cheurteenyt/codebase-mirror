@@ -28,7 +28,10 @@ function createDistFixture(): string {
   writeFileSync(join(dist, "assets", "entry-real.js"), "console.log('entry');");
   writeFileSync(join(dist, "assets", "lazy-real.js"), "console.log('graph');");
   writeFileSync(join(dist, "assets", "control-real.js"), "console.log('control');");
-  writeFileSync(join(dist, "assets", "theme-real.css"), "body{color:#fff}");
+  writeFileSync(
+    join(dist, "assets", "theme-real.css"),
+    ".text-foreground,.text-primary,.border-border{color:#fff}",
+  );
   // These plausible names are deliberately absent from the manifest. A
   // readdir().find() implementation would select or total them by accident.
   writeFileSync(join(dist, "assets", "GraphTab-000-decoy.js"), "x".repeat(200_000));
@@ -81,5 +84,15 @@ describe("bundle budget asset resolution", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Expected exactly one manifest entry referenced by dist/index.html, found 0");
+  });
+
+  it("fails closed when the production semantic palette is absent", () => {
+    const dist = createDistFixture();
+    writeFileSync(join(dist, "assets", "theme-real.css"), "body{color:#fff}");
+
+    const result = spawnSync(process.execPath, [SCRIPT, dist], { encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("semantic selector .text-foreground is missing");
   });
 });

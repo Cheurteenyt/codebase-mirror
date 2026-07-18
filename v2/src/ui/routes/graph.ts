@@ -29,6 +29,10 @@ const CALLABLE_LABELS = new Set(['Function', 'Method', 'Constructor']);
 const CLUSTER_NODE_SPACING = 16;
 const CLUSTER_PADDING = 28;
 const CLUSTER_GAP = 36;
+const PATH_DEFAULT_MAX_HOPS = 6;
+const PATH_MAX_HOPS = 8;
+const PATH_MAX_VISITED_NODES = 5_000;
+const PATH_MAX_VISITED_EDGES = 20_000;
 const CLUSTER_SPIRAL_STEP = 48;
 const DOMAIN_PADDING = 58;
 const DOMAIN_GAP = 92;
@@ -1098,6 +1102,87 @@ export async function routeNeighborhood(
       limit,
       returned: page.neighbors.length,
       next_cursor: nextCursor,
+    },
+  });
+}
+
+/** Exact, bounded shortest coupling path between two project symbols. */
+export async function routePath(
+  ctx: RouteContext,
+  url: URL,
+  _req: IncomingMessage,
+  res: ServerResponse,
+  project: string,
+): Promise<void> {
+  if (!ctx.codeReader) {
+    sendJson(res, 404, { error: 'Code graph not available' });
+    return;
+  }
+  const parseNodeId = (name: 'source_id' | 'target_id'): number | null => {
+    const raw = url.searchParams.get(name);
+    if (!raw || !/^[1-9][0-9]*$/u.test(raw)) return null;
+    const value = Number(raw);
+    return Number.isSafeInteger(value) ? value : null;
+  };
+  const sourceId = parseNodeId('source_id');
+  const targetId = parseNodeId('target_id');
+  if (sourceId == null || targetId == null) {
+    sendJson(res, 400, { error: 'source_id and target_id must be positive safe integers' });
+    return;
+  }
+  const rawMaxHops = url.searchParams.get('max_hops') ?? String(PATH_DEFAULT_MAX_HOPS);
+  if (!/^[1-9][0-9]*$/u.test(rawMaxHops)) {
+    sendJson(res, 400, { error: `max_hops must be an integer between 1 and ${PATH_MAX_HOPS}` });
+    return;
+  }
+  const maxHops = Number(rawMaxHops);
+  if (!Number.isSafeInteger(maxHops) || maxHops < 1 || maxHops > PATH_MAX_HOPS) {
+    sendJson(res, 400, { error: `max_hops must be an integer between 1 and ${PATH_MAX_HOPS}` });
+    return;
+  }
+
+  const snapshot = ctx.codeReader.withGraphSnapshot(null, () => ctx.codeReader!.findExactPath(
+    project,
+    sourceId,
+    targetId,
+    {
+      maxHops,
+      maxVisitedNodes: PATH_MAX_VISITED_NODES,
+      maxVisitedEdges: PATH_MAX_VISITED_EDGES,
+    },
+  ));
+  if (!snapshot.ok) throw new Error('A path read without an expected revision cannot mismatch');
+  if (!snapshot.value) {
+    sendJson(res, 404, { error: 'Source or target node not found in this project' });
+    return;
+  }
+  const result = snapshot.value;
+  const searchComplete = result.status === 'found' || result.status === 'not_found';
+  sendJson(res, 200, {
+    contract_version: 1,
+    exact: searchComplete,
+    graph_revision: snapshot.graph_revision,
+    strategy: 'bounded-undirected-bfs-v1',
+    status: result.status,
+    source_id: sourceId,
+    target_id: targetId,
+    hops: result.hops,
+    nodes: serializeUnpositionedGraphNodes(ctx, project, result.nodes),
+    edges: result.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source_id,
+      target: edge.target_id,
+      type: edge.type,
+    })),
+    search: {
+      complete: searchComplete,
+      visited_nodes: result.visited_nodes,
+      visited_edges: result.visited_edges,
+    },
+    limits: {
+      max_hops: maxHops,
+      max_visited_nodes: PATH_MAX_VISITED_NODES,
+      max_visited_edges: PATH_MAX_VISITED_EDGES,
     },
   });
 }

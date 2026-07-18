@@ -126,6 +126,50 @@ describe('CodeGraphReader — getNeighbors column collision regression', () => {
     expect(reader.getExactNeighborhoodPage('other', 10, 0, 10)).toBeNull();
   });
 
+  it('finds a deterministic shortest coupling path without relying on edge direction', () => {
+    const path = reader.findExactPath('test', 20, 30, {
+      maxHops: 4,
+      maxVisitedNodes: 20,
+      maxVisitedEdges: 20,
+    });
+
+    expect(path).toMatchObject({
+      status: 'found',
+      hops: 2,
+      visited_nodes: 3,
+    });
+    expect(path?.nodes.map((node) => node.id)).toEqual([20, 10, 30]);
+    expect(path?.edges.map((edge) => ({
+      id: edge.id,
+      source: edge.source_id,
+      target: edge.target_id,
+    }))).toEqual([
+      { id: 1, source: 10, target: 20 },
+      { id: 2, source: 30, target: 10 },
+    ]);
+
+    expect(reader.findExactPath('test', 20, 30, {
+      maxHops: 1,
+      maxVisitedNodes: 20,
+      maxVisitedEdges: 20,
+    })?.status).toBe('max_hops');
+    expect(reader.findExactPath('test', 20, 30, {
+      maxHops: 4,
+      maxVisitedNodes: 20,
+      maxVisitedEdges: 1,
+    })?.status).toBe('limit_reached');
+    expect(reader.findExactPath('test', 40, 50, {
+      maxHops: 4,
+      maxVisitedNodes: 20,
+      maxVisitedEdges: 20,
+    })?.status).toBe('not_found');
+    expect(reader.findExactPath('test', 20, 100, {
+      maxHops: 4,
+      maxVisitedNodes: 20,
+      maxVisitedEdges: 20,
+    })).toBeNull();
+  });
+
   it('reconstructs an exact architecture scope incrementally without dangling or duplicate edges', () => {
     let cursor = { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 };
     const collectedNodes: number[] = [];

@@ -26,6 +26,9 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    // Match the TypeScript contract and the Chromium-family local runtime.
+    // Avoid downlevelling modern syntax into larger helper expressions.
+    target: "es2022",
     sourcemap: true,
     rollupOptions: {
       output: {

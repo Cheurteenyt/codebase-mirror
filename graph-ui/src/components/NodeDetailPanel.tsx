@@ -3,6 +3,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { colorForLabel, colorForRisk } from "../lib/colors";
 import type { GraphNode, GraphEdge } from "../lib/types";
 import { useExactNeighborhood } from "../hooks/useExactNeighborhood";
+import { useExactPath } from "../hooks/useExactPath";
 
 interface Connection {
   node: GraphNode;
@@ -31,6 +32,9 @@ interface NodeDetailPanelProps {
   ) => void;
   onClose: () => void;
   onNavigate: (node: GraphNode) => void;
+  /** Optional source retained while the user selects a target symbol. */
+  pathSource: GraphNode | null;
+  onPathSourceChange: (node: GraphNode | null) => void;
 }
 
 function collectConnections(anchor: GraphNode, nodes: readonly GraphNode[], edges: readonly GraphEdge[]): Connection[] {
@@ -91,6 +95,8 @@ export function NodeDetailPanel({
   onExactValidation,
   onClose,
   onNavigate,
+  pathSource,
+  onPathSourceChange,
 }: NodeDetailPanelProps) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const isVisibleInOverview = allNodes.some((candidate) => candidate.id === node.id);
@@ -214,37 +220,37 @@ export function NodeDetailPanel({
   const dominantInbound = groupedInbound[0];
 
   return (
-    <div className="w-full bg-[#0b1920]/95 backdrop-blur-xl flex flex-col h-full min-h-0 overflow-hidden">
+    <div className="nd-panel">
       {/* Header */}
-      <div className="px-4 pt-4 pb-3 border-b border-border/30">
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colorForLabel(node.label) }} />
+      <div className="nd-header">
+        <div className="nd-heading-row">
+          <div className="nd-grow">
+            <div className="nd-title-row">
+              <span className="nd-dot" style={{ backgroundColor: colorForLabel(node.label) }} />
               <h3
                 ref={headingRef}
                 tabIndex={-1}
-                className="truncate text-[13px] font-semibold text-foreground focus:outline-none"
+                className="nd-title"
               >
                 {node.name}
               </h3>
             </div>
             <span
-              className="inline-block px-2 py-0.5 rounded-md text-[10px] font-medium"
+              className="nd-label"
               style={{ backgroundColor: colorForLabel(node.label) + "18", color: colorForLabel(node.label) }}
             >
               {node.label}
             </span>
           </div>
           {/* R43 (a11y): aria-label so screen readers announce "Close" instead of "times". */}
-          <button onClick={onClose} aria-label="Close" className="text-foreground/20 hover:text-foreground/50 transition-colors text-[16px] leading-none p-1">×</button>
+          <button onClick={onClose} aria-label="Close" className="nd-close">×</button>
         </div>
 
         {node.file_path && (
-          <p className="text-[11px] text-foreground/30 font-mono mt-2 break-all leading-relaxed">
+          <p className="nd-file">
             {node.file_path}
             {node.start_line ? (
-              <span className="text-foreground/45">
+              <span className="nd-line">
                 {" "}:{node.start_line}
                 {node.end_line && node.end_line !== node.start_line ? `-${node.end_line}` : ""}
               </span>
@@ -255,55 +261,63 @@ export function NodeDetailPanel({
         <div
           aria-label={`Flow profile: ${profileRole}`}
           aria-live="polite"
-          className="mt-3 rounded-lg bg-white/[0.04] p-2"
+          className="nd-flow"
         >
-          <div className="flex items-center justify-between gap-2">
+          <div className="nd-between">
             <div>
-              <p className="text-[9px] uppercase tracking-widest text-foreground/30">Flow profile</p>
-              <p className="text-[12px] font-semibold text-primary">{profileRole}</p>
+              <p className="nd-kicker">Flow profile</p>
+              <p className="nd-role">{profileRole}</p>
             </div>
-            <span className="text-[9px] uppercase tracking-wider text-foreground/45">
+            <span className="nd-coverage">
               {profileCoverage}
             </span>
           </div>
-          <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] tabular-nums text-foreground/65">
-            <span aria-label={`Out connections: ${totalOutbound}`} className="rounded bg-white/[0.04] px-1.5 py-0.5 text-primary">→ {totalOutbound}</span>
-            <span aria-label={`In connections: ${totalInbound}`} className="rounded bg-white/[0.04] px-1.5 py-0.5 text-accent">← {totalInbound}</span>
+          <div className="nd-stats">
+            <span aria-label={`Out connections: ${totalOutbound}`} className="nd-pill text-primary">→ {totalOutbound}</span>
+            <span aria-label={`In connections: ${totalInbound}`} className="nd-pill text-accent">← {totalInbound}</span>
             <span
               aria-label={totalConnectionsIsExact
                 ? `Total connections: ${totalConnections}`
                 : `Estimated total unique connections: ${totalConnections}`}
-              className="rounded bg-white/[0.04] px-1.5 py-0.5"
+              className="nd-pill"
             >
               {totalConnectionsIsExact ? totalConnections : `≈${totalConnections}`} unique
             </span>
             {node.risk_score != null && (
-              <span className="rounded bg-white/[0.04] px-1.5 py-0.5" style={{ color: colorForRisk(node.risk_score) }}>
+              <span className="nd-pill" style={{ color: colorForRisk(node.risk_score) }}>
                 Risk {(node.risk_score * 100).toFixed(0)}%
               </span>
             )}
           </div>
           {(dominantOutbound || dominantInbound) && (
-            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-foreground/40">
+            <div className="nd-dominant">
               {dominantOutbound && <span>OUT {relationName(dominantOutbound[0])} · {countConnections(dominantOutbound[1])}</span>}
               {dominantInbound && <span>IN {relationName(dominantInbound[0])} · {countConnections(dominantInbound[1])}</span>}
             </div>
           )}
         </div>
+        <ConnectionPath
+          node={node}
+          project={project}
+          refreshKey={exactRefreshKey}
+          source={pathSource}
+          onSourceChange={onPathSourceChange}
+          onNavigate={onNavigate}
+        />
         {!isInOverview && (
-          <p role="status" className="mt-2 rounded-md border border-sky-300/15 bg-sky-300/[0.05] px-2 py-1.5 text-[10px] leading-relaxed text-sky-100/70">
+          <p role="status" className="nd-note nd-note-sky">
             Outside the representative map · exact neighborhood below.
           </p>
         )}
         {isInOverview && !isVisibleInOverview && (
-          <p role="status" className="mt-2 rounded-md border border-violet-300/15 bg-violet-300/[0.05] px-2 py-1.5 text-[10px] leading-relaxed text-violet-100/70">
+          <p role="status" className="nd-note nd-note-violet">
             Hidden by active filters · exact neighborhood below.
           </p>
         )}
         {exactError && (
           <div
             role="alert"
-            className="mt-2 flex items-center justify-between gap-2 rounded-md border border-amber-300/15 bg-amber-200/[0.04] px-2 py-1.5 text-[10px] leading-relaxed text-amber-100/75"
+            className="nd-alert"
           >
             <span>
               {exactErrorPhase === "more"
@@ -313,22 +327,22 @@ export function NodeDetailPanel({
             </span>
             <button
               onClick={exactNeighborhood.retry}
-              className="shrink-0 rounded-md border border-amber-300/25 px-2 py-1 font-medium text-amber-50 transition-colors hover:bg-amber-200/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/50"
+              className="nd-retry"
             >
               {exactErrorPhase === "more" ? "Retry page" : "Retry exact load"}
             </button>
           </div>
         )}
         {exactData && connectionsArePartial && (
-          <p role="status" aria-live="polite" className="mt-2 text-[10px] leading-relaxed text-sky-200/70">
+          <p role="status" aria-live="polite" className="nd-partial">
             Loaded {visibleConnectionCount.toLocaleString()} of {totalConnections.toLocaleString()} exact connections.
           </p>
         )}
       </div>
 
       {/* Connections */}
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="px-4 py-3 space-y-4">
+      <ScrollArea className="nd-scroll">
+        <div className="nd-connections">
           {groupedOutbound.length > 0 && (
             <ConnectionSection key={`out-${node.id}`} title="References" count={countGroups(groupedOutbound)} icon="→" groups={groupedOutbound} onNavigate={onNavigate} />
           )}
@@ -339,25 +353,124 @@ export function NodeDetailPanel({
             <ConnectionSection key={`self-${node.id}`} title="Self references" count={visibleSelf} icon="↻" groups={groupedSelf} onNavigate={onNavigate} />
           )}
           {connections.length === 0 && exactPending && (
-            <p role="status" className="text-[12px] text-foreground/30 text-center py-8">
+            <p role="status" className="nd-empty">
               Loading exact connections…
             </p>
           )}
           {connections.length === 0 && !exactPending && !exactError && (
-            <p className="text-[12px] text-foreground/20 text-center py-8">No connections</p>
+            <p className="nd-empty opacity-70">No connections</p>
           )}
           {exactData?.page.next_cursor && exactErrorPhase !== "more" && (
             <button
               onClick={exactNeighborhood.loadMore}
               disabled={exactNeighborhood.loadingMore}
               aria-busy={exactNeighborhood.loadingMore}
-              className="min-h-10 w-full rounded-lg border border-sky-300/20 bg-sky-300/[0.06] px-3 py-2 text-[12px] font-medium text-sky-100/80 transition-colors hover:bg-sky-300/[0.11] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200/50 disabled:cursor-wait disabled:opacity-50"
+              className="nd-more"
             >
               {exactNeighborhood.loadingMore ? "Loading more exact connections…" : "Load more exact connections"}
             </button>
           )}
         </div>
       </ScrollArea>
+    </div>
+  );
+}
+
+function ConnectionPath({
+  node,
+  project,
+  refreshKey,
+  source,
+  onSourceChange,
+  onNavigate,
+}: {
+  node: GraphNode;
+  project: string | null;
+  refreshKey?: string | number;
+  source: GraphNode | null;
+  onSourceChange: (node: GraphNode | null) => void;
+  onNavigate: (node: GraphNode) => void;
+}) {
+  const start = source ?? node;
+  const enabled = source != null && source.id !== node.id;
+  const path = useExactPath(project, start.id, node.id, enabled, refreshKey);
+  if (!source) {
+    return (
+      <button
+        type="button"
+        onClick={() => onSourceChange(node)}
+        className="path-trigger"
+      >
+        Trace connection from here
+      </button>
+    );
+  }
+
+  const data = path.data;
+  const stoppedMessage = data?.status === "not_found"
+    ? "No connection exists in the complete project graph."
+    : data?.status === "max_hops"
+      ? `No path within ${data.limits.max_hops} hops; deeper links were not searched.`
+      : data?.status === "limit_reached"
+        ? "Search stopped at its safety limit; this does not prove the symbols are disconnected."
+        : null;
+  return (
+    <div aria-label="Connection path" className="path-card">
+      <div className="nd-between-start">
+        <div className="nd-min">
+          <p className="path-kicker">{enabled ? "Coupling path" : "Path start"}</p>
+          <p className={enabled ? "path-route" : "path-source"}>
+            {enabled ? `${source.name} → ${node.name}` : source.name}
+          </p>
+        </div>
+        <button type="button" onClick={() => onSourceChange(null)} className="path-clear">Clear</button>
+      </div>
+      {!enabled && <p role="status" className="path-prompt">Choose another symbol on the map or with Search.</p>}
+      {path.loading && <p role="status" className="path-loading">Searching the complete graph…</p>}
+      {path.error && (
+        <div role="alert" className="path-alert">
+          <span>{path.error}</span>
+          <button type="button" onClick={path.retry} className="path-retry">Retry</button>
+        </div>
+      )}
+      {data?.status === "found" && (
+        <div className="path-result">
+          <p className="path-result-title">
+            Exact shortest path · {data.hops} {data.hops === 1 ? "hop" : "hops"}
+          </p>
+          <ol className="path-list">
+            {data.nodes.map((step, index) => {
+              const edge = data.edges[index];
+              const next = data.nodes[index + 1];
+              const forward = edge?.source === step.id;
+              const from = forward ? step : next;
+              const to = forward ? next : step;
+              return (
+                <li key={step.id}>
+                  <button
+                    type="button"
+                    aria-label={`Open path step ${step.name}`}
+                    onClick={() => onNavigate(step)}
+                    className="path-step"
+                  >
+                    <span className="path-step-name">{step.name}</span>
+                    {step.file_path && <span className="path-step-file">{step.file_path}</span>}
+                  </button>
+                  {edge && next && from && to && (
+                    <p
+                      aria-label={`${relationName(edge.type)} points from ${from.name} to ${to.name}`}
+                      className="path-relation"
+                    >
+                      {forward ? "↓" : "↑"} {relationName(edge.type)}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
+      {stoppedMessage && <p role="status" className={`path-status${data?.status === "not_found" ? "" : " path-warning"}`}>{stoppedMessage}</p>}
     </div>
   );
 }
@@ -430,8 +543,8 @@ function ConnectionSection({ title, count, icon, groups, onNavigate }: {
 
   return (
     <div>
-      <p className="text-[11px] font-medium text-foreground/40 mb-2">
-        {title} <span className="text-foreground/15">({count})</span>
+      <p className="nd-section-title">
+        {title} <span className="nd-section-count">({count})</span>
       </p>
       {groups.map(([type, conns]) => {
         const expanded = expandedTypes.has(type);
@@ -445,11 +558,11 @@ function ConnectionSection({ title, count, icon, groups, onNavigate }: {
           if (connection.node.label !== conns[0].node.label) showLabels = true;
         }
         return (
-          <div key={type} className="mb-2">
-            <p className="text-[9px] text-foreground/25 uppercase tracking-wider mb-1 font-medium">
+          <div key={type} className="nd-group">
+            <p className="nd-relation-type">
               {normalizedType}
             </p>
-            <div className="space-y-px">
+            <div className="nd-relation-list">
               {visibleConnections.map((c) => {
                 const displayName = connectionName(c.node, (nameCounts.get(c.node.name) ?? 0) > 1);
                 return (
@@ -457,13 +570,13 @@ function ConnectionSection({ title, count, icon, groups, onNavigate }: {
                     key={c.node.id}
                     onClick={() => onNavigate(c.node)}
                     aria-label={`Open ${displayName} (${c.node.label})${c.occurrences > 1 ? `, ${c.occurrences} connections` : ""}`}
-                    className="group flex min-h-8 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200/40"
+                    className="nd-connection group"
                   >
-                    <span className="text-foreground/25 text-[10px] group-hover:text-foreground/40">{icon}</span>
-                    <span className="w-[5px] h-[5px] rounded-full shrink-0" style={{ backgroundColor: colorForLabel(c.node.label) }} />
-                    <span className="min-w-0 flex-1 truncate text-foreground/65 group-hover:text-foreground/85">{displayName}</span>
-                    {c.occurrences > 1 && <span className="shrink-0 text-[9px] tabular-nums text-sky-200/55">×{c.occurrences}</span>}
-                    {showLabels && <span className="shrink-0 text-[10px] text-foreground/25">{c.node.label}</span>}
+                    <span className="nd-connection-icon">{icon}</span>
+                    <span className="nd-connection-dot" style={{ backgroundColor: colorForLabel(c.node.label) }} />
+                    <span className="nd-connection-name">{displayName}</span>
+                    {c.occurrences > 1 && <span className="nd-occurrences">×{c.occurrences}</span>}
+                    {showLabels && <span className="nd-connection-label">{c.node.label}</span>}
                   </button>
                 );
               })}
@@ -472,7 +585,7 @@ function ConnectionSection({ title, count, icon, groups, onNavigate }: {
                   type="button"
                   aria-expanded={expanded}
                   onClick={() => toggleType(type)}
-                  className="min-h-8 w-full rounded-md px-2 py-1 text-left text-[10px] font-medium text-sky-200/60 transition-colors hover:bg-sky-200/[0.05] hover:text-sky-100/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200/40"
+                  className="nd-connection-more"
                 >
                   {expanded
                     ? `Show fewer ${normalizedType} connections`

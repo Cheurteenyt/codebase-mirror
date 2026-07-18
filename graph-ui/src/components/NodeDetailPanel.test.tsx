@@ -1,12 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GraphNeighborhoodData, GraphNode } from "../lib/types";
+import type { GraphNeighborhoodData, GraphNode, GraphPathData } from "../lib/types";
 import { NodeDetailPanel } from "./NodeDetailPanel";
 
 const useExactNeighborhoodMock = vi.hoisted(() => vi.fn());
+const useExactPathMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../hooks/useExactNeighborhood", () => ({
   useExactNeighborhood: useExactNeighborhoodMock,
+}));
+vi.mock("../hooks/useExactPath", () => ({
+  useExactPath: useExactPathMock,
 }));
 
 const node = {
@@ -68,12 +72,36 @@ function hookState(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function pathData(overrides: Partial<GraphPathData> = {}): GraphPathData {
+  const middle = graphNode(3);
+  return {
+    contract_version: 1,
+    exact: true,
+    graph_revision: "graph-reader-v1:aaaaaaaaaaaaaaaaaaaaaa",
+    strategy: "bounded-undirected-bfs-v1",
+    status: "found",
+    source_id: 2,
+    target_id: 1,
+    hops: 2,
+    nodes: [neighbor, middle, node],
+    edges: [
+      { id: 20, source: 2, target: 3, type: "IMPORTS" },
+      { id: 21, source: 1, target: 3, type: "CALLS" },
+    ],
+    search: { complete: true, visited_nodes: 4, visited_edges: 5 },
+    limits: { max_hops: 6, max_visited_nodes: 5000, max_visited_edges: 20000 },
+    ...overrides,
+  };
+}
+
 function renderPanel({
   selectedNode = node,
   overviewNodes,
   allNodes = [node, neighbor],
   allEdges = [{ source: 1, target: 2, type: "CALLS" }],
   onNavigate = vi.fn(),
+  pathSource = null,
+  onPathSourceChange = vi.fn(),
   exactRefreshKey,
   requiresExactValidation = false,
   onExactValidation,
@@ -83,6 +111,8 @@ function renderPanel({
   allNodes?: GraphNode[];
   allEdges?: Array<{ source: number; target: number; type: string }>;
   onNavigate?: (next: GraphNode) => void;
+  pathSource?: GraphNode | null;
+  onPathSourceChange?: (next: GraphNode | null) => void;
   exactRefreshKey?: string | number;
   requiresExactValidation?: boolean;
   onExactValidation?: (nodeId: number, refreshKey: string | number | undefined, valid: boolean) => void;
@@ -99,6 +129,8 @@ function renderPanel({
       onExactValidation={onExactValidation}
       onClose={vi.fn()}
       onNavigate={onNavigate}
+      pathSource={pathSource}
+      onPathSourceChange={onPathSourceChange}
     />,
   );
 }
@@ -107,6 +139,53 @@ describe("NodeDetailPanel exact neighborhood", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useExactNeighborhoodMock.mockReturnValue(hookState());
+    useExactPathMock.mockReturnValue({ data: null, loading: false, error: null, retry: vi.fn() });
+  });
+
+  it("arms an exact path from the selected symbol without loading one eagerly", () => {
+    const onPathSourceChange = vi.fn();
+    renderPanel({ onPathSourceChange, exactRefreshKey: "graph-a:1" });
+
+    expect(useExactPathMock).toHaveBeenCalledWith("test", 1, 1, false, "graph-a:1");
+    fireEvent.click(screen.getByRole("button", { name: "Trace connection from here" }));
+    expect(onPathSourceChange).toHaveBeenCalledWith(node);
+  });
+
+  it("explains the exact path and preserves stored relationship direction", () => {
+    const onNavigate = vi.fn();
+    useExactPathMock.mockReturnValue({
+      data: pathData(),
+      loading: false,
+      error: null,
+      retry: vi.fn(),
+    });
+    renderPanel({ pathSource: neighbor, onNavigate });
+
+    expect(screen.getByText("Exact shortest path · 2 hops")).toBeInTheDocument();
+    expect(screen.getByLabelText("imports points from node-2 to node-3")).toBeInTheDocument();
+    expect(screen.getByLabelText("calls points from hub to node-3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open path step node-3" }));
+    expect(onNavigate).toHaveBeenCalledWith(expect.objectContaining({ id: 3 }));
+  });
+
+  it("does not claim disconnection when a bounded path search stops", () => {
+    useExactPathMock.mockReturnValue({
+      data: pathData({
+        exact: false,
+        status: "limit_reached",
+        hops: null,
+        nodes: [],
+        edges: [],
+        search: { complete: false, visited_nodes: 5000, visited_edges: 18000 },
+      }),
+      loading: false,
+      error: null,
+      retry: vi.fn(),
+    });
+    renderPanel({ pathSource: neighbor });
+
+    expect(screen.getByRole("status")).toHaveTextContent(/safety limit/u);
+    expect(screen.queryByText(/No connection exists/u)).not.toBeInTheDocument();
   });
 
   it("keeps exact degrees visible while honestly labeling the bounded overview list", () => {

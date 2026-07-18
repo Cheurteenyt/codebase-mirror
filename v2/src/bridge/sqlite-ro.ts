@@ -58,6 +58,23 @@ export interface ExactNeighborhoodPage {
   next_after_edge_id: number | null;
 }
 
+export type ExactPathStatus = 'found' | 'not_found' | 'max_hops' | 'limit_reached';
+
+export interface ExactPathSearchOptions {
+  maxHops: number;
+  maxVisitedNodes: number;
+  maxVisitedEdges: number;
+}
+
+export interface ExactPathResult {
+  status: ExactPathStatus;
+  nodes: CodeNode[];
+  edges: CodeEdge[];
+  hops: number | null;
+  visited_nodes: number;
+  visited_edges: number;
+}
+
 export interface ExactNodeSearchPage {
   nodes: CodeNode[];
   total_matches: number;
@@ -209,6 +226,14 @@ interface TypeCountRow {
 
 /** Row from `SELECT source_id, target_id, type FROM edges`. */
 interface EdgeTripleRow {
+  source_id: number;
+  target_id: number;
+  type: string;
+}
+
+interface PathEdgeRow {
+  id: number;
+  project: string;
   source_id: number;
   target_id: number;
   type: string;
@@ -733,6 +758,153 @@ export class CodeGraphReader {
         ? neighbors[neighbors.length - 1].edge.id
         : null,
     };
+  }
+
+  /**
+   * Find a shortest coupling path in the complete project graph.
+   *
+   * Relationships are traversed in either direction because this answers
+   * "how are these symbols coupled?" rather than pretending every stored
+   * relationship is an executable call direction. Breadth-first levels and
+   * edge-id ordering make the chosen shortest path deterministic. The query
+   * stops with an explicit non-authoritative status when a safety bound is
+   * reached; it never reports that a sampled or interrupted search found no
+   * path.
+   */
+  findExactPath(
+    project: string,
+    sourceId: number,
+    targetId: number,
+    options: ExactPathSearchOptions,
+  ): ExactPathResult | null {
+    const endpointRows = this.db
+      .prepare(
+        `SELECT * FROM nodes
+         WHERE project = ? AND id IN (?, ?)
+         ORDER BY id ASC`,
+      )
+      .all(project, sourceId, targetId) as CodeNodeRow[];
+    const endpoints = new Map(endpointRows.map((row) => [row.id, deserializeCodeNode(row)]));
+    const source = endpoints.get(sourceId);
+    const target = endpoints.get(targetId);
+    if (!source || !target) return null;
+
+    const maxHops = Math.max(1, Math.floor(options.maxHops));
+    const maxVisitedNodes = Math.max(2, Math.floor(options.maxVisitedNodes));
+    const maxVisitedEdges = Math.max(1, Math.floor(options.maxVisitedEdges));
+    if (sourceId === targetId) {
+      return {
+        status: 'found',
+        nodes: [source],
+        edges: [],
+        hops: 0,
+        visited_nodes: 1,
+        visited_edges: 0,
+      };
+    }
+
+    const incidentEdges = this.db.prepare(
+      `WITH frontier(id) AS MATERIALIZED (
+         SELECT CAST(value AS INTEGER) FROM json_each(?)
+       ), incident AS (
+         SELECT e.id, e.project, e.source_id, e.target_id, e.type
+         FROM edges e
+         WHERE e.project = ?
+           AND e.source_id IN (SELECT id FROM frontier)
+         UNION ALL
+         SELECT e.id, e.project, e.source_id, e.target_id, e.type
+         FROM edges e
+         WHERE e.project = ?
+           AND e.target_id IN (SELECT id FROM frontier)
+           AND e.source_id NOT IN (SELECT id FROM frontier)
+       )
+       SELECT e.*
+       FROM incident e
+       JOIN nodes source
+         ON source.project = e.project AND source.id = e.source_id
+       JOIN nodes target
+         ON target.project = e.project AND target.id = e.target_id
+       ORDER BY e.id ASC
+       LIMIT ?`,
+    );
+    const visited = new Set<number>([sourceId]);
+    const parents = new Map<number, { nodeId: number; edge: PathEdgeRow }>();
+    let frontier = [sourceId];
+    let visitedEdges = 0;
+
+    const stopped = (status: Exclude<ExactPathStatus, 'found'>): ExactPathResult => ({
+      status,
+      nodes: [],
+      edges: [],
+      hops: null,
+      visited_nodes: visited.size,
+      visited_edges: visitedEdges,
+    });
+    const found = (): ExactPathResult => {
+      const nodeIds = [targetId];
+      const edges: CodeEdge[] = [];
+      let cursor = targetId;
+      while (cursor !== sourceId) {
+        const parent = parents.get(cursor);
+        if (!parent) throw new Error('Exact path parent chain is incomplete');
+        nodeIds.push(parent.nodeId);
+        edges.push({ ...parent.edge, properties_json: '{}' });
+        cursor = parent.nodeId;
+      }
+      nodeIds.reverse();
+      edges.reverse();
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM nodes
+           WHERE project = ? AND id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`,
+        )
+        .all(project, JSON.stringify(nodeIds)) as CodeNodeRow[];
+      const byId = new Map(rows.map((row) => [row.id, deserializeCodeNode(row)]));
+      const nodes = nodeIds.map((id) => byId.get(id));
+      if (nodes.some((node) => node == null)) {
+        throw new Error('Exact path referenced a node outside its stable snapshot');
+      }
+      return {
+        status: 'found',
+        nodes: nodes as CodeNode[],
+        edges,
+        hops: edges.length,
+        visited_nodes: visited.size,
+        visited_edges: visitedEdges,
+      };
+    };
+
+    for (let hop = 1; hop <= maxHops; hop += 1) {
+      const remainingEdges = maxVisitedEdges - visitedEdges;
+      if (remainingEdges <= 0) return stopped('limit_reached');
+      const rows = incidentEdges.all(
+        JSON.stringify(frontier),
+        project,
+        project,
+        remainingEdges + 1,
+      ) as PathEdgeRow[];
+      const edgeLimitReached = rows.length > remainingEdges;
+      const pageRows = edgeLimitReached ? rows.slice(0, remainingEdges) : rows;
+      visitedEdges += pageRows.length;
+      const frontierSet = new Set(frontier);
+      const next: number[] = [];
+      for (const edge of pageRows) {
+        const neighborId = frontierSet.has(edge.source_id) ? edge.target_id : edge.source_id;
+        if (visited.has(neighborId)) continue;
+        if (visited.size >= maxVisitedNodes) return stopped('limit_reached');
+        visited.add(neighborId);
+        parents.set(neighborId, {
+          nodeId: frontierSet.has(edge.source_id) ? edge.source_id : edge.target_id,
+          edge,
+        });
+        next.push(neighborId);
+        if (neighborId === targetId) return found();
+      }
+      if (edgeLimitReached) return stopped('limit_reached');
+      if (next.length === 0) return stopped('not_found');
+      frontier = next;
+    }
+    return stopped('max_hops');
   }
 
   /**
