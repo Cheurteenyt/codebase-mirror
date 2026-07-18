@@ -235,6 +235,92 @@ describe("R53 (Part E): GraphTab C1 chain — canvas not unmounted on refetch", 
     expect(screen.getByRole("button", { name: "Structure" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("resolves dependency-atlas domains by key when atlas and tree ids collide", () => {
+    (useGraphData as any).mockReturnValue({
+      data: {
+        nodes: [
+          {
+            ...mockData.nodes[0],
+            id: 7,
+            file_path: "v2/src/index.ts",
+            cluster_id: 70,
+          },
+        ],
+        edges: [],
+        total_nodes: 100,
+        layout: {
+          strategy: "architecture-domain-v1",
+          node_spacing: 16,
+          counts_scope: "returned_nodes",
+          clusters: [
+            { id: 0, domain_id: 0, key: "(root)", x: -100, y: 0, radius: 40, node_count: 0 },
+            { id: 70, domain_id: 7, key: "v2/src", x: 100, y: 0, radius: 40, node_count: 1 },
+          ],
+          domains: [
+            { id: 0, key: "(root)", x: -100, y: 0, radius: 70, node_count: 1, cluster_count: 1 },
+            { id: 7, key: "v2", x: 100, y: 0, radius: 70, node_count: 99, cluster_count: 1 },
+          ],
+          dependency_atlas: {
+            strategy: "exact-domain-dependencies-v1",
+            exact: true,
+            coverage: {
+              complete: true,
+              total_domains: 2,
+              returned_domains: 2,
+              total_nodes: 100,
+              returned_nodes: 100,
+            },
+            domains: [
+              {
+                id: 0,
+                key: "v2",
+                x: 0,
+                y: 0,
+                radius: 180,
+                node_count: 99,
+                file_count: 10,
+                representative_node_id: 7,
+                incoming_edges: 0,
+                outgoing_edges: 6,
+                internal_edges: 20,
+              },
+              {
+                id: 1,
+                key: "(root)",
+                x: 400,
+                y: 0,
+                radius: 72,
+                node_count: 1,
+                file_count: 1,
+                representative_node_id: 1,
+                incoming_edges: 6,
+                outgoing_edges: 0,
+                internal_edges: 0,
+              },
+            ],
+            relation_count: 6,
+            relations: [{ source_key: "v2", target_key: "(root)", type: "CALLS", count: 6 }],
+          },
+        },
+      },
+      loading: false,
+      error: null,
+      fetchOverview: vi.fn(),
+    });
+
+    const { container } = render(<GraphTab project="test-project" />);
+    fireEvent.click(screen.getByRole("button", { name: "Dependencies" }));
+    expect(screen.getByText("6 exact cross-domain relations")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /calls 6/i }));
+    expect(screen.getByText("0 exact cross-domain relations")).toBeInTheDocument();
+    const canvas = container.querySelector("canvas")!;
+    fireEvent.keyDown(canvas, { key: "d" });
+    fireEvent.keyDown(canvas, { key: "Enter" });
+
+    expect(screen.getByRole("navigation", { name: "Graph navigation" })).toHaveTextContent("v2");
+    expect(screen.getByRole("navigation", { name: "Graph navigation" })).not.toHaveTextContent("(root)");
+  });
+
   it("keeps selected Stellar semantics inside the canvas instead of permanent chrome", () => {
     localStorage.setItem("cbm-graph-visual-mode", "stellar");
     (useGraphData as any).mockReturnValue({

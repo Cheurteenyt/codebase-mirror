@@ -106,6 +106,15 @@ export interface ArchitectureDomainSummary {
   representative: CodeNode;
 }
 
+export interface ArchitectureDomainDependencySummary {
+  /** Selected atlas key, or null for the aggregate of omitted domains. */
+  source_key: string | null;
+  /** Selected atlas key, or null for the aggregate of omitted domains. */
+  target_key: string | null;
+  type: string;
+  count: number;
+}
+
 export type GraphSnapshotResult<T> =
   | { ok: true; graph_revision: string; value: T }
   | {
@@ -567,6 +576,84 @@ export class CodeGraphReader {
       node_count: row.node_count,
       file_count: row.file_count,
       representative: deserializeCodeNode(row),
+    }));
+  }
+
+  /**
+   * Aggregate every relationship touching one of the selected architecture
+   * domains inside SQLite. Omitted domains are folded into one explicit
+   * null endpoint, so the atlas can stay bounded without understating the
+   * selected domains' total inbound or outbound traffic. Null cannot collide
+   * with a real top-level directory name.
+   */
+  listArchitectureDomainDependencies(
+    project: string,
+    selectedDomainKeys: readonly string[],
+  ): ArchitectureDomainDependencySummary[] {
+    const domainKeys = [...new Set(selectedDomainKeys)].sort();
+    if (domainKeys.length === 0) return [];
+    const selectedDomainsJson = JSON.stringify(domainKeys);
+    const rows = this.db
+      .prepare(
+        `WITH normalized_nodes AS (
+           SELECT n.id,
+             n.label,
+             TRIM(
+               CASE
+                 WHEN SUBSTR(REPLACE(n.file_path, CHAR(92), '/'), 2, 2) = ':/'
+                   THEN SUBSTR(REPLACE(n.file_path, CHAR(92), '/'), 4)
+                 ELSE REPLACE(n.file_path, CHAR(92), '/')
+               END,
+               '/'
+             ) AS normalized_path
+           FROM nodes n
+           WHERE n.project = ?
+         ), node_domains AS (
+           SELECT id,
+             CASE
+               WHEN normalized_path = '' THEN '(virtual)'
+               WHEN INSTR(normalized_path, '/') = 0 THEN
+                 CASE
+                   WHEN label IN ('Directory', 'Folder') THEN normalized_path
+                   ELSE '(root)'
+                 END
+               ELSE SUBSTR(normalized_path, 1, INSTR(normalized_path, '/') - 1)
+             END AS architecture_domain
+           FROM normalized_nodes
+         ), selected_domains AS (
+           SELECT CAST(value AS TEXT) AS key FROM json_each(?)
+         ), classified_edges AS (
+           SELECT
+             CASE WHEN source_domain.architecture_domain IN (SELECT key FROM selected_domains)
+               THEN source_domain.architecture_domain ELSE NULL END AS source_key,
+             CASE WHEN target_domain.architecture_domain IN (SELECT key FROM selected_domains)
+               THEN target_domain.architecture_domain ELSE NULL END AS target_key,
+             e.type
+           FROM edges e
+           JOIN node_domains source_domain ON source_domain.id = e.source_id
+           JOIN node_domains target_domain ON target_domain.id = e.target_id
+           WHERE e.project = ?
+             AND (
+               source_domain.architecture_domain IN (SELECT key FROM selected_domains)
+               OR target_domain.architecture_domain IN (SELECT key FROM selected_domains)
+             )
+         )
+         SELECT source_key, target_key, type, COUNT(*) AS count
+         FROM classified_edges
+         GROUP BY source_key, target_key, type
+         ORDER BY count DESC, source_key ASC, target_key ASC, type ASC`,
+      )
+      .all(project, selectedDomainsJson, project) as Array<{
+        source_key: string | null;
+        target_key: string | null;
+        type: string;
+        count: number;
+      }>;
+    return rows.map((row) => ({
+      source_key: row.source_key,
+      target_key: row.target_key,
+      type: row.type,
+      count: row.count,
     }));
   }
 

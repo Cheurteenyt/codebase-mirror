@@ -108,6 +108,38 @@ export interface GraphData {
         representative_node_id: number;
       }>;
     };
+    dependency_atlas?: {
+      strategy: "exact-domain-dependencies-v1";
+      /** Counts and relations are exact for every returned domain. */
+      exact: true;
+      coverage: {
+        complete: boolean;
+        total_domains: number;
+        returned_domains: number;
+        total_nodes: number;
+        returned_nodes: number;
+      };
+      domains: Array<{
+        id: number;
+        key: string;
+        x: number;
+        y: number;
+        radius: number;
+        node_count: number;
+        file_count: number;
+        representative_node_id: number;
+        incoming_edges: number;
+        outgoing_edges: number;
+        internal_edges: number;
+      }>;
+      relation_count: number;
+      relations: Array<{
+        source_key: string;
+        target_key: string;
+        type: string;
+        count: number;
+      }>;
+    };
   };
 }
 

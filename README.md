@@ -355,31 +355,24 @@ lower weight; cross-links that do not advance toward or away from the focus are
 not promoted as flow. Focus-label ranking is precomputed on semantic-frame
 changes rather than sorted during every Canvas paint.
 
-Large unselected Dependencies overviews keep every sampled node visible and
-clickable, but only semantic hubs participate in d3 relaxation. Micro-symbols
-remain on their deterministic constellation targets, nodes are painted in
-spectral/rank batches, and secondary edges appear only when projected spacing
-makes them useful. Selecting a symbol or returning to `Structure` restores
-the complete node set to the same simulation before applying that view's
-forces. This adaptive boundary reduces sustained CPU without changing the API
-sample, exact-neighborhood behavior, filters, or hit targets.
+The unselected Dependencies overview is an exact, bounded **dependency atlas**
+rather than a 1,000-symbol particle ring. The layout response ranks at most 12
+top-level domains, packs their exact node totals into stable circles, and
+aggregates every directed relationship touching those domains inside SQLite.
+Traffic to omitted domains remains included in the selected domains' exact
+in/out totals; it is not rendered as a misleading synthetic node. Coverage is
+labelled complete or partial, and relation-type filters reuse the returned
+exact groups without another request.
 
-The quiet Dependencies constellation is also a project map rather than an
-undifferentiated particle ring. Major top-level paths occupy contiguous
-elliptical sectors with
-bounded colored arcs and exact representative counts; tiny paths collapse into
-one unlabeled `other` sector. Hub halos and the backbone remain visible, while
-the overview admits an 8–18 label screen-area budget of radially anchored,
-collision-checked symbols and rejects generic names such as `now`, `close`, and
-`handle`. Pointer/keyboard targets enter first, but labels consume the budget
-only after a valid placement is found. Sector, hub, and candidate plans are
-computed only when the semantic frame changes, not on Canvas paints. Inside
-those sectors, at most six server-authored communities
-with four or more shown nodes receive a muted path/count caption anchored to
-their highest-ranked informative symbol. These captions reuse the same collision
-boxes as sector, hub, and symbol labels. Non-semantic inner guide rings are
-omitted, so every persistent mark now carries project, community, degree, type,
-status, or relation meaning.
+Domain selection opens its sampled structure and exposes the existing
+revision-bound exact-scope action, while zooming progressively reveals the
+representative symbol constellation. At macro scale
+the Canvas skips all sampled-node fills and hit tests; it paints only bounded
+domain surfaces, traffic tiers, labels, and at most 28 directed bundles. The
+same node objects, d3 simulation, filters, keyboard model, exact neighborhood,
+and focused incoming/outgoing flow are retained. Returning to `Structure` or
+focusing a symbol therefore changes the task frame without creating a second
+renderer or downloading another graph.
 
 ```bash
 # From v2/ in a source checkout

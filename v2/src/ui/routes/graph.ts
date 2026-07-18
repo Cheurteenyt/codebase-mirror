@@ -8,7 +8,12 @@ import { computeRiskScore } from '../../reports/risk.js';
 import { safeJsonParse, MAX_NODES_PER_LABEL } from '../../constants.js';
 import { sendJson, colorForLabel } from '../helpers.js';
 import type { RouteContext } from '../types.js';
-import type { CodeNode, ExactScopeKind } from '../../bridge/sqlite-ro.js';
+import type {
+  ArchitectureDomainDependencySummary,
+  ArchitectureDomainSummary,
+  CodeNode,
+  ExactScopeKind,
+} from '../../bridge/sqlite-ro.js';
 import { architectureDomainKey, graphCommunityKey } from '../../graph-scope.js';
 import {
   GOLDEN_ANGLE,
@@ -37,6 +42,10 @@ const CLUSTER_SPIRAL_STEP = 48;
 const DOMAIN_PADDING = 58;
 const DOMAIN_GAP = 92;
 const DOMAIN_SPIRAL_STEP = 80;
+const DEPENDENCY_ATLAS_MAX_DOMAINS = 12;
+const DEPENDENCY_ATLAS_MIN_RADIUS = 72;
+const DEPENDENCY_ATLAS_RADIUS_RANGE = 150;
+const DEPENDENCY_ATLAS_GAP = 92;
 
 interface ClusterableNode {
   id: number;
@@ -89,6 +98,20 @@ interface PackedLayoutDomain {
   x: number;
   y: number;
   nodeCount: number;
+}
+
+interface PackedDependencyAtlasDomain {
+  id: number;
+  key: string;
+  node_count: number;
+  file_count: number;
+  representative_node_id: number;
+  radius: number;
+  x: number;
+  y: number;
+  incoming_edges: number;
+  outgoing_edges: number;
+  internal_edges: number;
 }
 
 function computeTopologyRevision(
@@ -322,6 +345,101 @@ export function buildStructuredOverview(
   };
 }
 
+/**
+ * Build one exact, bounded project-level dependency atlas. Circle area uses a
+ * bounded square-root scale, while labels retain the exact counts. Relations
+ * to omitted domains remain in per-domain traffic totals but are not rendered
+ * as a misleading synthetic node.
+ */
+function selectDependencyAtlasDomains(
+  domains: readonly ArchitectureDomainSummary[],
+): ArchitectureDomainSummary[] {
+  return [...domains]
+    .sort((left, right) => (
+      right.node_count - left.node_count
+      || right.file_count - left.file_count
+      || stableStringCompare(left.key, right.key)
+    ))
+    .slice(0, DEPENDENCY_ATLAS_MAX_DOMAINS);
+}
+
+export function buildDependencyAtlas(
+  domains: readonly ArchitectureDomainSummary[],
+  dependencies: readonly ArchitectureDomainDependencySummary[],
+) {
+  const rankedDomains = selectDependencyAtlasDomains(domains);
+  const maximumNodeCount = Math.max(1, ...rankedDomains.map((domain) => domain.node_count));
+  const atlasDomains: PackedDependencyAtlasDomain[] = rankedDomains.map((domain, id) => ({
+    id,
+    key: domain.key,
+    node_count: domain.node_count,
+    file_count: domain.file_count,
+    representative_node_id: domain.representative.id,
+    radius: Math.round(
+      DEPENDENCY_ATLAS_MIN_RADIUS
+      + DEPENDENCY_ATLAS_RADIUS_RANGE * Math.sqrt(domain.node_count / maximumNodeCount),
+    ),
+    x: 0,
+    y: 0,
+    incoming_edges: 0,
+    outgoing_edges: 0,
+    internal_edges: 0,
+  }));
+  packGraphCircles(atlasDomains, DEPENDENCY_ATLAS_GAP, DOMAIN_SPIRAL_STEP);
+
+  const selectedDomains = new Map(atlasDomains.map((domain) => [domain.key, domain]));
+  const relations: Array<{
+    source_key: string;
+    target_key: string;
+    type: string;
+    count: number;
+  }> = [];
+  for (const dependency of dependencies) {
+    const source = dependency.source_key == null
+      ? undefined
+      : selectedDomains.get(dependency.source_key);
+    const target = dependency.target_key == null
+      ? undefined
+      : selectedDomains.get(dependency.target_key);
+    if (source && target && source.id === target.id) {
+      source.internal_edges += dependency.count;
+      continue;
+    }
+    // In/out are boundary traffic. Keeping internal edges separate prevents a
+    // large cohesive domain from looking externally coupled merely because it
+    // contains many local relationships.
+    if (source) source.outgoing_edges += dependency.count;
+    if (target) target.incoming_edges += dependency.count;
+    if (source && target) relations.push({
+      source_key: source.key,
+      target_key: target.key,
+      type: dependency.type,
+      count: dependency.count,
+    });
+  }
+
+  const totalNodes = domains.reduce((sum, domain) => sum + domain.node_count, 0);
+  const returnedNodes = atlasDomains.reduce((sum, domain) => sum + domain.node_count, 0);
+  return {
+    strategy: 'exact-domain-dependencies-v1' as const,
+    exact: true as const,
+    coverage: {
+      complete: atlasDomains.length === domains.length,
+      total_domains: domains.length,
+      returned_domains: atlasDomains.length,
+      total_nodes: totalNodes,
+      returned_nodes: returnedNodes,
+    },
+    domains: atlasDomains.map((domain) => ({
+      ...domain,
+      x: roundGraphCoordinate(domain.x),
+      y: roundGraphCoordinate(domain.y),
+    })),
+    relation_count: relations.reduce((sum, relation) => sum + relation.count, 0),
+    relations,
+  };
+}
+
 function allocateBalancedLabelQuotas(
   counts: Record<string, number>,
   maxNodes: number,
@@ -527,6 +645,14 @@ export async function routeLayout(
   const snapshot = ctx.codeReader!.withGraphSnapshot(null, () => {
     const availableByLabel = ctx.codeReader!.countNodesByLabel(project);
     const architectureDomains = ctx.codeReader!.listArchitectureDomains(project);
+    const dependencyAtlasDomains = selectDependencyAtlasDomains(architectureDomains);
+    const dependencyAtlas = buildDependencyAtlas(
+      architectureDomains,
+      ctx.codeReader!.listArchitectureDomainDependencies(
+        project,
+        dependencyAtlasDomains.map((domain) => domain.key),
+      ),
+    );
     const nodes = selectBalancedOverviewNodes(
       ctx,
       project,
@@ -621,6 +747,7 @@ export async function routeLayout(
             representative_node_id: domain.representative.id,
           })),
         },
+        dependency_atlas: dependencyAtlas,
       },
     };
   });

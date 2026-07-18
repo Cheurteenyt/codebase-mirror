@@ -139,6 +139,32 @@ describe('Graph UI balanced overview contract', () => {
         { key: 'tests', node_count: 1, file_count: 1, representative_node_id: 13 },
       ],
     });
+    expect(response.body.layout.dependency_atlas).toMatchObject({
+      strategy: 'exact-domain-dependencies-v1',
+      exact: true,
+      coverage: {
+        complete: true,
+        total_domains: 2,
+        returned_domains: 2,
+        total_nodes: 24,
+        returned_nodes: 24,
+      },
+      relations: [
+        { source_key: 'tests', target_key: 'src', type: 'CONTAINS', count: 1 },
+      ],
+    });
+    const sourceAtlasDomain = response.body.layout.dependency_atlas.domains
+      .find((domain: { key: string }) => domain.key === 'src');
+    expect(sourceAtlasDomain).toMatchObject({
+      node_count: 23,
+      file_count: 5,
+      incoming_edges: 1,
+      outgoing_edges: 0,
+      internal_edges: 5,
+    });
+    expect(Number.isFinite(sourceAtlasDomain.x)).toBe(true);
+    expect(Number.isFinite(sourceAtlasDomain.y)).toBe(true);
+    expect(sourceAtlasDomain.radius).toBeGreaterThan(0);
     expect(response.body.nodes.map((node: { id: number }) => node.id)).toContain(6);
     expect(response.body.nodes.every((node: { status?: string }) => typeof node.status === 'string')).toBe(true);
     const hub = response.body.nodes.find((node: { id: number }) => node.id === 6);
@@ -306,6 +332,62 @@ describe('Graph UI balanced overview contract', () => {
     );
     expect(identity.headers.get('content-encoding')).toBeNull();
     expect(identity.body.topology_revision).toBe(complete.body.topology_revision);
+  });
+
+  it('bounds the dependency atlas without losing traffic to omitted domains', async () => {
+    const project = 'dependency-atlas-coverage';
+    const dbPath = defaultCodeDbPath(project);
+    mkdirSync(dirname(dbPath), { recursive: true });
+    const db = new Database(dbPath);
+    try {
+      db.exec(`
+        CREATE TABLE nodes (
+          id INTEGER PRIMARY KEY, project TEXT NOT NULL, label TEXT NOT NULL,
+          name TEXT NOT NULL, qualified_name TEXT NOT NULL, file_path TEXT NOT NULL,
+          start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, properties_json TEXT NOT NULL
+        );
+        CREATE TABLE edges (
+          id INTEGER PRIMARY KEY, project TEXT NOT NULL, source_id INTEGER NOT NULL,
+          target_id INTEGER NOT NULL, type TEXT NOT NULL, properties_json TEXT NOT NULL
+        );
+        CREATE INDEX idx_edges_source ON edges(source_id);
+        CREATE INDEX idx_edges_target ON edges(target_id);
+      `);
+      const insertNode = db.prepare(
+        `INSERT INTO nodes VALUES (?, ?, 'File', ?, ?, ?, 1, 2, '{}')`,
+      );
+      for (let index = 0; index < 13; index += 1) {
+        // A real directory may legitimately use the old display sentinel.
+        // Keep it distinct from the aggregate of omitted domains.
+        const key = index === 0 ? '(external)' : `d${String(index).padStart(2, '0')}`;
+        insertNode.run(index + 1, project, `${key}.ts`, `${key}::file`, `${key}/file.ts`);
+      }
+      db.prepare(`INSERT INTO edges VALUES (1, ?, 13, 1, 'CALLS', '{}')`).run(project);
+      db.prepare(`INSERT INTO edges VALUES (2, ?, 1, 13, 'IMPORTS', '{}')`).run(project);
+    } finally {
+      db.close();
+    }
+
+    fixture = await startUiTestFixture({ project });
+    const response = await fixture.getJson('/api/layout?max_nodes=13');
+
+    expect(response.status).toBe(200);
+    const atlas = response.body.layout.dependency_atlas;
+    expect(atlas.coverage).toEqual({
+      complete: false,
+      total_domains: 13,
+      returned_domains: 12,
+      total_nodes: 13,
+      returned_nodes: 12,
+    });
+    expect(atlas.domains.map((domain: { key: string }) => domain.key)).toContain('(external)');
+    expect(atlas.domains.map((domain: { key: string }) => domain.key)).not.toContain('d12');
+    expect(atlas.relations).toEqual([]);
+    expect(atlas.domains.find((domain: { key: string }) => domain.key === '(external)')).toMatchObject({
+      incoming_edges: 1,
+      outgoing_edges: 1,
+      internal_edges: 0,
+    });
   });
 
   it('keeps a top-level domain whose first file appears after the old 10k cutoff', { timeout: 10_000 }, async () => {

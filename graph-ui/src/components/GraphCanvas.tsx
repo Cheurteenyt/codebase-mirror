@@ -97,6 +97,13 @@ interface SimEdge {
   type: string;
 }
 
+interface WeightedOverviewEdge {
+  source: number | { id: number };
+  target: number | { id: number };
+  type: string;
+  count?: number;
+}
+
 interface StellarFlowEdgeBatch {
   direct: SimEdge[];
   transit: SimEdge[];
@@ -147,6 +154,8 @@ const MID_LABEL_LIMIT = 24;
 const DEFAULT_LAYOUT_NODE_SPACING = 16;
 const DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING = 7;
 const RAW_TOPOLOGY_MIN_PROJECTED_SPACING = 18;
+const DEPENDENCY_ATLAS_RAW_START = 10;
+const DEPENDENCY_ATLAS_RAW_END = 18;
 const MAX_KEYBOARD_DOMAINS = 32;
 const MAX_KEYBOARD_COMMUNITIES = 64;
 const MAX_KEYBOARD_NODES = 64;
@@ -194,6 +203,9 @@ export function computeSemanticZoomLayers(projectedNodeSpacing: number) {
 
 type LayoutCluster = NonNullable<GraphData["layout"]>["clusters"][number];
 type LayoutDomain = NonNullable<GraphData["layout"]>["domains"][number];
+type DependencyAtlasDomain = NonNullable<
+  NonNullable<GraphData["layout"]>["dependency_atlas"]
+>["domains"][number];
 type KeyboardTargetKind = "domain" | "community" | "node";
 
 interface KeyboardTarget {
@@ -311,15 +323,15 @@ interface OverviewBundlePlan {
   trafficTiers: Map<number, number>;
 }
 
-function simEdgeNodeId(endpoint: number | SimNode): number {
+function simEdgeNodeId(endpoint: number | { id: number }): number {
   return typeof endpoint === "number" ? endpoint : endpoint.id;
 }
 
-function buildOverviewBundleBatches(
-  edges: readonly SimEdge[],
-  nodeMap: ReadonlyMap<number, SimNode>,
+function buildOverviewBundleBatches<T extends { id: number }>(
+  edges: readonly WeightedOverviewEdge[],
+  nodeMap: ReadonlyMap<number, T>,
   centers: ReadonlyMap<number, { id: number; x: number; y: number; radius: number }>,
-  scopeIdForNode: (node: SimNode) => number | undefined,
+  scopeIdForNode: (node: T) => number | undefined,
   maxBundles: number,
   routingCenterForScope?: (
     scopeId: number,
@@ -364,8 +376,9 @@ function buildOverviewBundleBatches(
       };
       accumulators.set(key, accumulator);
     }
-    accumulator.count += 1;
-    accumulator.groupCounts[group] += 1;
+    const weight = Math.max(1, edge.count ?? 1);
+    accumulator.count += weight;
+    accumulator.groupCounts[group] += weight;
   }
 
   const scopeCenters = [...centers.values()];
@@ -849,7 +862,6 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   });
   const stellarOverviewHubsRef = useRef<SimNode[]>([]);
   const stellarOverviewLabelCandidatesRef = useRef<SimNode[]>([]);
-  const stellarOverviewCommunityLabelsRef = useRef<SimNode[]>([]);
   const stellarNodeBatchesRef = useRef<Map<string, SimNode[]>>(new Map());
   const stellarSimulationReducedRef = useRef(false);
   const stellarFlowLanesRef = useRef<ReturnType<typeof summarizeStellarFlowLanes>>({
@@ -864,6 +876,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const clusterMapRef = useRef<Map<number, LayoutCluster>>(new Map());
   const domainsRef = useRef<LayoutDomain[]>([]);
   const domainCatalogRef = useRef<Map<string, { node_count: number; file_count: number }>>(new Map());
+  const dependencyAtlasDomainsRef = useRef<DependencyAtlasDomain[]>([]);
+  const dependencyAtlasBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
+  const dependencyAtlasTrafficTiersRef = useRef<Map<number, number>>(new Map());
   const layoutNodeSpacingRef = useRef(DEFAULT_LAYOUT_NODE_SPACING);
   const localEdgesRef = useRef<SimEdge[]>([]);
   const rawEdgeLayersRef = useRef<[SimEdge[], SimEdge[]]>([[], []]);
@@ -878,6 +893,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const edgeGroupsRef = useRef<Map<GraphEdgeGroup, SimEdge[]>>(new Map());
   const hoveredScopeRef = useRef<Omit<GraphScopeSelection, "nodeIds"> | null>(null);
   const keyboardTargetsRef = useRef<KeyboardTargets>(emptyKeyboardTargets());
+  const dependencyAtlasKeyboardTargetsRef = useRef<KeyboardTarget[]>([]);
   const keyboardVisibleCountsRef = useRef<Record<KeyboardTargetKind, number>>({
     domain: 0,
     community: 0,
@@ -897,11 +913,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const activeRef = useRef(active);
   const previousActiveRef = useRef(active);
   const previousDetailModeRef = useRef(detailMode);
+  const detailModeRef = useRef(detailMode);
   const visualModeRef = useRef(visualMode);
   const selectedNodeIdRef = useRef(selectedNodeId);
   const previousFlowFrameRef = useRef({ visualMode: "architecture" as GraphVisualMode, selectedNodeId: null as number | null });
   const dataRequiresLayoutReheatRef = useRef(false);
   activeRef.current = active;
+  detailModeRef.current = detailMode;
   visualModeRef.current = visualMode;
   selectedNodeIdRef.current = selectedNodeId;
 
@@ -1016,7 +1034,19 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
-    if (visualModeRef.current !== "stellar" && domainsRef.current.length) {
+    const dependencyAtlasDomains = visualModeRef.current === "stellar"
+      && selectedNodeIdRef.current == null
+      && !detailModeRef.current
+      ? dependencyAtlasDomainsRef.current
+      : [];
+    if (dependencyAtlasDomains.length > 0) {
+      for (const domain of dependencyAtlasDomains) {
+        minX = Math.min(minX, domain.x - domain.radius);
+        minY = Math.min(minY, domain.y - domain.radius);
+        maxX = Math.max(maxX, domain.x + domain.radius);
+        maxY = Math.max(maxY, domain.y + domain.radius);
+      }
+    } else if (visualModeRef.current !== "stellar" && domainsRef.current.length) {
       for (const domain of domainsRef.current) {
         minX = Math.min(minX, domain.x - domain.radius);
         minY = Math.min(minY, domain.y - domain.radius);
@@ -1117,12 +1147,20 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       clustersRef.current.map((cluster) => [cluster.id, cluster.domain_id]),
     );
     const nodeIds = new Set<number>();
+    const atlasDomain = scope.kind === "domain"
+      ? dependencyAtlasDomainsRef.current.find((domain) => domain.id === scope.id && domain.key === scope.key)
+      : undefined;
+    const architectureDomainIds = atlasDomain
+      ? new Set(domainsRef.current.filter((domain) => domain.key === scope.key).map((domain) => domain.id))
+      : null;
     for (const node of nodesRef.current) {
       if (scope.kind === "community" && node.cluster_id === scope.id) nodeIds.add(node.id);
       if (
         scope.kind === "domain"
         && node.cluster_id != null
-        && clusterDomain.get(node.cluster_id) === scope.id
+        && (architectureDomainIds
+          ? architectureDomainIds.has(clusterDomain.get(node.cluster_id) ?? -1)
+          : clusterDomain.get(node.cluster_id) === scope.id)
       ) nodeIds.add(node.id);
     }
     onScopeSelectRef.current?.({ ...scope, nodeIds });
@@ -1161,7 +1199,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     drawRef.current?.();
     animateToTransform({ x: -x * zoom, y: -y * zoom, k: zoom });
 
-    const targets = keyboardTargetsRef.current[target.kind];
+    const targets = visualModeRef.current === "stellar" && target.kind === "domain"
+      ? dependencyAtlasKeyboardTargetsRef.current
+      : keyboardTargetsRef.current[target.kind];
     const visible = keyboardVisibleCountsRef.current[target.kind];
     const kindLabel = target.kind === "domain"
       ? "Domain"
@@ -1177,13 +1217,27 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   }, [animateToTransform, cancelPendingAutoFit, setStellarPreviewFocus]);
 
   const cycleKeyboardTarget = useCallback((kind: KeyboardTargetKind, direction: 1 | -1) => {
-    if (kind !== "node" && visualModeRef.current === "stellar") {
+    const dependencyAtlasActive = visualModeRef.current === "stellar"
+      && selectedNodeIdRef.current == null
+      && !detailModeRef.current
+      && dependencyAtlasKeyboardTargetsRef.current.length > 0;
+    if (dependencyAtlasActive && kind === "node"
+      && layoutNodeSpacingRef.current * transformRef.current.k < DEPENDENCY_ATLAS_RAW_START) {
       if (keyboardStatusRef.current) {
-        keyboardStatusRef.current.textContent = "Symbols only in this view.";
+        keyboardStatusRef.current.textContent = "Open a domain or zoom in for symbols.";
       }
       return;
     }
-    const targets = keyboardTargetsRef.current[kind];
+    if (kind !== "node" && visualModeRef.current === "stellar"
+      && !(dependencyAtlasActive && kind === "domain")) {
+      if (keyboardStatusRef.current) {
+        keyboardStatusRef.current.textContent = "Only domains and symbols here.";
+      }
+      return;
+    }
+    const targets = dependencyAtlasActive && kind === "domain"
+      ? dependencyAtlasKeyboardTargetsRef.current
+      : keyboardTargetsRef.current[kind];
     if (targets.length === 0) {
       if (keyboardStatusRef.current) {
         keyboardStatusRef.current.textContent = `No visible ${kind} targets.`;
@@ -1237,7 +1291,6 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       stellarConstellationRef.current = { sectors: [], radius: 0 };
       stellarOverviewHubsRef.current = [];
       stellarOverviewLabelCandidatesRef.current = [];
-      stellarOverviewCommunityLabelsRef.current = [];
       stellarNodeBatchesRef.current = new Map();
       stellarSimulationReducedRef.current = false;
       stellarFlowLanesRef.current = { layers: [], modules: [] };
@@ -1249,6 +1302,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       clusterMapRef.current = new Map();
       domainsRef.current = [];
       domainCatalogRef.current = new Map();
+      dependencyAtlasDomainsRef.current = [];
+      dependencyAtlasBundleBatchesRef.current = new Map();
+      dependencyAtlasTrafficTiersRef.current = new Map();
       layoutNodeSpacingRef.current = DEFAULT_LAYOUT_NODE_SPACING;
       localEdgesRef.current = [];
       rawEdgeLayersRef.current = [[], []];
@@ -1262,6 +1318,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       labelCandidatesRef.current = [];
       edgeGroupsRef.current = new Map();
       keyboardTargetsRef.current = emptyKeyboardTargets();
+      dependencyAtlasKeyboardTargetsRef.current = [];
       keyboardVisibleCountsRef.current = { domain: 0, community: 0, node: 0 };
       keyboardFocusRef.current = null;
       if (lastHoverIdRef.current != null) onNodeHoverRef.current(null);
@@ -1367,6 +1424,57 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     domainCatalogRef.current = new Map(
       (data.layout?.domain_catalog?.domains ?? []).map((domain) => [domain.key, domain]),
     );
+    const dependencyAtlasDomains = [...(data.layout?.dependency_atlas?.domains ?? [])]
+      .sort((left, right) => left.id - right.id);
+    dependencyAtlasDomainsRef.current = dependencyAtlasDomains;
+    const dependencyAtlasCenters = new Map(
+      dependencyAtlasDomains.map((domain) => [domain.id, domain]),
+    );
+    const dependencyAtlasIds = new Map(
+      dependencyAtlasDomains.map((domain) => [domain.key, domain.id]),
+    );
+    const dependencyAtlasNodes = new Map(
+      dependencyAtlasDomains.map((domain) => [domain.id, { id: domain.id }]),
+    );
+    const dependencyAtlasEdges: WeightedOverviewEdge[] = (data.layout?.dependency_atlas?.relations ?? [])
+      .flatMap((relation) => {
+        const source = dependencyAtlasIds.get(relation.source_key);
+        const target = dependencyAtlasIds.get(relation.target_key);
+        return source == null || target == null
+          ? []
+          : [{ source, target, type: relation.type, count: relation.count }];
+      });
+    dependencyAtlasBundleBatchesRef.current = buildOverviewBundleBatches(
+      dependencyAtlasEdges,
+      dependencyAtlasNodes,
+      dependencyAtlasCenters,
+      (domain) => domain.id,
+      Math.min(28, Math.max(10, dependencyAtlasDomains.length * 3)),
+    ).batches;
+    const maximumAtlasTraffic = Math.max(
+      1,
+      ...dependencyAtlasDomains.map((domain) => domain.incoming_edges + domain.outgoing_edges),
+    );
+    const maximumAtlasTrafficLog = Math.log1p(maximumAtlasTraffic);
+    dependencyAtlasTrafficTiersRef.current = new Map(dependencyAtlasDomains.flatMap((domain) => {
+      const boundaryTraffic = domain.incoming_edges + domain.outgoing_edges;
+      return boundaryTraffic === 0 ? [] : [[
+        domain.id,
+        Math.max(1, Math.min(4, Math.ceil(
+          Math.log1p(boundaryTraffic) / maximumAtlasTrafficLog * 4,
+        ))),
+      ] as const];
+    }));
+    dependencyAtlasKeyboardTargetsRef.current = dependencyAtlasDomains
+      .slice(0, MAX_KEYBOARD_DOMAINS)
+      .map((domain) => ({
+        kind: "domain" as const,
+        id: domain.id,
+        label: domain.key,
+        x: domain.x,
+        y: domain.y,
+        radius: domain.radius,
+      }));
     const clusterMap = new Map(clustersRef.current.map((cluster) => [cluster.id, cluster]));
     clusterMapRef.current = clusterMap;
     const domainMap = new Map(domainsRef.current.map((domain) => [domain.id, domain]));
@@ -1490,7 +1598,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     };
     const keyboardFocus = keyboardFocusRef.current;
     if (keyboardFocus) {
-      const refreshedFocus = keyboardTargetsRef.current[keyboardFocus.kind]
+      const refreshedTargets = visualModeRef.current === "stellar" && keyboardFocus.kind === "domain"
+        ? dependencyAtlasKeyboardTargetsRef.current
+        : keyboardTargetsRef.current[keyboardFocus.kind];
+      const refreshedFocus = refreshedTargets
         .find((target) => target.id === keyboardFocus.id);
       keyboardFocusRef.current = refreshedFocus ?? null;
       if (!refreshedFocus && keyboardStatusRef.current) keyboardStatusRef.current.textContent = "";
@@ -1663,13 +1774,6 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
               || left.id - right.id
             ))
         : [];
-      stellarOverviewCommunityLabelsRef.current = selectedNodeId == null
-        ? clustersRef.current
-            .filter((cluster) => cluster.node_count >= 4)
-            .slice(0, 6)
-            .flatMap((cluster) => stellarOverviewLabelCandidatesRef.current
-              .find((candidate) => candidate.cluster_id === cluster.id) ?? [])
-        : [];
       stellarFlowLanesRef.current = summarizeStellarFlowLanes(targets);
       stellarFlowLabelCandidatesRef.current = selectedNodeId == null
         ? []
@@ -1799,7 +1903,6 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       stellarConstellationRef.current = { sectors: [], radius: 0 };
       stellarOverviewHubsRef.current = [];
       stellarOverviewLabelCandidatesRef.current = [];
-      stellarOverviewCommunityLabelsRef.current = [];
       stellarFlowLanesRef.current = { layers: [], modules: [] };
       stellarFlowLabelCandidatesRef.current = [];
       stellarFlowEdgeGroupsRef.current = new Map();
@@ -1975,6 +2078,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       && selectedNodeId != null
       && stellarFlowTargetsRef.current.get(selectedNodeId)?.role === "focus";
     const stellarOverview = stellarFlow && !stellarFocused;
+    const dependencyAtlasOverview = stellarOverview
+      && !detailMode
+      && dependencyAtlasDomainsRef.current.length > 0;
     const stellarPreviewNodeId = stellarOverview ? stellarPreviewRef.current : null;
     const relationFocusId = selectedNodeId ?? stellarPreviewNodeId;
 
@@ -1992,24 +2098,32 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       overviewCommunityReveal,
       overviewRawTopologyReveal,
     ] = computeSemanticZoomLayers(projectedNodeSpacing);
-    const domainBundleOpacity = detailMode || stellarFlow ? 0 : overviewDomainBundleOpacity;
+    const dependencyAtlasRawReveal = dependencyAtlasOverview
+      ? fadeBetween(projectedNodeSpacing, DEPENDENCY_ATLAS_RAW_START, DEPENDENCY_ATLAS_RAW_END)
+      : 1;
+    const dependencyAtlasOpacity = dependencyAtlasOverview ? 1 - dependencyAtlasRawReveal * 0.84 : 0;
+    const domainBundleOpacity = dependencyAtlasOverview
+      ? dependencyAtlasOpacity
+      : detailMode || stellarFlow ? 0 : overviewDomainBundleOpacity;
     const communityBundleOpacity = detailMode || stellarFlow ? 0 : overviewCommunityBundleOpacity;
     const communityReveal = detailMode || stellarFlow ? 0 : overviewCommunityReveal;
-    const rawTopologyReveal = detailMode || stellarFlow ? 1 : overviewRawTopologyReveal;
+    const rawTopologyReveal = dependencyAtlasOverview
+      ? dependencyAtlasRawReveal
+      : detailMode || stellarFlow ? 1 : overviewRawTopologyReveal;
     // Raw topology enters only after the community backbone has fully left.
     // Nodes lead their lower-contrast edges so intermediate frames disclose
     // readable symbols rather than a hairball.
     const rawNodeOpacity = stellarFlow
-      ? 0.96
+      ? 0.96 * rawTopologyReveal
       : rawTopologyReveal * (0.78 + fadeBetween(projectedNodeSpacing, 22, 26) * 0.22);
     const rawDetailReveal = stellarFlow
       ? (stellarFocused ? 1 : fadeBetween(projectedNodeSpacing, 4, 10))
       : fadeBetween(projectedNodeSpacing, 22, 30);
     const localEdgeOpacity = stellarFlow
-      ? (stellarFocused ? 0.075 : 0.19)
+      ? (stellarFocused ? 0.075 : 0.19 * rawTopologyReveal)
       : rawTopologyReveal * (0.18 + fadeBetween(projectedNodeSpacing, 22, 32) * 0.42);
     const crossEdgeOpacity = stellarFlow
-      ? (stellarFocused ? 0.045 : 0.13)
+      ? (stellarFocused ? 0.045 : 0.13 * rawTopologyReveal)
       : rawTopologyReveal * fadeBetween(projectedNodeSpacing, 24, 36) * 0.45;
     const hoveredScope = hoveredScopeRef.current;
     const keyboardFocus = keyboardFocusRef.current;
@@ -2023,15 +2137,21 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       : keyboardFocus?.kind === "community"
         ? keyboardFocus.id
         : undefined;
+    const renderedDomains = dependencyAtlasOverview
+      ? dependencyAtlasDomainsRef.current
+      : domainsRef.current;
+    const renderedDomainTrafficTiers = dependencyAtlasOverview
+      ? dependencyAtlasTrafficTiersRef.current
+      : domainTrafficTiersRef.current;
 
-    if (!stellarFlow && domainsRef.current.length > 0) {
+    if ((!stellarFlow || dependencyAtlasOverview) && renderedDomains.length > 0) {
       // A small fixed palette makes top-level architecture areas immediately
       // distinguishable. Domains are still batched by palette slot, keeping
       // the number of canvas state changes constant even for large monorepos.
       for (let paletteIndex = 0; paletteIndex < DOMAIN_PALETTE.length; paletteIndex += 1) {
         let hasDomain = false;
         ctx.beginPath();
-        for (const domain of domainsRef.current) {
+        for (const domain of renderedDomains) {
           if (((domain.id % DOMAIN_PALETTE.length) + DOMAIN_PALETTE.length) % DOMAIN_PALETTE.length !== paletteIndex) continue;
           ctx.moveTo(domain.x + domain.radius, domain.y);
           ctx.arc(domain.x, domain.y, domain.radius, 0, Math.PI * 2);
@@ -2047,15 +2167,18 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
     }
 
-    if (!stellarFlow && domainOverview && domainTrafficTiersRef.current.size > 0) {
+    if (
+      (dependencyAtlasOverview || (!stellarFlow && domainOverview))
+      && renderedDomainTrafficTiers.size > 0
+    ) {
       // Domain area continues to encode code volume. A second, batched outline
       // adds the missing activity dimension without labels, gradients, or a
       // per-domain drawing state: only real cross-domain traffic can light it.
       for (let tier = 1; tier <= 4; tier += 1) {
         let hasTraffic = false;
         ctx.beginPath();
-        for (const domain of domainsRef.current) {
-          if (domainTrafficTiersRef.current.get(domain.id) !== tier) continue;
+        for (const domain of renderedDomains) {
+          if (renderedDomainTrafficTiers.get(domain.id) !== tier) continue;
           const trafficRadius = domain.radius + (1.1 + tier * 0.3) / tk;
           ctx.moveTo(domain.x + trafficRadius, domain.y);
           ctx.arc(domain.x, domain.y, trafficRadius, 0, Math.PI * 2);
@@ -2162,9 +2285,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     }
 
     const focusedScope = hoveredScope || keyboardFocus;
-    if (!stellarFlow && focusedScope && focusedScope.kind !== "node") {
+    if ((!stellarFlow || dependencyAtlasOverview) && focusedScope && focusedScope.kind !== "node") {
       const focusedCircle = focusedScope.kind === "domain"
-        ? domainsRef.current.find((domain) => domain.id === focusedScope.id)
+        ? renderedDomains.find((domain) => domain.id === focusedScope.id)
         : clustersRef.current.find((cluster) => cluster.id === focusedScope.id);
       if (focusedCircle) {
         const palette = focusedScope.kind === "domain"
@@ -2273,7 +2396,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ctx.fillStyle = "rgba(236, 254, 255, 0.78)";
         const relationLabel = stellarFlowRelationLabelRef.current;
         ctx.fillText(relationLabel ? `VISIBLE · ${relationLabel}` : "FOCUS", 0, focusLabelY);
-      } else if (targets.size > 0) {
+      } else if (!dependencyAtlasOverview && targets.size > 0) {
         const { sectors, radius: maxRadius } = stellarConstellationRef.current;
         if (maxRadius > 0) {
           // Constellation geometry is intentionally elliptical. Paint its
@@ -2372,8 +2495,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.globalAlpha = 1;
     };
 
-    if (domainBundleOpacity && domainBundleBatchesRef.current.size) {
-      drawBundleBatches(domainBundleBatchesRef.current, 1.25, domainBundleOpacity, activeDomainId);
+    const renderedDomainBundles = dependencyAtlasOverview
+      ? dependencyAtlasBundleBatchesRef.current
+      : domainBundleBatchesRef.current;
+    if (domainBundleOpacity && renderedDomainBundles.size) {
+      drawBundleBatches(renderedDomainBundles, 1.25, domainBundleOpacity, activeDomainId);
     }
     if (communityBundleOpacity && clusterBundleBatchesRef.current.size) {
       const touchesActiveDomain = activeDomainId == null
@@ -2537,7 +2663,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // The quiet Stellar overview quantizes rank opacity into four perceptual
     // tiers and batches each spectral color. All symbols remain present, but a
     // 1,000-node frame now needs at most 40 fills instead of 1,000.
-    const batchStellarNodes = stellarFlow && !stellarFocused
+    const batchStellarNodes = rawNodeOpacity > 0 && stellarFlow && !stellarFocused
       && !activeHighlightedIds && !deadCodeView && keyboardFocus?.kind !== "node";
     if (batchStellarNodes) {
       for (const [key, nodes] of stellarNodeBatchesRef.current) {
@@ -2632,22 +2758,26 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     // Labels are painted after edges and nodes so no topology line can cut
     // through them. Domain names remain as dimmed anchors while community and
     // node labels progressively inherit the available attention budget.
-    if (!stellarFlow && domainsRef.current.length) {
+    if ((!stellarFlow || dependencyAtlasOverview) && renderedDomains.length) {
       const previousAlpha = ctx.globalAlpha;
       ctx.globalAlpha = previousAlpha * (1 - communityReveal * 0.55);
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      for (const domain of domainsRef.current) {
+      for (const domain of renderedDomains) {
         const title = domain.key;
         const exactDomain = domainCatalogRef.current.get(domain.key);
-        const groupLabel = domain.cluster_count === 1 ? "group" : "groups";
-        const showSummary = activeDomainId === domain.id;
+        const atlasDomain = dependencyAtlasOverview ? domain as DependencyAtlasDomain : undefined;
+        const clusterCount = "cluster_count" in domain ? domain.cluster_count : 0;
+        const groupLabel = clusterCount === 1 ? "group" : "groups";
+        const showSummary = dependencyAtlasOverview || activeDomainId === domain.id;
         // Counts are useful when the user asks about one scope, but repeating
         // them across the whole map competes with the architecture. The exact
         // full-domain count therefore appears only for the active scope.
-        const summary = exactDomain
-          ? `${compactArchitectureCount(exactDomain.node_count)} nodes · ${domain.cluster_count} ${groupLabel}`
-          : `${compactArchitectureCount(domain.node_count)} nodes · ${domain.cluster_count} ${groupLabel}`;
+        const summary = atlasDomain
+          ? `${compactArchitectureCount(atlasDomain.node_count)} nodes · ${compactArchitectureCount(atlasDomain.incoming_edges)} in · ${compactArchitectureCount(atlasDomain.outgoing_edges)} out`
+          : exactDomain
+            ? `${compactArchitectureCount(exactDomain.node_count)} nodes · ${clusterCount} ${groupLabel}`
+            : `${compactArchitectureCount(domain.node_count)} nodes · ${clusterCount} ${groupLabel}`;
         const palette = domainPalette(domain.id);
         const titleY = domain.y - domain.radius + 14 / tk;
         const summaryY = titleY + 16 / tk;
@@ -2739,59 +2869,6 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         }
       }
       ctx.globalAlpha = previousAlpha;
-    }
-
-    if (stellarOverview && stellarConstellationRef.current.sectors.length > 1) {
-      // Sector and node labels share the hub obstacles recorded by the halo
-      // pass instead of constructing a second collision map.
-      const { sectors, radius: maxRadius } = stellarConstellationRef.current;
-      const captions: [string, number, number, string, boolean][] = [];
-      for (let index = 0; index < sectors.length; index += 1) {
-        const sector = sectors[index];
-        if (sector.key !== "other") captions.push([
-          `${sector.key} · ${compactArchitectureCount(sector.count)}`,
-          sector.mid,
-          0.94,
-          domainPalette(index).title,
-          true,
-        ]);
-      }
-      for (const node of stellarOverviewCommunityLabelsRef.current) {
-        const target = stellarFlowTargetsRef.current.get(node.id)!;
-        const community = clusterMapRef.current.get(node.cluster_id!)!;
-        const key = community.key;
-        captions.push([
-          `${key.length > 25 ? `…${key.slice(-24)}` : key} · ${compactArchitectureCount(community.node_count)}`,
-          Math.atan2(target.y / 0.82, target.x),
-          0.82,
-          "rgba(148, 197, 218, 0.7)",
-          false,
-        ]);
-      }
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      for (const [label, angle, radius, color, major] of captions) {
-        ctx.font = `${major ? 700 : 650} ${(major ? 10.5 : 9) / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-        const labelRadius = maxRadius * radius;
-        const labelX = Math.cos(angle) * labelRadius;
-        const labelY = Math.sin(angle) * labelRadius * 0.82;
-        const labelWidth = ctx.measureText(label).width;
-        const padding = (major ? 4 : 3) / tk;
-        const halfHeight = (major ? 8 : 7) / tk;
-        const box = {
-          left: labelX - labelWidth / 2 - padding,
-          right: labelX + labelWidth / 2 + padding,
-          top: labelY - halfHeight,
-          bottom: labelY + halfHeight,
-        };
-        if (hitsOccupied(box, occupied)) continue;
-        occupied.push(box);
-        ctx.strokeStyle = "rgba(3, 8, 14, 0.96)";
-        ctx.lineWidth = (major ? 4 : 3) / tk;
-        ctx.strokeText(label, labelX, labelY);
-        ctx.fillStyle = color;
-        ctx.fillText(label, labelX, labelY);
-      }
     }
 
     // Zoom-dependent labels with collision avoidance. The selected node is
@@ -3052,6 +3129,13 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
     const findNodeAt = (mx: number, my: number): SimNode | null => {
       const k = transformRef.current.k;
+      if (
+        visualModeRef.current === "stellar"
+        && selectedNodeIdRef.current == null
+        && !detailModeRef.current
+        && dependencyAtlasDomainsRef.current.length > 0
+        && layoutNodeSpacingRef.current * k < DEPENDENCY_ATLAS_RAW_START
+      ) return null;
       const scaledX = mx / k;
       const scaledY = my / k;
       let closest: SimNode | null = null;
@@ -3072,13 +3156,23 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     };
 
     const findScopeAt = (mx: number, my: number): Omit<GraphScopeSelection, "nodeIds"> | null => {
-      if (!onScopeSelectRef.current || visualModeRef.current === "stellar") return null;
+      if (!onScopeSelectRef.current) return null;
       const k = transformRef.current.k;
       const projectedNodeSpacing = layoutNodeSpacingRef.current * k;
-      if (projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING) return null;
+      const dependencyAtlasActive = visualModeRef.current === "stellar"
+        && selectedNodeIdRef.current == null
+        && !detailModeRef.current
+        && dependencyAtlasDomainsRef.current.length > 0;
+      if (dependencyAtlasActive && projectedNodeSpacing >= DEPENDENCY_ATLAS_RAW_START) return null;
+      if (!dependencyAtlasActive && (
+        visualModeRef.current === "stellar"
+        || projectedNodeSpacing >= RAW_TOPOLOGY_MIN_PROJECTED_SPACING
+      )) return null;
       const scaledX = mx / k;
       const scaledY = my / k;
-      const candidates = projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING
+      const candidates = dependencyAtlasActive
+        ? dependencyAtlasDomainsRef.current.map((scope) => ({ ...scope, kind: "domain" as const }))
+        : projectedNodeSpacing < DOMAIN_OVERVIEW_MAX_PROJECTED_SPACING
         ? domainsRef.current.map((scope) => ({ ...scope, kind: "domain" as const }))
         : clustersRef.current.map((scope) => ({ ...scope, kind: "community" as const }));
       let closest: (typeof candidates)[number] | null = null;
@@ -3573,7 +3667,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         ref={canvasRef}
         data-visual-mode={visualMode}
         data-layout-policy={visualMode === "stellar"
-          ? selectedNodeId == null ? "hub-orbit" : "directed-focus"
+          ? selectedNodeId == null
+            ? !detailMode && data.layout?.dependency_atlas ? "dependency-atlas" : "hub-orbit"
+            : "directed-focus"
           : "architecture-map"}
         data-flow-lens={visualMode === "stellar" && selectedNodeId != null
           ? "semantic-depth-v2"
@@ -3588,7 +3684,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         }}
         role="application"
         aria-roledescription="interactive code graph"
-        aria-label={`${visualMode === "stellar" ? "Dependencies" : "Structure map"}: ${data?.nodes.length ?? 0} nodes and ${data?.edges.length ?? 0} edges`}
+        aria-label={visualMode === "stellar" && selectedNodeId == null
+          && !detailMode && data.layout?.dependency_atlas
+          ? `Dependency atlas: ${data.layout.dependency_atlas.coverage.returned_domains} exact domains`
+          : `${visualMode === "stellar" ? "Dependencies" : "Structure map"}: ${data?.nodes.length ?? 0} nodes and ${data?.edges.length ?? 0} edges`}
         aria-describedby={keyboardInstructionsId}
         aria-keyshortcuts="D Shift+D C Shift+C N Shift+N Enter Space"
         tabIndex={0}
@@ -3641,7 +3740,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       />
       <span id={keyboardInstructionsId} className="sr-only">
         {visualMode === "stellar"
-          ? "Dependencies graph. Hover a symbol or press N or Shift+N to preview its visible first hop without graph changes. Activate it for the complete visible flow: incoming left, outgoing right. Numbered rails show hop depth and the focus label names relation types. "
+          ? selectedNodeId == null && !detailMode && data.layout?.dependency_atlas
+            ? "Dependency atlas. D browses domains; Enter opens files and symbols. Zoom in, then N browses representatives. Lines show exact traffic. "
+            : "Dependencies graph. Hover a symbol or press N or Shift+N to preview its visible first hop without graph changes. Activate it for the complete visible flow: incoming left, outgoing right. Numbered rails show hop depth and the focus label names relation types. "
           : detailMode
             ? "Exact Structure. N browses symbols. "
             : "Structure map. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}

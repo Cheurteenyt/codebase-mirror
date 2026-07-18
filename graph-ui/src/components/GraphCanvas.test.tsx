@@ -258,7 +258,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(ctx.fill.mock.calls.length).toBeLessThan(50);
   });
 
-  it("labels architectural sectors while omitting low-information overview names", () => {
+  it("keeps the legacy particle fallback quiet when no exact atlas is available", () => {
     const ctx = installCanvasMock(800, 600);
     const nodes = [
       ...Array.from({ length: 14 }, (_, index) => makeNode(index + 1, index === 0 ? "now" : index === 1 ? "CodeGraphReader" : `backend-${index}`, {
@@ -309,10 +309,10 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     );
 
     const labels = ctx.fillText.mock.calls.map((call) => call[0]);
-    expect(labels).toContain("v2 · 14");
-    expect(labels).toContain("graph-ui · 12");
-    expect(labels).toContain("v2/src/backend-core · 8");
-    expect(labels.filter((label) => String(label).includes("src/")).length).toBeLessThanOrEqual(6);
+    expect(labels).not.toContain("v2 · 14");
+    expect(labels).not.toContain("graph-ui · 12");
+    expect(labels).not.toContain("v2/src/backend-core · 8");
+    expect(labels.filter((label) => String(label).includes("src/")).length).toBe(0);
     expect(labels).not.toContain("docs/guide · 1");
     expect(labels).not.toContain("docs/audit · 1");
     expect(labels.some((label) => /^(?:backend|frontend)-/u.test(String(label)))).toBe(true);
@@ -473,6 +473,88 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(physicsNodes.find((node) => node.id === 2)!.anchorX).toBeGreaterThan(0);
     expect(container.querySelector("canvas")).toHaveAttribute("data-layout-policy", "directed-focus");
     expect(container.querySelector("canvas")).toHaveAttribute("data-flow-lens", "semantic-depth-v2");
+  });
+
+  it("opens an exact dependency domain before revealing representative symbols", () => {
+    const ctx = installCanvasMock(800, 600);
+    const onScopeSelect = vi.fn();
+    const atlasData: GraphData = {
+      nodes: [
+        makeNode(1, "source-symbol", { x: -100, y: 0, cluster_id: 0, file_path: "src/source.ts" }),
+        makeNode(2, "test-symbol", { x: 100, y: 0, cluster_id: 1, file_path: "tests/test.ts" }),
+      ],
+      edges: [{ source: 2, target: 1, type: "CALLS" }],
+      total_nodes: 200,
+      topology_revision: "dependency-atlas",
+      layout: {
+        strategy: "architecture-domain-v1",
+        node_spacing: 16,
+        counts_scope: "returned_nodes",
+        clusters: [
+          { id: 0, domain_id: 0, key: "src", x: -100, y: 0, radius: 40, node_count: 1 },
+          { id: 1, domain_id: 1, key: "tests", x: 100, y: 0, radius: 40, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "src", x: -100, y: 0, radius: 70, node_count: 1, cluster_count: 1 },
+          { id: 1, key: "tests", x: 100, y: 0, radius: 70, node_count: 1, cluster_count: 1 },
+        ],
+        dependency_atlas: {
+          strategy: "exact-domain-dependencies-v1",
+          exact: true,
+          coverage: {
+            complete: true,
+            total_domains: 2,
+            returned_domains: 2,
+            total_nodes: 200,
+            returned_nodes: 200,
+          },
+          domains: [
+            {
+              id: 0, key: "src", x: -400, y: 0, radius: 180,
+              node_count: 180, file_count: 20, representative_node_id: 1,
+              incoming_edges: 12, outgoing_edges: 6, internal_edges: 30,
+            },
+            {
+              id: 1, key: "tests", x: 400, y: 0, radius: 180,
+              node_count: 20, file_count: 4, representative_node_id: 2,
+              incoming_edges: 6, outgoing_edges: 12, internal_edges: 8,
+            },
+          ],
+          relation_count: 6,
+          relations: [{ source_key: "tests", target_key: "src", type: "CALLS", count: 6 }],
+        },
+      },
+    };
+
+    const { getByRole } = render(
+      <GraphCanvas
+        data={atlasData}
+        visualMode="stellar"
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={() => {}}
+        onScopeSelect={onScopeSelect}
+        onNodeHover={() => {}}
+      />,
+    );
+
+    const canvas = getByRole("application");
+    expect(canvas).toHaveAttribute("data-layout-policy", "dependency-atlas");
+    expect(canvas).toHaveAccessibleName("Dependency atlas: 2 exact domains");
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "src")).toBe(true);
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "180 nodes · 12 in · 6 out")).toBe(true);
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "source-symbol")).toBe(false);
+    expect(ctx.quadraticCurveTo).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(canvas, { key: "d" });
+    expect(getByRole("status")).toHaveTextContent("Domain src, 1 of 2");
+    fireEvent.keyDown(canvas, { key: "Enter" });
+    expect(onScopeSelect).toHaveBeenCalledWith({
+      kind: "domain",
+      id: 0,
+      key: "src",
+      nodeIds: new Set([1]),
+    });
   });
 
   it("previews a bounded first hop without mutating or reheating Stellar physics", async () => {
