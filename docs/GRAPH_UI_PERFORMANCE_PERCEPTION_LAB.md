@@ -664,3 +664,44 @@ two-hop path inspected 203 relationships in **14.09 ms**; an inconclusive
 six-hop search inspected 4,617 relationships in **54.29 ms**. These are smoke
 observations, not cross-version benchmark claims. The packaged Edge smoke and
 the visible in-app workflow report no console, page, or HTTP failure.
+
+## Exact dependency-atlas follow-up - 2026-07-18
+
+The Dependencies overview still inherited its architecture from the bounded
+1,000-node representative sample. That made the picture stable and cheap to
+paint, but domain size and cross-domain traffic could be understated whenever
+their supporting symbols were outside the sample. The resulting constellation
+also emphasized individual particles before it answered the project-scale
+question: which code areas exist, and where does coupling cross their borders?
+
+The layout response now includes one bounded `exact-domain-dependencies-v1`
+atlas computed inside the same revision-stable SQLite snapshot as the sampled
+graph. It ranks at most 12 real architecture domains, scales their circle areas
+with a bounded square-root rule, and aggregates exact directed relation counts
+by source, target, and type. Traffic between a retained domain and an omitted
+domain remains included in that retained domain's inbound/outbound totals; no
+synthetic external circle or invented relation is painted. Coverage metadata
+states whether all domains and nodes fit inside the bounded atlas.
+
+Canvas reuses the existing batched directed-bundle renderer for these weighted
+flows. At macro scale it skips raw symbol fill, hit testing, and labels; semantic
+zoom progressively hands control back to the already loaded representatives.
+`D` browses exact domains, `Enter` opens the matching sampled domain by stable
+key, and `N` becomes available after the representative layer is readable. A
+browser regression found and closed a numeric-id collision where atlas `v2`
+could select sampled `(root)`; the integration test now locks the key-based
+resolution.
+
+On the local 10,621-node index, the packaged endpoint returned all **7 / 7**
+domains, exact totals for all **10,621** nodes, and **1,021** cross-domain
+relations while retaining the 1,000-node interactive sample. Five local smoke
+requests measured **369.4 / 391.7 / 535.5 ms** minimum/median/maximum; these are
+single-machine observations, not V1/V2 benchmark claims. The visible packaged
+site was checked at 836x958, 1024x768, and 1440x900 with no document overflow,
+console warning, or console error. Keyboard domain drill-down and semantic zoom
+were exercised against the real project.
+
+Frontend **23 files / 216 tests**, the focused V2 layout suite **6 tests**, both
+typechecks, the production build, and `build:package` pass. The unchanged gzip
+limits remain green at Graph **38.81 / 40 KiB**, manifest CSS **14.84 / 15
+KiB**, and manifest JavaScript **124.89 / 125 KiB**.

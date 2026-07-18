@@ -79,6 +79,16 @@ export function FilterPanel({
     for (const n of data.nodes) lc.set(n.label, (lc.get(n.label) ?? 0) + 1);
     const ec = new Map<string, number>();
     for (const e of data.edges) ec.set(e.type, (ec.get(e.type) ?? 0) + 1);
+    // Exact atlas groups can contain a cross-domain relation type that is not
+    // present in the representative sample. Keep that filter reachable, and
+    // avoid double-counting types that exist in both contracts.
+    const atlasEdgeCounts = new Map<string, number>();
+    for (const relation of data.layout?.dependency_atlas?.relations ?? []) {
+      atlasEdgeCounts.set(relation.type, (atlasEdgeCounts.get(relation.type) ?? 0) + relation.count);
+    }
+    for (const [type, count] of atlasEdgeCounts) {
+      ec.set(type, Math.max(ec.get(type) ?? 0, count));
+    }
     const sc = new Map<string, number>();
     for (const n of data.nodes)
       if (n.status) sc.set(n.status, (sc.get(n.status) ?? 0) + 1);

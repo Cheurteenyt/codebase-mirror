@@ -167,7 +167,10 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   useEffect(() => {
     if (!data) return;
     const labels = new Set(data.nodes.map((n) => n.label));
-    const types = new Set(data.edges.map((e) => e.type));
+    const types = new Set([
+      ...data.edges.map((edge) => edge.type),
+      ...(data.layout?.dependency_atlas?.relations.map((relation) => relation.type) ?? []),
+    ]);
     if (firstLoad.current) {
       // First load: initialize all labels and edge types as enabled.
       firstLoad.current = false;
@@ -234,8 +237,23 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
     const edges = data.edges.filter(
       (e) => enabledEdgeTypes.has(e.type) && nodeIds.has(e.source) && nodeIds.has(e.target),
     );
+    const layout = data.layout?.dependency_atlas
+      ? {
+          ...data.layout,
+          dependency_atlas: {
+            ...data.layout.dependency_atlas,
+            relations: data.layout.dependency_atlas.relations.filter(
+              (relation) => enabledEdgeTypes.has(relation.type),
+            ),
+            relation_count: data.layout.dependency_atlas.relations.reduce(
+              (count, relation) => enabledEdgeTypes.has(relation.type) ? count + relation.count : count,
+              0,
+            ),
+          },
+        }
+      : data.layout;
 
-    return { ...data, nodes, edges };
+    return { ...data, nodes, edges, layout };
   }, [data, enabledLabels, enabledEdgeTypes, showOnlyDead, hideEntryPoints, hideTests]);
 
   // The full Code DB revision is authoritative. The WS epoch invalidates exact
@@ -281,6 +299,9 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   }, [enabledEdgeTypes, enabledLabels, exactGraphData, hideEntryPoints, hideTests, showOnlyDead]);
   const canvasData = exactFilteredData ?? filteredData;
   const filterPanelData = exactGraphData ?? data;
+  const dependencyAtlas = !exactGraphData && visualMode === "stellar"
+    ? filteredData?.layout?.dependency_atlas
+    : undefined;
   const selectedNodeRequiresExactValidation = Boolean(
     selectedNode
     && selectedNodeOutsideOverviewRef.current
@@ -558,7 +579,16 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
   }, [restoreDetailFocus, selectedNode]);
 
   const handleScopeSelect = useCallback((incoming: GraphScopeSelection) => {
-    const scope = makeScope(incoming.kind, incoming.id) ?? incoming;
+    // Dependency-atlas ids belong to the bounded atlas response, not to the
+    // sampled architecture tree. Resolve atlas domains by their stable key so
+    // an atlas id (for example 0) cannot accidentally select an unrelated
+    // sampled domain that happens to use the same numeric id.
+    const matchingDomain = incoming.kind === "domain"
+      ? filteredData?.layout?.domains.find((candidate) => candidate.key === incoming.key)
+      : null;
+    const scope = matchingDomain
+      ? makeScope("domain", matchingDomain.id) ?? incoming
+      : makeScope(incoming.kind, incoming.id) ?? incoming;
     const trail: GraphTrailItem[] = [];
     if (scope.kind === "community" && filteredData?.layout) {
       const community = filteredData.layout.clusters.find((candidate) => candidate.id === scope.id);
@@ -984,10 +1014,27 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                 >
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,0.8)]" />
                   <span className="whitespace-nowrap">
-                    <strong className="font-semibold text-cyan-50">{canvasData.nodes.length.toLocaleString()}</strong>
-                    <span className="text-foreground/45"> / {data.total_nodes.toLocaleString()} nodes</span>
+                    {dependencyAtlas ? (
+                      <>
+                        <strong className="font-semibold text-cyan-50">
+                          {dependencyAtlas.coverage.returned_domains.toLocaleString()}
+                        </strong>
+                        <span className="text-foreground/45">
+                          {` / ${dependencyAtlas.coverage.total_domains.toLocaleString()} domains`}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <strong className="font-semibold text-cyan-50">{canvasData.nodes.length.toLocaleString()}</strong>
+                        <span className="text-foreground/45"> / {data.total_nodes.toLocaleString()} nodes</span>
+                      </>
+                    )}
                   </span>
-                  {data.layout?.domains && (
+                  {dependencyAtlas ? (
+                    <span className="hidden whitespace-nowrap text-sky-200/70 sm:inline">
+                      {dependencyAtlas.relation_count.toLocaleString()} exact cross-domain relations
+                    </span>
+                  ) : data.layout?.domains && (
                     <span className="hidden whitespace-nowrap text-sky-200/70 sm:inline">
                       {(data.layout.domain_catalog?.total_domains ?? data.layout.domains.length).toLocaleString()} domains
                       {data.layout.domain_catalog?.exact ? " exact" : ""}
@@ -995,7 +1042,9 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                     </span>
                   )}
                   <span className={`whitespace-nowrap rounded-md border px-1.5 py-0.5 font-sans text-[9px] font-semibold uppercase tracking-[0.12em] ${data.truncated ? "border-amber-300/15 bg-amber-300/[0.06] text-amber-100/75" : "border-emerald-300/15 bg-emerald-300/[0.06] text-emerald-100/75"}`}>
-                    {data.truncated ? "covered sample" : "complete"}
+                    {dependencyAtlas
+                      ? dependencyAtlas.coverage.complete ? "exact atlas" : "covered atlas"
+                      : data.truncated ? "covered sample" : "complete"}
                   </span>
                   {highlightedIds && highlightedIds.size > 0 && (
                     <span className="hidden whitespace-nowrap text-cyan-300/65 md:inline">
@@ -1005,10 +1054,11 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                 </summary>
                 <div className="border-t border-white/[0.07] px-3 py-2 font-mono leading-relaxed text-foreground/48">
                   <p>
-                    {canvasData.edges.length.toLocaleString()} visible edges
-                    {data.truncated
-                      ? ` · ${data.sampling?.strategy === "architecture-coverage-v1" ? "structure-covered representatives" : (data.sampling?.strategy ?? "sampled")}`
-                      : " · complete graph"}
+                    {dependencyAtlas
+                      ? `${dependencyAtlas.coverage.returned_nodes.toLocaleString()} / ${dependencyAtlas.coverage.total_nodes.toLocaleString()} nodes represented by exact domain totals`
+                      : `${canvasData.edges.length.toLocaleString()} visible edges${data.truncated
+                        ? ` · ${data.sampling?.strategy === "architecture-coverage-v1" ? "structure-covered representatives" : (data.sampling?.strategy ?? "sampled")}`
+                        : " · complete graph"}`}
                   </p>
                   {data.edge_sampling?.edges_truncated && (
                     <p className="text-amber-100/65">
@@ -1018,7 +1068,9 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                     </p>
                   )}
                   <p className="text-sky-200/45">
-                    {`Directed bundles at overview · retained raw links appear with zoom${data.layout?.domain_catalog?.exact ? " · domain totals cover all project nodes" : ""}${data.truncated ? " · community geometry and flows describe representatives" : ""}`}
+                    {dependencyAtlas
+                      ? "Exact domain flows · select a domain for files and symbols · zoom reveals representatives"
+                      : `Directed bundles at overview · retained raw links appear with zoom${data.layout?.domain_catalog?.exact ? " · domain totals cover all project nodes" : ""}${data.truncated ? " · community geometry and flows describe representatives" : ""}`}
                   </p>
                 </div>
               </details>

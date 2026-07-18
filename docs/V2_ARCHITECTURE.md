@@ -132,14 +132,17 @@ not require a migration. `Structure` is the default and follows the
 server-authored domain/community anchors. At macro scale it labels only the 12
 largest communities whose projected circles can carry text, using the existing
 collision budget. `Dependencies` installs deterministic targets into that same
-  simulation. Without a focus, exact full-graph degree pulls hubs toward the
-  center while directory communities retain angular sectors. Hover or virtual
-  keyboard node focus adds a read-only first-hop paint lens over that settled
-  frame. It traces at most two incident edges per semantic group from topology
-  already loaded in the Canvas, adds direction markers and a focus ring, and
-  never changes d3 coordinates, filters, navigation, or network state. Pointer
-  focus is invalidated on semantic-frame and server-revision changes; keyboard
-  focus remains the intentional fallback. Selecting a visible symbol pins it to
+  simulation. Without a focus, an exact domain dependency atlas replaces the
+  representative particle frame. Hover or keyboard domain focus emphasizes
+  one bounded scope; activating it opens the sampled domain and its existing
+  exact-scope action. Zoom progressively reveals the representative
+  constellation, where node hover or
+  virtual keyboard focus adds a read-only first-hop paint lens. That lens traces
+  at most two incident edges per semantic group from topology already loaded in
+  the Canvas, adds direction markers and a focus ring, and never changes d3
+  coordinates, filters, navigation, or network state. Pointer focus is
+  invalidated on semantic-frame and server-revision changes; keyboard focus
+  remains the intentional fallback. Selecting a visible symbol pins it to
   the semantic origin, unfolds up to four visible incoming relation layers to the left and
 outgoing layers to the right, and retains unrelated symbols as dim outer
 context. Numbered rails come only from real directed paths. Repeated directory
@@ -160,19 +163,22 @@ to that domain while other domain titles remain as orientation anchors. Its
 summary uses the exact top-level catalog when available. Idle rendering is
 unchanged, and the lens adds no per-node paint pass or simulation mutation.
 
-In the unfocused frame, top-level project paths form contiguous elliptical
-sectors and small path families collapse into one quiet `other` sector. Colored
-boundary arcs and exact representative counts expose project structure without
-duplicating the Structure domain renderer. The hub halo and stronger
-backbone remain batched; a separate 8–18 label screen-area budget uses radial
-collision candidates and excludes low-information names. Sector summaries,
-hub membership, and label candidates are all precomputed on semantic-frame
-changes, so the additional hierarchy does not add a graph scan per paint.
-The six largest represented communities containing at least four shown nodes
-may also receive a subdued path/count caption. Each is anchored to the
-highest-ranked informative symbol already present in the precomputed overview
-plan and participates in the shared collision pass. Decorative inner rings are
-not rendered; the sector boundary remains the only persistent orbit.
+`GET /api/layout` derives the unfocused dependency atlas inside the same stable
+SQLite snapshot as the representative topology. It ranks at most 12 domains by
+exact node/file count, applies a bounded square-root area scale, and uses the
+shared deterministic circle packer. One grouped SQL read aggregates every edge
+touching those domains. Selected-to-selected relations remain exact typed
+bundles; selected-to-omitted relations contribute to exact in/out totals but do
+not create a false `(other)` node. The contract separately reports complete or
+partial domain/node coverage.
+
+At the atlas camera, representative nodes, their raw edges, labels, previews,
+and hit targets are skipped. The Canvas paints domain surfaces, four traffic
+tiers, collision-checked exact summaries, and at most 28 directed bundles.
+Zoom performs a quiet semantic handoff to the existing symbol constellation;
+domain scopes stop intercepting input before symbol hit targets become active.
+Domain and relation filters reuse the layout response, so no additional request,
+full-graph client scan, renderer, or simulation is introduced.
 
 The focused camera is composed from directed targets only; the 1,000-node dim
 context cannot shrink the active neighborhood. Screen-space safe insets reserve
