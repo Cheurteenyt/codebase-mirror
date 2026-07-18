@@ -603,3 +603,33 @@ and the packaged browser smoke. The smoke preserves keyboard access to generic
 symbols and reports no console, page, or HTTP error. Strict gzip limits remain
 green at Graph **39.11 / 40 KiB**, manifest CSS **11.63 KiB**, and manifest
 JavaScript **124.95 / 125 KiB**.
+
+## Selected-symbol flow profile follow-up - 2026-07-18
+
+The focused Dependencies frame already arranged incoming and outgoing symbols,
+but its detail panel opened with four isolated numbers followed immediately by
+a long relation list. In the product fixture, understanding `GraphTab` as an
+outward-facing hub required manually reconciling `61` outgoing, `1` incoming,
+`62` unique, and the repeated `contains` headings.
+
+The selected-symbol header now turns those same exact-neighborhood facts into a
+compact flow profile. It classifies the visible role as `Outbound hub`,
+`Inbound hub`, `Connector`, `Outbound only`, `Inbound only`, `Self-linked`, or
+`Isolated`; keeps the accessible outgoing, incoming, unique, and risk values;
+and names the dominant loaded relation in each external direction. The
+coverage marker distinguishes loading, representative overview, partial exact,
+and complete exact data. Exact self-loops are subtracted before classification,
+so a self-reference cannot be mislabeled as a bidirectional connector.
+
+The profile replaces the previous counter row and redundant completion text.
+It adds no request, graph traversal, Canvas paint, simulation mutation, polling,
+or overview work; `NodeDetailPanel` remains dynamically loaded only after a
+selection. Navigating from `GraphTab` to its line-111 child changed the profile
+from `Outbound hub` to `Inbound only`, then restored the original profile when
+navigating back, proving that the summary follows the exact selected anchor.
+
+The frontend passes **22 files / 208 tests**, its typecheck and production
+build, and `build:package`. The packaged 1,000 / 10,319-node frame exposes the
+new profile through the accessibility tree. Strict gzip limits remain green at
+Graph **39.11 / 40 KiB**, manifest CSS **11.54 KiB**, and manifest JavaScript
+**124.95 / 125 KiB**.

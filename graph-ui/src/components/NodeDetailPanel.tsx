@@ -204,6 +204,14 @@ export function NodeDetailPanel({
   const connectionsArePartial = exactData
     ? exactData.page.next_cursor != null
     : overviewIsPartial;
+  const profileRole = flowRole(totalOutbound, totalInbound, visibleSelf);
+  const profileCoverage = exactPending
+    ? "Loading"
+    : exactData
+    ? connectionsArePartial ? "Partial" : "Exact"
+    : "Overview";
+  const dominantOutbound = groupedOutbound[0];
+  const dominantInbound = groupedInbound[0];
 
   return (
     <div className="w-full bg-[#0b1920]/95 backdrop-blur-xl flex flex-col h-full min-h-0 overflow-hidden">
@@ -244,64 +252,52 @@ export function NodeDetailPanel({
           </p>
         )}
 
-        {/* Stats */}
-        <div className="flex gap-5 mt-3">
-          {[
-            { label: "Out", value: totalOutbound, color: "text-primary" },
-            { label: "In", value: totalInbound, color: "text-accent" },
-            {
-              label: "Total",
-              value: totalConnections,
-              color: "text-foreground",
-              estimated: !totalConnectionsIsExact,
-            },
-          ].map((s) => (
-            <div
-              key={s.label}
-              aria-label={s.estimated
-                ? `Estimated total unique connections: ${s.value}`
-                : `${s.label} connections: ${s.value}`}
-            >
-              <p className="text-[9px] text-foreground/25 uppercase tracking-widest">
-                {s.label}{s.estimated ? " est." : ""}
-              </p>
-              <p className={`text-[18px] font-semibold tabular-nums ${s.color}`}>
-                {s.estimated ? "≈" : ""}{s.value}
-              </p>
-            </div>
-          ))}
-          {/* R43 (M1): risk-score display. The data and colorForRisk function
-              already existed but were never used in the detail panel — only
-              in the hover tooltip. Now consistent. */}
-          {node.risk_score != null && (
+        <div
+          aria-label={`Flow profile: ${profileRole}`}
+          aria-live="polite"
+          className="mt-3 rounded-lg bg-white/[0.04] p-2"
+        >
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <p className="text-[9px] text-foreground/25 uppercase tracking-widest">Risk</p>
-              <p
-                className="text-[18px] font-semibold tabular-nums"
-                style={{ color: colorForRisk(node.risk_score) }}
-              >
-                {(node.risk_score * 100).toFixed(0)}%
-              </p>
+              <p className="text-[9px] uppercase tracking-widest text-foreground/30">Flow profile</p>
+              <p className="text-[12px] font-semibold text-primary">{profileRole}</p>
+            </div>
+            <span className="text-[9px] uppercase tracking-wider text-foreground/45">
+              {profileCoverage}
+            </span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] tabular-nums text-foreground/65">
+            <span aria-label={`Out connections: ${totalOutbound}`} className="rounded bg-white/[0.04] px-1.5 py-0.5 text-primary">→ {totalOutbound}</span>
+            <span aria-label={`In connections: ${totalInbound}`} className="rounded bg-white/[0.04] px-1.5 py-0.5 text-accent">← {totalInbound}</span>
+            <span
+              aria-label={totalConnectionsIsExact
+                ? `Total connections: ${totalConnections}`
+                : `Estimated total unique connections: ${totalConnections}`}
+              className="rounded bg-white/[0.04] px-1.5 py-0.5"
+            >
+              {totalConnectionsIsExact ? totalConnections : `≈${totalConnections}`} unique
+            </span>
+            {node.risk_score != null && (
+              <span className="rounded bg-white/[0.04] px-1.5 py-0.5" style={{ color: colorForRisk(node.risk_score) }}>
+                Risk {(node.risk_score * 100).toFixed(0)}%
+              </span>
+            )}
+          </div>
+          {(dominantOutbound || dominantInbound) && (
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-foreground/40">
+              {dominantOutbound && <span>OUT {relationName(dominantOutbound[0])} · {countConnections(dominantOutbound[1])}</span>}
+              {dominantInbound && <span>IN {relationName(dominantInbound[0])} · {countConnections(dominantInbound[1])}</span>}
             </div>
           )}
         </div>
-        {exactPending && (
-          <p
-            role="status"
-            aria-live="polite"
-            className="mt-2 text-[10px] leading-relaxed text-amber-200/70"
-          >
-            Loading the exact neighborhood; bounded overview connections remain visible.
-          </p>
-        )}
         {!isInOverview && (
           <p role="status" className="mt-2 rounded-md border border-sky-300/15 bg-sky-300/[0.05] px-2 py-1.5 text-[10px] leading-relaxed text-sky-100/70">
-            Exact project result · outside the representative map. Its complete direct neighborhood remains available below.
+            Outside the representative map · exact neighborhood below.
           </p>
         )}
         {isInOverview && !isVisibleInOverview && (
           <p role="status" className="mt-2 rounded-md border border-violet-300/15 bg-violet-300/[0.05] px-2 py-1.5 text-[10px] leading-relaxed text-violet-100/70">
-            Exact project result · present in the representative overview but hidden by active filters. Its exact neighborhood remains available below.
+            Hidden by active filters · exact neighborhood below.
           </p>
         )}
         {exactError && (
@@ -323,29 +319,9 @@ export function NodeDetailPanel({
             </button>
           </div>
         )}
-        {!exactData && !exactError && connectionsArePartial && (
-          <p role="status" className="mt-2 text-[10px] leading-relaxed text-amber-200/65">
-            Showing {visibleConnectionCount.toLocaleString()} overview {visibleConnectionCount === 1 ? "connection" : "connections"}. Estimated unique total: {totalConnections.toLocaleString()}.
-            In/out totals are exact; the unique total remains provisional until exact data loads.
-          </p>
-        )}
-        {!exactData
-          && !exactPending
-          && !exactError
-          && overviewCompletenessKnown
-          && !overviewIsPartial && (
-          <p role="status" className="mt-2 text-[10px] leading-relaxed text-emerald-200/60">
-            Complete neighborhood present in overview · {visibleConnectionCount.toLocaleString()} connections
-          </p>
-        )}
         {exactData && connectionsArePartial && (
           <p role="status" aria-live="polite" className="mt-2 text-[10px] leading-relaxed text-sky-200/70">
             Loaded {visibleConnectionCount.toLocaleString()} of {totalConnections.toLocaleString()} exact connections.
-          </p>
-        )}
-        {exactData && !connectionsArePartial && (
-          <p role="status" aria-live="polite" className="mt-2 text-[10px] leading-relaxed text-emerald-200/70">
-            Exact neighborhood loaded · {totalConnections.toLocaleString()} connections
           </p>
         )}
       </div>
@@ -410,6 +386,21 @@ function countGroups(groups: [string, Connection[]][]): number {
   return groups.reduce((sum, [, connections]) => sum + countConnections(connections), 0);
 }
 
+function flowRole(outbound: number, inbound: number, self: number): string {
+  const externalOut = Math.max(0, outbound - self);
+  const externalIn = Math.max(0, inbound - self);
+  if (!externalOut && !externalIn) return self ? "Self-linked" : "Isolated";
+  if (!externalIn) return "Outbound only";
+  if (!externalOut) return "Inbound only";
+  if (externalOut >= externalIn * 3) return "Outbound hub";
+  if (externalIn >= externalOut * 3) return "Inbound hub";
+  return "Connector";
+}
+
+function relationName(type: string): string {
+  return type.replace(/_/g, " ").toLowerCase();
+}
+
 function connectionName(node: GraphNode, ambiguous: boolean): string {
   const file = node.file_path?.split(/[\\/]/).pop();
   if (node.name.startsWith("anonymous#") && file) {
@@ -445,7 +436,7 @@ function ConnectionSection({ title, count, icon, groups, onNavigate }: {
       {groups.map(([type, conns]) => {
         const expanded = expandedTypes.has(type);
         const visibleConnections = expanded ? conns : conns.slice(0, 25);
-        const normalizedType = type.replace(/_/g, " ").toLowerCase();
+        const normalizedType = relationName(type);
         const hiddenCount = conns.length - visibleConnections.length;
         const nameCounts = new Map<string, number>();
         let showLabels = false;

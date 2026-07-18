@@ -117,9 +117,99 @@ describe("NodeDetailPanel exact neighborhood", () => {
     expect(screen.getByLabelText("Out connections: 42")).toBeInTheDocument();
     expect(screen.getByLabelText("In connections: 3")).toBeInTheDocument();
     expect(screen.getByLabelText("Estimated total unique connections: 45")).toBeInTheDocument();
-    expect(screen.getByText(/Showing 1 overview connection/u)).toBeInTheDocument();
-    expect(screen.getByText(/unique total remains provisional until exact data loads/u)).toBeInTheDocument();
+    expect(screen.getByText("Loading")).toBeInTheDocument();
+    expect(screen.getByText("≈45 unique")).toBeInTheDocument();
     expect(useExactNeighborhoodMock).toHaveBeenCalledWith("test", 1, true, undefined);
+  });
+
+  it("turns exact counts into an immediately readable directional flow profile", () => {
+    const calledA = graphNode(2);
+    const calledB = graphNode(3);
+    const calledC = graphNode(4);
+    const caller = graphNode(5);
+    useExactNeighborhoodMock.mockReturnValue(hookState({
+      data: exactData({
+        anchor: {
+          kind: "node",
+          id: 1,
+          total_inbound: 1,
+          total_outbound: 3,
+          total_unique_edges: 4,
+        },
+        nodes: [node, calledA, calledB, calledC, caller],
+        edges: [
+          { id: 10, source: 1, target: 2, type: "CALLS" },
+          { id: 11, source: 1, target: 3, type: "CALLS" },
+          { id: 12, source: 1, target: 4, type: "CALLS" },
+          { id: 13, source: 5, target: 1, type: "IMPORTS" },
+        ],
+        page: { limit: 250, returned: 4, next_cursor: null },
+      }),
+    }));
+
+    renderPanel();
+
+    expect(screen.getByLabelText("Flow profile: Outbound hub")).toBeInTheDocument();
+    expect(screen.getByText("Exact")).toBeInTheDocument();
+    expect(screen.getByLabelText("Out connections: 3")).toBeInTheDocument();
+    expect(screen.getByLabelText("In connections: 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Total connections: 4")).toBeInTheDocument();
+    expect(screen.getByText("OUT calls · 3")).toBeInTheDocument();
+    expect(screen.getByText("IN imports · 1")).toBeInTheDocument();
+  });
+
+  it("does not misclassify an exact self-loop as a bidirectional connector", () => {
+    useExactNeighborhoodMock.mockReturnValue(hookState({
+      data: exactData({
+        anchor: {
+          kind: "node",
+          id: 1,
+          total_inbound: 1,
+          total_outbound: 1,
+          total_unique_edges: 1,
+        },
+        nodes: [node],
+        edges: [{ id: 10, source: 1, target: 1, type: "CALLS" }],
+        page: { limit: 250, returned: 1, next_cursor: null },
+      }),
+    }));
+
+    renderPanel();
+
+    expect(screen.getByLabelText("Flow profile: Self-linked")).toBeInTheDocument();
+  });
+
+  it.each([
+    [0, 0, "Isolated"],
+    [1, 0, "Outbound only"],
+    [0, 1, "Inbound only"],
+    [2, 2, "Connector"],
+    [1, 3, "Inbound hub"],
+  ] as const)("classifies %i outbound and %i inbound relations as %s", (outbound, inbound, role) => {
+    const outboundNodes = Array.from({ length: outbound }, (_, index) => graphNode(10 + index));
+    const inboundNodes = Array.from({ length: inbound }, (_, index) => graphNode(20 + index));
+    const edges = [
+      ...outboundNodes.map((target, index) => ({ id: index + 1, source: 1, target: target.id, type: "CALLS" })),
+      ...inboundNodes.map((source, index) => ({ id: outbound + index + 1, source: source.id, target: 1, type: "CALLS" })),
+    ];
+    useExactNeighborhoodMock.mockReturnValue(hookState({
+      data: exactData({
+        anchor: {
+          kind: "node",
+          id: 1,
+          total_inbound: inbound,
+          total_outbound: outbound,
+          total_unique_edges: outbound + inbound,
+        },
+        nodes: [node, ...outboundNodes, ...inboundNodes],
+        edges,
+        page: { limit: 250, returned: edges.length, next_cursor: null },
+      }),
+    }));
+
+    renderPanel();
+
+    expect(screen.getByLabelText(`Flow profile: ${role}`)).toBeInTheDocument();
   });
 
   it("does not double-count a visible self-loop in the provisional unique total", () => {
@@ -137,8 +227,7 @@ describe("NodeDetailPanel exact neighborhood", () => {
     expect(screen.getByLabelText("Out connections: 3")).toBeInTheDocument();
     expect(screen.getByLabelText("In connections: 2")).toBeInTheDocument();
     expect(screen.getByLabelText("Estimated total unique connections: 4")).toBeInTheDocument();
-    expect(screen.getByText("Total est.")).toBeInTheDocument();
-    expect(screen.getByText("≈4")).toBeInTheDocument();
+    expect(screen.getByText("≈4 unique")).toBeInTheDocument();
     expect(screen.getByText("Self references")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Open hub (Function)" })).toHaveLength(1);
   });
@@ -146,23 +235,23 @@ describe("NodeDetailPanel exact neighborhood", () => {
   it("identifies an exact search result that is outside the representative map", () => {
     renderPanel({ allNodes: [neighbor], allEdges: [] });
 
-    expect(screen.getByText(/Exact project result · outside the representative map/u))
+    expect(screen.getByText(/Outside the representative map/u))
       .toHaveAttribute("role", "status");
   });
 
   it("distinguishes a represented node hidden by filters from a node absent from the overview", () => {
     renderPanel({ overviewNodes: [node], allNodes: [], allEdges: [] });
 
-    expect(screen.getByText(/present in the representative overview but hidden by active filters/u))
+    expect(screen.getByText(/Hidden by active filters/u))
       .toHaveAttribute("role", "status");
-    expect(screen.queryByText(/outside the representative map/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Outside the representative map/u)).not.toBeInTheDocument();
   });
 
   it("shows a useful empty loading state instead of claiming that there are no connections", () => {
     useExactNeighborhoodMock.mockReturnValue(hookState({ loading: true }));
     renderPanel({ allNodes: [node], allEdges: [] });
 
-    expect(screen.getByText(/Loading the exact neighborhood/u)).toBeInTheDocument();
+    expect(screen.getByText("Loading")).toBeInTheDocument();
     expect(screen.getByText("Loading exact connections…")).toBeInTheDocument();
     expect(screen.queryByText("No connections")).not.toBeInTheDocument();
   });
@@ -291,7 +380,7 @@ describe("NodeDetailPanel exact neighborhood", () => {
     expect(screen.getByLabelText("Total connections: 2")).toBeInTheDocument();
     expect(screen.getByText("Self references")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Open hub (Function)" })).toHaveLength(1);
-    expect(screen.getByText("Exact neighborhood loaded · 2 connections")).toBeInTheDocument();
+    expect(screen.getByText("Exact")).toBeInTheDocument();
   });
 
   it("compacts repeated edges while keeping ambiguous neighbors identifiable", () => {
