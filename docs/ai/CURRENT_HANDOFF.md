@@ -13,7 +13,7 @@ base_sha: 52a2dbb4745f29a6c353a5537079546140cbe4e3
 last_completed_code_sha: 52a2dbb4745f29a6c353a5537079546140cbe4e3
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-19T22:59:31Z
+updated_at_utc: 2026-07-19T23:08:00Z
 implementer_role: codex
 ```
 
@@ -49,7 +49,7 @@ to target `5915e0624ed4376611fdc1f824d1d65a327c4a2f`.
 | Finding | Source | Decision | Root cause / evidence | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------|----------|-----------------------|------------------------|-----------------|-------------------|------------------|
 | R171-BENCH-F001 | T06 | ACCEPTED | **Root cause recorded before correction:** `search_code_and_memory` calls `CodeGraphReader.searchCode`, whose FTS/LIKE inputs are indexed node `name`, `qualified_name`, and file path metadata—not source-file text. T06 searches string literals (`Dependency atlas:` and `exact cross-domain relations`), which are not code nodes. The other allowed tools return module/edit graph context, not arbitrary source occurrences. A zero-result query therefore leaves no permitted exact-text operation and the agent retries variants/contexts, producing the observed 70-call loop and wrong guessed lines. | pending | pending | pending | NOT_STARTED |
-| R171-BENCH-F002 | T07/T08 | ACCEPTED | Line convention audit pending. The indexer visibly stores tree-sitter rows as `row + 1`; the remaining question is whether any MCP payload exposes call-site/route-entry lines or whether the agent guessed from definition-only metadata. | pending | pending | pending | NOT_STARTED |
+| R171-BENCH-F002 | T07/T08 | ACCEPTED | **Exact-target audit, before correction:** a fresh full index of `5915e06` stored all relevant locations correctly and 1-based: `routeLayout` 631, `buildDependencyAtlas` 366, `packGraphCircles` 23; `call_sites` stored `listArchitectureDomainDependencies` at 651 and the `routeLayout` route-table call at 140. The route table has anonymous nodes at every line 140-150 but no `Route` nodes. Cross-file resolution reads `call_sites` without its `line` column, edge properties omit call-site lines, and existing MCP context payloads expose definition/neighbor lines but not exact source occurrences. Thus `650` and `142` were agent guesses from incomplete/ambiguous payloads, not an indexer off-by-one or corrupt source location. No line-convention/data correction is warranted; the bounded exact lookup in F003 supplies the missing evidence without changing existing contracts. | pending | pending | pending | AUDITED |
 | R171-BENCH-F003 | T05/T06 | ACCEPTED | One bounded exact source occurrence/value lookup is required; existing broad tools and contracts remain unchanged. | pending | pending | pending | NOT_STARTED |
 
 ## Pushed checkpoints
@@ -92,14 +92,14 @@ npx vitest run tests/mcp/exact-source-lookup.test.ts
 
 ## Current working state
 
-- **Last completed finding:** T06 root cause documented before correction.
-- **Current finding:** R171-BENCH-F002 line-number provenance audit.
+- **Last completed finding:** R171-BENCH-F002 line-number provenance audit;
+  fresh exact-target data is correct and the failure is an evidence-surface gap.
+- **Current finding:** R171-BENCH-F003 bounded exact-source lookup.
 - **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` until first checkpoint.
 - **Unpushed commits expected:** `0` before first checkpoint.
 - **Known blocker:** none.
-- **Single next action:** trace T07/T08 lines from tree-sitter extraction through
-  SQLite and each MCP response, then decide whether a data correction is
-  warranted.
+- **Single next action:** add the focused failing regression for a confined,
+  bounded, batched exact-literal source lookup, then implement that one tool.
 
 ## Security confirmation
 
