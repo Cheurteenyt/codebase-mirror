@@ -1,6 +1,7 @@
 # Token and task-success benchmark protocol
 
-Status: **pre-registered; results not yet run**
+Status: **executed for Codex; independent second agent not feasible in the
+recorded environment**
 
 This document is a manual measurement protocol, not a benchmark harness. It
 fixes the target, questions, reference answers, grading rules, conditions, and
@@ -357,6 +358,36 @@ do not count assistant messages or internal reasoning items. Record:
 - `total_tokens = input_tokens + output_tokens`;
 - the count of completed MCP or command-execution tool items.
 
+The executed Codex commands used these exact common arguments:
+
+```powershell
+$Common = @(
+  'exec', '--json', '--ephemeral', '--ignore-user-config',
+  '--sandbox', 'read-only', '-m', 'gpt-5.6-sol',
+  '-c', 'model_reasoning_effort="medium"', '-C', $Target
+)
+```
+
+For Condition A, the command added exactly one ephemeral MCP server:
+
+```powershell
+$McpArgs = @(
+  '-c', 'mcp_servers.benchmark.command="node"',
+  '-c', "mcp_servers.benchmark.args=['$Target/v2/dist/cli/index.js','mcp','--project','benchmark-codebase-mirror-5915e06']"
+)
+codex @Common @McpArgs $Prompt
+```
+
+For Condition B, it added no server:
+
+```powershell
+codex @Common $Prompt
+```
+
+`$Prompt` was the fixed prefix from Section 6, one verbatim condition, and one
+verbatim task question. The JSONL stream was inspected for forbidden tool
+types, the final answer, completed tool items, and `turn.completed.usage`.
+
 If a second CLI reports token usage in its final native JSON object, use its
 own field names and document the mapping. Do not estimate missing counts from
 characters, words, prices, or another tokenizer. If native counts are absent,
@@ -364,46 +395,93 @@ mark that agent `NOT FEASIBLE` and explain why rather than inventing data.
 
 Only a parser that reads already-produced native JSON logs may automate
 extraction. It may not invoke agents, answer questions, grade semantically, or
-simulate tools. No parser is required for this pre-registered round.
+simulate tools. The executed round used an inline PowerShell JSONL filter only
+to surface completed tool items, final answers, and native usage fields.
 
 ## 8. Results
 
-Pre-registration checkpoint: **no measured agent task has been run**. The
-commit containing this locked target, task list, and reference set will be
-recorded here before results are added.
+The target, questions, answers, conditions, and grading rules above were first
+committed and pushed without results in pre-registration commit
+`ca437c5f747170b73d566d4394250422f660243e` at
+`2026-07-19T18:30:49+02:00`. All measured runs happened afterward.
 
 ### 8.1 Environment
 
 | Field | Observed value |
 |---|---|
-| Pre-registration commit | `PENDING` |
-| Run date/timezone | `NOT RUN` |
-| OS | `NOT RUN` |
+| Pre-registration commit | `ca437c5f747170b73d566d4394250422f660243e` |
+| Run date/timezone | `2026-07-19`, Europe/Paris (CEST, UTC+02:00) |
+| OS | Microsoft Windows 11 Professionnel `10.0.26200` |
+| Node.js / npm | `v24.15.0` / `11.12.1` |
 | Product/target SHA | `5915e0624ed4376611fdc1f824d1d65a327c4a2f` |
-| Index command/revision | `NOT RUN` |
-| Primary agent CLI/model/settings | `NOT RUN` |
-| Independent second agent CLI/model/settings | `FEASIBILITY PENDING` |
+| Index result | Full discovery; 512 files, 10,665 nodes, 19,597 edges, 0 skipped, 0 errors; last indexed `2026-07-19T16:32:57.190Z` |
+| Primary agent | Codex CLI `0.144.4`; `gpt-5.6-sol`; reasoning `medium`; ephemeral read-only process per task |
+| Independent second agent | `NOT FEASIBLE`: Gemini CLI `0.1.9` was installed, but its non-interactive probe exited 1 because no auth method/API key was configured; this version exposes no native JSON output flag in `--help` |
 
 ### 8.2 Aggregate results
 
 | Agent | Condition | Runs | Input tokens | Cached input | Output tokens | Total tokens | Tool calls | PASS | PARTIAL | FAIL |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `NOT RUN` | MCP | 0 | - | - | - | - | - | - | - | - |
-| `NOT RUN` | grep/read | 0 | - | - | - | - | - | - | - | - | - |
+| Codex `gpt-5.6-sol` | MCP | 12 | 5,295,413 | 4,723,456 | 30,881 | 5,326,294 | 421 | 7 | 2 | 3 |
+| Codex `gpt-5.6-sol` | grep/read | 12 | 581,005 | 484,608 | 3,715 | 584,720 | 23 | 12 | 0 | 0 |
+| Gemini CLI `0.1.9` | MCP | 0 | - | - | - | - | - | - | - | - |
+| Gemini CLI `0.1.9` | grep/read | 0 | - | - | - | - | - | - | - | - |
 
-Report sums in this table. Derive per-task means only by dividing these sums by
-12; never average already-rounded values. Report token reduction as
-`1 - MCP_total / grep_total` only when all 12 paired runs exist. A negative
-number is a regression and must remain visible.
+Codex MCP used **5,326,294** total tokens versus **584,720** for grep/read:
+9.11 times as many, or a **-810.9% token reduction** under the pre-registered
+formula `1 - MCP_total / grep_total`. Mean total tokens per task were 443,858
+for MCP and 48,727 for grep/read. The negative value is intentionally reported
+as a regression, not reframed as savings. MCP also used 421 tool calls versus
+23 and produced lower task success.
 
 ### 8.3 Per-task results
 
-Add one row per task, condition, and agent. Native token columns may not be
-blank for a completed run.
-
 | Agent | Task | Condition | Input | Cached | Output | Total | Tool calls | Grade | Normalized answer or failure |
 |---|---|---|---:|---:|---:|---:|---:|---|---|
-| `NOT RUN` | - | - | - | - | - | - | - | - | - |
+| Codex | T01 | MCP | 131,481 | 94,464 | 612 | 132,093 | 11 | PASS | Exact reference |
+| Codex | T01 | grep/read | 80,616 | 64,256 | 617 | 81,233 | 4 | PASS | Exact reference |
+| Codex | T02 | MCP | 205,447 | 183,808 | 1,008 | 206,455 | 11 | PASS | Exact reference |
+| Codex | T02 | grep/read | 30,870 | 24,064 | 157 | 31,027 | 1 | PASS | Exact reference |
+| Codex | T03 | MCP | 158,826 | 133,120 | 1,245 | 160,071 | 9 | PASS | Exact reference |
+| Codex | T03 | grep/read | 31,625 | 24,064 | 117 | 31,742 | 1 | PASS | Exact reference |
+| Codex | T04 | MCP | 165,259 | 139,520 | 868 | 166,127 | 11 | PASS | Exact reference |
+| Codex | T04 | grep/read | 31,389 | 24,064 | 188 | 31,577 | 1 | PASS | Exact reference |
+| Codex | T05 | MCP | 301,532 | 244,992 | 3,209 | 304,741 | 29 | FAIL | Returned `24,180,320,96,36`; all five constants wrong |
+| Codex | T05 | grep/read | 31,656 | 24,064 | 159 | 31,815 | 1 | PASS | Exact reference |
+| Codex | T06 | MCP | 1,274,167 | 1,185,024 | 6,883 | 1,281,050 | 70 | FAIL | Returned `GraphCanvas.tsx:2411` and `:2416`; both occurrences wrong |
+| Codex | T06 | grep/read | 31,340 | 30,208 | 166 | 31,506 | 1 | PASS | Exact reference |
+| Codex | T07 | MCP | 340,808 | 296,960 | 3,082 | 343,890 | 16 | FAIL | Returned call-site line `650`; reference is `651` |
+| Codex | T07 | grep/read | 47,807 | 43,264 | 197 | 48,004 | 2 | PASS | Exact reference |
+| Codex | T08 | MCP | 1,617,981 | 1,509,120 | 6,826 | 1,624,807 | 121 | PARTIAL | Three of four ordered steps exact; route entry line `142` instead of `140` |
+| Codex | T08 | grep/read | 91,378 | 77,568 | 590 | 91,968 | 4 | PASS | Exact reference |
+| Codex | T09 | MCP | 474,147 | 414,208 | 3,021 | 477,168 | 48 | PASS | Exact reference |
+| Codex | T09 | grep/read | 86,738 | 73,472 | 669 | 87,407 | 4 | PASS | Exact reference |
+| Codex | T10 | MCP | 300,994 | 244,480 | 1,908 | 302,902 | 23 | PARTIAL | Correct subset of 3/5; omitted `FilterPanel.tsx` and `GraphCanvas.tsx` |
+| Codex | T10 | grep/read | 31,781 | 24,064 | 226 | 32,007 | 1 | PASS | Exact reference |
+| Codex | T11 | MCP | 113,540 | 86,528 | 798 | 114,338 | 18 | PASS | Exact reference |
+| Codex | T11 | grep/read | 47,811 | 45,312 | 269 | 48,080 | 2 | PASS | Exact reference |
+| Codex | T12 | MCP | 211,231 | 191,232 | 1,421 | 212,652 | 54 | PASS | Exact reference |
+| Codex | T12 | grep/read | 37,994 | 30,208 | 360 | 38,354 | 1 | PASS | Exact reference |
+
+Input token totals are cumulative provider-reported input across each run's
+model turns; cached input is a subset shown separately and was not subtracted.
+Tool counts include completed failed/rejected command items, as pre-registered.
+No run used a forbidden evidence tool, and no rerun was substituted.
+
+### 8.4 Second-agent feasibility result
+
+The independent-agent criterion was attempted, not silently omitted. The local
+Gemini CLI was version `0.1.9`. `gemini -p "Reply exactly GEMINI_PROBE_OK and
+do not use tools."` failed before a model turn with:
+
+```text
+Please set an Auth method in your C:\Users\cheur\.gemini\settings.json OR
+specify GEMINI_API_KEY env variable file before running
+```
+
+Adding credentials would require user-provided external authority. Therefore no
+Gemini benchmark task was run, no token value was estimated, and this round
+cannot support an agent-independence claim.
 
 ## 9. Interpretation rules
 
@@ -417,6 +495,16 @@ blank for a completed run.
   and mechanical score.
 - Separate observed facts from explanations. Cache effects, tool payload size,
   and model strategy are possible explanations, not proven causes.
+
+For this executed round, the narrow conclusion is unambiguous: V2 MCP did not
+beat grep/read on either measured dimension. It used 9.11 times the native total
+tokens, made 18.3 times the tool calls, and lowered the exact success outcome
+from 12 `PASS` to 7 `PASS`, 2 `PARTIAL`, and 3 `FAIL`. The largest regressions
+were exact string/code retrieval and the cross-file trace. The observed search
+loops are consistent with a missing compact exact-occurrence/snippet primitive,
+but that explanation is an inference and requires a separately scoped product
+investigation. These results say nothing about Graph UI rendering performance
+or about stronger non-MCP baselines.
 
 ## 10. Pre-registered weaknesses
 
@@ -447,6 +535,20 @@ blank for a completed run.
 12. Tool-call counts ignore internal model reasoning and compare semantically
     different payload sizes; they are diagnostic, not a cost metric by
     themselves.
+13. The local Gemini CLI lacked configured authentication, so the requested
+    independent second-agent comparison could not be run and agent independence
+    remains untested.
+14. Codex `--ignore-user-config` still emitted model-cache and remote-plugin
+    metadata warnings. No forbidden tool call appeared, but ambient runtime
+    initialization was not perfectly silent or independently measurable.
+15. The inline filter retained extracted answers, counts, and usage in the task
+    terminal but did not archive the complete raw JSONL streams. The table is
+    reproducible from the exact procedure, but a reviewer cannot recalculate
+    every count from committed raw logs in this single-file deliverable.
+16. MCP tool schemas and payloads are included in native cumulative input
+    tokens on every model turn. This is the correct observed agent cost, but it
+    combines schema overhead, returned context, repeated cached input, and
+    reasoning-loop behavior rather than isolating any one cause.
 
 Any additional failure, invalid run, unavailable native metric, prompt
 deviation, or environment discrepancy discovered during execution must be
