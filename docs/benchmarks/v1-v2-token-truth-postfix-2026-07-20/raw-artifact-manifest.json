@@ -1,0 +1,4818 @@
+{
+  "schema_version": 1,
+  "results_identity": "r173-v1-v2-truth",
+  "phase": "postfix",
+  "excludes": [
+    "derived/**"
+  ],
+  "artifact_count": 961,
+  "total_bytes": 8928135,
+  "tree_sha256": "ffa6495997a99a9cf1c7683d8b83e05cc9268f96cf3bb29a0579309c321a70af",
+  "artifacts": [
+    {
+      "path": "invalid-runs.json",
+      "bytes": 7443,
+      "sha256": "cd2fd4c342f816e9fad6be951d736e9112209b0d54a8b603959364da83f73625"
+    },
+    {
+      "path": "postfix/continuous/large/T01-A-v1-mcp-a1.jsonl",
+      "bytes": 56822,
+      "sha256": "80670ad9d164c2880579b2bcde4c7131b0ef5de8bc98166303a753e21c5ca731"
+    },
+    {
+      "path": "postfix/continuous/large/T01-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 5916,
+      "sha256": "a09bed33770b08cd74e3ae0f214622b537c36ecefa840fec0eb99b1d32377f34"
+    },
+    {
+      "path": "postfix/continuous/large/T01-A-v1-mcp-a1.meta.json",
+      "bytes": 3550,
+      "sha256": "98a2c5cda705d6e5a808f69175df620c7844a08e2f1817c89d39e835c2eea8fb"
+    },
+    {
+      "path": "postfix/continuous/large/T01-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1102,
+      "sha256": "0bfda67de80b0636bc5be06a84cb6614b1adec0f51a5cabab1eb5b0f5fbbcd99"
+    },
+    {
+      "path": "postfix/continuous/large/T01-A-v1-mcp-a1.stderr.txt",
+      "bytes": 1296,
+      "sha256": "2b1ecede1f26e28c4aaa14a1cb0bcabc1caf0e2b252ff1b68d2bf2d4029a33c9"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 43097,
+      "sha256": "57ae0d6ab29ec2672df4a43f409b04dc6e7b5279cde198c72eb2b4d8fb72069c"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 5034,
+      "sha256": "6c7b61afa3d86f184fe704fd0f67dc943566fa84f2da320ab83cb12b951eb0ee"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3708,
+      "sha256": "5dc44874fceffb915820e5f7e745d05465cc8a1e5e5f495fe41d37c406f7f110"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1216,
+      "sha256": "d7871f82901b3a23528178858bb5789f6b34913d8a0282fe1c78f23867e81328"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 1352,
+      "sha256": "65dac4753a63bf78b3fb2c82e810c4c84c681f70fb4476f27c352a43588d6786"
+    },
+    {
+      "path": "postfix/continuous/large/T01-C-grep-read-a1.jsonl",
+      "bytes": 2167,
+      "sha256": "bbd7b812dde8fac87773710c3ce15669eb5a4ef0b254f05a735917c13716978e"
+    },
+    {
+      "path": "postfix/continuous/large/T01-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T01-C-grep-read-a1.meta.json",
+      "bytes": 2587,
+      "sha256": "cc0c5ff3ec8e73b9f2dd111f50b010dfcedd4123ad74cbe866fbaf00b4c50814"
+    },
+    {
+      "path": "postfix/continuous/large/T01-C-grep-read-a1.prompt.txt",
+      "bytes": 967,
+      "sha256": "2718cece4a17508197ac3913aa73ea3d81f7afdd7af650952b75ef0546cca6d6"
+    },
+    {
+      "path": "postfix/continuous/large/T01-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "46e7bda8d0e56bb162345a65a5758e5e6a12d647f574b7b13aa6e88aa84155a1"
+    },
+    {
+      "path": "postfix/continuous/large/T01-D-hybrid-a1.jsonl",
+      "bytes": 2161,
+      "sha256": "d173f7947d8602a6fd67977dd40efc067ceb4e41bef85734879ba020e7250fe2"
+    },
+    {
+      "path": "postfix/continuous/large/T01-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "23c2f4cff4b70ee806ba1cf2c29df88e496459efb427027d8cdc5dce1bc882e4"
+    },
+    {
+      "path": "postfix/continuous/large/T01-D-hybrid-a1.meta.json",
+      "bytes": 3933,
+      "sha256": "13e97f846ca44128b6dafa07a3a271b645c83293017a22f7a16601a2b5daaec7"
+    },
+    {
+      "path": "postfix/continuous/large/T01-D-hybrid-a1.prompt.txt",
+      "bytes": 1441,
+      "sha256": "048db98fd67f1e6a498f040c14df9de907f1b87ffda864bc43a8c71ecf1871cf"
+    },
+    {
+      "path": "postfix/continuous/large/T01-D-hybrid-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "c72a597433b5361cf377dca40a633bf5aacaaf6fac36d2e5193691c18e0f9f51"
+    },
+    {
+      "path": "postfix/continuous/large/T02-A-v1-mcp-a1.jsonl",
+      "bytes": 2857,
+      "sha256": "b13abcb3956fb06a29b818578d042573c2f598c6086f4748e47c3dd15be51e61"
+    },
+    {
+      "path": "postfix/continuous/large/T02-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2102,
+      "sha256": "5798e674f99edf9bac9c4593d3af281fd4ecaab20bbed1ddaa374f786de53034"
+    },
+    {
+      "path": "postfix/continuous/large/T02-A-v1-mcp-a1.meta.json",
+      "bytes": 2821,
+      "sha256": "61eaf7ccd16c7cd6aa9ab638d1f7ee9705391740f0c4a016a59b8018c7a5b33d"
+    },
+    {
+      "path": "postfix/continuous/large/T02-A-v1-mcp-a1.prompt.txt",
+      "bytes": 341,
+      "sha256": "da93f7d57cce7727e11cdb65d7ee6c3379002b2388b1c9a417f28de0e52bd4bc"
+    },
+    {
+      "path": "postfix/continuous/large/T02-A-v1-mcp-a1.stderr.txt",
+      "bytes": 615,
+      "sha256": "6fb64e7ded3d1d500d38f77684cae06b23e766eea4e67e1707999854d7549662"
+    },
+    {
+      "path": "postfix/continuous/large/T02-B-v2-mcp-a1.jsonl",
+      "bytes": 1382,
+      "sha256": "465b6216d2b98db29363dd5d23fd1a953945b181ec0c9b2735f2047870bbcdaa"
+    },
+    {
+      "path": "postfix/continuous/large/T02-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1112,
+      "sha256": "a3b514dab33846180186fdec5ae33bf6fe5d443c5377b39e6995eb73e67e5a45"
+    },
+    {
+      "path": "postfix/continuous/large/T02-B-v2-mcp-a1.meta.json",
+      "bytes": 2865,
+      "sha256": "3c7034f16f2f6af1df5cb4b1004653e67faebb5471f58ff2a5e29df1ff0909ca"
+    },
+    {
+      "path": "postfix/continuous/large/T02-B-v2-mcp-a1.prompt.txt",
+      "bytes": 341,
+      "sha256": "da93f7d57cce7727e11cdb65d7ee6c3379002b2388b1c9a417f28de0e52bd4bc"
+    },
+    {
+      "path": "postfix/continuous/large/T02-B-v2-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "f9cfe34e8efd22419905cb7211b079f4563be8c7940eef9b9d9d68b89fd22f6c"
+    },
+    {
+      "path": "postfix/continuous/large/T02-C-grep-read-a1.jsonl",
+      "bytes": 1046,
+      "sha256": "fa3c7c5f18926ee4cbae2c6c66672416e3e7a9a997bd8a43e9aa0848d361c5fe"
+    },
+    {
+      "path": "postfix/continuous/large/T02-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T02-C-grep-read-a1.meta.json",
+      "bytes": 1993,
+      "sha256": "a7fa9977313a1462c8e37c9b6f5839d1f3dbc2bbbbc53b1cf8e80de7e270bbb0"
+    },
+    {
+      "path": "postfix/continuous/large/T02-C-grep-read-a1.prompt.txt",
+      "bytes": 341,
+      "sha256": "da93f7d57cce7727e11cdb65d7ee6c3379002b2388b1c9a417f28de0e52bd4bc"
+    },
+    {
+      "path": "postfix/continuous/large/T02-C-grep-read-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "8aa0e88e563b7375b83700b714540991790c580f2d15e2e9fd6fbd034f6be591"
+    },
+    {
+      "path": "postfix/continuous/large/T02-D-hybrid-a1.jsonl",
+      "bytes": 1046,
+      "sha256": "22b404da17975a621e830c28ce381e23d69ef1459476ebbd5c0587cf982d287b"
+    },
+    {
+      "path": "postfix/continuous/large/T02-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "3e88f68e56ef226068972c91392d61f4861a6d81ade1727c6f34c42b7a9f1184"
+    },
+    {
+      "path": "postfix/continuous/large/T02-D-hybrid-a1.meta.json",
+      "bytes": 2865,
+      "sha256": "ebc4b84d3307d2378ca9395152a798cb99e9fac9c3d963ccca16596d1cda3a2c"
+    },
+    {
+      "path": "postfix/continuous/large/T02-D-hybrid-a1.prompt.txt",
+      "bytes": 341,
+      "sha256": "da93f7d57cce7727e11cdb65d7ee6c3379002b2388b1c9a417f28de0e52bd4bc"
+    },
+    {
+      "path": "postfix/continuous/large/T02-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "ed4b7c486284a601fb024bbd5c76e7df6cbef696687359baf129f0c449f2e581"
+    },
+    {
+      "path": "postfix/continuous/large/T03-A-v1-mcp-a1.jsonl",
+      "bytes": 3284,
+      "sha256": "194f55fbbaf24ec6a2efa36ccb2fea68276b03a70809f080d8d74dbab43f3207"
+    },
+    {
+      "path": "postfix/continuous/large/T03-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2103,
+      "sha256": "1bd6bf7bf692808a13537b2543697af006f1e03e45d72f8f30d6e558601d6a4d"
+    },
+    {
+      "path": "postfix/continuous/large/T03-A-v1-mcp-a1.meta.json",
+      "bytes": 2815,
+      "sha256": "e4e821cbdd21c3b583c429b8e69136f8e03a0c6121024707e15a72693c1fe1ea"
+    },
+    {
+      "path": "postfix/continuous/large/T03-A-v1-mcp-a1.prompt.txt",
+      "bytes": 335,
+      "sha256": "669ac07ace7cafc70b70c5017e577a6b47508a44fdde795c5d1c583f1b441dfd"
+    },
+    {
+      "path": "postfix/continuous/large/T03-A-v1-mcp-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "f927892a3ef91e1de51fdf6063790aafcfe83c2bef97fbcae31d97d69db8d89a"
+    },
+    {
+      "path": "postfix/continuous/large/T03-B-v2-mcp-a1.jsonl",
+      "bytes": 1344,
+      "sha256": "cc31f9f6314052e0fb02996665d5b986c83ee62f51b72c3ea0048475ed3c40bc"
+    },
+    {
+      "path": "postfix/continuous/large/T03-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1112,
+      "sha256": "648f88ea4d33eaef5464faf99f1b02d911604a9bab6ff6d221a181aaebe5bcf3"
+    },
+    {
+      "path": "postfix/continuous/large/T03-B-v2-mcp-a1.meta.json",
+      "bytes": 2859,
+      "sha256": "eab6a5926a200b24d42fe7f6e1412c0763ee7ee0c27cbe060d22d571a4f9ae56"
+    },
+    {
+      "path": "postfix/continuous/large/T03-B-v2-mcp-a1.prompt.txt",
+      "bytes": 335,
+      "sha256": "669ac07ace7cafc70b70c5017e577a6b47508a44fdde795c5d1c583f1b441dfd"
+    },
+    {
+      "path": "postfix/continuous/large/T03-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "eed70d590a104853d3e7e95ed839f96d022ab846d3915ad561b4bba5c79de911"
+    },
+    {
+      "path": "postfix/continuous/large/T03-C-grep-read-a1.jsonl",
+      "bytes": 1014,
+      "sha256": "e68358cbb95e531f6aea8eb04a0bfb9f2fb810fe29b103b94ad6906f7e462a39"
+    },
+    {
+      "path": "postfix/continuous/large/T03-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T03-C-grep-read-a1.meta.json",
+      "bytes": 1986,
+      "sha256": "692d29b038d2fcff0bf716f275ea54b4fb32bceeaf4491b6878b234d912375b7"
+    },
+    {
+      "path": "postfix/continuous/large/T03-C-grep-read-a1.prompt.txt",
+      "bytes": 335,
+      "sha256": "669ac07ace7cafc70b70c5017e577a6b47508a44fdde795c5d1c583f1b441dfd"
+    },
+    {
+      "path": "postfix/continuous/large/T03-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "4cc1b7b502a21ce1c3d602a66e98640c2001bde732a5af4daf9a49f108f409cf"
+    },
+    {
+      "path": "postfix/continuous/large/T03-D-hybrid-a1.jsonl",
+      "bytes": 1014,
+      "sha256": "2c1c473833a13b84d54a70f8e7a4b6f9d4b6efc991989db8d641f7fc1683442c"
+    },
+    {
+      "path": "postfix/continuous/large/T03-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "ebd1184ee6605780e0b1531bb75aff2cdd6e6b6880ce9c1e17c0ae4102ab3eb4"
+    },
+    {
+      "path": "postfix/continuous/large/T03-D-hybrid-a1.meta.json",
+      "bytes": 2859,
+      "sha256": "14ace2cc1c510ea439a68bdaa29c329b3b15beaedd6504897352d3693c01483b"
+    },
+    {
+      "path": "postfix/continuous/large/T03-D-hybrid-a1.prompt.txt",
+      "bytes": 335,
+      "sha256": "669ac07ace7cafc70b70c5017e577a6b47508a44fdde795c5d1c583f1b441dfd"
+    },
+    {
+      "path": "postfix/continuous/large/T03-D-hybrid-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "95440805242faf7b02f0fb68468dd90cfdbd96599fd268c4b5c83b21615fbc87"
+    },
+    {
+      "path": "postfix/continuous/large/T04-A-v1-mcp-a1.jsonl",
+      "bytes": 17213,
+      "sha256": "891ae4cc8d30a6bb05c68eb0227f855323c71ce5f2b11757f6fce500a3a67c03"
+    },
+    {
+      "path": "postfix/continuous/large/T04-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3375,
+      "sha256": "a02bb33ce7f2ebf558f066482f55e22cf23f0642802a7bb0cf9a73171717ea60"
+    },
+    {
+      "path": "postfix/continuous/large/T04-A-v1-mcp-a1.meta.json",
+      "bytes": 2826,
+      "sha256": "b1c36cfb206e22542fe2cf7b4c4ed370a2a2e0a871d13f4671b5f676a25d4eb2"
+    },
+    {
+      "path": "postfix/continuous/large/T04-A-v1-mcp-a1.prompt.txt",
+      "bytes": 347,
+      "sha256": "1e6c87cd1b1b30944233b58e63e67097d5ed29d505975139ef9d7ec1f4a0f7ab"
+    },
+    {
+      "path": "postfix/continuous/large/T04-A-v1-mcp-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "afcb8bbd4afd322bdd546f827b4a39dfc2930b39f76df83d6c2e0cad7f8fd83a"
+    },
+    {
+      "path": "postfix/continuous/large/T04-B-v2-mcp-a1.jsonl",
+      "bytes": 5857,
+      "sha256": "264c88fcfbcca9a1b5986618daae1dd52d923999147c5e077eb0d6345ee86106"
+    },
+    {
+      "path": "postfix/continuous/large/T04-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1372,
+      "sha256": "f9ca221e135c12033b38098b0b75cbcfac5b368d736197bbd79526c4c8edc227"
+    },
+    {
+      "path": "postfix/continuous/large/T04-B-v2-mcp-a1.meta.json",
+      "bytes": 2871,
+      "sha256": "bfe5356ae5d373d5715568e137f05960f853446b476120e1c48629f6ff6d9865"
+    },
+    {
+      "path": "postfix/continuous/large/T04-B-v2-mcp-a1.prompt.txt",
+      "bytes": 347,
+      "sha256": "1e6c87cd1b1b30944233b58e63e67097d5ed29d505975139ef9d7ec1f4a0f7ab"
+    },
+    {
+      "path": "postfix/continuous/large/T04-B-v2-mcp-a1.stderr.txt",
+      "bytes": 1190,
+      "sha256": "4a4739299ebcb13fb0a4b6d2ea49c9acbf2febf01fe4c9e859a283542f57b220"
+    },
+    {
+      "path": "postfix/continuous/large/T04-C-grep-read-a1.jsonl",
+      "bytes": 1504,
+      "sha256": "9207c54398fa02bbb9cf47c6fa109da10b55b7251a218c5ad883f2c63a259597"
+    },
+    {
+      "path": "postfix/continuous/large/T04-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T04-C-grep-read-a1.meta.json",
+      "bytes": 1999,
+      "sha256": "4faca68e8faeff3bede004a5f2cda7c94a74ab7a26570a36b3a0653c8fa362d0"
+    },
+    {
+      "path": "postfix/continuous/large/T04-C-grep-read-a1.prompt.txt",
+      "bytes": 347,
+      "sha256": "1e6c87cd1b1b30944233b58e63e67097d5ed29d505975139ef9d7ec1f4a0f7ab"
+    },
+    {
+      "path": "postfix/continuous/large/T04-C-grep-read-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "f0687fa9d6faac303912d146f7abcc5eb65fa203af588b4d4584dec298da7c51"
+    },
+    {
+      "path": "postfix/continuous/large/T04-D-hybrid-a1.jsonl",
+      "bytes": 1526,
+      "sha256": "c8969256f660523d9dbcaef8fdceee3e6515946bfcd106e11940d64a7fcf9856"
+    },
+    {
+      "path": "postfix/continuous/large/T04-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "d4bb1240192d94cb2c9397c6731c1ce04a19094ebfe853d7183f91e953426a22"
+    },
+    {
+      "path": "postfix/continuous/large/T04-D-hybrid-a1.meta.json",
+      "bytes": 2871,
+      "sha256": "f2247a0f7e7390e271300e13acdc10ae85de1cd4cd7ffd6f74058d2c44ad06bb"
+    },
+    {
+      "path": "postfix/continuous/large/T04-D-hybrid-a1.prompt.txt",
+      "bytes": 347,
+      "sha256": "1e6c87cd1b1b30944233b58e63e67097d5ed29d505975139ef9d7ec1f4a0f7ab"
+    },
+    {
+      "path": "postfix/continuous/large/T04-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "f79dd7937c2cc9ecf7562a4015addb9119063c5c14248a41c709d6a67fc0b149"
+    },
+    {
+      "path": "postfix/continuous/large/T05-A-v1-mcp-a1.jsonl",
+      "bytes": 24179,
+      "sha256": "651ddaa322f29c6517f9ffaefa1e6691f96afa8f141022894895f9b59e8cbeff"
+    },
+    {
+      "path": "postfix/continuous/large/T05-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 6080,
+      "sha256": "86456a9bf6baa1a99015c0ff48a861d062ce8b25c3c9260203ae54fc71ebf706"
+    },
+    {
+      "path": "postfix/continuous/large/T05-A-v1-mcp-a1.meta.json",
+      "bytes": 2903,
+      "sha256": "88b2cf68dff340c2fdd729c07792a17715fd61b84d9b33d033f4003a9884b99b"
+    },
+    {
+      "path": "postfix/continuous/large/T05-A-v1-mcp-a1.prompt.txt",
+      "bytes": 423,
+      "sha256": "6c9fe43fdd4d36a88f74130cfc018a739e36fd7f6ffcfbe8a60e86b19da5ed54"
+    },
+    {
+      "path": "postfix/continuous/large/T05-A-v1-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "148dd7a9cd81f81ed0b4b8d7a212d5ec2b55e6a15d68412e410f265aea8086c0"
+    },
+    {
+      "path": "postfix/continuous/large/T05-B-v2-mcp-a1.jsonl",
+      "bytes": 4435,
+      "sha256": "b9896f685f68de2eaeb45017aa3a3aa1e931fba164163066315cbdff298cc71e"
+    },
+    {
+      "path": "postfix/continuous/large/T05-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1114,
+      "sha256": "5bba2dab216ae17c507ba8163fb0a5eac0bf0e71bc182f1fd421dc612591daf7"
+    },
+    {
+      "path": "postfix/continuous/large/T05-B-v2-mcp-a1.meta.json",
+      "bytes": 2947,
+      "sha256": "0d51bb732ad1c57d68ea33d187829df441cca61e8c71ea6a7241736846b8c58e"
+    },
+    {
+      "path": "postfix/continuous/large/T05-B-v2-mcp-a1.prompt.txt",
+      "bytes": 423,
+      "sha256": "6c9fe43fdd4d36a88f74130cfc018a739e36fd7f6ffcfbe8a60e86b19da5ed54"
+    },
+    {
+      "path": "postfix/continuous/large/T05-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "a0038e4d7a2485f2a4267be8ac1a852ec2aabc861f0547ef6fcd65c357bee3fb"
+    },
+    {
+      "path": "postfix/continuous/large/T05-C-grep-read-a1.jsonl",
+      "bytes": 3054,
+      "sha256": "c028b156341511bad154002b8075afad47575f447ce800a971bc00e63d1b2716"
+    },
+    {
+      "path": "postfix/continuous/large/T05-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T05-C-grep-read-a1.meta.json",
+      "bytes": 2074,
+      "sha256": "203fa91244b7c9dd02059fcc28345d41fd369f453a6bfd6f578d9b8b485f365b"
+    },
+    {
+      "path": "postfix/continuous/large/T05-C-grep-read-a1.prompt.txt",
+      "bytes": 423,
+      "sha256": "6c9fe43fdd4d36a88f74130cfc018a739e36fd7f6ffcfbe8a60e86b19da5ed54"
+    },
+    {
+      "path": "postfix/continuous/large/T05-C-grep-read-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "4e024fb21903800c4332972456c7c8724e7862fce87abd431255ab056c99a784"
+    },
+    {
+      "path": "postfix/continuous/large/T05-D-hybrid-a1.jsonl",
+      "bytes": 3090,
+      "sha256": "d25986b6362fe28f789d7d10741dde18f50530ebbe2227dce14a20e5bc8fbe4f"
+    },
+    {
+      "path": "postfix/continuous/large/T05-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "4ab4425c35287928a4f0a3c9e0a766abe0d18108694c778390b29d0e180d7dab"
+    },
+    {
+      "path": "postfix/continuous/large/T05-D-hybrid-a1.meta.json",
+      "bytes": 2947,
+      "sha256": "49943568f671db9a1f29892b56ddfc18180842d814b42efc33694a4017a15b58"
+    },
+    {
+      "path": "postfix/continuous/large/T05-D-hybrid-a1.prompt.txt",
+      "bytes": 423,
+      "sha256": "6c9fe43fdd4d36a88f74130cfc018a739e36fd7f6ffcfbe8a60e86b19da5ed54"
+    },
+    {
+      "path": "postfix/continuous/large/T05-D-hybrid-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "b0d08b4c8c3d7c0f19ab71bda7342b8894c7b53542462c44d9857f066fac7ef1"
+    },
+    {
+      "path": "postfix/continuous/large/T06-A-v1-mcp-a1.jsonl",
+      "bytes": 93245,
+      "sha256": "433b518c3e2fa3221bc79a2d7141966b6dafdb5321b0624d0054a9a79d4bd079"
+    },
+    {
+      "path": "postfix/continuous/large/T06-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 5969,
+      "sha256": "646cc5338b8baf7fff1439abd33982bf1612f1cc7365c24085b5443b91ea0c88"
+    },
+    {
+      "path": "postfix/continuous/large/T06-A-v1-mcp-a1.meta.json",
+      "bytes": 2916,
+      "sha256": "420564a1dcb257a70606f7a498c1b78f62a7850d5995322e7f7fd29d48ae78a3"
+    },
+    {
+      "path": "postfix/continuous/large/T06-A-v1-mcp-a1.prompt.txt",
+      "bytes": 436,
+      "sha256": "292495363dd831f9fb1423491bf8c957218c9c204d6f31aa53cf0132d2aedd52"
+    },
+    {
+      "path": "postfix/continuous/large/T06-A-v1-mcp-a1.stderr.txt",
+      "bytes": 786,
+      "sha256": "ef22254f3e44653da2de94d7762ebfc95ec8f19f4df568c3f86c9ca6bcbcde4a"
+    },
+    {
+      "path": "postfix/continuous/large/T06-B-v2-mcp-a1.jsonl",
+      "bytes": 4085,
+      "sha256": "0612a98fb9f41b364a01c1c09ddddedebd27cd31dea131a9d0819c7b5d362285"
+    },
+    {
+      "path": "postfix/continuous/large/T06-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1114,
+      "sha256": "6df78986c3b59eedac55e42e4ce047bdaf4dff64994d60456f8f2855a9e7deda"
+    },
+    {
+      "path": "postfix/continuous/large/T06-B-v2-mcp-a1.meta.json",
+      "bytes": 2960,
+      "sha256": "ae849c75678a839dfe446f9bfb04efdaed13358eb4dd635e41f4685d2bd8dc63"
+    },
+    {
+      "path": "postfix/continuous/large/T06-B-v2-mcp-a1.prompt.txt",
+      "bytes": 436,
+      "sha256": "292495363dd831f9fb1423491bf8c957218c9c204d6f31aa53cf0132d2aedd52"
+    },
+    {
+      "path": "postfix/continuous/large/T06-B-v2-mcp-a1.stderr.txt",
+      "bytes": 685,
+      "sha256": "617f600ac9a95d9bbe55519d11f8550a0c19a8d7ce8343d763703d00e1572333"
+    },
+    {
+      "path": "postfix/continuous/large/T06-C-grep-read-a1.jsonl",
+      "bytes": 1442,
+      "sha256": "49611ede13380d84974d5cf3e013422f905b52184d0da9d9a6f8c9cb7a583540"
+    },
+    {
+      "path": "postfix/continuous/large/T06-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T06-C-grep-read-a1.meta.json",
+      "bytes": 2088,
+      "sha256": "1da8ad1c7ac01c6c5d59f1fc0054d3af5635980adb2680f13233b95acfa20ad9"
+    },
+    {
+      "path": "postfix/continuous/large/T06-C-grep-read-a1.prompt.txt",
+      "bytes": 436,
+      "sha256": "292495363dd831f9fb1423491bf8c957218c9c204d6f31aa53cf0132d2aedd52"
+    },
+    {
+      "path": "postfix/continuous/large/T06-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "4fbbca1ed9faa9c2ce45b22fcaa5b083779c675b138c895f6d801c4030c27abe"
+    },
+    {
+      "path": "postfix/continuous/large/T06-D-hybrid-a1.jsonl",
+      "bytes": 1442,
+      "sha256": "14f027498e29c36ef03fa1ba7cccc36f138747b05aa2c106dc21066578e79a78"
+    },
+    {
+      "path": "postfix/continuous/large/T06-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "d3200da37bc49f61c1ec9f650b44e4f3c11f9eb875419561eace477c0b6e0789"
+    },
+    {
+      "path": "postfix/continuous/large/T06-D-hybrid-a1.meta.json",
+      "bytes": 2960,
+      "sha256": "a3551b067069f975acb898316669c092ef7247c1fa895d3ad5470442cbed0b3f"
+    },
+    {
+      "path": "postfix/continuous/large/T06-D-hybrid-a1.prompt.txt",
+      "bytes": 436,
+      "sha256": "292495363dd831f9fb1423491bf8c957218c9c204d6f31aa53cf0132d2aedd52"
+    },
+    {
+      "path": "postfix/continuous/large/T06-D-hybrid-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "c2fe6ad18e9b73a5379bb695173cb9bbef8785c18eb434bbd1b64c8cd0d48ac1"
+    },
+    {
+      "path": "postfix/continuous/large/T07-A-v1-mcp-a1.jsonl",
+      "bytes": 8549,
+      "sha256": "b06ed12a823191a82cffe54c151e96226a761209ad9487f4ac2ce03da452d34f"
+    },
+    {
+      "path": "postfix/continuous/large/T07-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2609,
+      "sha256": "538bbd10e9cf68cc8893579588fbacab4b5acf89cfbf0a197ebdaf4542b5aa21"
+    },
+    {
+      "path": "postfix/continuous/large/T07-A-v1-mcp-a1.meta.json",
+      "bytes": 2831,
+      "sha256": "21c3908da0c1cacbad10b23dd5f044c6c6411448896a638ca05313e04af55201"
+    },
+    {
+      "path": "postfix/continuous/large/T07-A-v1-mcp-a1.prompt.txt",
+      "bytes": 351,
+      "sha256": "4997e25c5d83418964798607e7cb8cbb0a4aebb0bd32b54332904cc14d403905"
+    },
+    {
+      "path": "postfix/continuous/large/T07-A-v1-mcp-a1.stderr.txt",
+      "bytes": 786,
+      "sha256": "6138b2ab33c3fed837f9637acdb2c656acb27ca2093f7f91a948be6efcce1d0c"
+    },
+    {
+      "path": "postfix/continuous/large/T07-B-v2-mcp-a1.jsonl",
+      "bytes": 2931,
+      "sha256": "ff637a41de3484a08001e497de354b53154f98fcfc9b8f9a24a0e08208081bac"
+    },
+    {
+      "path": "postfix/continuous/large/T07-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1367,
+      "sha256": "83cf381d8696d176902beb530c70acf055a1ff56c12c3e4c8f6d43d7c8b0c33e"
+    },
+    {
+      "path": "postfix/continuous/large/T07-B-v2-mcp-a1.meta.json",
+      "bytes": 2874,
+      "sha256": "331f1d4176e5014599e1254d9582af75441c98b9b2e786d061bc1b444325627c"
+    },
+    {
+      "path": "postfix/continuous/large/T07-B-v2-mcp-a1.prompt.txt",
+      "bytes": 351,
+      "sha256": "4997e25c5d83418964798607e7cb8cbb0a4aebb0bd32b54332904cc14d403905"
+    },
+    {
+      "path": "postfix/continuous/large/T07-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "45245de4280a9e43682f371d8a14f86f9b9080f0d47547192740eb08262d145c"
+    },
+    {
+      "path": "postfix/continuous/large/T07-C-grep-read-a1.jsonl",
+      "bytes": 7076,
+      "sha256": "92b924649b4feac743cd7be5ad87a9c370b22b8b2a069434b2a728d5e6d95789"
+    },
+    {
+      "path": "postfix/continuous/large/T07-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T07-C-grep-read-a1.meta.json",
+      "bytes": 2002,
+      "sha256": "9632c2cba110713e30f52b5947d03ab4bd8f4628b65091925d4f862ebcfae84f"
+    },
+    {
+      "path": "postfix/continuous/large/T07-C-grep-read-a1.prompt.txt",
+      "bytes": 351,
+      "sha256": "4997e25c5d83418964798607e7cb8cbb0a4aebb0bd32b54332904cc14d403905"
+    },
+    {
+      "path": "postfix/continuous/large/T07-C-grep-read-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "534d0e445b14d333bdf30c3a3b13856e1288b0c27c8e8614d162c57adabb0990"
+    },
+    {
+      "path": "postfix/continuous/large/T07-D-hybrid-a1.jsonl",
+      "bytes": 5115,
+      "sha256": "a340d7bd5e3471f78763e60a9a2f5a7b3c1f92f6bf2ec107d76b7fcdba322056"
+    },
+    {
+      "path": "postfix/continuous/large/T07-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "561210a82c8dd24308b23860b3ec87f1164dfe9e878345fe3ae7198339639d69"
+    },
+    {
+      "path": "postfix/continuous/large/T07-D-hybrid-a1.meta.json",
+      "bytes": 2875,
+      "sha256": "33273ff33f7d41f88f3dd42b1746505ad65d8bb1e38f410766aaac292d03cd7b"
+    },
+    {
+      "path": "postfix/continuous/large/T07-D-hybrid-a1.prompt.txt",
+      "bytes": 351,
+      "sha256": "4997e25c5d83418964798607e7cb8cbb0a4aebb0bd32b54332904cc14d403905"
+    },
+    {
+      "path": "postfix/continuous/large/T07-D-hybrid-a1.stderr.txt",
+      "bytes": 1055,
+      "sha256": "64a6f1c7283dab6abb4bcbf402be6ea34f56518c3609cb9fc675ec4e23fafb15"
+    },
+    {
+      "path": "postfix/continuous/large/T08-A-v1-mcp-a1.jsonl",
+      "bytes": 23352,
+      "sha256": "d7169dfde9393d08c09f4a6ad96140e977214bf7dfefd3138e64d3228155ab07"
+    },
+    {
+      "path": "postfix/continuous/large/T08-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2275,
+      "sha256": "3c36907d5fc5e0a9b3410221dd7e9667d3cc8bbaf75928d68f0ff3c8b03ee9b9"
+    },
+    {
+      "path": "postfix/continuous/large/T08-A-v1-mcp-a1.meta.json",
+      "bytes": 3005,
+      "sha256": "a210dc2a8428d6d892b5e1120f97b7787e1045763df83415ef4967b2b7635fc3"
+    },
+    {
+      "path": "postfix/continuous/large/T08-A-v1-mcp-a1.prompt.txt",
+      "bytes": 526,
+      "sha256": "63bddfcae233d49cb858f0e1d11458a78eecad52ead0fe24b7d9105a800ae6aa"
+    },
+    {
+      "path": "postfix/continuous/large/T08-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "5d89276dfe1630708bffc6f36a3573b55993899353e44409e0b85e45fd6a238d"
+    },
+    {
+      "path": "postfix/continuous/large/T08-B-v2-mcp-a1.jsonl",
+      "bytes": 10262,
+      "sha256": "afdc271c0f9504b7d3eee6bac5ec26d11e2c511cf42ffe13479917408d4b2fbd"
+    },
+    {
+      "path": "postfix/continuous/large/T08-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2145,
+      "sha256": "13061a5184e0ed9308da22ae6ffb7c34fcc72e41dc9e4792e24ddc745ff5dd9e"
+    },
+    {
+      "path": "postfix/continuous/large/T08-B-v2-mcp-a1.meta.json",
+      "bytes": 3050,
+      "sha256": "a05fe37a188f51f72aa4d43be49a7f23008e68449885104a90ca72807cec5b99"
+    },
+    {
+      "path": "postfix/continuous/large/T08-B-v2-mcp-a1.prompt.txt",
+      "bytes": 526,
+      "sha256": "63bddfcae233d49cb858f0e1d11458a78eecad52ead0fe24b7d9105a800ae6aa"
+    },
+    {
+      "path": "postfix/continuous/large/T08-B-v2-mcp-a1.stderr.txt",
+      "bytes": 629,
+      "sha256": "7241310b48d1ca5a2a58e13c779dced29fd53bfbfe0b6ddbca3da20ea4a97e90"
+    },
+    {
+      "path": "postfix/continuous/large/T08-C-grep-read-a1.jsonl",
+      "bytes": 6138,
+      "sha256": "da1e2ffc45deb30d448956d140a415db648b6c713adbd7add1b3371db0d6e640"
+    },
+    {
+      "path": "postfix/continuous/large/T08-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T08-C-grep-read-a1.meta.json",
+      "bytes": 2178,
+      "sha256": "173131fe48211863aed9e5af0afe5d36a9b86f1efe4a2a9ca94dd664e2102635"
+    },
+    {
+      "path": "postfix/continuous/large/T08-C-grep-read-a1.prompt.txt",
+      "bytes": 526,
+      "sha256": "63bddfcae233d49cb858f0e1d11458a78eecad52ead0fe24b7d9105a800ae6aa"
+    },
+    {
+      "path": "postfix/continuous/large/T08-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "5adf6a639db67d0cf14aa6fd7ad09e01c7ec9720e32ecc85dd5cb48540ad8154"
+    },
+    {
+      "path": "postfix/continuous/large/T08-D-hybrid-a1.jsonl",
+      "bytes": 7186,
+      "sha256": "943133fcd957ba184e8a868660da174369190809f3b650f18046f1145507980a"
+    },
+    {
+      "path": "postfix/continuous/large/T08-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 852,
+      "sha256": "ba58de9772fb2dfdb8e11efa44cf6e05857e62a812b20b59cbe65e57ed04ca1e"
+    },
+    {
+      "path": "postfix/continuous/large/T08-D-hybrid-a1.meta.json",
+      "bytes": 3049,
+      "sha256": "66fd6ffd9044644c81cb5818cde595bcce265fc097c625c11ca052a2a726b7f0"
+    },
+    {
+      "path": "postfix/continuous/large/T08-D-hybrid-a1.prompt.txt",
+      "bytes": 526,
+      "sha256": "63bddfcae233d49cb858f0e1d11458a78eecad52ead0fe24b7d9105a800ae6aa"
+    },
+    {
+      "path": "postfix/continuous/large/T08-D-hybrid-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "10c6b6a3a9de5cef7bab321625e646dda591205b66f9ecd22af2b888003d9eea"
+    },
+    {
+      "path": "postfix/continuous/large/T09-A-v1-mcp-a1.jsonl",
+      "bytes": 18777,
+      "sha256": "4be450669bb9968bc5f0d3753e5f1863a3b7c2b7dfd8de9e4c763edac63d8069"
+    },
+    {
+      "path": "postfix/continuous/large/T09-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3381,
+      "sha256": "7b7329c1e64c86f0a74835cfe0b989aa095a9cd0785b848fa383c4c444bd502c"
+    },
+    {
+      "path": "postfix/continuous/large/T09-A-v1-mcp-a1.meta.json",
+      "bytes": 2929,
+      "sha256": "6e4f455b85381d402274f092d55490f037b3fe4d680e5a426d3a510eaf1b2758"
+    },
+    {
+      "path": "postfix/continuous/large/T09-A-v1-mcp-a1.prompt.txt",
+      "bytes": 443,
+      "sha256": "c32614232ec0a18e9d32229c8507c09653e1294451acb597d8172b0c6c961855"
+    },
+    {
+      "path": "postfix/continuous/large/T09-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "368e9f1db00d3870567eed2be40713b0602bcf5fdbf2992ef228873245cd1a4f"
+    },
+    {
+      "path": "postfix/continuous/large/T09-B-v2-mcp-a1.jsonl",
+      "bytes": 3223,
+      "sha256": "02b637984b0cebc560c541224d131982ebec99ca64e34b55e4e1ce4bf6c002bd"
+    },
+    {
+      "path": "postfix/continuous/large/T09-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "063e252a97781578edbf4da2b05afba94c4e6e2d7b93803145e4cff8eea668e9"
+    },
+    {
+      "path": "postfix/continuous/large/T09-B-v2-mcp-a1.meta.json",
+      "bytes": 2973,
+      "sha256": "9ef87a75820cfea22be159d169ea36b0b5f890921269a0a7acb3199b856b20b1"
+    },
+    {
+      "path": "postfix/continuous/large/T09-B-v2-mcp-a1.prompt.txt",
+      "bytes": 443,
+      "sha256": "c32614232ec0a18e9d32229c8507c09653e1294451acb597d8172b0c6c961855"
+    },
+    {
+      "path": "postfix/continuous/large/T09-B-v2-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "f69aa6fe2fa31b6d15cb8d4982b8e965cef2cb1098d833b92a3e20a66efb2eb7"
+    },
+    {
+      "path": "postfix/continuous/large/T09-C-grep-read-a1.jsonl",
+      "bytes": 12682,
+      "sha256": "8ee205b782d8daca16d7e18069259298ec5868c929b31572426a6c842944e026"
+    },
+    {
+      "path": "postfix/continuous/large/T09-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T09-C-grep-read-a1.meta.json",
+      "bytes": 2101,
+      "sha256": "d5a9b0911b5325b49cf807ae8ef0498f082e9e9a9808499dd29a92f69d7bb428"
+    },
+    {
+      "path": "postfix/continuous/large/T09-C-grep-read-a1.prompt.txt",
+      "bytes": 443,
+      "sha256": "c32614232ec0a18e9d32229c8507c09653e1294451acb597d8172b0c6c961855"
+    },
+    {
+      "path": "postfix/continuous/large/T09-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "314f18a975547efdb006468ee697820f71aefaac5e0fa3039c97271b10f8730a"
+    },
+    {
+      "path": "postfix/continuous/large/T09-D-hybrid-a1.jsonl",
+      "bytes": 14791,
+      "sha256": "2a768f7d6934cbf43cdfc89665c0a7798a6fddcbc7ed02d4569f15ba50e1781f"
+    },
+    {
+      "path": "postfix/continuous/large/T09-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "fbc7d21b315142108cb6166706ab9721e8dfb14c0ca0fcb53c3013b88d0bd2b3"
+    },
+    {
+      "path": "postfix/continuous/large/T09-D-hybrid-a1.meta.json",
+      "bytes": 2973,
+      "sha256": "7db78c13d639d8714443be2f8ab94e346c02c4ca9410cbbe9b550f0309bf4573"
+    },
+    {
+      "path": "postfix/continuous/large/T09-D-hybrid-a1.prompt.txt",
+      "bytes": 443,
+      "sha256": "c32614232ec0a18e9d32229c8507c09653e1294451acb597d8172b0c6c961855"
+    },
+    {
+      "path": "postfix/continuous/large/T09-D-hybrid-a1.stderr.txt",
+      "bytes": 629,
+      "sha256": "194de8c7eb07751b28aa32386ee64fdbedb1544a6601b584f8da9f34ca3e45d5"
+    },
+    {
+      "path": "postfix/continuous/large/T10-A-v1-mcp-a1.jsonl",
+      "bytes": 6432,
+      "sha256": "8ff827a34b522dc24860a8374948cd67538a362967e48114384c7ed592ada12e"
+    },
+    {
+      "path": "postfix/continuous/large/T10-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2356,
+      "sha256": "03ebbb08b8fdc59ecb10e30bae4da7fec25e38b7cb42b3f8bc69c350e9da2af1"
+    },
+    {
+      "path": "postfix/continuous/large/T10-A-v1-mcp-a1.meta.json",
+      "bytes": 2880,
+      "sha256": "e9d69c93faf0f79ce929ce04ba40365f1745d2d8cba423d69b573e758060c460"
+    },
+    {
+      "path": "postfix/continuous/large/T10-A-v1-mcp-a1.prompt.txt",
+      "bytes": 400,
+      "sha256": "ec0d71523d1a8dfcaebb2d42965c3ff97bdaef2d99f4617306d307b1c766e27f"
+    },
+    {
+      "path": "postfix/continuous/large/T10-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "8768051af6743e0be009069f715103bc72afda69a02abc7fead55e2926f6f82b"
+    },
+    {
+      "path": "postfix/continuous/large/T10-B-v2-mcp-a1.jsonl",
+      "bytes": 3473,
+      "sha256": "3a5dd82909ced52f093f61c8ffeb3a19e0e78f621390af2a2319f3ee9e728b3c"
+    },
+    {
+      "path": "postfix/continuous/large/T10-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1114,
+      "sha256": "011ed051e80f1105c70c812364b87d9b2b03698260d2246b221bddcab92eed84"
+    },
+    {
+      "path": "postfix/continuous/large/T10-B-v2-mcp-a1.meta.json",
+      "bytes": 2924,
+      "sha256": "858c30f18862bd12b2fa39cead421f185e98dcda286882e0665385f1b0baafbd"
+    },
+    {
+      "path": "postfix/continuous/large/T10-B-v2-mcp-a1.prompt.txt",
+      "bytes": 400,
+      "sha256": "ec0d71523d1a8dfcaebb2d42965c3ff97bdaef2d99f4617306d307b1c766e27f"
+    },
+    {
+      "path": "postfix/continuous/large/T10-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "fb2b9c5ecf72b01873cf005ea8c9a592ccdd2610390661c29bd510c7ff0a3aec"
+    },
+    {
+      "path": "postfix/continuous/large/T10-C-grep-read-a1.jsonl",
+      "bytes": 1553,
+      "sha256": "a9ae410a6769f69f4f9bae104be8da567757a0370ac8a92d542216c08c7f71bc"
+    },
+    {
+      "path": "postfix/continuous/large/T10-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T10-C-grep-read-a1.meta.json",
+      "bytes": 2052,
+      "sha256": "625e9297cbc69467d20f62a93dff4a8472338d0cc48c6a4527a7d36739229793"
+    },
+    {
+      "path": "postfix/continuous/large/T10-C-grep-read-a1.prompt.txt",
+      "bytes": 400,
+      "sha256": "ec0d71523d1a8dfcaebb2d42965c3ff97bdaef2d99f4617306d307b1c766e27f"
+    },
+    {
+      "path": "postfix/continuous/large/T10-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "a89f510cbd1a2fb70eca417306ccaaa8509108b0004d1cca38099d1c6301d322"
+    },
+    {
+      "path": "postfix/continuous/large/T10-D-hybrid-a1.jsonl",
+      "bytes": 1427,
+      "sha256": "db031e59f5c3efddb15a06ef21937f4605858bf6e82dfdbc04b79199fa672a2c"
+    },
+    {
+      "path": "postfix/continuous/large/T10-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "7e2b1fe16328575ca6cc72a7674d75172bfa74b42e8b14d296c22d86a202c4b8"
+    },
+    {
+      "path": "postfix/continuous/large/T10-D-hybrid-a1.meta.json",
+      "bytes": 2924,
+      "sha256": "cc940f4a59cd9b853483ec0d4bd8e637c8149567e506da0cdd2da13865cd6c3b"
+    },
+    {
+      "path": "postfix/continuous/large/T10-D-hybrid-a1.prompt.txt",
+      "bytes": 400,
+      "sha256": "ec0d71523d1a8dfcaebb2d42965c3ff97bdaef2d99f4617306d307b1c766e27f"
+    },
+    {
+      "path": "postfix/continuous/large/T10-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "18de73cc26ad5c97d51bf176ab28156fc26fc70c92166ad78d56d153c972c928"
+    },
+    {
+      "path": "postfix/continuous/large/T11-A-v1-mcp-a1.jsonl",
+      "bytes": 40379,
+      "sha256": "84fabc401019a320d7c361d225f7626ab96f8052f88336ef0daa207f12b61e3b"
+    },
+    {
+      "path": "postfix/continuous/large/T11-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3875,
+      "sha256": "d7cc7d02fbdc2f6d3bb54cc0e62e65eaf1f74687b43671c6afe6573695d99501"
+    },
+    {
+      "path": "postfix/continuous/large/T11-A-v1-mcp-a1.meta.json",
+      "bytes": 2831,
+      "sha256": "26c8745c57384144b5fad617a446358f93541887178fa3dec306bf57bbab103a"
+    },
+    {
+      "path": "postfix/continuous/large/T11-A-v1-mcp-a1.prompt.txt",
+      "bytes": 351,
+      "sha256": "9a4c50703f487d609ff5341383fec1eec5c827b26a6fe48c495f557bf3acb689"
+    },
+    {
+      "path": "postfix/continuous/large/T11-A-v1-mcp-a1.stderr.txt",
+      "bytes": 786,
+      "sha256": "3d3cb7bd83cf80e2f14d0f776796c0b0e2a3ecd8b19a3e156fbd8db14e8b20c0"
+    },
+    {
+      "path": "postfix/continuous/large/T11-B-v2-mcp-a1.jsonl",
+      "bytes": 1792,
+      "sha256": "8997fbb466b50d372500229459e812fc17bd12c343dc6570049f12c7bde83e42"
+    },
+    {
+      "path": "postfix/continuous/large/T11-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1112,
+      "sha256": "a25c232c983e3e048f17d17365ef1aa463b808f0bd8036b821e4929497f7f899"
+    },
+    {
+      "path": "postfix/continuous/large/T11-B-v2-mcp-a1.meta.json",
+      "bytes": 2875,
+      "sha256": "399a446561c214cf5185f1c6cb3179bbad78a2edd55fbe1880969ee92623eca3"
+    },
+    {
+      "path": "postfix/continuous/large/T11-B-v2-mcp-a1.prompt.txt",
+      "bytes": 351,
+      "sha256": "9a4c50703f487d609ff5341383fec1eec5c827b26a6fe48c495f557bf3acb689"
+    },
+    {
+      "path": "postfix/continuous/large/T11-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "f75fb5d884eee13273bf10f0614955dd44a579df89467046a01253c63125e2f1"
+    },
+    {
+      "path": "postfix/continuous/large/T11-C-grep-read-a1.jsonl",
+      "bytes": 1615,
+      "sha256": "dd2fbbe8f82a4d92cd31445a7e1f532acc4ad0e17581eef6d358dc5f6cf099aa"
+    },
+    {
+      "path": "postfix/continuous/large/T11-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T11-C-grep-read-a1.meta.json",
+      "bytes": 2003,
+      "sha256": "f549ecf153d38ac57a1c592b49d0ff240ff27cd13afcb32932b39b8aea703cd7"
+    },
+    {
+      "path": "postfix/continuous/large/T11-C-grep-read-a1.prompt.txt",
+      "bytes": 351,
+      "sha256": "9a4c50703f487d609ff5341383fec1eec5c827b26a6fe48c495f557bf3acb689"
+    },
+    {
+      "path": "postfix/continuous/large/T11-C-grep-read-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "2b36d2c4d70333888d98eac1075168b4ed2462bfc4bafe5214fee09e54305997"
+    },
+    {
+      "path": "postfix/continuous/large/T11-D-hybrid-a1.jsonl",
+      "bytes": 1531,
+      "sha256": "5ad84d1a50b95bed8787eff3aac55653d2ccf9d938f0519131b97417a23de6ca"
+    },
+    {
+      "path": "postfix/continuous/large/T11-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "a9edc59156ada88a3128d6895b7d76b2588e3ea4fb2b9e06b3b6aac197e38909"
+    },
+    {
+      "path": "postfix/continuous/large/T11-D-hybrid-a1.meta.json",
+      "bytes": 2875,
+      "sha256": "5a2fc441c124f98226c4d4246e0272e388f88d13f310e632db848db083f2ba01"
+    },
+    {
+      "path": "postfix/continuous/large/T11-D-hybrid-a1.prompt.txt",
+      "bytes": 351,
+      "sha256": "9a4c50703f487d609ff5341383fec1eec5c827b26a6fe48c495f557bf3acb689"
+    },
+    {
+      "path": "postfix/continuous/large/T11-D-hybrid-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "768dff6c6ecbc8abd93e7d6ddb01be0416f409bcc8e3a3e4c272bfe92c51159c"
+    },
+    {
+      "path": "postfix/continuous/large/T12-A-v1-mcp-a1.jsonl",
+      "bytes": 1414407,
+      "sha256": "4c505d40f5d37fb66de56f951f0990893cdd5b7e934218ae77298f33e25dfb6c"
+    },
+    {
+      "path": "postfix/continuous/large/T12-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2617,
+      "sha256": "4c4fa859820a715669cfee9d2650dc32ce3045c5f8bd89b5d0483ee661fcb476"
+    },
+    {
+      "path": "postfix/continuous/large/T12-A-v1-mcp-a1.meta.json",
+      "bytes": 2805,
+      "sha256": "5cd41ed29c27a811be3ab2e1cc4ee3333975462cdcf9fd0275b8223765d9671b"
+    },
+    {
+      "path": "postfix/continuous/large/T12-A-v1-mcp-a1.prompt.txt",
+      "bytes": 325,
+      "sha256": "9c7f7ee476f6134abb76761f360ef82700efd8e56de501b97e8f8baee72f3dfc"
+    },
+    {
+      "path": "postfix/continuous/large/T12-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "1105372e0b76a89ba6a2f9e244e62ca8dcb227ac505831d4d404a20e7ca6787d"
+    },
+    {
+      "path": "postfix/continuous/large/T12-B-v2-mcp-a1.jsonl",
+      "bytes": 1281,
+      "sha256": "a6a36f84685ff87737bdf59a3c42f5b4969b00302425e7aa0c58d5c402c2ffdf"
+    },
+    {
+      "path": "postfix/continuous/large/T12-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1111,
+      "sha256": "64b571e4d36ad107f8a9d672cddd020cef531650de57441c89c1451ce997c3fa"
+    },
+    {
+      "path": "postfix/continuous/large/T12-B-v2-mcp-a1.meta.json",
+      "bytes": 2849,
+      "sha256": "17e746c6cede12e0142b6376de6794563c285553596909163ba1cb19f886839b"
+    },
+    {
+      "path": "postfix/continuous/large/T12-B-v2-mcp-a1.prompt.txt",
+      "bytes": 325,
+      "sha256": "9c7f7ee476f6134abb76761f360ef82700efd8e56de501b97e8f8baee72f3dfc"
+    },
+    {
+      "path": "postfix/continuous/large/T12-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "7e809d86aa351b5fc859bbaf4df36c0cac6d130bfe3f69daff93508127af6e51"
+    },
+    {
+      "path": "postfix/continuous/large/T12-C-grep-read-a1.jsonl",
+      "bytes": 177435,
+      "sha256": "d5f730855e3a14f5d8606329a302017def987a04de79fce57192ba11d469d45f"
+    },
+    {
+      "path": "postfix/continuous/large/T12-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/large/T12-C-grep-read-a1.meta.json",
+      "bytes": 1977,
+      "sha256": "eaafc44cbfe9879ccf70767669b446c9498e837baa10eaf0f467118888180ee4"
+    },
+    {
+      "path": "postfix/continuous/large/T12-C-grep-read-a1.prompt.txt",
+      "bytes": 325,
+      "sha256": "9c7f7ee476f6134abb76761f360ef82700efd8e56de501b97e8f8baee72f3dfc"
+    },
+    {
+      "path": "postfix/continuous/large/T12-C-grep-read-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "69760cc0437cac8435292a36702f07d189d7da9a92ca9ee68695d6e976c3cff3"
+    },
+    {
+      "path": "postfix/continuous/large/T12-D-hybrid-a1.jsonl",
+      "bytes": 1171,
+      "sha256": "4b580f4145d98e5d2ac440ae06ad66988c139ac824f72c5864eaebbb260dd25c"
+    },
+    {
+      "path": "postfix/continuous/large/T12-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "c80d3c917afd96fe968073030b4ad2e8a8038fea05afa5b609c079633e6e1097"
+    },
+    {
+      "path": "postfix/continuous/large/T12-D-hybrid-a1.meta.json",
+      "bytes": 2849,
+      "sha256": "46ea4c3be44dab23c9bc4a39e2872694bf48756ea88e6ff261316d76e9c675aa"
+    },
+    {
+      "path": "postfix/continuous/large/T12-D-hybrid-a1.prompt.txt",
+      "bytes": 325,
+      "sha256": "9c7f7ee476f6134abb76761f360ef82700efd8e56de501b97e8f8baee72f3dfc"
+    },
+    {
+      "path": "postfix/continuous/large/T12-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "6ad58da23d5629f24b8054f582610d714d38d4fc9823f9741aabbb91f9ef2c39"
+    },
+    {
+      "path": "postfix/continuous/small/T01-A-v1-mcp-a1.jsonl",
+      "bytes": 100868,
+      "sha256": "eba35517633e3d65d0f732d7279f90d31b1b99fa5271e0d997a6e4ac16e25f1a"
+    },
+    {
+      "path": "postfix/continuous/small/T01-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 7847,
+      "sha256": "4cd7e759da9bb8484d1a972187506d9d6dbc73581fa5cb911e4d90663dc72964"
+    },
+    {
+      "path": "postfix/continuous/small/T01-A-v1-mcp-a1.meta.json",
+      "bytes": 3437,
+      "sha256": "2907ce475d3b577b96719db3b4d99aef3f69e4b88a953d743180ec26840c527c"
+    },
+    {
+      "path": "postfix/continuous/small/T01-A-v1-mcp-a1.prompt.txt",
+      "bytes": 974,
+      "sha256": "82abedbd128669a53043628684f24de573ddf651fbd778b2ddb992fbd9c1a577"
+    },
+    {
+      "path": "postfix/continuous/small/T01-A-v1-mcp-a1.stderr.txt",
+      "bytes": 2081,
+      "sha256": "c9dca64b94a000eeb81cce383964696038c859afca8e0c0814994af368f50e0e"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 27865,
+      "sha256": "ccadc3586eb81800b753842613cfd60e038730e6e393508866e2b55c6bc5bc9a"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1630,
+      "sha256": "54b1650877a462a6f2c470a31cf0cb6d9860b2582763086f7eb920c62f2b5226"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3589,
+      "sha256": "dcae5b45bbe201b904b474bf99cd9a075bb0f0a837d8a7390ed10caa275f2c6a"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1083,
+      "sha256": "ac1ee54cc2165046d4e733823581918905e73f6d582db30da2a92f5e20c9d7b6"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "d1fa9747bb5e4600df070ad82dc57991d89f2bc6586cf9b9cc434d7572f1584d"
+    },
+    {
+      "path": "postfix/continuous/small/T01-C-grep-read-a1.jsonl",
+      "bytes": 7429,
+      "sha256": "cc10c60c312732c172cb42d9ec066b9020669ee5f756a36a27e5fbabb0d58eaa"
+    },
+    {
+      "path": "postfix/continuous/small/T01-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T01-C-grep-read-a1.meta.json",
+      "bytes": 2469,
+      "sha256": "f5b3c08763a277c6b9030e7275e223ff930f7a0b8e1f402742fce91be36aa08e"
+    },
+    {
+      "path": "postfix/continuous/small/T01-C-grep-read-a1.prompt.txt",
+      "bytes": 834,
+      "sha256": "1b1f138554be72cd8a53baecc3cbffba6fd3a10c38b7846c7c009ff25c431e88"
+    },
+    {
+      "path": "postfix/continuous/small/T01-C-grep-read-a1.stderr.txt",
+      "bytes": 1571,
+      "sha256": "fd74bf122c916a78d597f1415772bb6fa0f058e03eb868e5b0ed7f7495a73831"
+    },
+    {
+      "path": "postfix/continuous/small/T01-D-hybrid-a1.jsonl",
+      "bytes": 4522,
+      "sha256": "3cc405df86756595a0d65194422f2067bbb6c02ccd13a79808ed18af9faaf4c3"
+    },
+    {
+      "path": "postfix/continuous/small/T01-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "7c0d6da7ab25848a3ea5f3e76072216672a6aa285ee4a26a409102c93242f914"
+    },
+    {
+      "path": "postfix/continuous/small/T01-D-hybrid-a1.meta.json",
+      "bytes": 3815,
+      "sha256": "1bc4f094b6e50ac2c5707073084e2a544de11572734bb63f3274f5d09cea62ce"
+    },
+    {
+      "path": "postfix/continuous/small/T01-D-hybrid-a1.prompt.txt",
+      "bytes": 1308,
+      "sha256": "24c7cb16a84b949e4c51cbbb7696690e68e6e8713265f9d5cc38878ef0929832"
+    },
+    {
+      "path": "postfix/continuous/small/T01-D-hybrid-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "5c3dde505eae81db0f8d63997a9de0d4ff7d599e331aaa977b63fd48f3031715"
+    },
+    {
+      "path": "postfix/continuous/small/T02-A-v1-mcp-a1.jsonl",
+      "bytes": 3039,
+      "sha256": "14390bef6fb639e1d8cd8ed6caddbd28df4371b5c201e23816d2b85dcb6400ca"
+    },
+    {
+      "path": "postfix/continuous/small/T02-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2107,
+      "sha256": "bda17ba7c02c3275e1013fbab0d9b93008fbb611df4ddbac8886a585adea65b6"
+    },
+    {
+      "path": "postfix/continuous/small/T02-A-v1-mcp-a1.meta.json",
+      "bytes": 2845,
+      "sha256": "75ef28272158cafb2b2b923d86e771d5e3eb73013969fb92391f917f68b4bd5e"
+    },
+    {
+      "path": "postfix/continuous/small/T02-A-v1-mcp-a1.prompt.txt",
+      "bytes": 355,
+      "sha256": "064fc59575418db5003184f2a9a3965f85b11804523dddc05b397cc81d119cbe"
+    },
+    {
+      "path": "postfix/continuous/small/T02-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "10d2ece67e51561d58ab1d148f358e38f16d3c3c30bf829fd54c033108811c63"
+    },
+    {
+      "path": "postfix/continuous/small/T02-B-v2-mcp-a1.jsonl",
+      "bytes": 2597,
+      "sha256": "bc7e6ad090187dd84b3142b9279bfde6308b994b03c21b9aaa0bbf19f5a06249"
+    },
+    {
+      "path": "postfix/continuous/small/T02-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1369,
+      "sha256": "696004c58217e044ef1796f08a58684ad1d1567c152c97b85da26f8ca1f6b713"
+    },
+    {
+      "path": "postfix/continuous/small/T02-B-v2-mcp-a1.meta.json",
+      "bytes": 2889,
+      "sha256": "1844190c254096bc6076b22892599e5bdc5a28da70cd598bc64c82e8c68d1e9e"
+    },
+    {
+      "path": "postfix/continuous/small/T02-B-v2-mcp-a1.prompt.txt",
+      "bytes": 355,
+      "sha256": "064fc59575418db5003184f2a9a3965f85b11804523dddc05b397cc81d119cbe"
+    },
+    {
+      "path": "postfix/continuous/small/T02-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "142890485b1744e13cde57c77077df64d337722ee70a13012370a719696c97d2"
+    },
+    {
+      "path": "postfix/continuous/small/T02-C-grep-read-a1.jsonl",
+      "bytes": 1043,
+      "sha256": "e004e2149a49337ce56cdac08aad2a3fdabbc29083ae4ec839793a4b4e50b8ba"
+    },
+    {
+      "path": "postfix/continuous/small/T02-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T02-C-grep-read-a1.meta.json",
+      "bytes": 2017,
+      "sha256": "31b5bfd2dfc6dd3448cb0ce1fe916bc53e31f7341f73883b4ead97c63f645b53"
+    },
+    {
+      "path": "postfix/continuous/small/T02-C-grep-read-a1.prompt.txt",
+      "bytes": 355,
+      "sha256": "064fc59575418db5003184f2a9a3965f85b11804523dddc05b397cc81d119cbe"
+    },
+    {
+      "path": "postfix/continuous/small/T02-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "59ea7a1b8bec3e811bd9b67a07b4e4bdedb4e9cb5c3f9c1c6bcdc39882139659"
+    },
+    {
+      "path": "postfix/continuous/small/T02-D-hybrid-a1.jsonl",
+      "bytes": 1083,
+      "sha256": "37c615df889b567987c8a89858dacf43600bb5bf9738fe687c2ba8169acd98c3"
+    },
+    {
+      "path": "postfix/continuous/small/T02-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "e7858e27aceca97b5aae4ddaa5c549371e5d0297fa052ba56341fddbb88b8890"
+    },
+    {
+      "path": "postfix/continuous/small/T02-D-hybrid-a1.meta.json",
+      "bytes": 2888,
+      "sha256": "c25cd16a991f532e721f5323ea7c4bc8936d72be0d495ae271958cc81851eb5a"
+    },
+    {
+      "path": "postfix/continuous/small/T02-D-hybrid-a1.prompt.txt",
+      "bytes": 355,
+      "sha256": "064fc59575418db5003184f2a9a3965f85b11804523dddc05b397cc81d119cbe"
+    },
+    {
+      "path": "postfix/continuous/small/T02-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "d7389a07a70d999363885a7d701b070c8e8568dd612e45f7076f59cc51eaf253"
+    },
+    {
+      "path": "postfix/continuous/small/T03-A-v1-mcp-a1.jsonl",
+      "bytes": 2791,
+      "sha256": "7e326eb68e1ff31e62cb369ce3c4dc8d457bc8cbcf15c64d06a5e74485fd1ede"
+    },
+    {
+      "path": "postfix/continuous/small/T03-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2107,
+      "sha256": "8f3919042cf9212fd44f0d7549c68c54e0499c93c322f054cd996b3a40bc1b9e"
+    },
+    {
+      "path": "postfix/continuous/small/T03-A-v1-mcp-a1.meta.json",
+      "bytes": 2806,
+      "sha256": "39e34d8941368516149da42d9ff68d8301342f52d6be26160378447dc2182816"
+    },
+    {
+      "path": "postfix/continuous/small/T03-A-v1-mcp-a1.prompt.txt",
+      "bytes": 316,
+      "sha256": "573aad020013f1503ec77457e66fb010406aac1d00bce7051176f318ca4b7b39"
+    },
+    {
+      "path": "postfix/continuous/small/T03-A-v1-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "28ed6e39b1ba5b74a2ceae309a431b260fbbcf8fe152d37924cdb4aae28d83a0"
+    },
+    {
+      "path": "postfix/continuous/small/T03-B-v2-mcp-a1.jsonl",
+      "bytes": 3244,
+      "sha256": "da28d4c36270452ee01ea80d7789ccaeb72fe834b55ce45c26eb479a96565f75"
+    },
+    {
+      "path": "postfix/continuous/small/T03-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "ea93e9fe440b13fd13b3db0725eb9366475b6d45758452faf2a7d4a25365611a"
+    },
+    {
+      "path": "postfix/continuous/small/T03-B-v2-mcp-a1.meta.json",
+      "bytes": 2849,
+      "sha256": "9af7c4fd0b87c927e526bec90feb1bcd9382410a6c4013b3b40a406a46769a56"
+    },
+    {
+      "path": "postfix/continuous/small/T03-B-v2-mcp-a1.prompt.txt",
+      "bytes": 316,
+      "sha256": "573aad020013f1503ec77457e66fb010406aac1d00bce7051176f318ca4b7b39"
+    },
+    {
+      "path": "postfix/continuous/small/T03-B-v2-mcp-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "186c95ba4b4d7627b573af0a5e52ed55406976ee657cd23ca9cd1dbe06a56694"
+    },
+    {
+      "path": "postfix/continuous/small/T03-C-grep-read-a1.jsonl",
+      "bytes": 2409,
+      "sha256": "e3d0976893fe7fa23cf6972e0bdeb455707a7b2c9ae10a44dc524588d7f24cf7"
+    },
+    {
+      "path": "postfix/continuous/small/T03-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T03-C-grep-read-a1.meta.json",
+      "bytes": 1976,
+      "sha256": "468df034b44d8c1e5ac3beaf8ae21acea695a555c6e3591dd6ca99dd5db99c9f"
+    },
+    {
+      "path": "postfix/continuous/small/T03-C-grep-read-a1.prompt.txt",
+      "bytes": 316,
+      "sha256": "573aad020013f1503ec77457e66fb010406aac1d00bce7051176f318ca4b7b39"
+    },
+    {
+      "path": "postfix/continuous/small/T03-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "698d06ec7e8c34c305007b7cb2329af0c00ceeaf9ca25493470b97932015670c"
+    },
+    {
+      "path": "postfix/continuous/small/T03-D-hybrid-a1.jsonl",
+      "bytes": 3619,
+      "sha256": "48e132f54133e1899402bd17b64e7806ca0d593043c2c3308716cafc0288633a"
+    },
+    {
+      "path": "postfix/continuous/small/T03-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "c057f20274968122e876a9e69a003a5c5c5a2ef05e8cfc02eb7fa3c5b4cb706e"
+    },
+    {
+      "path": "postfix/continuous/small/T03-D-hybrid-a1.meta.json",
+      "bytes": 2850,
+      "sha256": "ada40cb52849c5b741c8f220946e7de8284e10eac9c708fe6b8938fbd514de38"
+    },
+    {
+      "path": "postfix/continuous/small/T03-D-hybrid-a1.prompt.txt",
+      "bytes": 316,
+      "sha256": "573aad020013f1503ec77457e66fb010406aac1d00bce7051176f318ca4b7b39"
+    },
+    {
+      "path": "postfix/continuous/small/T03-D-hybrid-a1.stderr.txt",
+      "bytes": 539,
+      "sha256": "894d740c44b2273bd8094f9719366795d53bbd104b435a09008eb02457c6cbce"
+    },
+    {
+      "path": "postfix/continuous/small/T04-A-v1-mcp-a1.jsonl",
+      "bytes": 35561,
+      "sha256": "d92186be73ae6da5d8ac3c8796d65f1aee88a93a3c7a371e37b6305ab35847e7"
+    },
+    {
+      "path": "postfix/continuous/small/T04-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3640,
+      "sha256": "a8f9b380752e73f1aaaa4092e432cd89f7fb01049f23229f48e913fd706a7816"
+    },
+    {
+      "path": "postfix/continuous/small/T04-A-v1-mcp-a1.meta.json",
+      "bytes": 2834,
+      "sha256": "afd51631c6dbe7a6da2286f5200b126579895ea6b3a1848e6a34b07caee16f53"
+    },
+    {
+      "path": "postfix/continuous/small/T04-A-v1-mcp-a1.prompt.txt",
+      "bytes": 344,
+      "sha256": "d772a0914f3fb5e9303e98f363162a907187549b8469e26651fd250e76876c23"
+    },
+    {
+      "path": "postfix/continuous/small/T04-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "cb9ae03b146acfaa18a32bef843f1b813398d435fcffccd33e9110d7e18cca2c"
+    },
+    {
+      "path": "postfix/continuous/small/T04-B-v2-mcp-a1.jsonl",
+      "bytes": 3523,
+      "sha256": "c533fc48245073af46d04c32b7943500e1e8fd6bdcf01ae0fa88fcd9e5e9c062"
+    },
+    {
+      "path": "postfix/continuous/small/T04-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1112,
+      "sha256": "ffbd8035ee3b07adc691245f55a7cc25283a68cc1acb259ecdd94d4635803910"
+    },
+    {
+      "path": "postfix/continuous/small/T04-B-v2-mcp-a1.meta.json",
+      "bytes": 2878,
+      "sha256": "cc8da57ef28561d56791758c7b7e3d08bfd6c60ab777e5249aa6711f40d3146d"
+    },
+    {
+      "path": "postfix/continuous/small/T04-B-v2-mcp-a1.prompt.txt",
+      "bytes": 344,
+      "sha256": "d772a0914f3fb5e9303e98f363162a907187549b8469e26651fd250e76876c23"
+    },
+    {
+      "path": "postfix/continuous/small/T04-B-v2-mcp-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "8bcd41cb6171bcae1df707b1e7fffc136965aa7e0ac68790760f28a9b25ac208"
+    },
+    {
+      "path": "postfix/continuous/small/T04-C-grep-read-a1.jsonl",
+      "bytes": 1366,
+      "sha256": "de72d38d09e2963b57363ae0a74ea2ddeb1cfe8979d7f56431d2b0d80de5e827"
+    },
+    {
+      "path": "postfix/continuous/small/T04-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T04-C-grep-read-a1.meta.json",
+      "bytes": 2006,
+      "sha256": "5f542b8ab5fd7eb1006182067e53b45b055b356032188843889d4a1e48f4bd5c"
+    },
+    {
+      "path": "postfix/continuous/small/T04-C-grep-read-a1.prompt.txt",
+      "bytes": 344,
+      "sha256": "d772a0914f3fb5e9303e98f363162a907187549b8469e26651fd250e76876c23"
+    },
+    {
+      "path": "postfix/continuous/small/T04-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "2042c76a9a41fb4ce6a33ef67cf3c159524b3c17aa9cf5656736925b4dd567a1"
+    },
+    {
+      "path": "postfix/continuous/small/T04-D-hybrid-a1.jsonl",
+      "bytes": 1431,
+      "sha256": "9f15f779297bf2c7b3b243df61371bb16b9134811f8a5bef162befe2dd629952"
+    },
+    {
+      "path": "postfix/continuous/small/T04-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "166e910d5c921455d88f92cb6a791a5a8b1e155fd03f12dad64aad534feedc6f"
+    },
+    {
+      "path": "postfix/continuous/small/T04-D-hybrid-a1.meta.json",
+      "bytes": 2877,
+      "sha256": "2d08142ce5117a204d21683455017eb7ab661e57897de2bc047a97733d7c7d48"
+    },
+    {
+      "path": "postfix/continuous/small/T04-D-hybrid-a1.prompt.txt",
+      "bytes": 344,
+      "sha256": "d772a0914f3fb5e9303e98f363162a907187549b8469e26651fd250e76876c23"
+    },
+    {
+      "path": "postfix/continuous/small/T04-D-hybrid-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "a3c275198f12b2bee466fe70e096a81ccacbad3a3aede2a704c19c970063277d"
+    },
+    {
+      "path": "postfix/continuous/small/T05-A-v1-mcp-a1.jsonl",
+      "bytes": 16668,
+      "sha256": "1ff7757d293097e8b3e7ad39612d61d94244ac58b525d7dffc012504d1f73eec"
+    },
+    {
+      "path": "postfix/continuous/small/T05-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 4137,
+      "sha256": "e517599746fc292da0494bfb41b1984f64db19e5ce40393150effae06b078dd3"
+    },
+    {
+      "path": "postfix/continuous/small/T05-A-v1-mcp-a1.meta.json",
+      "bytes": 2943,
+      "sha256": "13ec99c194768f138e0e91fc5c23fa0988002fa5b41b64b1e3932ea656f57493"
+    },
+    {
+      "path": "postfix/continuous/small/T05-A-v1-mcp-a1.prompt.txt",
+      "bytes": 453,
+      "sha256": "c422c626e0a65430da3f9f34040d63d9f2cbc0e4caa34187d5707f7d2cdd1df6"
+    },
+    {
+      "path": "postfix/continuous/small/T05-A-v1-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "6fe1e8840a735b7bab018df523eeb5be13b72e71c90153dff19857c99879017c"
+    },
+    {
+      "path": "postfix/continuous/small/T05-B-v2-mcp-a1.jsonl",
+      "bytes": 3564,
+      "sha256": "3886b220145f517c06256d38181b8b9eb5885850ad25aeed7ad059e0a292d6fe"
+    },
+    {
+      "path": "postfix/continuous/small/T05-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "8b01b2177ec340a6a94bdef8375c530375426ac4f9198dcb4acf42fffb98951e"
+    },
+    {
+      "path": "postfix/continuous/small/T05-B-v2-mcp-a1.meta.json",
+      "bytes": 2987,
+      "sha256": "9df10c06ab0c0c287f31ee79904ed4419cd46278fb7ab3f0566797d4813f6261"
+    },
+    {
+      "path": "postfix/continuous/small/T05-B-v2-mcp-a1.prompt.txt",
+      "bytes": 453,
+      "sha256": "c422c626e0a65430da3f9f34040d63d9f2cbc0e4caa34187d5707f7d2cdd1df6"
+    },
+    {
+      "path": "postfix/continuous/small/T05-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "48ea8497e7ab48587dd07eabe2debc7d6dbeaf6c7df401259bc9739a43ac947e"
+    },
+    {
+      "path": "postfix/continuous/small/T05-C-grep-read-a1.jsonl",
+      "bytes": 2294,
+      "sha256": "cb640913a64af3cfd782b6bacf72b62fabaebafb5e933238cddac3defd66ca91"
+    },
+    {
+      "path": "postfix/continuous/small/T05-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T05-C-grep-read-a1.meta.json",
+      "bytes": 2115,
+      "sha256": "2766a37cb9b29bafbea0dc98db662f48501cc7a243381f0eb7b38ae27eef5322"
+    },
+    {
+      "path": "postfix/continuous/small/T05-C-grep-read-a1.prompt.txt",
+      "bytes": 453,
+      "sha256": "c422c626e0a65430da3f9f34040d63d9f2cbc0e4caa34187d5707f7d2cdd1df6"
+    },
+    {
+      "path": "postfix/continuous/small/T05-C-grep-read-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "a2f0d351872410a2b7e5c6604ee9ef632bf29e4621bd9368f4488f0c316ec0fe"
+    },
+    {
+      "path": "postfix/continuous/small/T05-D-hybrid-a1.jsonl",
+      "bytes": 2293,
+      "sha256": "dc6737a78e3bf1b21718d70a3bb6ee26551169a9a2c589fe68f99db435cd7239"
+    },
+    {
+      "path": "postfix/continuous/small/T05-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "fcec8f3b5b82720dc22dcfe22fae6f40f1b69aa6bd2e079ae90c22b791d43ca2"
+    },
+    {
+      "path": "postfix/continuous/small/T05-D-hybrid-a1.meta.json",
+      "bytes": 2986,
+      "sha256": "66e43e071524b84bcb233e5bd79d68958296b1b4d3296d3fc2aeeec0d88f1f09"
+    },
+    {
+      "path": "postfix/continuous/small/T05-D-hybrid-a1.prompt.txt",
+      "bytes": 453,
+      "sha256": "c422c626e0a65430da3f9f34040d63d9f2cbc0e4caa34187d5707f7d2cdd1df6"
+    },
+    {
+      "path": "postfix/continuous/small/T05-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "a9fcb9b4db03b2279aaf3c8fb20e410c083fee1cd4bc340fae27fb91a695f960"
+    },
+    {
+      "path": "postfix/continuous/small/T06-A-v1-mcp-a1.jsonl",
+      "bytes": 235078,
+      "sha256": "9e3b4ff7c21de61e0cccc69511205333650542da5d0655133399f023ce3bc892"
+    },
+    {
+      "path": "postfix/continuous/small/T06-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 6105,
+      "sha256": "eb3bd78f881bdc7814d0549f767b81724407f304c5fd1ac85775569d7303b862"
+    },
+    {
+      "path": "postfix/continuous/small/T06-A-v1-mcp-a1.meta.json",
+      "bytes": 2922,
+      "sha256": "9ee8bd82d0627fd21cfe41bf6896109c1e01422f8b3fa82183c464d03a37195f"
+    },
+    {
+      "path": "postfix/continuous/small/T06-A-v1-mcp-a1.prompt.txt",
+      "bytes": 433,
+      "sha256": "b2f0fa60c6a683873c274e2ef8fa184f8e8132a2345670223ed32657da38abbb"
+    },
+    {
+      "path": "postfix/continuous/small/T06-A-v1-mcp-a1.stderr.txt",
+      "bytes": 1257,
+      "sha256": "cbface4902c3063d7a421219305467169f49349f3cdb84936f45986c20308fce"
+    },
+    {
+      "path": "postfix/continuous/small/T06-B-v2-mcp-a1.jsonl",
+      "bytes": 2316,
+      "sha256": "c18cb6b5b5cad19d6e0259c84ff147face37b942fe74464651945ca35e8b2c85"
+    },
+    {
+      "path": "postfix/continuous/small/T06-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "3e37f2526488734bbeeb03a7acd1776807f41a90a1b30190015ec3da4ece0cf7"
+    },
+    {
+      "path": "postfix/continuous/small/T06-B-v2-mcp-a1.meta.json",
+      "bytes": 2966,
+      "sha256": "a2d4cd1f1965ace5e1627adb50b4b73451d80bf55a5c147fd83e0976cdbe4fc5"
+    },
+    {
+      "path": "postfix/continuous/small/T06-B-v2-mcp-a1.prompt.txt",
+      "bytes": 433,
+      "sha256": "b2f0fa60c6a683873c274e2ef8fa184f8e8132a2345670223ed32657da38abbb"
+    },
+    {
+      "path": "postfix/continuous/small/T06-B-v2-mcp-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "87d0742214417387b0da51bfd79ad13fc7002d6facdea714358aa5942211e6a4"
+    },
+    {
+      "path": "postfix/continuous/small/T06-C-grep-read-a1.jsonl",
+      "bytes": 1786,
+      "sha256": "6bc9ceb7b7b5806609d4f5b7dacc64796a7d85669d636b97bc829a0ce55e8ae9"
+    },
+    {
+      "path": "postfix/continuous/small/T06-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T06-C-grep-read-a1.meta.json",
+      "bytes": 2095,
+      "sha256": "f7ea641f9680ee53d5137adf16afde3e694d63e04e565baf3ad6eba5e6a6770e"
+    },
+    {
+      "path": "postfix/continuous/small/T06-C-grep-read-a1.prompt.txt",
+      "bytes": 433,
+      "sha256": "b2f0fa60c6a683873c274e2ef8fa184f8e8132a2345670223ed32657da38abbb"
+    },
+    {
+      "path": "postfix/continuous/small/T06-C-grep-read-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "3b1370706b218701e8f8537ef064b11d3347700c15057e811301f798bd2f71b8"
+    },
+    {
+      "path": "postfix/continuous/small/T06-D-hybrid-a1.jsonl",
+      "bytes": 1501,
+      "sha256": "c2bd3f326e02231f98e3ae9bc9492e7420750a472e1cf43461a43d923f6cb1ad"
+    },
+    {
+      "path": "postfix/continuous/small/T06-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "e3c97108fed4893fc93697413347d751207237f50ee941a439ddff5bd17d3809"
+    },
+    {
+      "path": "postfix/continuous/small/T06-D-hybrid-a1.meta.json",
+      "bytes": 2967,
+      "sha256": "07a2da9ac49b8761761ba9c20641511e272cfba29ac00c94e859e75c8b16dd10"
+    },
+    {
+      "path": "postfix/continuous/small/T06-D-hybrid-a1.prompt.txt",
+      "bytes": 433,
+      "sha256": "b2f0fa60c6a683873c274e2ef8fa184f8e8132a2345670223ed32657da38abbb"
+    },
+    {
+      "path": "postfix/continuous/small/T06-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "7d820bde1241a69c86b242aa4c2fa32fa0f197961f60f6933f16c6dc21920f6f"
+    },
+    {
+      "path": "postfix/continuous/small/T07-A-v1-mcp-a1.jsonl",
+      "bytes": 10365,
+      "sha256": "0ade42509acf58d5ce5ff7884a9d8bfd074177f609e3c40a3bf43ee996296c69"
+    },
+    {
+      "path": "postfix/continuous/small/T07-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2611,
+      "sha256": "7589084ea31efc3db44c0326c165a986b51064e3d8ce5efad76c82d20b96dd25"
+    },
+    {
+      "path": "postfix/continuous/small/T07-A-v1-mcp-a1.meta.json",
+      "bytes": 2854,
+      "sha256": "b01565149947c65729e203e0a51d4658cdb8ea90db3562c5fc806d7abd9274dd"
+    },
+    {
+      "path": "postfix/continuous/small/T07-A-v1-mcp-a1.prompt.txt",
+      "bytes": 364,
+      "sha256": "59663f45bafa6e2c0d90d85dd86e27f847224e606b1b8223cbd77f925ad9676d"
+    },
+    {
+      "path": "postfix/continuous/small/T07-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "ab1de15960a553ef985eb77a3e150a07dd24daf13281482e140c0fdbd61e4f9b"
+    },
+    {
+      "path": "postfix/continuous/small/T07-B-v2-mcp-a1.jsonl",
+      "bytes": 2822,
+      "sha256": "f21322267a90b82a91a3d54e95adf5bc18b9c5e7579c675c460f19ceb7980985"
+    },
+    {
+      "path": "postfix/continuous/small/T07-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1368,
+      "sha256": "a30f9a75d0844a057b585e36c573069ced01f5e71763ea5e9abf53db0fc6009b"
+    },
+    {
+      "path": "postfix/continuous/small/T07-B-v2-mcp-a1.meta.json",
+      "bytes": 2898,
+      "sha256": "0a829710241f55573df40dba6f90c89a7ce43e72fc6431561e5fe70313586b94"
+    },
+    {
+      "path": "postfix/continuous/small/T07-B-v2-mcp-a1.prompt.txt",
+      "bytes": 364,
+      "sha256": "59663f45bafa6e2c0d90d85dd86e27f847224e606b1b8223cbd77f925ad9676d"
+    },
+    {
+      "path": "postfix/continuous/small/T07-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "4f3010810f519cef5888a99863335c9ab19e7e32a8100f1cd566bb15f32fb23d"
+    },
+    {
+      "path": "postfix/continuous/small/T07-C-grep-read-a1.jsonl",
+      "bytes": 3488,
+      "sha256": "3f69471de45b85cc9b9479d6265c4a3ea9918f51c7d0727b60edbec976a3da4a"
+    },
+    {
+      "path": "postfix/continuous/small/T07-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T07-C-grep-read-a1.meta.json",
+      "bytes": 2026,
+      "sha256": "654c857eda0a1d8169ccee2eb5f8142f62dc5e4959b37850ba4be62fc1f359eb"
+    },
+    {
+      "path": "postfix/continuous/small/T07-C-grep-read-a1.prompt.txt",
+      "bytes": 364,
+      "sha256": "59663f45bafa6e2c0d90d85dd86e27f847224e606b1b8223cbd77f925ad9676d"
+    },
+    {
+      "path": "postfix/continuous/small/T07-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "69927891e2b1d0dd4b714369763bc8e4443621f8bf5c9d0a84e52184357394a6"
+    },
+    {
+      "path": "postfix/continuous/small/T07-D-hybrid-a1.jsonl",
+      "bytes": 3367,
+      "sha256": "d322013e92678fdb5a52f0532f18a7e55d9a5abb267ca5b33402625803b5b17f"
+    },
+    {
+      "path": "postfix/continuous/small/T07-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "82fe011ac82c0d4120b3fc142fe492b7323f6b8a4efc66600b1bb46291d1364c"
+    },
+    {
+      "path": "postfix/continuous/small/T07-D-hybrid-a1.meta.json",
+      "bytes": 2898,
+      "sha256": "08dda648392fef5a5df672fbf9b2ccfe1c52fb3efdc685874eae6661d0ff4eb2"
+    },
+    {
+      "path": "postfix/continuous/small/T07-D-hybrid-a1.prompt.txt",
+      "bytes": 364,
+      "sha256": "59663f45bafa6e2c0d90d85dd86e27f847224e606b1b8223cbd77f925ad9676d"
+    },
+    {
+      "path": "postfix/continuous/small/T07-D-hybrid-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "3e028c9fc74b75481f91dba51241bfa5d83f8a157aed82b6825a9e7718321e8a"
+    },
+    {
+      "path": "postfix/continuous/small/T08-A-v1-mcp-a1.jsonl",
+      "bytes": 62036,
+      "sha256": "b8ddb872f53fc9fa7c13c2617fa0feab3e688ae16b5e6e7f39f8d725f758918c"
+    },
+    {
+      "path": "postfix/continuous/small/T08-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3130,
+      "sha256": "cea95fc552ff13176019bfd6543a8272cee2df8a2dc4349826cf9ee496a9f63a"
+    },
+    {
+      "path": "postfix/continuous/small/T08-A-v1-mcp-a1.meta.json",
+      "bytes": 2969,
+      "sha256": "e1838e4c2f606c7bbb28ca98b17ae45f37ab4719e9385d8f1929d89364f20fcd"
+    },
+    {
+      "path": "postfix/continuous/small/T08-A-v1-mcp-a1.prompt.txt",
+      "bytes": 479,
+      "sha256": "54b4b327fb4bc22d1b11d9cc7cc594c6f7ea64d695b76315eaaa9d49c90e0027"
+    },
+    {
+      "path": "postfix/continuous/small/T08-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "a0af6ffd5b23f7e5649df521a6f2c7e7f2f041be759a72f9efc85a09d4ab547d"
+    },
+    {
+      "path": "postfix/continuous/small/T08-B-v2-mcp-a1.jsonl",
+      "bytes": 2178,
+      "sha256": "e9d6915cc21f255e65a911c88ce66f14d19849bb5c9d9a43e776b79bb2124360"
+    },
+    {
+      "path": "postfix/continuous/small/T08-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1111,
+      "sha256": "12e534709a5745cba9e195fdf38c3c3c46ad26c16f022242a4a8aabef9e6d44b"
+    },
+    {
+      "path": "postfix/continuous/small/T08-B-v2-mcp-a1.meta.json",
+      "bytes": 3013,
+      "sha256": "576a9ea6c76ec23012aba258b8534abdfdbb14a3a0bb25f79f3984bf7ac14dce"
+    },
+    {
+      "path": "postfix/continuous/small/T08-B-v2-mcp-a1.prompt.txt",
+      "bytes": 479,
+      "sha256": "54b4b327fb4bc22d1b11d9cc7cc594c6f7ea64d695b76315eaaa9d49c90e0027"
+    },
+    {
+      "path": "postfix/continuous/small/T08-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "f8d9880a47dd7539d8f6d737c6f8a87fb1bbb8eddf2c066368c90a274ef4b68b"
+    },
+    {
+      "path": "postfix/continuous/small/T08-C-grep-read-a1.jsonl",
+      "bytes": 1998,
+      "sha256": "cda66715230912d30b59a1398950c73db1878e124129011e543601f2c1383d37"
+    },
+    {
+      "path": "postfix/continuous/small/T08-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T08-C-grep-read-a1.meta.json",
+      "bytes": 2141,
+      "sha256": "ddab68c23540fb54ac146bf03db1ab8f6b7de2c296e61d03b0547fce93c7e37f"
+    },
+    {
+      "path": "postfix/continuous/small/T08-C-grep-read-a1.prompt.txt",
+      "bytes": 479,
+      "sha256": "54b4b327fb4bc22d1b11d9cc7cc594c6f7ea64d695b76315eaaa9d49c90e0027"
+    },
+    {
+      "path": "postfix/continuous/small/T08-C-grep-read-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "a25e66eb6f07ff867875aac2b71e87e0fac6d772d9cc351aa871058749e6089a"
+    },
+    {
+      "path": "postfix/continuous/small/T08-D-hybrid-a1.jsonl",
+      "bytes": 1970,
+      "sha256": "92fba6d593afac8dfecd9b678782fdb08a63219d5c5ca4be71deb3e21f94fd18"
+    },
+    {
+      "path": "postfix/continuous/small/T08-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "1412bb71f092e811f8baa28438b8baa496adeafb27cf0785648facc5208a4600"
+    },
+    {
+      "path": "postfix/continuous/small/T08-D-hybrid-a1.meta.json",
+      "bytes": 3013,
+      "sha256": "ee737107201213e9a9645dd5236a317abe7fe1ee5eb58bbe6f12c80906dd1020"
+    },
+    {
+      "path": "postfix/continuous/small/T08-D-hybrid-a1.prompt.txt",
+      "bytes": 479,
+      "sha256": "54b4b327fb4bc22d1b11d9cc7cc594c6f7ea64d695b76315eaaa9d49c90e0027"
+    },
+    {
+      "path": "postfix/continuous/small/T08-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "c001a3dcb385c86230515e7e21116c7f53eef23c4c771288f9283c25a70e5c63"
+    },
+    {
+      "path": "postfix/continuous/small/T09-A-v1-mcp-a1.jsonl",
+      "bytes": 19943,
+      "sha256": "acabacceedd999fbcc5e1c9276055920bd90159d7332f05b213f9239cce77160"
+    },
+    {
+      "path": "postfix/continuous/small/T09-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2619,
+      "sha256": "0a6d950bfd71129b5367a92bf7ab0c7660cc81789293b0be8119b7c98c90108e"
+    },
+    {
+      "path": "postfix/continuous/small/T09-A-v1-mcp-a1.meta.json",
+      "bytes": 2937,
+      "sha256": "5e93d26ae396d810c6903718b855840daf95500409e4ad0c76b7f7cd83a79f7c"
+    },
+    {
+      "path": "postfix/continuous/small/T09-A-v1-mcp-a1.prompt.txt",
+      "bytes": 441,
+      "sha256": "21500e6f38064f91d88439c48ef186a27fce4bc3e1ef95d32474ce4943bc28e3"
+    },
+    {
+      "path": "postfix/continuous/small/T09-A-v1-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "663fb8370c382adc13723b5851f9840d875eec839b5ecfcd02407b0406371db6"
+    },
+    {
+      "path": "postfix/continuous/small/T09-B-v2-mcp-a1.jsonl",
+      "bytes": 2256,
+      "sha256": "425948b009b99a5509b91c9f00357197a77de50f3f9009bc043a4ec950f919ee"
+    },
+    {
+      "path": "postfix/continuous/small/T09-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1112,
+      "sha256": "d4ca988672c6179473defade53c26dc398bc2fee4532975af0bc82b45ada7850"
+    },
+    {
+      "path": "postfix/continuous/small/T09-B-v2-mcp-a1.meta.json",
+      "bytes": 2981,
+      "sha256": "55e87c7c8560cac5b144083943027d75d37496e5a91508cf9e67049b6a2d76ac"
+    },
+    {
+      "path": "postfix/continuous/small/T09-B-v2-mcp-a1.prompt.txt",
+      "bytes": 441,
+      "sha256": "21500e6f38064f91d88439c48ef186a27fce4bc3e1ef95d32474ce4943bc28e3"
+    },
+    {
+      "path": "postfix/continuous/small/T09-B-v2-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "60f2746557e4fee5a01724595c8469014fa19c6b9068bf01e507aed088432cea"
+    },
+    {
+      "path": "postfix/continuous/small/T09-C-grep-read-a1.jsonl",
+      "bytes": 17216,
+      "sha256": "718ff916b16855b98b4e3bae2c9e7790e724a758633187a68a2fff2867ef6c62"
+    },
+    {
+      "path": "postfix/continuous/small/T09-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T09-C-grep-read-a1.meta.json",
+      "bytes": 2109,
+      "sha256": "da929f3c59dd4f4b139fd9794ddb2ef62460862a17a5822730e85241409326dd"
+    },
+    {
+      "path": "postfix/continuous/small/T09-C-grep-read-a1.prompt.txt",
+      "bytes": 441,
+      "sha256": "21500e6f38064f91d88439c48ef186a27fce4bc3e1ef95d32474ce4943bc28e3"
+    },
+    {
+      "path": "postfix/continuous/small/T09-C-grep-read-a1.stderr.txt",
+      "bytes": 629,
+      "sha256": "93c8434a840dca08e47060b5add824068374b79aa8e613286ba8e4d62bbe2218"
+    },
+    {
+      "path": "postfix/continuous/small/T09-D-hybrid-a1.jsonl",
+      "bytes": 5340,
+      "sha256": "8ccbe53bd84fe96046bcf35104978682da022caf004554b5a44e3db8314b50b0"
+    },
+    {
+      "path": "postfix/continuous/small/T09-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "0816963cbfa3dfcb77a4d2fafaa3a0dc6aabebcd7ab8cdda624d657d2020eb75"
+    },
+    {
+      "path": "postfix/continuous/small/T09-D-hybrid-a1.meta.json",
+      "bytes": 2981,
+      "sha256": "996e1fd142f2f2e96a2e241b59b6ce7ae4722dcee3cd5a06ac83dcbfe95e90af"
+    },
+    {
+      "path": "postfix/continuous/small/T09-D-hybrid-a1.prompt.txt",
+      "bytes": 441,
+      "sha256": "21500e6f38064f91d88439c48ef186a27fce4bc3e1ef95d32474ce4943bc28e3"
+    },
+    {
+      "path": "postfix/continuous/small/T09-D-hybrid-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "5bb5fe90ca2cbefa918d8cbdaa57a23af3ca6e20ba4ff0822d69f5db71585630"
+    },
+    {
+      "path": "postfix/continuous/small/T10-A-v1-mcp-a1.jsonl",
+      "bytes": 2417752,
+      "sha256": "9961c1faeaf93809cab69c7d4643c6c96b3d733e09c8746957e654425285635f"
+    },
+    {
+      "path": "postfix/continuous/small/T10-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 35605,
+      "sha256": "112536ed0d5e80f5d3fff6e3ff913a8d6f22ecca3b64bb3f06a9c98bacc3f699"
+    },
+    {
+      "path": "postfix/continuous/small/T10-A-v1-mcp-a1.meta.json",
+      "bytes": 2915,
+      "sha256": "13dc867fe1373f8cb5aa7dd6ed2db97f89f16c9f85f3c5cf2c36d3ff5cb99ba2"
+    },
+    {
+      "path": "postfix/continuous/small/T10-A-v1-mcp-a1.prompt.txt",
+      "bytes": 425,
+      "sha256": "2b3ddec40e258289248b2a26eb8947519329b91f07187f1e78192b49fe249912"
+    },
+    {
+      "path": "postfix/continuous/small/T10-A-v1-mcp-a1.stderr.txt",
+      "bytes": 629,
+      "sha256": "35c2926ff419db931633a40e1b559a4113bd6db52991c6fc28c2bd3d4260f32e"
+    },
+    {
+      "path": "postfix/continuous/small/T10-B-v2-mcp-a1.jsonl",
+      "bytes": 4774,
+      "sha256": "1b1df40a9d4d977e39f50c26ea47cd3168f9f3852688fa53b51179c07b3dfd9f"
+    },
+    {
+      "path": "postfix/continuous/small/T10-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "3d3ced26313c067029bf2f0934eb1e0cfabd10a8591b6bfcfb8f300ae12ba6d4"
+    },
+    {
+      "path": "postfix/continuous/small/T10-B-v2-mcp-a1.meta.json",
+      "bytes": 2959,
+      "sha256": "51cf4f9934e6d78ad6515d69760df5cb7b1fc662b0b4d826d7255de61d5ff60a"
+    },
+    {
+      "path": "postfix/continuous/small/T10-B-v2-mcp-a1.prompt.txt",
+      "bytes": 425,
+      "sha256": "2b3ddec40e258289248b2a26eb8947519329b91f07187f1e78192b49fe249912"
+    },
+    {
+      "path": "postfix/continuous/small/T10-B-v2-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "9aa3db693fe702241995cfbe1948580a267eaa78ecb7e6b5b6dccaec6f435651"
+    },
+    {
+      "path": "postfix/continuous/small/T10-C-grep-read-a1.jsonl",
+      "bytes": 1442,
+      "sha256": "74d4c833cd4925711c9704482adcfcfbce8d5bb61f44b5ab2d8a0b17b27c89c7"
+    },
+    {
+      "path": "postfix/continuous/small/T10-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T10-C-grep-read-a1.meta.json",
+      "bytes": 2087,
+      "sha256": "fbeeceef4182abedb4307b09822260e9710eaee4fe795feb049438a2629a6895"
+    },
+    {
+      "path": "postfix/continuous/small/T10-C-grep-read-a1.prompt.txt",
+      "bytes": 425,
+      "sha256": "2b3ddec40e258289248b2a26eb8947519329b91f07187f1e78192b49fe249912"
+    },
+    {
+      "path": "postfix/continuous/small/T10-C-grep-read-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "034fe7e78b1451b5684b1ae59eff7a8ade1423e32ae5725e0ba8b275e2b70780"
+    },
+    {
+      "path": "postfix/continuous/small/T10-D-hybrid-a1.jsonl",
+      "bytes": 2477,
+      "sha256": "7c0d3267123f2ad0c9a8c51193c11fd378901f82393261cda215261505a45b0c"
+    },
+    {
+      "path": "postfix/continuous/small/T10-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "2173801bee7e0c59706048216468a73d67239f8e64d43770a9a513a863a9d036"
+    },
+    {
+      "path": "postfix/continuous/small/T10-D-hybrid-a1.meta.json",
+      "bytes": 2959,
+      "sha256": "6035ef3d1f28aa5de80ce44cb1c67dd1fe4ea85daa609c592c2552070ea912ae"
+    },
+    {
+      "path": "postfix/continuous/small/T10-D-hybrid-a1.prompt.txt",
+      "bytes": 425,
+      "sha256": "2b3ddec40e258289248b2a26eb8947519329b91f07187f1e78192b49fe249912"
+    },
+    {
+      "path": "postfix/continuous/small/T10-D-hybrid-a1.stderr.txt",
+      "bytes": 777,
+      "sha256": "da14fad30b403c125c83ff30e980e3c61f418c471781c83b1c5459bd86e393c3"
+    },
+    {
+      "path": "postfix/continuous/small/T11-A-v1-mcp-a1.jsonl",
+      "bytes": 68643,
+      "sha256": "fae353736da16fc85bb40f139caff1ad5d2b248c5a59995625eca1276fe2f335"
+    },
+    {
+      "path": "postfix/continuous/small/T11-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3643,
+      "sha256": "7ef2bd3dad37e50e795eaac2000fc0c5d2ae25327fdf706d1478e7050c021b22"
+    },
+    {
+      "path": "postfix/continuous/small/T11-A-v1-mcp-a1.meta.json",
+      "bytes": 2816,
+      "sha256": "6fa9810b48aa12db7cda5bfde04052ad337c96e99adcdf3d764838fb7ab770fd"
+    },
+    {
+      "path": "postfix/continuous/small/T11-A-v1-mcp-a1.prompt.txt",
+      "bytes": 326,
+      "sha256": "2dc57b653496b197b853359b7f621cb50a40b46b361a5f4a55b467d0124fc797"
+    },
+    {
+      "path": "postfix/continuous/small/T11-A-v1-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "a1830c468be0447819f05efc425de2d4a984958ebb557e8ac2d7896a19beed93"
+    },
+    {
+      "path": "postfix/continuous/small/T11-B-v2-mcp-a1.jsonl",
+      "bytes": 2596,
+      "sha256": "915c9f3f833c7bdc43f085c3856e41861d11938ff1d3954ae244430dafc59cf3"
+    },
+    {
+      "path": "postfix/continuous/small/T11-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "0e328b7cd430a4815ea66c0292a15b4dd7f2395f70a7ef5ec4ba05a2346c0a5a"
+    },
+    {
+      "path": "postfix/continuous/small/T11-B-v2-mcp-a1.meta.json",
+      "bytes": 2860,
+      "sha256": "773a314ececbe629543bf47761ee63f4767cd94e4c6c3bbd49bb3a1b04a93f7b"
+    },
+    {
+      "path": "postfix/continuous/small/T11-B-v2-mcp-a1.prompt.txt",
+      "bytes": 326,
+      "sha256": "2dc57b653496b197b853359b7f621cb50a40b46b361a5f4a55b467d0124fc797"
+    },
+    {
+      "path": "postfix/continuous/small/T11-B-v2-mcp-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "c4b9fb0d87c2709740734f322e85a48ebd5364008352103efde00d5f2e8a4924"
+    },
+    {
+      "path": "postfix/continuous/small/T11-C-grep-read-a1.jsonl",
+      "bytes": 1833,
+      "sha256": "4056e59a6344172eeb98c7f361c974ae2e5efd6b732862aca0fc0cad81db5462"
+    },
+    {
+      "path": "postfix/continuous/small/T11-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T11-C-grep-read-a1.meta.json",
+      "bytes": 1988,
+      "sha256": "b32b312ac2ee9405049a9faed466fe9275f5b54004106087d6c9358264a267a9"
+    },
+    {
+      "path": "postfix/continuous/small/T11-C-grep-read-a1.prompt.txt",
+      "bytes": 326,
+      "sha256": "2dc57b653496b197b853359b7f621cb50a40b46b361a5f4a55b467d0124fc797"
+    },
+    {
+      "path": "postfix/continuous/small/T11-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "303034dc4b8e8116202dd6e76150377228d4b618217c11ce99b07027fc7b4cde"
+    },
+    {
+      "path": "postfix/continuous/small/T11-D-hybrid-a1.jsonl",
+      "bytes": 2027,
+      "sha256": "23937fa54a09d812c25fbdb711b8fd7a6b740d1b540336b737ac2d9ca4b579ec"
+    },
+    {
+      "path": "postfix/continuous/small/T11-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "5bb94464d0edaca4ce1356cc9525b2735eb6d15beba3330a9541a52503a42420"
+    },
+    {
+      "path": "postfix/continuous/small/T11-D-hybrid-a1.meta.json",
+      "bytes": 2860,
+      "sha256": "9a41798ca8245c92425b1daf5df91854604f2db36892da322420a68d2ea9e1c3"
+    },
+    {
+      "path": "postfix/continuous/small/T11-D-hybrid-a1.prompt.txt",
+      "bytes": 326,
+      "sha256": "2dc57b653496b197b853359b7f621cb50a40b46b361a5f4a55b467d0124fc797"
+    },
+    {
+      "path": "postfix/continuous/small/T11-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "a18072d58cfc123de0d7b08a3a330f281339be9c9a20a002e5a34f972dc69065"
+    },
+    {
+      "path": "postfix/continuous/small/T12-A-v1-mcp-a1.jsonl",
+      "bytes": 31697,
+      "sha256": "b3cb4476dfa193e8efe091c4fac3b13377cc30c2ec36bfe5387319fd1719c902"
+    },
+    {
+      "path": "postfix/continuous/small/T12-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2360,
+      "sha256": "006114bd55711a291b55b0ad5bc45a866d0c203ab68185f913f48266b4126db4"
+    },
+    {
+      "path": "postfix/continuous/small/T12-A-v1-mcp-a1.meta.json",
+      "bytes": 2815,
+      "sha256": "1e03fcdb7b8d15dac866cf82e79ce79252ff104482cc33b5ad57eb8acc688677"
+    },
+    {
+      "path": "postfix/continuous/small/T12-A-v1-mcp-a1.prompt.txt",
+      "bytes": 325,
+      "sha256": "9c7f7ee476f6134abb76761f360ef82700efd8e56de501b97e8f8baee72f3dfc"
+    },
+    {
+      "path": "postfix/continuous/small/T12-A-v1-mcp-a1.stderr.txt",
+      "bytes": 472,
+      "sha256": "d5ddce0f7634a79ac71ba144f389f58c69a5ee2b0eedcdece6b7f7280190ac9e"
+    },
+    {
+      "path": "postfix/continuous/small/T12-B-v2-mcp-a1.jsonl",
+      "bytes": 1179,
+      "sha256": "54eebf100087eed2da566270cbe8004b99ddc3f6efa644fe02c7938b6571946f"
+    },
+    {
+      "path": "postfix/continuous/small/T12-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1110,
+      "sha256": "68be0302a582bbb90c72bbcb29f6aa7b37afd2b8a799c0bd6dd5f18e4345ead8"
+    },
+    {
+      "path": "postfix/continuous/small/T12-B-v2-mcp-a1.meta.json",
+      "bytes": 2859,
+      "sha256": "a69266434d9ff2690cdf253e4560ab406255410661b1c8905c2611d94f22d222"
+    },
+    {
+      "path": "postfix/continuous/small/T12-B-v2-mcp-a1.prompt.txt",
+      "bytes": 325,
+      "sha256": "9c7f7ee476f6134abb76761f360ef82700efd8e56de501b97e8f8baee72f3dfc"
+    },
+    {
+      "path": "postfix/continuous/small/T12-B-v2-mcp-a1.stderr.txt",
+      "bytes": 158,
+      "sha256": "8f61ba0b1dd4a22eb7b3ffc6633c2221b7c92a3fc97b9b6e441b5f3f3ac08372"
+    },
+    {
+      "path": "postfix/continuous/small/T12-C-grep-read-a1.jsonl",
+      "bytes": 23903,
+      "sha256": "1fcf415eabfe17b1b83494825fb5346f5f579e6f951f527e27b03cffb2eb035a"
+    },
+    {
+      "path": "postfix/continuous/small/T12-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/continuous/small/T12-C-grep-read-a1.meta.json",
+      "bytes": 1987,
+      "sha256": "d475c8748bf85e4ae25bfcd0a45c2df8dfb1d3e224c54fc0886d76cd595db166"
+    },
+    {
+      "path": "postfix/continuous/small/T12-C-grep-read-a1.prompt.txt",
+      "bytes": 325,
+      "sha256": "9c7f7ee476f6134abb76761f360ef82700efd8e56de501b97e8f8baee72f3dfc"
+    },
+    {
+      "path": "postfix/continuous/small/T12-C-grep-read-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "9fcdc0ca593d60ac637cde96225d44a0b74d485742ebc743882706cad6d7436d"
+    },
+    {
+      "path": "postfix/continuous/small/T12-D-hybrid-a1.jsonl",
+      "bytes": 22623,
+      "sha256": "1a4aefc8ecdc9c11f973244bd06ea266871c28ad3b3f139bf58a297558cd7211"
+    },
+    {
+      "path": "postfix/continuous/small/T12-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "9db4d27c8f5c2c8b85e907f0afa090facc4610203fe13e8a5fe3c88362a7403f"
+    },
+    {
+      "path": "postfix/continuous/small/T12-D-hybrid-a1.meta.json",
+      "bytes": 2859,
+      "sha256": "ec01d154e9ce87531c760e3908fac1a3af54feeec7b5367d0ed03e3aa5508208"
+    },
+    {
+      "path": "postfix/continuous/small/T12-D-hybrid-a1.prompt.txt",
+      "bytes": 325,
+      "sha256": "9c7f7ee476f6134abb76761f360ef82700efd8e56de501b97e8f8baee72f3dfc"
+    },
+    {
+      "path": "postfix/continuous/small/T12-D-hybrid-a1.stderr.txt",
+      "bytes": 315,
+      "sha256": "1452d4cd570e406f81303efecfbb627b9ea6535ea5aebafb50264172db4c88f4"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-A-v1-mcp-a1.jsonl",
+      "bytes": 20592,
+      "sha256": "8ce16f0a4fb25abc4a24246920c0f4076e76df01705200d4cb9761f340f5ee57"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 4412,
+      "sha256": "25304e507ce2fd39ab4028e0fc09e088b7f2ed66d357674a9285596f01addf91"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-A-v1-mcp-a1.meta.json",
+      "bytes": 3532,
+      "sha256": "e466688f27b7d1444fb6140c9b91866f5318ea5b200208b927a1706a6bf1be1e"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1091,
+      "sha256": "8b0d5670aa06e9e581f16bfe3de9e547ea9ae46dcf10d49be41b3e04ec5ee766"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-A-v1-mcp-a1.stderr.txt",
+      "bytes": 1139,
+      "sha256": "aa2eb1c85061942d9db0a39cc5e13b898a9e4fad63d7b292f8e9819c5cfb7e33"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 14127,
+      "sha256": "ff6f20a496248a2bd3cde38312b7e34f15322696d23012505946c905c62708f3"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1629,
+      "sha256": "c8fb3660689b577fab7ddd2d83c76c3af44e32215e9566c6768a628da0087494"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3690,
+      "sha256": "b0201936036cb68d5a724c985811dbd0f3f5628503c41477e8e9db3051828683"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1205,
+      "sha256": "426e8a9ffd2db2ab12ad344fe1d95a4f27b3fd6eb5c65c59725d1acfd89ef654"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "5aa0396ac09a526ba7cdad3e627545023e0fd6bfd47c018b431c7d009ee52a3b"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-C-grep-read-a1.jsonl",
+      "bytes": 2175,
+      "sha256": "2307f357f90c7299abc1e08f3f1f560deb1f563248f0f24db33c22f6c14e5f30"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-C-grep-read-a1.meta.json",
+      "bytes": 2570,
+      "sha256": "a1114c4d1b34a204873b3f0c5a52e5c88f9bb552299d4396f42bdf4880ac19fe"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-C-grep-read-a1.prompt.txt",
+      "bytes": 956,
+      "sha256": "a0b1d6dd86126492fa839c1255a748bbfedd49cbf7a146eb6e925604228ac933"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "e8d276a049a87bfe106739e9c05f07e851a0a0f4fddbddd9affbf1a23d1ba01e"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-D-hybrid-a1.jsonl",
+      "bytes": 2175,
+      "sha256": "31ae1b6a98d6c30cd9909366571809ef6708f85821b6c69d407e218b6b28f1a9"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "9901161385cd62d4b274162ed9df1fcb7ccff50e1202cb8bec85274ad577db40"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-D-hybrid-a1.meta.json",
+      "bytes": 3915,
+      "sha256": "5223e5948ec55b7d8889d48f987ddb5456ef9f5157866a33bf2b1fae6daf656a"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-D-hybrid-a1.prompt.txt",
+      "bytes": 1430,
+      "sha256": "956d26c8ec2ec9b49650f03e59e46d1fd83797e18787f8b990778e2350aa4f84"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-D-hybrid-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "e3d7f9eb65030a26bbf2a3756d00ceeeaf1436eb4a699da03d7084586034abfb"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-A-v1-mcp-a1.jsonl",
+      "bytes": 3066,
+      "sha256": "5570d4f143e6a9810caf6d6ac1a1154871650229ec129f473f92c7c97bf77094"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2102,
+      "sha256": "1a8f2f73ddd0eaffd693589f25f37d52332b449d81e52ac1eedc5097adcd110d"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-A-v1-mcp-a1.meta.json",
+      "bytes": 3413,
+      "sha256": "a01dea9f4926c97d30e86f30e8db3c9afbace242bcc3376b4c18e4eca05c9377"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-A-v1-mcp-a1.prompt.txt",
+      "bytes": 974,
+      "sha256": "4d7334aa660230fe30aa069d72e32c74283ed38af0571e16cdd27f7f590525bb"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-A-v1-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "af77530aff101072bea0f113556b0e9facbdcb2faa553f9fbb74e93e0affa522"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-B-v2-mcp-a1.jsonl",
+      "bytes": 6596,
+      "sha256": "b1a2e22665eac56d06537f61230755c53819343c6a97c49d532a3e2bc5536216"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1630,
+      "sha256": "695e14eb8722254b0ae4647bf6a96bce7d931d08229b594db02b21df9e670d09"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-B-v2-mcp-a1.meta.json",
+      "bytes": 3573,
+      "sha256": "7bcb424c755db0cfabc7a0aaf22a5b3ccd0b8520f1d69ed705c6211367be2f34"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1088,
+      "sha256": "919b8c41761fb8ceb411935ba7793524f64ecee2b11fddfa424e629e3ea83804"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-B-v2-mcp-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "ae17a9f33781b49feefd938c19ed8fce626c2e7259c8d8db04d00b34bcf2081c"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-C-grep-read-a1.jsonl",
+      "bytes": 1078,
+      "sha256": "7315b78a2eba15b4ae456c7604784e719995d783124800dab71e92a0457c608c"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-C-grep-read-a1.meta.json",
+      "bytes": 2454,
+      "sha256": "4e32b55b58016e3e845f161504375a3cea52ae91c5bb5ec10106a812abb0359e"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-C-grep-read-a1.prompt.txt",
+      "bytes": 839,
+      "sha256": "25e027ccffe03e6c46d385fb19dd2b76c3276f4c02253621faa0ecacef027324"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "249968042db21035313b95a5595189d5d26adda5ebc8cebdc3dc78b6f97272f2"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-D-hybrid-a1.jsonl",
+      "bytes": 1078,
+      "sha256": "881721bb7b1d96224beaa6287ae2d232c8aff6de17db4a30c9605d26b08c460f"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "76c7478a3a2f25e63d7de8c81a8182d4d179a736f375e94c61ebf7329f62799a"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-D-hybrid-a1.meta.json",
+      "bytes": 3797,
+      "sha256": "2cd6e8fdb6611177b4b2f894f2892cd120eb6706039d25f4358013bcc637a812"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-D-hybrid-a1.prompt.txt",
+      "bytes": 1313,
+      "sha256": "84972722c95e5e5cd29fbba0e1b159003bcd752ed225dd94eabca5d4b4c14182"
+    },
+    {
+      "path": "postfix/one-shot/large/T02-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "b660a90c4731b622692038d39f2c3018415bdbffd76f3463f9dc394e096a6bab"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-A-v1-mcp-a1.jsonl",
+      "bytes": 3241,
+      "sha256": "f67535116585f04006d6eef97ad5f5cb545453401d70f764722dde41fb7a1d7a"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2105,
+      "sha256": "1f6cca891bbd75334ef224cc410cfdebdc04710c339e6cb81cc7a2ef9800b129"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-A-v1-mcp-a1.meta.json",
+      "bytes": 3409,
+      "sha256": "ffff4d99d23619c5df70993c42f23c36b690ed34c0b8deaddb790c8a4b594753"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-A-v1-mcp-a1.prompt.txt",
+      "bytes": 968,
+      "sha256": "f1d6c1f65a72080a15e5b9d67284bdac3fa72b9ac7d8be1e5ca50548e78158b9"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-A-v1-mcp-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "ebc9a773c2551dcfa7e4c89cf3233ed1e312876dfab7c05a539de509f6986d72"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-B-v2-mcp-a1.jsonl",
+      "bytes": 2435,
+      "sha256": "4631320a45e2f2909e2104f95a7247fcc453a464aa1e583d037127f82c2c0751"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1370,
+      "sha256": "9b90e7984ed956d988ede2652937884beef217732d0d6e90cc76e820569ee94f"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-B-v2-mcp-a1.meta.json",
+      "bytes": 3567,
+      "sha256": "c6d58522a114ac5f0c75fd8261d35dc3655c7c3b23cb52f8fd9dd97e21553bdd"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1082,
+      "sha256": "57c4d0144a3340a6a5eaaf506ce9e40dee2d77460e88802e57d383ff4483395a"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "a2fca945a0952e157679319cf162d0b48cd097402706ab038742f851620b8576"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-C-grep-read-a1.jsonl",
+      "bytes": 1290,
+      "sha256": "c7191a1c19a64c5edcef5d90b11483e325ee03b0120cdeebf5c7ae0c8bceb56f"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-C-grep-read-a1.meta.json",
+      "bytes": 2448,
+      "sha256": "a7c166f4ce97cec6ce0deaa1f799fff4f744cb1c4037a52c4c5fe46ab53b07d6"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-C-grep-read-a1.prompt.txt",
+      "bytes": 833,
+      "sha256": "2719664048c526443c5779d58fbba130e83b47581d18a68089a65e4412d3ca8d"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "0e648ee1578e720624b25b1d4f58c7adb7d55030b15234915670229a32e52bb2"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-D-hybrid-a1.jsonl",
+      "bytes": 1301,
+      "sha256": "de7675ea979876e35f056b72ad749c4440cdf137029b1153374f6a52d74a8027"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "4fbed77f536d02f05f3d67fa9cb2b4a65507176ea7b965b1111d8556549d4899"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-D-hybrid-a1.meta.json",
+      "bytes": 3792,
+      "sha256": "a61160e54ddb8e938c5cd10ea44cdbc71a55aedc8e3131da52380b9303772b5a"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-D-hybrid-a1.prompt.txt",
+      "bytes": 1307,
+      "sha256": "52f583c4846b68681ec9a0c1013a8fbaf56628701ab37fe2e6ff92a56bba3a9f"
+    },
+    {
+      "path": "postfix/one-shot/large/T03-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "9f1304849ea3796a3358a9251b36d22cd66f2152e43e8cc5e8b8a6e4d31ec647"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-A-v1-mcp-a1.jsonl",
+      "bytes": 17760,
+      "sha256": "e58de629cd91b9cc7235caec240fe97233fb8e24597552127c499421af64eb5c"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3376,
+      "sha256": "60e4913c74e69994503f6ecd4d0dd7ac900d9fad9d48719e9c19e88868e41372"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-A-v1-mcp-a1.meta.json",
+      "bytes": 3421,
+      "sha256": "33df2a8206875925cd4ff2a284fbcb51ca7b5aa468211e6f596e3fc6dcf3e2b3"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-A-v1-mcp-a1.prompt.txt",
+      "bytes": 980,
+      "sha256": "1d1e6bf810661a72e3aea6e9e5f333912e38266a2f62dba36c344f83ba11080a"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-A-v1-mcp-a1.stderr.txt",
+      "bytes": 825,
+      "sha256": "9a2e860ab0a8bf92d5b64d7dd74b4c78e9ed862470ffaf4adb2bdd79827dae3f"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-B-v2-mcp-a1.jsonl",
+      "bytes": 15206,
+      "sha256": "9e71aef028bdf46819aab8ca4ef4b4581336bcda74e5157bb1fcd5b9fa2c2f20"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1374,
+      "sha256": "6a377888a0850f602edfd26dcefc8594e99323158399009e749bb603f92476a5"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-B-v2-mcp-a1.meta.json",
+      "bytes": 3579,
+      "sha256": "baba58d62fb90058b137e801ce8bed97e7b711e18a5ce566ea279b17a1fd7715"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1094,
+      "sha256": "c3ea363e85ce2e632fe157d793b8ad5aa5ce3cb39d42c7838e256a53f4ff2a5b"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "abccdc5aefd06a236f79064c6dd2f080dca5fd51fe776e0157d07b449d39581a"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-C-grep-read-a1.jsonl",
+      "bytes": 1592,
+      "sha256": "0933b351fb931939f2cc0d95b56fcca2fd5b4c37526c13931593abb6f3e78ec8"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-C-grep-read-a1.meta.json",
+      "bytes": 2460,
+      "sha256": "a2622586480d5be0018310f6e14ee34e62d21c112bc0c0e90e20e38f18d2f1a0"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-C-grep-read-a1.prompt.txt",
+      "bytes": 845,
+      "sha256": "6e9ee1f530709ca2647104727bd85860935ef8811dfc04fff38da6fe29517516"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "e0b2a7d83a421a5f040e32e4e1b1d800ae5208de5fba6659ce5b2b208dfb9cce"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-D-hybrid-a1.jsonl",
+      "bytes": 1544,
+      "sha256": "ad2283d6413d0096560df1f09861924af3b5dd3094e4fdab2d6f4f6af29518f2"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "b8ce145c7fdfcf3fdb74436e129e6f104032fd1918f498d51f48b3fa6b3f9618"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-D-hybrid-a1.meta.json",
+      "bytes": 3804,
+      "sha256": "de7324eff7f9b0b6364ab573eec16d19bbddb214c52d616c873bbb4493af7204"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-D-hybrid-a1.prompt.txt",
+      "bytes": 1319,
+      "sha256": "bfc14fc58358ec117a88ee6b49d41fc3631e8784f33d701a64be0e7b2a939453"
+    },
+    {
+      "path": "postfix/one-shot/large/T04-D-hybrid-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "2bcbc15331def479e14505e1667caedf27db14b294bfbdd585d68cca5dd6a23f"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-A-v1-mcp-a1.jsonl",
+      "bytes": 24169,
+      "sha256": "660302cfcb402586f0e1dbed85289aad8441b1ef45ffeeb6b0c5caa8267dc11d"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 6078,
+      "sha256": "b76181e4da905102b54a39a7f01044047d13730d6c1faca198f96f5dc9fbec18"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-A-v1-mcp-a1.meta.json",
+      "bytes": 3497,
+      "sha256": "24553d8f3f9c48114cc5f18e034e102170876041febd271ddca58f4fd6cc79a2"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1056,
+      "sha256": "98d5a7f5b5bc1ff4b3aa793dab6199b4339ed12d538d9c1e91f4f78b5d7f7811"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-A-v1-mcp-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "297318b51d7f643c1c2d4540451d3fc4a8abfad83f90c2c59007a77c003d362d"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-B-v2-mcp-a1.jsonl",
+      "bytes": 4611,
+      "sha256": "cfc653539c67a60f436d1f2945adbb20771dbb57072dda83155cd7e07726d08f"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1114,
+      "sha256": "3dd77d3b287cefc8f0f356088daebc1d01c44f41d93a8082ff742ad667ed64ee"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-B-v2-mcp-a1.meta.json",
+      "bytes": 3655,
+      "sha256": "0c96a8387f5238caa3f495c41b012f328935db8ab01f29bef7db36bc298a2551"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1170,
+      "sha256": "6b05020fcff04d25afa70712676cda56e64868ce05494f4d36eacd86afb8657b"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "54ab73e78cb08ef8aeb4a42a1f26dfe79368aaff8edffe2940474fadc62821da"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-C-grep-read-a1.jsonl",
+      "bytes": 3159,
+      "sha256": "f883e8e65f5d23da4ca9577428603d3e2e5f91cb352e6a9b9bcb908c016f1eaa"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-C-grep-read-a1.meta.json",
+      "bytes": 2536,
+      "sha256": "b0ee3c9e330172b95c2e15ac7e778d56fa9ecdd2257aa60a4e1ffc78d28dd2fb"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-C-grep-read-a1.prompt.txt",
+      "bytes": 921,
+      "sha256": "25f5aeb38d026eac965dee0f62e427067553a2851c9e720513435a123b2cc060"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "3fa0cee96666c137089f89ab215289c9974a5c59e70ffaba34e90ef2119dbc06"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-D-hybrid-a1.jsonl",
+      "bytes": 3159,
+      "sha256": "312927a1433ca2d06322e9ea35efd2165af6f13727ef7002fd1fb7870355069f"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "127e676fa4a7d3f83f08b6a36bdd9295ca9fa486a7645c2d17609ab47e90d23f"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-D-hybrid-a1.meta.json",
+      "bytes": 3880,
+      "sha256": "643fd7ed5748e727c916a1bebd4d59e2d6631b422ff2ded8a2c95f6658b4ae0e"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-D-hybrid-a1.prompt.txt",
+      "bytes": 1395,
+      "sha256": "bdfcd28c7bb8477f3e15d29ebc624b883ef3b7c2364621b9c92be62dfd8c3f2e"
+    },
+    {
+      "path": "postfix/one-shot/large/T05-D-hybrid-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "6f3f11cfc1d286a3e63f245d9baef2d72059cbaa674ba6be830d313da067c815"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-A-v1-mcp-a1.jsonl",
+      "bytes": 287735,
+      "sha256": "4e5bf4c8ed42b5039a4056d5b452399f28bffedc1d51bc2873456ee229661b6e"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 9568,
+      "sha256": "2ae2623783a8afb1861862ade245c9923fe772e2b37ad00dab203be35ff0f69a"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-A-v1-mcp-a1.meta.json",
+      "bytes": 3510,
+      "sha256": "fce269d7a8cb20d812b039a593329775b7b6691fc9628bda4096d10e05603a3f"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1069,
+      "sha256": "398f88370eae6d93bde632639bd32ceceb8067598970188c3ea8f01dc35927c4"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-A-v1-mcp-a1.stderr.txt",
+      "bytes": 2081,
+      "sha256": "8aad866c51dbe1f44c68a06e0442e6026a854e5cc0c61f8976c6f891977feda8"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-B-v2-mcp-a1.jsonl",
+      "bytes": 4125,
+      "sha256": "b98e29aa032216f2eae222b4a3019969eb0b06733da6de913d5bd0975ceb63e0"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "a76ebfaf9d2ab41469d81360f6d8a1450d7c3cd87161563f31c8385fe5f55da8"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-B-v2-mcp-a1.meta.json",
+      "bytes": 3668,
+      "sha256": "588cec0269881ebb363880d6b2e506d04aa42b3d935d8529f4388dcfc221e88a"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1183,
+      "sha256": "4ad919162e6d6002936b047a2a7d8de20c07045e751fd20f66a8ff0d1c23ddd7"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "61ff171340604c817df96254274a42196d59392cf3e264ad7e24e4ff2d47ed3a"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-C-grep-read-a1.jsonl",
+      "bytes": 1446,
+      "sha256": "63d1f31492fae087c702931fcf04d29d5d01b9002fcfabc65683f44416593058"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-C-grep-read-a1.meta.json",
+      "bytes": 2549,
+      "sha256": "b29c96e1ced3e309eb88b1f81024c94125b7db1a4530b83ce54908693f657de8"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-C-grep-read-a1.prompt.txt",
+      "bytes": 934,
+      "sha256": "a76965a884ce43ee59511e5c02659f9e105dacff57d37f2b6a952989f1859397"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-C-grep-read-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "c45fa0e881096a29977f40bbe7cecf6f050a19b3aafdeba1f92417fe36519cf7"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-D-hybrid-a1.jsonl",
+      "bytes": 1464,
+      "sha256": "d375a787ec9dd5d936e6562b5f9bead95802686600e70fd1ef6887f5427df6f0"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "e1caf7bd0f72a1efbb22ce4c18a67bbffba4dc363a8a6d5ed7f4dde7eba63a7f"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-D-hybrid-a1.meta.json",
+      "bytes": 3893,
+      "sha256": "330c678a6d06ac5045f1d046a6536f05288b3c4251380ac573f5373f18b80482"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-D-hybrid-a1.prompt.txt",
+      "bytes": 1408,
+      "sha256": "56c45411b9fbf1db8c6aae68442b4d38828b375e34fdd8870fa68491cbc726a0"
+    },
+    {
+      "path": "postfix/one-shot/large/T06-D-hybrid-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "b713b101dcf34e759b5847b467662fbe4b75368b385e14f4a75aa9fd81f0771f"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-A-v1-mcp-a1.jsonl",
+      "bytes": 9638,
+      "sha256": "334fab6ef1fdacc19ac830e827558c4d61c8643080d5b3b03b168181aa0bb169"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2998,
+      "sha256": "8ab4eee71b9918db8777ef9fc4d1bc0e244d2223f721ff3f1cd0e58e68f73960"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-A-v1-mcp-a1.meta.json",
+      "bytes": 3424,
+      "sha256": "ad075fa623b0321b9ba3d928be308d2222a5182e04d40b0854dcbfc715c36f61"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-A-v1-mcp-a1.prompt.txt",
+      "bytes": 984,
+      "sha256": "bd525cc8bf1c820e17073e1004d0156428ea1ba6b126b3f813757d41c098aad9"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-A-v1-mcp-a1.stderr.txt",
+      "bytes": 1139,
+      "sha256": "0fe74eb57e04b4d285cd07920b370e8bd19384989b73376d7d31639654063451"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-B-v2-mcp-a1.jsonl",
+      "bytes": 2924,
+      "sha256": "ece38b74de8cdb24382ba089406a300214bd09a1508f0a5130a12359fc0061bc"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1369,
+      "sha256": "8ea12fb3e93db3505cc796be24bcfbfabd0d5dde5a07bce2cf8ec71872beb4bd"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-B-v2-mcp-a1.meta.json",
+      "bytes": 3582,
+      "sha256": "f5ef73feda488e1f9cd44f765b8acdbf6f55eda56fccc05c071051085dcb73fe"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1098,
+      "sha256": "b71bfc67ad98ee868472e8975ae237a805802c0a5d8b12bf01404c4e3133f5c0"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-B-v2-mcp-a1.stderr.txt",
+      "bytes": 825,
+      "sha256": "d8e4c1945cbf8ccd0c7dc38c24901ca35a2374e2ae3b7e965daa88b6f93c362b"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-C-grep-read-a1.jsonl",
+      "bytes": 9256,
+      "sha256": "ae58ec308f432acd8047c9d17bcc8e79a3ef03f8d7f5445a3a4aa8ce3647d613"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-C-grep-read-a1.meta.json",
+      "bytes": 2464,
+      "sha256": "e4a0578864dcadd9298c302e008a8ab5228d69f87b0b2aec5c804d7514f3c1c3"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-C-grep-read-a1.prompt.txt",
+      "bytes": 849,
+      "sha256": "c5127cb74333e391fffa99495308294e144bb1a79f303b78ed28b04d35614377"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "442b49bfad837cb6d7d23be020d17c415ba8292b0f2bd7a736ae0b0e3a032df5"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-D-hybrid-a1.jsonl",
+      "bytes": 7387,
+      "sha256": "3b64416c596569c53fb79ad78b782deb314d6361ca125a9cbe6073f913d3266b"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "afa605bf25e35a91dcc75699655679fcabe3161630f233dfcef87ed51e7047ed"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-D-hybrid-a1.meta.json",
+      "bytes": 3808,
+      "sha256": "7b947360eca22413639f3fb10572ada06157ce3f78d39d0dfd3692a48d1e7816"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-D-hybrid-a1.prompt.txt",
+      "bytes": 1323,
+      "sha256": "6e542ad4baaee571d7c99deb0bbb2df9b484631d4637833e0a5fbb4641ec75a4"
+    },
+    {
+      "path": "postfix/one-shot/large/T07-D-hybrid-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "9c8b73419e74c9200fb2c8db2ee2de68a1ae13121ee82e9061bf85720e7e4f50"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-A-v1-mcp-a1.jsonl",
+      "bytes": 28315,
+      "sha256": "57bcb7b39190e63e86346f160f3039659cc393205e51fd799d10c8dec80ebd7e"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 5302,
+      "sha256": "db07f887a97ad2d9eccdeceaaae0e06ed1151ae35b6600c1630f27f6c0ed632c"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-A-v1-mcp-a1.meta.json",
+      "bytes": 3599,
+      "sha256": "d84a14d07d47b03497c766cb7d03e25b29533930813267ad1c03eb27bf74fccb"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1159,
+      "sha256": "5bcfbe1b6eca1f64a7a9274ac043af3b8e10d8107d20fe3c50a0ef498e095b7e"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-A-v1-mcp-a1.stderr.txt",
+      "bytes": 982,
+      "sha256": "11c380056c3446ee568a2aa014ef751fee1e887fa2f4298825d4a959c4c7c3dd"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-B-v2-mcp-a1.jsonl",
+      "bytes": 26873,
+      "sha256": "6fe96575076367609cc01ebe288d816ffe4702befc2765b83e5cb3684791e116"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3181,
+      "sha256": "945f236e398d264b01c96fc1f30a9c25ba293f3fe0ea04ce67d4c309936aba8c"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-B-v2-mcp-a1.meta.json",
+      "bytes": 3758,
+      "sha256": "3c3cbbd8a4eb7f6fb8387bc4a8ea02bb70d7a0eefd70cd9c5002aa9e46fe1710"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1273,
+      "sha256": "fabb791cea787657509a937479ee2a57d13e62cac095ef5be2fad4864b176f81"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-B-v2-mcp-a1.stderr.txt",
+      "bytes": 982,
+      "sha256": "c937e05da5d089e7d4aa1cc734a115a4535a9cfdabe358aebdfdd5b8d6eb5f47"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-C-grep-read-a1.jsonl",
+      "bytes": 50965,
+      "sha256": "4805155a9aced0df9f103689cecd99ad636535f43b6add2faa2956564119000a"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-C-grep-read-a1.meta.json",
+      "bytes": 2639,
+      "sha256": "f25caa3bd878c18c22518cc70ade7bd4c5cc552ac42e17b6e9e6f6f3781385cd"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-C-grep-read-a1.prompt.txt",
+      "bytes": 1024,
+      "sha256": "fee86f721f1baa28c00070e612e5fdaec62334ad517cc40b893f22e931cf2c8d"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-C-grep-read-a1.stderr.txt",
+      "bytes": 609,
+      "sha256": "d037efc442f4797810bc81aae246ff6d99d8c369c3f408c811b76ba078b8494f"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-D-hybrid-a1.jsonl",
+      "bytes": 22056,
+      "sha256": "af771177e7bcffcb1e4e11536c972d3e2c2b7a3e70c51f35c10946becf2b897a"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "0f4cf868746b2de7fc784211d20fcae8ebd439a0ce4734b0a1a255b42a7b9634"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-D-hybrid-a1.meta.json",
+      "bytes": 3983,
+      "sha256": "fb0665f0cefb96cdec6aa5159f478e43b943372d1c77504802435e8b9a035406"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-D-hybrid-a1.prompt.txt",
+      "bytes": 1498,
+      "sha256": "d665cbeb088c10c93e5375434b261f9463d8f431367a2591c8c4f1e8265406c3"
+    },
+    {
+      "path": "postfix/one-shot/large/T08-D-hybrid-a1.stderr.txt",
+      "bytes": 1275,
+      "sha256": "c8724de611f7e8ac2d2c576b62f4639c57cd5471c7975085dafc5fd3bf33e8a8"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-A-v1-mcp-a1.jsonl",
+      "bytes": 25629,
+      "sha256": "6cfa978d5fab5bcc410c50ae39d7f9e9abda0a15bc2a702e4f8d16f1fe82726d"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 4920,
+      "sha256": "c292c0c1a71e90dde74923a4b2b83f24e1732f33243532a3ff6af3342e52cf80"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-A-v1-mcp-a1.meta.json",
+      "bytes": 3523,
+      "sha256": "c2ce294706d7ba4d0df52f6a336469203a065b6230d3734e5481a6815d63ab7d"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1076,
+      "sha256": "24710f4fef0339cf9161fc445b729e07d6120b4c3be4cd50878a5fddd4e93f46"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-A-v1-mcp-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "e4e0cd07c923c954d87ec59f8e8b0405c8dd7ef9de2d51e4ce7bf5bdc5165436"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-B-v2-mcp-a1.jsonl",
+      "bytes": 3218,
+      "sha256": "1df9f832c000e17e177a41758328d25309812bfad12f44382bd234e3dddab0a1"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "69545d591aa5a9a49efb679fc56db320fe18ed4be13be33618f4ea8022d89e60"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-B-v2-mcp-a1.meta.json",
+      "bytes": 3681,
+      "sha256": "514ad181bc87fe110285b463e2386a37d635dc64b090ffc3a60d596073e9794d"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1190,
+      "sha256": "e4fee936a2efe7ff62ff2d87e516a6e8024213d12e4ec94323f789e1a695643f"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "ef4bf6b921957445d6198908a7dc57ce969e518b0a4deb9a1eca3837ee1b3451"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-C-grep-read-a1.jsonl",
+      "bytes": 22436,
+      "sha256": "99de9e10c56c896f2d306503e31ec657a9bb24d4342a42e0bd65202416b4b3dd"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-C-grep-read-a1.meta.json",
+      "bytes": 2562,
+      "sha256": "4a66a9be2ed285f90373c7f775cc617ff8f22f25fe41a241d9d1ba5242d8fb1c"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-C-grep-read-a1.prompt.txt",
+      "bytes": 941,
+      "sha256": "84b2c271ea5629c9d67828f42b2864cede2ecad4719952d84e314d43dd6b7fe5"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-C-grep-read-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "d00f60c4f1cea22f38cba0faa559a0af179fb4c55852cf31d93a5170ee4bb696"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-D-hybrid-a1.jsonl",
+      "bytes": 16987,
+      "sha256": "c4d29387c43e8e028a5df11737f67fcec7add21bb81735939eaab9508803f2df"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 852,
+      "sha256": "4ea49487efb38ca62f0e273c5e088228118c32865e845a38295d793bb6b5f574"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-D-hybrid-a1.meta.json",
+      "bytes": 3906,
+      "sha256": "e3a82bbc1ba1ce424569c625265eab68463edc19b07bcab3e21b17577d2646fd"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-D-hybrid-a1.prompt.txt",
+      "bytes": 1415,
+      "sha256": "fde6383e390ed44ab32f573f2995e4f9f0587e3b0d828afca697ffa9ca8c351a"
+    },
+    {
+      "path": "postfix/one-shot/large/T09-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "929f2bc2da885c7fe52d1996f80df3500728746495a22f59a6ae1e8f4b5b10cb"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-A-v1-mcp-a1.jsonl",
+      "bytes": 101420,
+      "sha256": "11c56138b3b3d8d715ae64626b144555e91e29310067784478a18adfbbcee8ef"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 9118,
+      "sha256": "344d33986d0f4bbab14d86d7156288263e41ebfd63fda224d5a73de64cc67ff3"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-A-v1-mcp-a1.meta.json",
+      "bytes": 3475,
+      "sha256": "5369532fa8194b80e57c7bffc1fb67167d56355cfedb8d2fef21f5c61e51c629"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1033,
+      "sha256": "05e5c3c532d9412169f83c81b795e685d61d287cec118a8a028dbd46fc46bdde"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-A-v1-mcp-a1.stderr.txt",
+      "bytes": 3023,
+      "sha256": "4f350f9fc1cdb8d5504280fa3f0beecbbb9e3518a1b66d9955a3e31396f6f540"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-B-v2-mcp-a1.jsonl",
+      "bytes": 3469,
+      "sha256": "ad2874a632d8d2a3eafb5d165e47931a143e79e2a405a041dbed35f1e164d9f8"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1114,
+      "sha256": "3de506dc83a395c5d763854e754387d629733576ee4ca22aa23c29314766170c"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-B-v2-mcp-a1.meta.json",
+      "bytes": 3632,
+      "sha256": "31e43e2ea2cfc5549e799a2518f08d16f3e9aee052343161127cb7c77390e5cd"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1147,
+      "sha256": "21224378ebbcf85c4e351cfe101929337e404655bec2017b0e1228fd37662257"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-B-v2-mcp-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "c61dae94afca18bae37d2521a2015e4a8ca8d762cc886cffcfd1bf27992e7eda"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-C-grep-read-a1.jsonl",
+      "bytes": 4252,
+      "sha256": "27ee316e6f7f53feff80e25e549f7f9bed97b61fc375b89c672d7af043ed95a5"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-C-grep-read-a1.meta.json",
+      "bytes": 2513,
+      "sha256": "1a5ae2c8cd75e8a304bc5b6e565ccc21e068ddd02766a9ddebd0dad4481bb3ae"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-C-grep-read-a1.prompt.txt",
+      "bytes": 898,
+      "sha256": "60d888d0e5ddbbce29c29b072f4f58ddb63f603a90ae67f459ee97e75aa23d0a"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-C-grep-read-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "b9f8047fdf690d3753a6f70ca672d40096725598c933d757f46eb0949cad2e10"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-D-hybrid-a1.jsonl",
+      "bytes": 1384,
+      "sha256": "ac171c0b329bef900867f6a3e1e6dc8c0a4e6178c5209390e0d42aaff7a20f3d"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "a398606262f5de2cbfe18fc50cc8fb4426cd73774a0f951454a6abd3005b43e1"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-D-hybrid-a1.meta.json",
+      "bytes": 3857,
+      "sha256": "ac969a7b2a5256c10278d4fc357af4463ef9f005d2003c1ffb8ecbb73a36643a"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-D-hybrid-a1.prompt.txt",
+      "bytes": 1372,
+      "sha256": "d9e80e29aa4c96815a281ad4fe4211cd887c000cec01d613ef6aea0c7aa283d2"
+    },
+    {
+      "path": "postfix/one-shot/large/T10-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "91d98c58d6afe4271c0465246c4b8768362b09b0c6d94f3ae810f7cb0fdd1711"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-A-v1-mcp-a1.jsonl",
+      "bytes": 214683,
+      "sha256": "6e0a942c4c8ee90ac76f184d280e80b9a76bf1ac77af78c21880c76127831c2e"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 11613,
+      "sha256": "605ae24f733764fcff16ba2784fa0bb9d8cabad99ab8a9dcc7225be427b53239"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-A-v1-mcp-a1.meta.json",
+      "bytes": 3426,
+      "sha256": "81d4eb30150a4e734fb044ac7c135922d7ccbb7307ab2779aeb0bde55bdc317b"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-A-v1-mcp-a1.prompt.txt",
+      "bytes": 984,
+      "sha256": "4ab94cbc97749ff2a8a2549ba9e144c14786a33a957eae35057f2fbd7ee83d42"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-A-v1-mcp-a1.stderr.txt",
+      "bytes": 1610,
+      "sha256": "1d938a40f9d790270abc69257272fb704cfceaf0fc59661cc3f9933d06629cdb"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-B-v2-mcp-a1.jsonl",
+      "bytes": 11191,
+      "sha256": "89bfd0debaa6322ba864bcd7ca8cf7be526cf87dd56dc67206c35f4121e0dac0"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1374,
+      "sha256": "8395c9bb5657c259f4773cf4597f290d2e68c3403e6d549514a181fbf246f3d6"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-B-v2-mcp-a1.meta.json",
+      "bytes": 3583,
+      "sha256": "98e2a6f7c6b2933f4a195f8aa1603c5e5a738e04ab94f206aae33cdc83ddeb1a"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1098,
+      "sha256": "94a3aee36c022a944acc645cd092a5049ec1948db5e634705f11e84affafa611"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "5b28502b5ff33c6d19fd15d7fdc4296fa7d3b3ed266472edf308054512cdb3ac"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-C-grep-read-a1.jsonl",
+      "bytes": 1446,
+      "sha256": "c5cd6fbafbe6893c73db7f583531cd36b54c7103f903f2220612f86104586bbb"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-C-grep-read-a1.meta.json",
+      "bytes": 2464,
+      "sha256": "3af142c068c12b173a644d70ae432fedd44b4c201aa8e949aa744ada6f7c9624"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-C-grep-read-a1.prompt.txt",
+      "bytes": 849,
+      "sha256": "823e8a692ce8eed62253b661af0b9fd929a2347bf678bc018f919df9504da168"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "2cb15cba6565c093d23f5a5e5b8a01aa2ff02359402f268624c20e9bd587b63c"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-D-hybrid-a1.jsonl",
+      "bytes": 1503,
+      "sha256": "ac9324774dd6a9a4c221302a297308bf954ce70be85beb82d2be1dd833780dfb"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "3c5f56f40364dc5e7a217a181dcab788b4475b8519eb76edb0ee76abbf027558"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-D-hybrid-a1.meta.json",
+      "bytes": 3808,
+      "sha256": "3b54b2f64f74a17fffc35fa8f75646c25215b6e506ce8df1acb124d97fe604c5"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-D-hybrid-a1.prompt.txt",
+      "bytes": 1323,
+      "sha256": "761cd73a5dd7642403b048f1a55d69a03225d4f90f522b9040de43a9492de6ff"
+    },
+    {
+      "path": "postfix/one-shot/large/T11-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "c597e8420e34f47dbfdb80190b73a8c1ddcbb01daeb7cb689fe67467997d7e39"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-A-v1-mcp-a1.jsonl",
+      "bytes": 7447,
+      "sha256": "a65ce41decee6212de353e988c5a25d7058b976884cf8131f380a907507480dd"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2764,
+      "sha256": "1654bf087d1ba09f6f4b892c315cb458f4ec9d3b4685f391559ff6b56e81870d"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-A-v1-mcp-a1.meta.json",
+      "bytes": 3399,
+      "sha256": "ae35d10bb59a42e89cb3c2ea99fe673b3ff4b479650d50fc79a8e84260c3bc26"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-A-v1-mcp-a1.prompt.txt",
+      "bytes": 958,
+      "sha256": "fa17386fe9b186666acd395a1b15c48d680fff440ca9bd908e40507b31b519ea"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-A-v1-mcp-a1.stderr.txt",
+      "bytes": 1139,
+      "sha256": "f9de3d5accaba771e475f9530414cc0a3c624e30866a594bacbc960e15eabae5"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-B-v2-mcp-a1.jsonl",
+      "bytes": 1276,
+      "sha256": "795cf1ec49f475cd88e8e6babee8ddd7a10790772113a0f3c5424452541a2f7f"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1111,
+      "sha256": "1166aff848788ff5837ada2c9e2ca1b8e3c149e890ea36b3ffa7941bff9305e5"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-B-v2-mcp-a1.meta.json",
+      "bytes": 3557,
+      "sha256": "bf6f68a8d05d87a3599fbe57f5f078645890adddd273d7cd4fc1d49de389c472"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1072,
+      "sha256": "15ff7cbf674b7f22557791da04962af11e463f07121eb0afe99a3d3d92c8bf9c"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "654dd3d7e9a7817174189769069a49e15abf821b36a57993759bee2aa68cf273"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-C-grep-read-a1.jsonl",
+      "bytes": 46482,
+      "sha256": "ceeb31e538652f2dbbe18f61a6fea79948a7c5c8afa4c8a07bdfa183113c97c5"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-C-grep-read-a1.meta.json",
+      "bytes": 2438,
+      "sha256": "8602b8829c241d7a3222639f594b6119bebd5ef619dd5d9b3381a4496dd28367"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-C-grep-read-a1.prompt.txt",
+      "bytes": 823,
+      "sha256": "c440e3a5fd9f04c41c1de7182dc824b20bb51c67f09d6792d7cbfe3256161132"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-C-grep-read-a1.stderr.txt",
+      "bytes": 825,
+      "sha256": "daf729a5c7c2826b16dd7221bfbd743b38a91d41a24a937c1669471be2805cc2"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-D-hybrid-a1.jsonl",
+      "bytes": 177638,
+      "sha256": "9a6c1256bd87ec619e5889d4c8fac4b22cc1265e95f4be79a30f40767e6de983"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "dca5d6f6c0428e9682bb403c1e9f26b79b4562653f8a0c94c583e2bd799ae442"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-D-hybrid-a1.meta.json",
+      "bytes": 3782,
+      "sha256": "bbc1814d737a948752b6cd4983dc0ff46c27259c59b45935863382e1e9413707"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-D-hybrid-a1.prompt.txt",
+      "bytes": 1297,
+      "sha256": "ee9e73714a34a92e2e0f05acaacd12244a3a7c79a4ccf7eabf1d802825208cd4"
+    },
+    {
+      "path": "postfix/one-shot/large/T12-D-hybrid-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "a3191834410f1f1817ab86f812a6e32b743d44a9c96b778f7c14ca12266cca52"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-A-v1-mcp-a1.jsonl",
+      "bytes": 81093,
+      "sha256": "828db88caaf9e9032a00ca97fc041eca48c2be2dd6ec76100f1b2158331a0b81"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 7720,
+      "sha256": "31d40415acb14f2f66a4af24e8f674bc79f3325b269373f93a209627817959cf"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-A-v1-mcp-a1.meta.json",
+      "bytes": 3419,
+      "sha256": "f19dc4ce9dcf7a905b0d4401eb18bd45221367dfa67e37844e4287c36a70c338"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-A-v1-mcp-a1.prompt.txt",
+      "bytes": 963,
+      "sha256": "b38c4491e8439a5f36bd3cbd02ffc4fce508920dac38743eda3e02f50364b39c"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-A-v1-mcp-a1.stderr.txt",
+      "bytes": 2238,
+      "sha256": "39115b46d749e4276d300a4ccf803747fac260a3e0c9cd38a909b8d2eadbd565"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 27777,
+      "sha256": "64871f56d61409a70de2ae8fef01632261c5d6790fffd0830bcd60fe906df6f3"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1630,
+      "sha256": "85b8d5881f56b964ecfa5b0c57c886079a35a55f4b85441d29c2089020270f5a"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3572,
+      "sha256": "1192b2f474a12ae794cc756d70ff2cfd2534560125450e774fe30c9c04017d1e"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1072,
+      "sha256": "b87b73b92f8cf91f19d78b728c71c8ee2bc2b6c27be0aada06dfd397d5af954c"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 1139,
+      "sha256": "c41e46ec101fd0288b787f6adaf71e1c1993c96ebec245d794c32e003613ba52"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-C-grep-read-a1.jsonl",
+      "bytes": 5966,
+      "sha256": "abc22167fd9c743737d50e93d008b395765f3ac6ede090c352783562e50c69bc"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-C-grep-read-a1.meta.json",
+      "bytes": 2453,
+      "sha256": "8c9befad50ff5037f9aa9028c210205e97fabb210fe4fd638fc2858c6d711628"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-C-grep-read-a1.prompt.txt",
+      "bytes": 823,
+      "sha256": "63ad45ff80682b33ffd1964188f95da9ce0b44d5f416748e6632bb81a290a759"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-C-grep-read-a1.stderr.txt",
+      "bytes": 899,
+      "sha256": "3734cd937c79d0780ff6c985433beb39957add8c07ff07610e4dcfb4edaf8b54"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-D-hybrid-a1.jsonl",
+      "bytes": 7172,
+      "sha256": "678ddcd9cb5d98a02ad989dcd53a046bf5bf3c8749f8b30367d1c2a3d2500f9b"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "15eeed5b0c88daaa96080100cbe5acaad6fbc89dbbd219b3ae89735fbcc78f8e"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-D-hybrid-a1.meta.json",
+      "bytes": 3797,
+      "sha256": "637c8f38add638deba3eafa768249662a5e4f69b804b13500d536573f7918068"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-D-hybrid-a1.prompt.txt",
+      "bytes": 1297,
+      "sha256": "8cf2965191a2be8d119015bb42bc3d9fc73db6a76841c785fa91788ab08c4a8b"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-D-hybrid-a1.stderr.txt",
+      "bytes": 1035,
+      "sha256": "4654eccdeb79c07d6eb6799a3e95c11fe57c364c34e6e9b0fea667602bd5e2db"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-A-v1-mcp-a1.jsonl",
+      "bytes": 3161,
+      "sha256": "373c290715998fb7888f4faa1a632b9ded91aa51250b082972b51bf4918cfa63"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2106,
+      "sha256": "b3d3c24c7117cba322ed38ad3b7b22b1d2ead0bca08327b06fec8b9af106b9d7"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-A-v1-mcp-a1.meta.json",
+      "bytes": 3449,
+      "sha256": "d35755c7a6280e65ad28d7c08a082558e483a038a699a103ed186780c5638ff4"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-A-v1-mcp-a1.prompt.txt",
+      "bytes": 993,
+      "sha256": "9361eab0bb60a39903f1961e7e08760f0945513ae1eda01a4b151910c169eabb"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-A-v1-mcp-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "b4158abebf90751eaea283b454c5744b22545db8f72a17d0d475c64acfd07331"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-B-v2-mcp-a1.jsonl",
+      "bytes": 4085,
+      "sha256": "1e5984014874379c1a5c731915834c5f98695b0d271e77ab10c80cc7dcb54034"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1625,
+      "sha256": "4cd4b97bfbb7dae8879823830035231a3a41c0efa075c8bb6a4bb920e278a466"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-B-v2-mcp-a1.meta.json",
+      "bytes": 3602,
+      "sha256": "5c8596c27d8561916fdac06410781aa866a852ecd55a65e8954060fda473973e"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1102,
+      "sha256": "3eb72aa7c53ff6a80fa4e056ff23a8e9538c693ac6bbe388c2e533597ad47f55"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-B-v2-mcp-a1.stderr.txt",
+      "bytes": 1296,
+      "sha256": "1c55fd54e1d8f1785cc5add891ffe975c7982b153a678a292cc4a40bb55597f7"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-C-grep-read-a1.jsonl",
+      "bytes": 1350,
+      "sha256": "a0a5b683b5d0edd8667cfe0f5c800ca23bbf025e1e64d075210e6cd91f79a2db"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-C-grep-read-a1.meta.json",
+      "bytes": 2483,
+      "sha256": "94e9d3cd12a00d6ae8d092295f71c90098e9a65ca21ed02feab8c1c7e40891b5"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-C-grep-read-a1.prompt.txt",
+      "bytes": 853,
+      "sha256": "49b5e38467c085d507a0868cf527ef79a18ad4a9cd49c2591816211d4f292df9"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-C-grep-read-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "befac64c5278159edfb4a62273aac9730650dffad2a7950b2d656971b843324a"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-D-hybrid-a1.jsonl",
+      "bytes": 1249,
+      "sha256": "8d77ba28bae871c59a3c5474f6c980a1d862a92b068a6bb3723ddd889d0ddd8a"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "d327e9f8ea242f176fc8c5bb01eef5c2581994190179be3e09bdb4b8f84a19b6"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-D-hybrid-a1.meta.json",
+      "bytes": 3827,
+      "sha256": "7600d4aa6e787a1d9a8533a8de71bc45cacc6ca86062babc3e5c132a744e35a5"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-D-hybrid-a1.prompt.txt",
+      "bytes": 1327,
+      "sha256": "dc13d5c963baeaf32b30f68e49c4d11f4133ebd755faed115fca608a670bd4ab"
+    },
+    {
+      "path": "postfix/one-shot/small/T02-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "8ea322268a303df540d9dfda203fa29a8159e40798e2a445adc4c56ceb899bb1"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-A-v1-mcp-a1.jsonl",
+      "bytes": 2787,
+      "sha256": "504928863c5ff48b4e90e81dd762be6905947fd824d11abcc1a17b7b64678255"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2107,
+      "sha256": "5cf53a6806698cfbf36d605b13483448276944bba584d78602216adb5bbe478e"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-A-v1-mcp-a1.meta.json",
+      "bytes": 3410,
+      "sha256": "52e1d08ccba5364424b81240f2694a1c963d19b832f42ef7a62bc7d789aed428"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-A-v1-mcp-a1.prompt.txt",
+      "bytes": 954,
+      "sha256": "2578ac4209fd8611901d6b25c1d0d98e91c7ba8dac61acd3f8f8f4d40420ae12"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-A-v1-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "293b60db0aa0c20b91e001f2ca8f809dbb644ef7abce9d1f073b8bc73078b374"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-B-v2-mcp-a1.jsonl",
+      "bytes": 4341,
+      "sha256": "96f720aed6d3772e6b008a99b8fcc23cf372b7ea2e65e852d1f80075685d7698"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1371,
+      "sha256": "80b2a4028968c98ef100921ff9cadba67421f7355db3033e23176946f10609d3"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-B-v2-mcp-a1.meta.json",
+      "bytes": 3563,
+      "sha256": "38e04148e51cf61955a983f5e59894d267bcdfdc5408dc547c2390b52eee81d3"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1063,
+      "sha256": "e06be484ced32cf691fbc8f8af77b41353b00aba468927b1f1418cdf260c67a9"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "2e46c422374177ae789f74404656cf75ecacfe5d4a09d310e556ffb892c0144b"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-C-grep-read-a1.jsonl",
+      "bytes": 2967,
+      "sha256": "33995bcf4c817a27e7c7e134a57c6e20e9f2192f7f2c8c2611f95ffcf603385e"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-C-grep-read-a1.meta.json",
+      "bytes": 2444,
+      "sha256": "e3241503f3d773c742f2f83a77298fd1e031cc7bbe1084eb9541079fc6d4b04d"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-C-grep-read-a1.prompt.txt",
+      "bytes": 814,
+      "sha256": "364c94a0375b721cff8bc490e6703aa1581563b60f3e2e059231dfbf5159a110"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-C-grep-read-a1.stderr.txt",
+      "bytes": 466,
+      "sha256": "8fe76f84e8094ff42c108b73438f9944285c165a5461d2866ba50fff6dea8824"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-D-hybrid-a1.jsonl",
+      "bytes": 2477,
+      "sha256": "e82e0e49a035110868fd8fd03b808406f40688b63d5c8228af59d39650550e33"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "6b095bffe1afedcbf1482fed624bf24016dc5a2d0c581416161a30f0bdf3b1e0"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-D-hybrid-a1.meta.json",
+      "bytes": 3788,
+      "sha256": "4c06f283d88209c6210c0584df73cb10a05953e0b35fa38da573b203fcd23b8e"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-D-hybrid-a1.prompt.txt",
+      "bytes": 1288,
+      "sha256": "a7c256c02abe4b01d70f13a9c377610c2b76950fe9968ae91d7b740b05b9d928"
+    },
+    {
+      "path": "postfix/one-shot/small/T03-D-hybrid-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "398f47d04490644a02eebe5f09667c4fa5d6e8ebc1866d07f38ded36ecd98a22"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-A-v1-mcp-a1.jsonl",
+      "bytes": 37207,
+      "sha256": "90b9a767327f69cf73f958a8872648266e596a84b7f89da3d5805f2d690767dd"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 4419,
+      "sha256": "f4059e56e1a140be6f4d892d14735908a83b6d4d09712e9b1fa71e9548f8f86f"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-A-v1-mcp-a1.meta.json",
+      "bytes": 3438,
+      "sha256": "c155ccc97cdc2d5c05b4673ea6bf990a311ad45172356ac3d24e0fe3fd3ae61f"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-A-v1-mcp-a1.prompt.txt",
+      "bytes": 982,
+      "sha256": "87e5d0da83152321a73f9563c177f3949367d32d3328966a4051e8d0a45bd9ce"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-A-v1-mcp-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "31ea4321ebd2f9e27e1aa1db444b9b83547a7f6d665ba43ed611517e6f746fa0"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-B-v2-mcp-a1.jsonl",
+      "bytes": 11045,
+      "sha256": "988bb4f7396acd7e07ad64c608a94bd8b7cecf8d4e86dd1bf7a9ab56188681a9"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1370,
+      "sha256": "d0c8875367cae69eaaeabefd0b44fda83a87d77e6b2ccdaee518be5216371edd"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-B-v2-mcp-a1.meta.json",
+      "bytes": 3591,
+      "sha256": "7afd741e0664c73f8c11d7bf08b80eef70fce9fd5433ee6bd040a32e5ee31c4f"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1091,
+      "sha256": "2b1d8475e1222d4060d059521ed51e3918cb53dec495f04eee8190f16367f143"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "096d85ebab5d42bbf3f79a23d19cf0a632be800fe7f98fc924b1736fb699c87a"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-C-grep-read-a1.jsonl",
+      "bytes": 2443,
+      "sha256": "2103688430bca1d9a5132453cf47f69aded4a99f5db80efe29d951525ba0bd5b"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-C-grep-read-a1.meta.json",
+      "bytes": 2472,
+      "sha256": "5ae675b7c002f4a1a658c73db8e928acffd8dea06a7ef9e6d6c5317cb185dc9f"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-C-grep-read-a1.prompt.txt",
+      "bytes": 842,
+      "sha256": "aac3644a3830c77773f9fca0c5b436c1a286794928f6a143c99b1aa7923e1cb9"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-C-grep-read-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "1e3d6a7c49ef5e562321ceea8d409d0241e3d02c68ed2a7f5e25b6e8285f1865"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-D-hybrid-a1.jsonl",
+      "bytes": 1441,
+      "sha256": "9e26091511f79807e9eb7067563a1f8853904c16f7269f95d6336ad39b3fb372"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "fedb957c44f8a652049af5bec048ce6c7008b2322036346ff59bdb665d5e9174"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-D-hybrid-a1.meta.json",
+      "bytes": 3816,
+      "sha256": "62f41ef11cf663d23f80f366b13f8d134eca139c13862c8a2c825d0a3e3bd9f5"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-D-hybrid-a1.prompt.txt",
+      "bytes": 1316,
+      "sha256": "5e9738748884eaee6509206ae1de6311b9105891763d496ade19c7cfdb8d0f69"
+    },
+    {
+      "path": "postfix/one-shot/small/T04-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "1359a7a2b6e7e6a27678ff8ab3c7f1eecf99bb0913a4c6c305b1e9d38299b126"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-A-v1-mcp-a1.jsonl",
+      "bytes": 19468,
+      "sha256": "de492b451f1e994cfe5f1d8964eb4c66b67d1cc7c666ca93626fde3d74a05629"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 5714,
+      "sha256": "b5c13e4d936e958fd963628f45781863d5292d058804e284c81140207eb751dd"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-A-v1-mcp-a1.meta.json",
+      "bytes": 3547,
+      "sha256": "ada2ca790688c2cb356b174419c549461c856e5ed2e8e86c4c0e680b5547efa0"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1091,
+      "sha256": "b02b4cf880435d8067440afa4a17997f721e52e62d28688d88303fcb48bbad08"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-A-v1-mcp-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "65300fbc2c01658c121d9a8e6b486eaf4fb2a7eeae127694c24ed869afd345b4"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-B-v2-mcp-a1.jsonl",
+      "bytes": 4453,
+      "sha256": "638036cae6c5ff333c233599dde8a3b2c15db5212f230fec89a9f19f605d448d"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1372,
+      "sha256": "e52ee7a357573568dbcabcd592cec9066f206c029ae678c067314a398dfcac3e"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-B-v2-mcp-a1.meta.json",
+      "bytes": 3700,
+      "sha256": "da7a35e485c20231cca638f31baf9865afa2f8301fcff7def2e882f14ace1043"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1200,
+      "sha256": "3fad763694bce4b6bd7f3408bfff0b68a8765bfe8612fbf84c35abda36c4fae4"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "7f4ca45071dcaf08566cc05bd4fd85188e944f4ca2293a044f7c7bcbf3fa125b"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-C-grep-read-a1.jsonl",
+      "bytes": 2291,
+      "sha256": "3bc2637e0f0a4187ace76c006f03d6314367fce7657c82fd05c58ea5a9e1f21f"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-C-grep-read-a1.meta.json",
+      "bytes": 2581,
+      "sha256": "33cad5b2d909ebafe36606ee91bfc391ce6827dd79dc24d93481c48b4c6d835a"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-C-grep-read-a1.prompt.txt",
+      "bytes": 951,
+      "sha256": "974700f11c913d5f2879a11bae8fbf91c7956d5d8f7d39eed2950ee028a5fa28"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "3c60afbedabfe846b795d2efc1bd69a61de83b54397223fd86337b8914f01ba4"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-D-hybrid-a1.jsonl",
+      "bytes": 2297,
+      "sha256": "e20be79246ad4008ea674e25b58e5919d9d376f15a4f3673ea37f6573b54e822"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "f7090c5dd5c48c3b55d4668c703f08f08ec171646dcccccc78d6e79d77328795"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-D-hybrid-a1.meta.json",
+      "bytes": 3925,
+      "sha256": "360d1c89549d0eb87413a671e8328a1ba44830732722bcbe8c360f35c8edfeab"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-D-hybrid-a1.prompt.txt",
+      "bytes": 1425,
+      "sha256": "db875acf5d8ec5327b8c70fb7f37be9f12241aa05ad7dc5fc8315dc0e30407db"
+    },
+    {
+      "path": "postfix/one-shot/small/T05-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "bdba1ffed7757152225c7c2b3653b6ba5910bee6402d64fb2dfd2b1955395990"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-A-v1-mcp-a1.jsonl",
+      "bytes": 391484,
+      "sha256": "44ee908ac6355fbf310aa97756df58249dac8de9391edc1214ad6f9be3502c3a"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 12767,
+      "sha256": "190689c3f60960ea821d9573904b3868d8240274a35d3e79d8bdb856bd545f81"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-A-v1-mcp-a1.meta.json",
+      "bytes": 3528,
+      "sha256": "7ba8451d062b7702927acf91bf02285c7a4f9c40e8d97356ec30667e768c8220"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1071,
+      "sha256": "5f47527d105de49b0727cb400878a5ed14a13c84b823b2002693397d6bc0f6a6"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-A-v1-mcp-a1.stderr.txt",
+      "bytes": 3337,
+      "sha256": "faae27420cc061bdabe19e7a9f66cbcbbf368cc2551d1dab7387a6211b3db9fb"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-B-v2-mcp-a1.jsonl",
+      "bytes": 2312,
+      "sha256": "7c5ab3542b4a9f6710e35a19e3f04a896dce3c5791f20e991e3827cc4047737c"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1112,
+      "sha256": "96bec974336b36120a5bc712a2cc017081d0ca87cc0e94c39ef5910f7327f193"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-B-v2-mcp-a1.meta.json",
+      "bytes": 3680,
+      "sha256": "ce935155757ce0437b454447c0d5e425e92f252f1141a4bb5f5616b799a28dd2"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1180,
+      "sha256": "58f6d78d23b0242593ea6cc95b7ada21f1c6af95e3c7f53cab6bb6531bab159d"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-B-v2-mcp-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "6d330468ed04a98a4e9f51b408deb39c49bef5ceb2ae7baa34f4fccd1cba0d3d"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-C-grep-read-a1.jsonl",
+      "bytes": 1478,
+      "sha256": "03ecdd644376288626d26e0629d1f7b37dbeb588ebb6701e7a5d1536c79aa817"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-C-grep-read-a1.meta.json",
+      "bytes": 2561,
+      "sha256": "02fdc1818c96abca43ba1723d9194d2c0ad92900b516cc29412707c3f1dfce87"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-C-grep-read-a1.prompt.txt",
+      "bytes": 931,
+      "sha256": "bedef8a38bd709569e65c9ebe6fcd5389007f43b7b6a8fd7dee2d63aa00865f6"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-C-grep-read-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "e2fe22885d9249f2103c4fcd1c4de82c3812ba718bb365897438865b881a6632"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-D-hybrid-a1.jsonl",
+      "bytes": 1478,
+      "sha256": "c147da58d88921284a7941494a9c080cdfee09ab8acf155d8ffb1f78fea196cc"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "49566d009a6af881c7bcbfa76c0800149ef9ecc416fea0dafa6bd8dc6b7d232a"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-D-hybrid-a1.meta.json",
+      "bytes": 3905,
+      "sha256": "38e1dc0f4b1dcddf3e4fbda61cedb1e84765bfa23ef0bd3fb2248bd6b075da8c"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-D-hybrid-a1.prompt.txt",
+      "bytes": 1405,
+      "sha256": "a4343a401ecbe39508891e0f5c75d1db2cf18ce09f6a3da40b384ed506d85338"
+    },
+    {
+      "path": "postfix/one-shot/small/T06-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "91cab7ef0d070637f040c981e6817fd70e1bc93c4c255c0f3bd239794a52e03b"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-A-v1-mcp-a1.jsonl",
+      "bytes": 17755,
+      "sha256": "71755541cd43f8ba9704446eefa0dfbc49b7bdc75e3240cf67f9cc69395fd4d6"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3508,
+      "sha256": "046379f3dcbc88a6bfffe5d993a86c90195d3172613b266777df42034c7bd1a5"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-A-v1-mcp-a1.meta.json",
+      "bytes": 3458,
+      "sha256": "69e3f503dc25d8bd15893aea9e21a1d0594236befd0865f41783d049c013310d"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1002,
+      "sha256": "ed886410a7693b68b84dd02ed6641077521a48f4c56e1af0e71405a6690da06b"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-A-v1-mcp-a1.stderr.txt",
+      "bytes": 1139,
+      "sha256": "fc1d4c6287b64c1c26f1b2b8fcd80e483cf18ddb2c3d5a6699dda1c9050794ba"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-B-v2-mcp-a1.jsonl",
+      "bytes": 2815,
+      "sha256": "b198e22850338d4037d57b7a7193e26311ef02b3a9b10fd20772b2c8000cb08c"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1367,
+      "sha256": "eba30d1a5a7c8758c58843709492315993e06d73b47f9f93c9ad4d6bed3ec6e4"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-B-v2-mcp-a1.meta.json",
+      "bytes": 3611,
+      "sha256": "3820e117fc39820109ba919519f510f98e9e0b471cfdeebd5a017e47ad39f852"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1111,
+      "sha256": "a1d86c80638e3945c358580431579edd92370f5b036c08f89f7d89c29218d72a"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-B-v2-mcp-a1.stderr.txt",
+      "bytes": 825,
+      "sha256": "d4947fac00286d17ffa0be163b3cd898615def29570b12f633f7f25ecb2cdb59"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-C-grep-read-a1.jsonl",
+      "bytes": 6784,
+      "sha256": "fd17cf46db83ab8a96c11a10e083107cb904034cacfcb9921369fe7447a2143c"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-C-grep-read-a1.meta.json",
+      "bytes": 2491,
+      "sha256": "1a4db73b51f4ca69ddc9cfad5fb0f1f20c877317b9fc84c4f61588e9406b64d9"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-C-grep-read-a1.prompt.txt",
+      "bytes": 862,
+      "sha256": "9965b318c4c8823a118fc32365707a2631abb407b5c89ac9e384541589367e1e"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "5b580d967e81ad302068e8afc34915d10a91578b7bd0bc1f0dad40dfa0c80b65"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-D-hybrid-a1.jsonl",
+      "bytes": 4827,
+      "sha256": "cc86c6a43f3b24b4425ab52cb35b5411abd839e2afbf816a6a8938475f2f32a3"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "146385ee61af92d0292f07d510372c56d6a4619456b9628a2ce63af29dd66b1c"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-D-hybrid-a1.meta.json",
+      "bytes": 3836,
+      "sha256": "88d46ff92104f68cbec3698859268586722e7319f96e4ac9c43261e3b70e85e1"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-D-hybrid-a1.prompt.txt",
+      "bytes": 1336,
+      "sha256": "ba1b22ff7d6088d680b3339733389c3ed945805376dea55cb49ecad6887ea32a"
+    },
+    {
+      "path": "postfix/one-shot/small/T07-D-hybrid-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "b2eeb08833f43de07224ea742839b94ad4cf3e35f5568e46221e20fd928b9c77"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-A-v1-mcp-a1.jsonl",
+      "bytes": 101861,
+      "sha256": "d03879670a7e262a791b671ba77f531b5685dd9317e440096611897257ab6516"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 6324,
+      "sha256": "36c23c82f18a4b1fc7790c7713ebb1545fcb9aad804e6c44f1eab8d703caa096"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-A-v1-mcp-a1.meta.json",
+      "bytes": 3572,
+      "sha256": "bfb2412eb7b5841d77a4a84ce78b0c2dd736f67e29a87a7d7fd09405e9bc5246"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1117,
+      "sha256": "34957a2a32afa9695ca37e599d60d0e9abb9a9f66b87d4411d34fc2dcdbe156e"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-A-v1-mcp-a1.stderr.txt",
+      "bytes": 2238,
+      "sha256": "584370681740cf3a70e78041b5ee02c11940460861fbdc842e986aba21c9e9e9"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-B-v2-mcp-a1.jsonl",
+      "bytes": 2656,
+      "sha256": "76b4ede81cb65abf045f3438db79884218aa0e76ea0c6ccea54e720981eaea84"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1114,
+      "sha256": "d789d56dbe3ef717562336ed560b6528d7479fdd66de62f43a89ceb1c102b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-B-v2-mcp-a1.meta.json",
+      "bytes": 3726,
+      "sha256": "bee81f38b2740600a9a4fd907500812b8926bdddb171e8cf3c47638df3c6ab48"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1226,
+      "sha256": "661e38303068d8b98aa84be1a3ab2dffcccab49a6556e9c259b9dacdceb2fa0c"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-B-v2-mcp-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "139a79f09a5a17339a6f6b416f62d09b96f87a11ad8378807cf4b674bd4df467"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-C-grep-read-a1.jsonl",
+      "bytes": 21488,
+      "sha256": "567c6c8afda31d30b6f850e6f8ed4d1e646bf291e0c40efdb4a82644cfc54e82"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-C-grep-read-a1.meta.json",
+      "bytes": 2607,
+      "sha256": "c9cd17fd825b4ad4cd6894bfed178a07c2102c0d6791b953b2c84759eec6c259"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-C-grep-read-a1.prompt.txt",
+      "bytes": 977,
+      "sha256": "2dfc4b2c8fb321dd0294d019ba4d5acf76156df38570cba1c1405544cfa2a6eb"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-C-grep-read-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "0a19454987e02db447e11269ea0540d88dbe15adc3b1f1d4c038b468b86e35a8"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-D-hybrid-a1.jsonl",
+      "bytes": 83110,
+      "sha256": "8e47bac2b07e49964286127d063046ebceebf26e033431be4cbd300fe336a39f"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "7dec7c41b7ad075ab800e758c549273c1471326b1092114b0e69a1419db37036"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-D-hybrid-a1.meta.json",
+      "bytes": 3951,
+      "sha256": "8fdee20c81d1eeb53a63f770a63ae7977b082bef9374ab7c970fbdc2f310f837"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-D-hybrid-a1.prompt.txt",
+      "bytes": 1451,
+      "sha256": "517fc809cb03cb8bf0580da282624588528c3f2fd16bcfadbdeabd8749be79e2"
+    },
+    {
+      "path": "postfix/one-shot/small/T08-D-hybrid-a1.stderr.txt",
+      "bytes": 1571,
+      "sha256": "66e26f5079486500f0f12294a3cf3258dc098d5700b96ef02cdc01402132eab9"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-A-v1-mcp-a1.jsonl",
+      "bytes": 25457,
+      "sha256": "ad7ff89e3b0bfe39300e0e98a1e1b536f13cdad5ab8de83719db35c789411179"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 4150,
+      "sha256": "3c066ba1764bce67fd6ec0b4061842059ed9d258b3f9db9c422bd7398a65d2e3"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-A-v1-mcp-a1.meta.json",
+      "bytes": 3541,
+      "sha256": "22de43c371bbb6e3e2c6ce1e0d63c3737636ea6db3b6a425929fc9d398d5927e"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1079,
+      "sha256": "abeac84bb3e6ba927f18da24e45261e988bfde91692e9d7f9bbfef8398c9292f"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-A-v1-mcp-a1.stderr.txt",
+      "bytes": 825,
+      "sha256": "84c2172f8bde2aaae3e9e32c88ad36d7c19baaa916ae3371c4b3c4501ef6236d"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-B-v2-mcp-a1.jsonl",
+      "bytes": 2252,
+      "sha256": "9611c0dd714ab6fd44c8b88eb1361b4e6116d7ab84c63698e64d6cb14550af07"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "944a3862135e29b59f877c504f4b1de2af68798955f3611940634b2d44244a58"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-B-v2-mcp-a1.meta.json",
+      "bytes": 3694,
+      "sha256": "dc7514b12ff02cbcf2503ccd3fd716043328cef0a8d0e4be34dbcca8d42b2f3f"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1188,
+      "sha256": "10e77b4be3702e00534a1c28d3a8b89e51ade7272138d49546aada64d00a7719"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "aa46d87bb59944ee7f5223a919e6f8c45d07dad588269420db50095f7ad15fc1"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-C-grep-read-a1.jsonl",
+      "bytes": 19954,
+      "sha256": "80cf97c5dea5de54c8040e6706e0edb3ac5d420622b8ffb6f8ab15e73363560e"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-C-grep-read-a1.meta.json",
+      "bytes": 2575,
+      "sha256": "897b5a0a3cca74b10930f6efe6f624198660ac549d7f57a825fb1feb30d15d2d"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-C-grep-read-a1.prompt.txt",
+      "bytes": 939,
+      "sha256": "d4159a84d1a0ac0367dc792de8a301c5c4d797bb860c11760814caec8eb85425"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "b498d8fb23724d187637489f40a0ac6d5a0cd09d1f067ad2277f04b2439042b7"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-D-hybrid-a1.jsonl",
+      "bytes": 14465,
+      "sha256": "48d2e327bdc44441383f46cc37ef05dca3a671949da1dce99e5d8193bb8bc71e"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "072389012ef62b0b443106b5fd433e357b224b5b2ddf9fe6beb8359b84fb2acf"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-D-hybrid-a1.meta.json",
+      "bytes": 3919,
+      "sha256": "ed9d28686fc6e6556fa843df9272712921adc433aef97f5e288c56c1a0cb5f53"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-D-hybrid-a1.prompt.txt",
+      "bytes": 1413,
+      "sha256": "a2c41aaa432d88b3a7222caad680e4644c22e48bad10690e6a041190fb1b5ddb"
+    },
+    {
+      "path": "postfix/one-shot/small/T09-D-hybrid-a1.stderr.txt",
+      "bytes": 1178,
+      "sha256": "51107cee198e2e3c3781dff40d77cc126b47e117e00668b5c0e05a2e9a221add"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-A-v1-mcp-a1.jsonl",
+      "bytes": 61175,
+      "sha256": "7da10b8895c71978aab6b05e84007e7cfd3b89ec269d12ee98e8272552745e50"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 6581,
+      "sha256": "ae32f47e72a8865ec5054833dc9545816de8cac3832302dd81693ad3afc3daa6"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-A-v1-mcp-a1.meta.json",
+      "bytes": 3518,
+      "sha256": "badda1ce3e4f620aec484f293096144fd6ecbf4ec67f271a7f0c177497005c99"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-A-v1-mcp-a1.prompt.txt",
+      "bytes": 1063,
+      "sha256": "e0e8ea100d3b679259a406156e1cdb6042fde847d0b6cf8d4d50e18c9169d55d"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-A-v1-mcp-a1.stderr.txt",
+      "bytes": 2081,
+      "sha256": "544a08cd57d3e4bbf0c98989e68a71408fd2b4dbf096fa45ae8bec56bd3b93c1"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-B-v2-mcp-a1.jsonl",
+      "bytes": 4771,
+      "sha256": "8641c17566c15d20a76a2548dcd08ec9d977c9c46f31a6eb9b26235e5533c67a"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1113,
+      "sha256": "b9d6fe70569f2eff91c378952a8b29dfddc298fa88fd82fc07a12c0f8d794cb7"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-B-v2-mcp-a1.meta.json",
+      "bytes": 3672,
+      "sha256": "f08b3e6d37174558f4305c8223656e0b5cf303ee82b0ce3159323bba5c4fd0ab"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1172,
+      "sha256": "76cefc7f5980cd64d3fbbbffb115e67b504f951d6eac751c964b1e2706a451bc"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "0d4fb77f2d960f1ded6eb7ff1b03e058636f6c0673f6f56d4f0d2373a64263eb"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-C-grep-read-a1.jsonl",
+      "bytes": 4202,
+      "sha256": "21c0b042d396c01af2c9103a9625ef1d43784d0cf87014f604819ac963ae5081"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-C-grep-read-a1.meta.json",
+      "bytes": 2553,
+      "sha256": "f66180593773b7c9a6e01bc867ff3e0d1f079f6df6919df97c1bf09d93c185f9"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-C-grep-read-a1.prompt.txt",
+      "bytes": 923,
+      "sha256": "70adc3f3ee7dfba4cbb4c4d4cdc443dda204005f0f22c6c9b57cc44b21d4557e"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-C-grep-read-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "0545bb22a290dc96a70f055e5f8b6b5b6e30af924948302e7bf192f21f77fa0e"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-D-hybrid-a1.jsonl",
+      "bytes": 12690,
+      "sha256": "4fd553d411e70d43d0d5c98a4e969d6117cc5df9e8a852ab3c9c471c2a354b59"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "cba85e2f869875fdebd4bc32af20066ca3a8e81c77b3fc2c832af2fda09fd841"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-D-hybrid-a1.meta.json",
+      "bytes": 3897,
+      "sha256": "d0483d903e24d7b6342da39cef04941e3e865c8db57d14f65138ace690be1ee4"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-D-hybrid-a1.prompt.txt",
+      "bytes": 1397,
+      "sha256": "2981969430b1ba16051a56062c3ff8f03d1f51f7b20453871965775f4ac818c5"
+    },
+    {
+      "path": "postfix/one-shot/small/T10-D-hybrid-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "26059cb49e3ff4034a97f643ac7b2ab331f99bda045f0743f30127b8ce2d57b4"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-A-v1-mcp-a1.jsonl",
+      "bytes": 153508,
+      "sha256": "0edf5e9d57393475733d12f85237e62b3497ec9ee00bd87076ff295538dd0847"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 6083,
+      "sha256": "147e4b47ff1c9dfd1f963121aef1dd743a476b43d11bf6c4b56d224504134ef5"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-A-v1-mcp-a1.meta.json",
+      "bytes": 3420,
+      "sha256": "c817d322189527c3ed40dea66e11a377d07ff8e2af5c560f00ea090ff0eec84b"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-A-v1-mcp-a1.prompt.txt",
+      "bytes": 964,
+      "sha256": "9f7b4c113307dffe2afcbe386b2f49a5cf83a0e5698d178e766d5b5f5852aa91"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-A-v1-mcp-a1.stderr.txt",
+      "bytes": 1296,
+      "sha256": "fa9de9cd7ff1697b7aab4daaf2e209240a66e4fa0fe307ba19f01d0418111332"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-B-v2-mcp-a1.jsonl",
+      "bytes": 28469,
+      "sha256": "3fdd3c2291b51463f2189c9f888f0710d5b69468df5d3294bf5479967e205d10"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 3951,
+      "sha256": "cb371033396a30c481a8073c297a59f2c2fd76ca4a42193a56a9b19a2ea1b26e"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-B-v2-mcp-a1.meta.json",
+      "bytes": 3573,
+      "sha256": "d14a61284b6bc234fe70a388dfb6687f1716540af5fa92a7fd3a9e629447ac48"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1073,
+      "sha256": "cf3abd8ec42897a7f8d10a18197a33e562561fc34aca1442693ad28fa1e39275"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-B-v2-mcp-a1.stderr.txt",
+      "bytes": 982,
+      "sha256": "a7a790f6d89ac434528e65f28cc42d9fb9d94a5bf7f9374508a98ee4720e506b"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-C-grep-read-a1.jsonl",
+      "bytes": 3456,
+      "sha256": "605576e53d161c92b2cb6079f4dddf181b331c1840a49f7001c55816c859406e"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-C-grep-read-a1.meta.json",
+      "bytes": 2454,
+      "sha256": "d5961877375aa0c27077f3c4a4883fc0c0c88f7178cb72cba72a4165287ce941"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-C-grep-read-a1.prompt.txt",
+      "bytes": 824,
+      "sha256": "ba327f497320db4e47800aef10f2b24ffc7668f54240263506fe50de87240c09"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-C-grep-read-a1.stderr.txt",
+      "bytes": 780,
+      "sha256": "072576fb56d79e414bb2e1a509a1be883700b8ce4edd4a71e6bd51d2e090c5a8"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-D-hybrid-a1.jsonl",
+      "bytes": 3366,
+      "sha256": "5cbd9cfa0d2e86390c9eb8fd21f0bb91d095aab054b9d4b9b2ea4589576dfad0"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 853,
+      "sha256": "fbb0e9821a85b962afd194a47b75b15f232615596b7db3e7d816f526a54ece6a"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-D-hybrid-a1.meta.json",
+      "bytes": 3798,
+      "sha256": "f293a9a5a43326a2dede961548d5982c8f078c91d1faae3721bfda55d5c6597a"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-D-hybrid-a1.prompt.txt",
+      "bytes": 1298,
+      "sha256": "65bac025c1b414908ac65900f4f9423c132dcf49d1d969e9ad00ee533090606f"
+    },
+    {
+      "path": "postfix/one-shot/small/T11-D-hybrid-a1.stderr.txt",
+      "bytes": 466,
+      "sha256": "93ad9934b57ae3311ff21f6c4d8652258818cc6a2876b638b8cb17b1c1a3a6b1"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-A-v1-mcp-a1.jsonl",
+      "bytes": 19409,
+      "sha256": "c3727b9cf606a1ce09d59c2217dda84c5d5827e78400d3531df9660b1a338f45"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-A-v1-mcp-a1.mcp-trace.jsonl",
+      "bytes": 2613,
+      "sha256": "f859b9db6e1ed22a6be7ac8e8862c10ba3a52b19c5ecd07d1b1b97c554eaffa6"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-A-v1-mcp-a1.meta.json",
+      "bytes": 3418,
+      "sha256": "6115babfe792ebc9ae8c2641fcd3b7495218013963f0252b3b201f0060e05ea5"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-A-v1-mcp-a1.prompt.txt",
+      "bytes": 963,
+      "sha256": "54b240987f6b9241e978c429b119236409b0039b9938d3e5a77397079a5b03ee"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-A-v1-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "0701af00d6db55a222ac422657d0fd8d1716d8f2aadd115a1cd3022386e02194"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-B-v2-mcp-a1.jsonl",
+      "bytes": 1176,
+      "sha256": "74c3fecf9c98a9faa23ddf3632412e0a836214bee6ebb33b53dc1de256f355da"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1110,
+      "sha256": "432b3772d8e8b8dc6c85b19e8e301c947d710046ab545bc7794abee10209881d"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-B-v2-mcp-a1.meta.json",
+      "bytes": 3571,
+      "sha256": "d6c8611beb4012837078a60050d964c6805da6bf8450621e9bb2dcffaf45df0a"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1072,
+      "sha256": "ecfb367fd6ba83f5f03bffe9a364ea1c78b9771f61278955d8c39ff53b2ffa59"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-B-v2-mcp-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "498dbe59765d4738929504aa9bea51892044aceafa574c0504a6a9798c1f19e2"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-C-grep-read-a1.jsonl",
+      "bytes": 23900,
+      "sha256": "616054ac5d118f3f704c97b346be651f80e903151fc1c846abeb6323c4233da3"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-C-grep-read-a1.mcp-trace.jsonl",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-C-grep-read-a1.meta.json",
+      "bytes": 2453,
+      "sha256": "77953af7f8375881536d0ddf31ced61f265625180350b73d935d771456f61e20"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-C-grep-read-a1.prompt.txt",
+      "bytes": 823,
+      "sha256": "83c4f278a4c4bddca44dd8538a7b46341dd1acf229e9c1ff4cdd46e70ee97bb3"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-C-grep-read-a1.stderr.txt",
+      "bytes": 197,
+      "sha256": "9cb1ff6849deacd88cfac156607297a0ff5dabd8da239b361e33b779c853b2bd"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-D-hybrid-a1.jsonl",
+      "bytes": 23900,
+      "sha256": "2566e81f1b306a3052fd2202bc82f10dfc4596c01a7c18d15eb1e4427125d749"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-D-hybrid-a1.mcp-trace.jsonl",
+      "bytes": 854,
+      "sha256": "28b8946e04e49bf4febcc5e593df70c48dcc8c8c20963f52b1d75f280d0c9a38"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-D-hybrid-a1.meta.json",
+      "bytes": 3797,
+      "sha256": "08fbf090a9eb3ddebcba5cf9ff52a05f81124ff9efe6af67a03309371a581bc2"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-D-hybrid-a1.prompt.txt",
+      "bytes": 1297,
+      "sha256": "f2cecf29bdc4fb543e125a3a1a6d8af4eb47449f7b08c0cfd61bca055411dd24"
+    },
+    {
+      "path": "postfix/one-shot/small/T12-D-hybrid-a1.stderr.txt",
+      "bytes": 354,
+      "sha256": "9006468019f01dc34446f278ae955f3b98ed6f76c12f8fdad22f3d4b5c4dc26b"
+    }
+  ]
+}

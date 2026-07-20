@@ -139,6 +139,7 @@ mixing two graph states.
 - [Architecture](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/V2_ARCHITECTURE.md)
 - [CLI Reference](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/CLI_REFERENCE.md)
 - [Current State](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/V2_CURRENT_STATE.md)
+- [V1/V2 Token Truth Audit](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) — Native V1, V2, grep/read, and hybrid results
 - [Changelog](CHANGELOG.md) — version history
 - [Contributing](https://github.com/Cheurteenyt/codebase-mirror/blob/main/CONTRIBUTING.md)
 - [Release Policy](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/RELEASE_POLICY.md)

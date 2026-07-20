@@ -8,15 +8,21 @@
 > is separate and measures only JSON whitespace bytes; see
 > [PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md](PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md).
 >
-> **Native-agent baseline (2026-07-20):** under identical Codex native
-> accounting, reproducible V2 MCP-only used fewer tokens than official V1 in
-> all four target/usage-model aggregates, but neither MCP-only arm beat an
-> optimized grep/read baseline. The cost-aware hybrid beat grep/read in three
-> of four aggregates, but used source commands and made no MCP evidence calls.
-> See
-> [V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md](V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md#13-immutable-pre-fix-baseline-checkpoint).
+> **Native-agent audit (2026-07-20):** under identical Codex native
+> accounting, post-fix V2 MCP-only uses fewer tokens and calls than official
+> reproducible V1 in all four target/usage-model aggregates. It still uses
+> 1.334x to 1.786x the tokens of optimized grep/read. The exact caller and
+> inventory profiles reduce one-shot V2 35.7% on the small target and 43.1% on
+> the large target, but continuous-small improves only 5.3%. The cost-aware
+> hybrid beats grep/read in two of four post-fix aggregates and makes no MCP
+> evidence calls, so it is not evidence of graph-query savings. See
+> [V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md](V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md#15-immutable-post-fix-checkpoint).
 
 V2 is designed to **minimize the number of API calls and tokens** an AI agent needs to understand and modify a codebase.
+
+That sentence states a design objective, not a universal measured advantage.
+The executed audit supports a V2-over-V1 result on two pinned repositories, but
+does not support an MCP-only advantage over optimized source search.
 
 ## The Problem
 

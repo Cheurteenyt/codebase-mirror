@@ -124,9 +124,9 @@ function ratioTable(aggregates) {
   return lines.join('\n');
 }
 
-function perTaskTables(runs) {
+function perTaskTables(runs, phase) {
   const lines = [
-    '# V1/V2 token-truth baseline: complete selected per-task tables',
+    `# V1/V2 token-truth ${phase}: complete selected per-task tables`,
     '',
     'Each arm cell is `raw native tokens / completed calls / response bytes / grade / validity`.',
     'The committed CSV beside this file is the canonical machine-readable table and retains every registered attribution field.',
@@ -211,7 +211,7 @@ async function main() {
   ].join('\n');
 
   writeNew(resolve(outputDir, 'aggregate-and-ratios.md'), `${markdown}\n`, options.force);
-  writeNew(resolve(outputDir, 'per-task.md'), perTaskTables(runs), options.force);
+  writeNew(resolve(outputDir, 'per-task.md'), perTaskTables(runs, phase), options.force);
   writeNew(resolve(outputDir, 'selected-runs.csv'), csv, options.force);
   writeNew(resolve(outputDir, 'raw-artifact-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, options.force);
   console.log(JSON.stringify({

@@ -1,12 +1,12 @@
 # V1/V2 token-efficiency truth audit — 2026-07-20
 
-Status: **pre-registered; no measured agent result has been observed**
+Status: **benchmark complete after two pre-registered optimization cycles**
 
 This document and the machine-readable files under
 `scripts/benchmark/v1-v2-truth-audit/` form one protocol. The purpose is to
 compare reproducible Codebase Memory V1, current V2, optimized grep/read, and
 the intended V2 hybrid workflow under identical native agent accounting. The
-initial comparison must be committed and pushed before V2 behavior changes.
+initial comparison was committed and pushed before V2 behavior changed.
 
 The exact questions and reference answers are stored in
 `scripts/benchmark/v1-v2-truth-audit/tasks.json`. They are copied without
@@ -609,3 +609,187 @@ response size, and agent routing rank higher.
 This is the immutable pre-fix evidence boundary. No V2 product behavior was
 changed before these artifacts, tables, claim boundaries, and root causes were
 generated.
+
+## 14. Two evidence-driven V2 optimization cycles
+
+The goal allowed at most two product cycles. Both preserve the eight-tool MCP
+surface and extend the read-only `lookup_source_text` contract with optional
+profiles; the default literal profile remains backward compatible.
+
+Cycle 1 added persistent server-side aggregation for exact direct callers and
+tracked top-level repository inventory. Results are deterministic and bounded,
+and explicitly report scan coverage, completeness, staleness, ambiguity, and
+truncation. It also removed unconditional overview-first and prepare-before-edit
+guidance. Cycle 2 added bounded route/CLI-to-symbol `call_chain` resolution with
+shortest-path selection, source-range fallback, ambiguity handling, and a
+copy-ready `formatted_chain`.
+
+The relevant regression suite grew to 52 passing tests covering exactness,
+ordering, limits, incomplete/stale results, empty and large projects, duplicate
+symbols, Windows/POSIX paths, read-only behavior, and legacy literal clients.
+The tool count stayed at eight. The measured V2 `tools/list` response grew from
+7,959 to 9,653 bytes (+21.3%); that fixed cost is reported rather than hidden.
+
+Fresh post-fix indexes used a new cache root. The small index reproduced 512
+files, 10,665 nodes, and 19,597 edges in 2.631 seconds. The large index
+reproduced 2,538 files, 56,825 nodes, and 300,442 edges in 10.547 seconds. Both
+post-fix CLI runs reported zero extraction errors and every expected task file
+was present. No indexer code changed, and the graph counts are identical to the
+pre-fix databases, so the changed large-run error count is not attributed to
+the MCP fix. Peak memory remains unavailable from the CLI.
+
+## 15. Immutable post-fix checkpoint
+
+The exact pre-registered protocol was rerun without changing tasks, answers,
+model, reasoning, grading, condition order, or aggregation. All 192 selected
+post-fix cells are valid. Canonical evidence is published in:
+
+- [`aggregate-and-ratios.md`](benchmarks/v1-v2-token-truth-postfix-2026-07-20/aggregate-and-ratios.md);
+- [`per-task.md`](benchmarks/v1-v2-token-truth-postfix-2026-07-20/per-task.md);
+- [`selected-runs.csv`](benchmarks/v1-v2-token-truth-postfix-2026-07-20/selected-runs.csv);
+- [`raw-artifact-manifest.json`](benchmarks/v1-v2-token-truth-postfix-2026-07-20/raw-artifact-manifest.json).
+
+The post-fix manifest covers 961 raw artifacts totaling 8,928,135 bytes. Its
+tree SHA-256 is
+`ffa6495997a99a9cf1c7683d8b83e05cc9268f96cf3bb29a0579309c321a70af`.
+Derived files are excluded. The runtime reports native usage but no auditable
+price/currency field, so no dollar cost is invented.
+
+### 15.1 Post-fix native aggregates
+
+| Usage | Target | Arm | Raw tokens | Calls | Response bytes | Query ms | PASS/PARTIAL/FAIL |
+|---|---|---|---:|---:|---:|---:|---:|
+| one-shot | small | A: V1 | 2,427,053 | 154 | 806,681 | 9,515.6 | 11/1/0 |
+| one-shot | small | B: V2 | 762,641 | 31 | 73,018 | 9,297.7 | 12/0/0 |
+| one-shot | small | C: grep/read | 571,498 | 27 | 72,896 | 0.0 | 12/0/0 |
+| one-shot | small | D: hybrid | 630,738 | 26 | 134,597 | 0.0 | 12/0/0 |
+| one-shot | large | A: V1 | 1,840,281 | 157 | 632,208 | 18,150.8 | 9/2/1 |
+| one-shot | large | B: V2 | 776,437 | 28 | 73,964 | 56,163.2 | 11/0/1 |
+| one-shot | large | C: grep/read | 580,016 | 24 | 123,160 | 0.0 | 11/0/1 |
+| one-shot | large | D: hybrid | 465,127 | 20 | 218,507 | 0.0 | 10/1/1 |
+| continuous | small | A: V1 | 13,896,174 | 215 | 2,844,789 | 26,787.5 | 12/0/0 |
+| continuous | small | B: V2 | 5,126,300 | 16 | 44,178 | 8,142.1 | 12/0/0 |
+| continuous | small | C: grep/read | 3,294,208 | 19 | 48,717 | 0.0 | 12/0/0 |
+| continuous | small | D: hybrid | 3,100,999 | 18 | 34,287 | 0.0 | 12/0/0 |
+| continuous | large | A: V1 | 12,924,301 | 86 | 1,645,708 | 8,885.7 | 9/2/1 |
+| continuous | large | B: V2 | 5,631,799 | 33 | 59,044 | 224,989.3 | 11/0/1 |
+| continuous | large | C: grep/read | 3,153,561 | 16 | 200,543 | 0.0 | 11/0/1 |
+| continuous | large | D: hybrid | 3,350,973 | 17 | 24,412 | 0.0 | 11/0/1 |
+
+The 224.99-second continuous-large V2 query total is not token cost. T01 alone
+contains 16 exploratory MCP calls and 181.60 seconds of query time; T08 adds
+five calls and 10.22 seconds. These observed agent choices remain in the
+aggregate.
+
+### 15.2 Before/after and matched-arm ratios
+
+| Usage | Target | V2 before | V2 after | Change | V2/V1 after | V2/grep after | Hybrid/grep after |
+|---|---|---:|---:|---:|---:|---:|---:|
+| one-shot | small | 1,186,699 | 762,641 | -35.7% | 0.314 | 1.334 | 1.104 |
+| one-shot | large | 1,363,515 | 776,437 | -43.1% | 0.422 | 1.339 | 0.802 |
+| continuous | small | 5,411,852 | 5,126,300 | -5.3% | 0.369 | 1.556 | 0.941 |
+| continuous | large | 8,492,285 | 5,631,799 | -33.7% | 0.436 | 1.786 | 1.063 |
+
+Across both usage models, V2 falls from 6,598,551 to 5,888,941 raw tokens on
+small (-10.8%) and from 9,855,800 to 6,408,236 on large (-35.0%). Calls fall
+125 to 47 (-62.4%) and 158 to 61 (-61.4%). Tool-result bytes fall 2,623,233 to
+117,196 (-95.5%) and 1,278,129 to 133,008 (-89.6%). The smaller token reduction
+than payload reduction, especially in continuous-small, is explained by fixed
+schema growth, model exploration variance, and cumulative reprocessing of
+earlier conversation context.
+
+V2 still does not beat optimized grep/read in any aggregate: its post-fix
+ratios are 1.334x to 1.786x. It does beat reproducible V1 in tokens, calls, and
+task success in all four matched cells.
+
+### 15.3 Exact-operation targets
+
+| Usage | Target | T09+T12 before | T09+T12 after | Change | Calls after | Grades after |
+|---|---|---:|---:|---:|---:|---|
+| one-shot | small | 346,033 | 87,282 | -74.8% | 2 | PASS/PASS |
+| one-shot | large | 607,719 | 87,786 | -85.6% | 2 | PASS/PASS |
+| continuous | small | 1,689,118 | 1,351,503 | -20.0% | 2 | PASS/PASS |
+| continuous | large | 2,848,167 | 1,514,128 | -46.8% | 2 | PASS/PASS |
+
+Every T09 and T12 answer is exact and each task uses one evidence call. The
+50% combined-token target passes both one-shot cells but misses both continuous
+cells, narrowly on large. Late continuous turns still pay for the accumulated
+session even after their immediate tool payload becomes compact.
+
+### 15.4 Hybrid result and causal boundary
+
+Hybrid raw tokens change by +16.2% (small one-shot), -18.0% (large one-shot),
+-7.9% (small continuous), and +2.3% (large continuous). Post-fix hybrid beats
+grep/read in only two of four cells. It makes **zero MCP evidence calls** in all
+four post-fix cells, as it did at baseline. These changes are source-command and
+agent-sampling variation, not an effect of the V2 MCP implementation. The
+hybrid target is therefore missed in small one-shot and large continuous.
+
+### 15.5 Regressions greater than 10%
+
+No large-target V2 task regresses by more than 10%. On small one-shot, V2 T02,
+T04, and T05 increase 162.1%, 24.8%, and 32.3% because the post-fix agent makes
+three, two, and two evidence calls where the baseline used one, two, and one.
+On small continuous, T01 and T02 increase 48.2% and 30.7%; T03 through T07
+increase 11.9% to 12.7% as early extra context is repeatedly billed on later
+turns. All remain PASS. This is not a payload-size regression: combined small
+V2 response bytes fall 95.5%.
+
+Hybrid regressions above 10% occur in continuous-small T03 and one-shot small
+T01, T06, T08, T11 plus large T11. They use only allowed source commands and
+remain the same grade. Because neither baseline nor post-fix hybrid invokes
+MCP, these rows measure nondeterministic source exploration and are retained
+without attributing them to the product fix.
+
+Large T08 remains FAIL in every arm because of the immutable strict label
+`test command@...:41`. V2 exposes a real residual contract defect: the agent
+naturally calls `call_chain` with `entry:"test"`, but the resolver does not map
+that name to `program.command('test [test-filter...]')`, returns
+`chain_not_found`, and triggers five to nine fallback calls. The preflight that
+used a function entry did not expose this CLI-registration form. A third
+optimization cycle is forbidden, so this gap is reported rather than patched
+or benchmarked against a changed prompt.
+
+## 16. Engineering-target disposition
+
+| Target | Result |
+|---|---|
+| No accuracy regression versus V1 or grep/read | PASS: V2 is 12/12 small and 11/0/1 large in both models, equal to grep/read and better than V1 on large. |
+| T09/T12 exact in at most three calls each | PASS: all eight task cells are exact in one call. |
+| T09/T12 combined tokens -50% | PARTIAL: both one-shot cells pass; continuous small (-20.0%) and large (-46.8%) miss. |
+| Aggregate V2 -30% on both targets | PARTIAL: both one-shot cells and continuous large pass; continuous small is -5.3%. Combined by target, small is -10.8% and large -35.0%. |
+| Hybrid no more tokens than grep/read at equal/better success | PARTIAL: passes large one-shot and small continuous; misses small one-shot and large continuous. |
+| V2 not worse than reproducible V1 on success, tokens, calls | PASS in all four matched aggregates. |
+
+## 17. Validation and direct conclusions
+
+Backend install, typecheck, build, the 52 focused regressions, the complete
+9-file MCP/bridge suite (67 tests), and `build:package` pass. Frontend install,
+typecheck, build, bundle budgets, and all 216 tests pass. Fresh post-fix indexes
+and task-file coverage pass.
+
+The broad backend run on Windows reports 105 passing files / 1,535 passing
+tests and 47 failing files / 533 failures. The failures are outside this MCP
+change and expose existing POSIX-only assumptions: shell `chmod`, `ls`, Bash
+redirection, symlink/Unix-mode checks, and extensionless
+`node_modules/.bin/tsx` spawning. They are not hidden or made permissive. The
+required Linux/Windows CI and CodeQL results remain the publication authority.
+
+The final answers are:
+
+1. **V1's reported advantage does not reproduce.** Under identical native
+   accounting, V2 beats official reproducible V1 in every matched aggregate.
+2. **Neither MCP-only arm beats optimized grep/read.** Post-fix V2 is still
+   1.334x to 1.786x the grep/read tokens.
+3. **Hybrid does not reliably beat grep/read.** It wins two of four post-fix
+   aggregates and uses no graph evidence, so no MCP savings claim follows.
+4. **Repository size is not a general benefit predictor.** The large target
+   benefits more from the new exact aggregations, but post-fix V2/grep is
+   almost equal across one-shot sizes and worsens with size in continuous use.
+5. **Historical V1 savings remain incomparable.** The paper-era prompts, raw
+   native logs, and accounting bridge are unavailable. V2's historical
+   -67% to -87% scenario estimates remain estimates, not transport results.
+6. **The fixed root cause was exact-operation exploration and payload size.**
+   The remaining high-value problems are cumulative context cost, schema/tool
+   selection overhead, and literal-aware CLI route-entry resolution for
+   `call_chain`. Index quality is not the aggregate token bottleneck here.

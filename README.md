@@ -420,7 +420,7 @@ docker run --rm -i -v cbm-cache:/home/node/.cache/codebase-memory-mcp cbm-v2 mcp
 - [CLI Reference](docs/CLI_REFERENCE.md) — All CLI commands including `cbm-v2 index`
 - [Intelligence Layer](docs/INTELLIGENCE.md) — Graph awareness + prepare_edit_context
 - [Token Economy](docs/TOKEN_ECONOMY.md) — Historical v0.15.9 workflow estimates (-67% to -87%), not a current transport benchmark
-- [V1/V2 Token Truth Audit](docs/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) — Native agent-token comparison across V1 MCP, V2 MCP, grep/read, and hybrid workflows
+- [V1/V2 Token Truth Audit](docs/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) — Exact native comparison: post-fix V2 beats reproducible V1 but remains above optimized grep/read
 - [Performance, Token, and UI Audit](docs/PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md) — Current compact-vs-pretty whitespace transport measurement
 
 ### Project

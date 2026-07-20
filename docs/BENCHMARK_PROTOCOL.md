@@ -1010,3 +1010,37 @@ continuous small T10. Their native costs and grades remain in the aggregate;
 they are never silently discarded. The raw manifest covers 1,206 artifacts
 (16,018,972 bytes), with tree SHA-256
 `d9339ca4cfde52f33c012f6be39de4c8ff60be9f6644b1f9c09614f9246fa073`.
+
+### 13.2 Exact post-fix rerun
+
+After the immutable baseline, two allowed optimization cycles added compact
+direct-caller aggregation, tracked top-level inventory, and bounded route/CLI
+call chains as backward-compatible `lookup_source_text` profiles. The eight
+tool names, tasks, prompts, answers, model, condition rules, and grading were
+not changed. The complete post-fix tables and raw checksum manifest are in
+[`docs/benchmarks/v1-v2-token-truth-postfix-2026-07-20`](benchmarks/v1-v2-token-truth-postfix-2026-07-20/aggregate-and-ratios.md).
+
+| Usage | Target | V1 MCP | V2 MCP | grep/read | Hybrid | V2 before -> after |
+|---|---|---:|---:|---:|---:|---:|
+| one-shot | small | 2,427,053 | 762,641 | 571,498 | 630,738 | -35.7% |
+| one-shot | large | 1,840,281 | 776,437 | 580,016 | 465,127 | -43.1% |
+| continuous | small | 13,896,174 | 5,126,300 | 3,294,208 | 3,100,999 | -5.3% |
+| continuous | large | 12,924,301 | 5,631,799 | 3,153,561 | 3,350,973 | -33.7% |
+
+These are raw provider-native input-plus-output totals. All 192 post-fix cells
+are valid. V2 remains below V1 in tokens and calls with equal or better task
+success, but remains above grep/read by 1.334x to 1.786x. Hybrid beats grep/read
+in two of four cells and again makes zero MCP evidence calls.
+
+T09 and T12 are exact in one call in all eight V2 task cells. Their combined
+one-shot tokens fall 74.8% on small and 85.6% on large; continuous reductions
+are 20.0% and 46.8% because resumed turns reprocess prior context. Across both
+usage models, aggregate V2 falls 10.8% on small and 35.0% on large. The
+pre-registered 30% target therefore misses on small rather than being weakened.
+
+The raw post-fix manifest covers 961 artifacts (8,928,135 bytes), with tree
+SHA-256
+`ffa6495997a99a9cf1c7683d8b83e05cc9268f96cf3bb29a0579309c321a70af`.
+The complete causal analysis, target disposition, validation evidence, and
+remaining CLI-entry defect are in
+[`V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md`](V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md#15-immutable-post-fix-checkpoint).
