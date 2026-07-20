@@ -41,7 +41,7 @@ const child = spawn(command, args, {
     ...process.env,
     HOME: process.env.CBM_V1_HOME ?? process.env.HOME,
   },
-  stdio: ['pipe', 'pipe', 'inherit'],
+  stdio: ['pipe', 'pipe', 'pipe'],
   windowsHide: true,
 });
 
@@ -155,6 +155,11 @@ function consume(chunk, side) {
 
 process.stdin.on('data', (chunk) => consume(chunk, 'client'));
 child.stdout.on('data', (chunk) => consume(chunk, 'server'));
+child.stderr.on('data', (chunk) => {
+  const text = chunk.toString('utf8');
+  trace({ event: 'server_stderr', source_bytes: chunk.byteLength, text });
+  process.stderr.write(text);
+});
 process.stdin.on('end', () => child.stdin.end());
 
 child.on('error', (error) => {

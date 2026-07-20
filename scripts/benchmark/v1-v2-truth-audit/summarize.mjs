@@ -338,7 +338,7 @@ function main() {
     values.sort((a, b) => a.attempt - b.attempt);
     const first = values[0];
     if (first.valid) selected.push(first);
-    else if (values[1]?.valid) selected.push(values[1]);
+    else if (values[1]) selected.push(values[1]);
     else selected.push(first);
   }
   selected.sort((a, b) => `${a.mode}${a.target}${a.task}${a.condition}`.localeCompare(`${b.mode}${b.target}${b.task}${b.condition}`));

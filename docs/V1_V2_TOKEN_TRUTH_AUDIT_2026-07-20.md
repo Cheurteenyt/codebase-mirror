@@ -413,3 +413,16 @@ Corrected launcher/auditor SHA-256 identities are:
 | `run.mjs` | `082AFF5B13564B73E97A7B2375DF72D19195D7E428A052DF6758FE7C38A6BD0F` |
 | `summarize.mjs` | `43C43108B2702482D18B5E5FEFA2EBCBC3D60BEFB7D225A7D34096B4928A14FB` |
 | `record-invalid.mjs` | `95BE5DF63725B6FC215F353AABFDACB1944C4DB8FDD2CC3120793ADAA26926F2` |
+
+Attempt 2 also failed before any `tools/call` reached V1. The official binary
+writes a Windows OEM-encoded French path warning to stderr; the first audit
+proxy version inherited those raw bytes, and Codex closed the MCP transport as
+invalid UTF-8. The second attempt is retained and becomes this cell's selected
+invalid/FAIL measurement. No third attempt is permitted.
+
+Before any other measured cell, the proxy changed only its stderr transport:
+it captures child bytes, decodes them with replacement for malformed sequences,
+and emits valid UTF-8 while recording the original byte length. JSON-RPC stdin
+and stdout are unchanged. The summarizer now selects attempt 2 even when both
+allowed attempts are invalid, so launcher failures cannot be hidden by falling
+back to a preferred attempt.
