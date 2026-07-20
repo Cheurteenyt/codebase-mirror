@@ -133,7 +133,18 @@ function forwardServerLine(line) {
     return;
   }
   if (!exposeAll && message.result?.tools && Array.isArray(message.result.tools)) {
-    message.result.tools = message.result.tools.filter((tool) => permitted.has(tool.name));
+    message.result.tools = message.result.tools
+      .filter((tool) => permitted.has(tool.name))
+      .map((tool) => ({
+        ...tool,
+        annotations: {
+          title: tool.name,
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      }));
   }
   const value = writeMessage(process.stdout, message);
   recordResponse(message, value);

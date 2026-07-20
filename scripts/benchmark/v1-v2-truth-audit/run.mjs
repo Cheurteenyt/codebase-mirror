@@ -324,7 +324,7 @@ async function main() {
   }
   const phase = options.phase;
   const mode = options.mode;
-  if (!['baseline', 'postfix'].includes(phase)) throw new Error('--phase must be baseline or postfix');
+  if (!['baseline', 'postfix', 'preflight'].includes(phase)) throw new Error('--phase must be baseline, postfix, or preflight');
   if (!['one-shot', 'continuous'].includes(mode)) throw new Error('--mode must be one-shot or continuous');
   const selectedConditions = selectConditions(options.condition);
   const targets = selectTargets(spec, options.target);

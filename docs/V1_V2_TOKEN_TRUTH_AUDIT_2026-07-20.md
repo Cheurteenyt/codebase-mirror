@@ -426,3 +426,18 @@ and emits valid UTF-8 while recording the original byte length. JSON-RPC stdin
 and stdout are unchanged. The summarizer now selects attempt 2 even when both
 allowed attempts are invalid, so launcher failures cannot be hidden by falling
 back to a preferred attempt.
+
+The next integrity audit showed that Codex still rejected every V1 call. Unlike
+V2, V1 `v0.5.5` publishes no MCP tool annotations, so a current non-interactive
+Codex client treats even the filtered read tools as approval-requiring and
+`approval_policy="never"` correctly fails closed. T02–T12 attempt 1 artifacts
+are retained as invalid because no `tools/call` reached the proxy; each may use
+its single attempt-2 rerun. T01 has exhausted both attempts and remains FAIL.
+
+To implement the pre-registered “expose only V1 read-only tools” condition, the
+proxy now adds truthful MCP annotations to those ten filtered schemas:
+`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, and
+`openWorldHint=false`. It does not change tool names, descriptions, input
+schemas, requests, responses, or V1 execution. This client-compatibility
+metadata is measured as part of V1's fixed schema overhead and is validated by
+a non-benchmark Codex call before any attempt-2 run.
