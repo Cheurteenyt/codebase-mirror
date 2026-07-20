@@ -656,3 +656,220 @@ more than its original 212,652 tokens and 54 calls. The new literal lookup is
 therefore validated for exact source evidence, while compact architecture/file
 inventory remains an independently measurable optimization target. This round
 does not justify adding another tool without a separately pre-registered scope.
+
+## 12. Larger-target scale validation — Playwright, 2026-07-20
+
+This appended round tests the open scaling hypothesis from section 11: whether
+the MCP/grep token-cost ratio moves toward parity when the target grows from
+512 indexed files to a real production repository in the low thousands. It
+does not replace or reinterpret sections 8 or 11. No harness, product change,
+new tool, Graph UI work, atomic-publication work, or indexing work is part of
+this round.
+
+### 12.1 Pre-registered target and fresh-index identity
+
+The target is the public `microsoft/playwright` repository at exact commit
+`ef3a5830f960c00018f810cebf26133b35ec2b6f`. Its non-truncated GitHub tree and
+the detached local checkout both contain 3,255 tracked files. The fresh full
+Codebase Memory index contains **2,538 indexed files, 56,825 nodes, and 300,442
+edges**, with zero skipped files and zero errors. The difference between
+tracked and indexed files is the extractor's normal supported-file discovery,
+not a reduced-coverage mode. The index project is
+`benchmark-playwright-ef3a583`; it is not refreshed between paired runs.
+
+Playwright was selected before any measured run because 3,255 tracked files
+place it squarely inside the requested 2,000–8,000 range, while its production
+monorepo structure, browser server, test runner, CLI, reporter, and React UI
+packages provide realistic cross-package navigation work. Its source is
+predominantly TypeScript/JavaScript, where the existing extractor has its
+strongest cross-file resolution, so the round tests scale without requiring or
+rewarding new extractor work. The checkout was clean at the pinned SHA; current
+V2 typecheck and package build succeeded before the full index.
+
+### 12.2 Pre-registered task mapping
+
+The twelve category types and difficulty spread match section 4. The intended
+MCP evidence mapping remains the same where applicable, with the already
+shipped `lookup_source_text` used for the two exact-source tasks:
+
+| Task | Category | Intended MCP evidence |
+|---|---|---|
+| T01 | Indexing/schema | `get_project_overview` / `search_code_and_memory` |
+| T02–T03 | Discovery | `search_code_and_memory` |
+| T04 | Pattern matching | `search_code_and_memory` |
+| T05 | Code retrieval | `lookup_source_text` / `get_module_context` |
+| T06 | Code search | `lookup_source_text` |
+| T07–T08 | Call tracing | `get_module_context` / `prepare_edit_context` |
+| T09–T10 | Graph query and blast radius | `get_module_context` / `prepare_edit_context` |
+| T11 | OOP analysis | `search_code_and_memory` / `get_module_context` |
+| T12 | File operations / architecture | `get_project_overview` |
+
+Every reference below was derived from the exact target before any measured
+agent process. Paths use `/`; sets are sorted lexicographically.
+
+#### T01 — registered CLI command schema (simple)
+
+**Question.** Return the exact seven CLI command names registered by the local
+`add*Command` helpers in `packages/playwright/src/program.ts`. Strip positional
+argument suffixes such as `[report]`, include hidden commands, sort
+lexicographically, and return a JSON string array.
+
+**Reference answer.**
+
+```json
+["clear-cache","init-agents","merge-reports","run-test-mcp-server","show-report","test","test-server"]
+```
+
+#### T02 — backend type discovery (simple)
+
+**Question.** Return the repository-relative definition path and 1-based start
+line of the exported interface `BrowserServerLauncher`, formatted as
+`path:line`.
+
+**Reference answer.**
+
+```text
+packages/playwright-core/src/client/browserType.ts:35
+```
+
+#### T03 — frontend type discovery (simple)
+
+**Question.** Return the repository-relative definition path and 1-based start
+line of the exported interface `ActionListProps`, formatted as `path:line`.
+
+**Reference answer.**
+
+```text
+packages/trace-viewer/src/ui/actionList.tsx:33
+```
+
+#### T04 — exported function pattern (medium)
+
+**Question.** Return every exported async function declared in
+`packages/playwright-core/src/cli/installActions.ts`, sorted lexicographically,
+as a JSON string array.
+
+**Reference answer.**
+
+```json
+["installBrowsers","installDeps","markDockerImage","uninstallBrowsers"]
+```
+
+#### T05 — exact code constants (simple)
+
+**Question.** Return the values of these five production constants as one JSON
+object with keys in the order shown: `minimumMajorNodeVersion`,
+`defaultExpectTimeout`, `GIT_OPERATIONS_TIMEOUT_MS`, `DEFAULT_TTY_WIDTH`, and
+`DEFAULT_TTY_HEIGHT`.
+
+**Reference answer.**
+
+```json
+{"minimumMajorNodeVersion":20,"defaultExpectTimeout":5000,"GIT_OPERATIONS_TIMEOUT_MS":3000,"DEFAULT_TTY_WIDTH":100,"DEFAULT_TTY_HEIGHT":40}
+```
+
+#### T06 — user-facing code search (medium)
+
+**Question.** Find the two production TS/TSX occurrences that render the exact
+phrases `Open snapshot in a new tab` and `Network requests`. Return their
+repository-relative `path:line` values sorted lexicographically as a JSON
+string array. Exclude tests.
+
+**Reference answer.**
+
+```json
+["packages/trace-viewer/src/ui/networkTab.tsx:100","packages/trace-viewer/src/ui/snapshotTab.tsx:86"]
+```
+
+#### T07 — direct caller trace (medium)
+
+**Question.** Find the only production call to `runAllTestsWithConfig`. Return
+the enclosing caller function and call-site `path:line`, formatted as
+`function@path:line`.
+
+**Reference answer.**
+
+```text
+runTests@packages/playwright/src/cli/testActions.ts:89
+```
+
+#### T08 — CLI-to-runner cross-file trace (hard)
+
+**Question.** Trace the normal non-UI, non-watch execution path from the
+Playwright `test` CLI command registration to the shared task executor. Return
+this exact four-step ordered chain, using the command registration and function
+definition locations with the format `name@path:line -> ...`. Do not add the
+anonymous Commander action callback.
+
+**Reference answer.**
+
+```text
+test command@packages/playwright/src/program.ts:41 -> runTests@packages/playwright/src/cli/testActions.ts:28 -> runAllTestsWithConfig@packages/playwright/src/runner/testRunner.ts:445 -> runTasks@packages/playwright/src/runner/tasks.ts:123
+```
+
+#### T09 — caller-set graph query (medium)
+
+**Question.** Return every production function or method that directly calls
+`runTasks`, with its number of static call sites, plus the total call sites.
+Sort callers lexicographically. Use this JSON shape:
+`{"callers":{"name":count},"total_call_sites":number}`.
+
+**Reference answer.**
+
+```json
+{"callers":{"_innerListTests":1,"_innerRunTests":1,"clearCache":1,"findRelatedTestFiles":1,"listFiles":1,"runAllTestsWithConfig":1},"total_call_sites":6}
+```
+
+#### T10 — trace-viewer contract blast radius (medium)
+
+**Question.** If the `TraceViewerServerOptions` contract changes, return the
+exact sorted set of production TS files that directly define, import, or
+reference that identifier. Exclude tests. Return a JSON string array.
+
+**Reference answer.**
+
+```json
+["packages/playwright-core/src/cli/program.ts","packages/playwright-core/src/server/index.ts","packages/playwright-core/src/server/trace/viewer/traceViewer.ts","packages/playwright/src/runner/testServer.ts"]
+```
+
+#### T11 — direct OOP subclasses (medium)
+
+**Question.** Return the exact sorted set of production classes under
+`packages/playwright/src/reporters` that directly extend `TerminalReporter`, as
+a JSON string array.
+
+**Reference answer.**
+
+```json
+["DotReporter","GitHubReporter","LineReporter","ListReporter"]
+```
+
+#### T12 — repository architecture inventory (simple)
+
+**Question.** Return every top-level directory tracked at the target commit,
+excluding `.git`, sorted lexicographically, as a JSON string array.
+
+**Reference answer.**
+
+```json
+[".azure-pipelines",".claude",".github","browser_patches","docs","examples","packages","tests","utils"]
+```
+
+### 12.3 Pre-registered execution and grading
+
+Execution is identical to sections 6 and 7 except for the pinned target,
+project name, and task text above. Each task uses a fresh ephemeral read-only
+Codex CLI `gpt-5.6-sol` process at reasoning `medium`. Odd tasks run MCP first;
+even tasks run grep/read first. The MCP arm exposes the eight unchanged product
+tools but permits evidence calls only to the six read-only tools:
+`get_project_overview`, `get_module_context`,
+`get_undocumented_hotspots`, `search_code_and_memory`,
+`prepare_edit_context`, and `lookup_source_text`. The two write tools remain
+forbidden. The grep/read arm permits only `rg`, `rg --files`, `Get-Content`, and
+`Select-String`. Native usage and completed tool-call counts are taken from
+each process's JSONL stream, and section 5's mechanical grading applies without
+change.
+
+This target identity, task list, reference answers, condition rules, and grade
+rules are committed before the first measured agent run. Results are appended
+below only after all 24 fresh processes complete.
