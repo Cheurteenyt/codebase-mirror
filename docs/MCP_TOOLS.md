@@ -50,7 +50,9 @@ tokens and not a second MCP response mode.
 
 ### 1. `get_project_overview`
 
-**Purpose**: High-level project stats — first call when an agent starts exploring a codebase.
+**Purpose**: High-level project health and architecture stats. Call when the
+task needs broad counts, freshness, hotspots, or coverage; do not use it as
+automatic startup context for an exact lookup.
 
 **Input**: `{ project?: string }`
 
@@ -95,9 +97,7 @@ tokens and not a second MCP response mode.
     "stale_files_sample": [],
     "recommendation": "FRESH"
   },
-  "recommendations": [
-    "Project is in good shape. Use prepare_edit_context before modifying any file to get full context."
-  ]
+  "recommendations": []
 }
 ```
 
@@ -105,6 +105,9 @@ tokens and not a second MCP response mode.
 compatibility. `active_bugs` and `active_refactors` count only
 `status: "active"`; these active counts drive the open-bug and pending-refactor
 recommendations.
+
+`recommendations` is empty when no measured finding requires a follow-up.
+The overview never recommends another tool merely as generic startup context.
 
 Module coverage scans at most 5,000 modules. When more exist,
 `scan_truncated` and `coverage_is_partial` are `true`, while
@@ -256,14 +259,16 @@ shortened by `limit`.
 
 ### 7. `lookup_source_text`
 
-**Purpose**: Resolve exact declaration values and source occurrence lines when
-the requested evidence is literal file text rather than a code-graph node name.
-It is intentionally not a regex engine, shell proxy, or broad composite search.
+**Purpose**: One bounded gateway for exact source truth. It preserves literal
+lookup and adds server-side direct-caller aggregation and top-level inventory,
+avoiding repeated search/read loops without adding a ninth MCP schema. It is
+not a regex engine, shell proxy, or broad composite search.
 
 **Input**:
 ```json
 {
   "project": "my-app",
+  "operation": "literal_matches",
   "queries": ["MAX_RETRIES", "Dependency atlas:"],
   "max_results_per_query": 20
 }
@@ -306,9 +311,52 @@ file, and 128 MiB total. Unsafe, unreadable, binary, oversized, or budget-skippe
 files make `scan_complete` false and appear in `scan_incomplete_reasons`; an
 answer must not be treated as exhaustive in that state.
 
-### 8. `prepare_edit_context` ⭐ Flagship
+For an exact direct-caller set, use one aggregation call:
 
-**Purpose**: Call this BEFORE editing any source file. Returns everything the agent needs to know: code structure, dependencies, linked human notes, blast radius, risk assessment, conventions, and stale data warnings.
+```json
+{
+  "operation": "direct_callers",
+  "symbol": "runTasks",
+  "include_tests": false,
+  "max_callers": 200
+}
+```
+
+The response contains deterministic `callers`, a compact `callers_by_name`
+count object, `total_call_sites`, target candidates, and explicit
+`callers_truncated`, `complete`, and `incomplete_reasons` fields. Static counts
+come from persistent `call_sites`, so repeated calls from one function are not
+collapsed like graph edges. Nested anonymous callbacks roll up to their nearest
+named owner. Missing/stale call-site metadata, duplicate target symbols,
+duplicate caller names, and caps make `complete` false rather than silently
+claiming an exhaustive answer. Tests are excluded by default.
+
+For exact tracked repository inventory:
+
+```json
+{
+  "operation": "top_level_directories",
+  "inventory_scope": "tracked"
+}
+```
+
+`tracked` executes `git ls-files` with an argument array under the published
+project root and returns sorted hidden and visible top-level directories,
+excluding root files and `.git`. Output is bounded to 16 MiB of Git paths and
+1,024 directories. If Git inventory is unavailable, the tool falls back to
+graph-owned paths with `complete=false`, `inventory_scope=indexed_fallback`,
+and explicit reasons. `inventory_scope=indexed` requests that intentionally
+non-exhaustive view directly.
+
+Existing clients may omit `operation`; `literal_matches` remains the default.
+Arguments for unrelated profiles are rejected or ignored only according to the
+documented profile, so no previously valid literal request changes behavior.
+
+### 8. `prepare_edit_context`
+
+**Purpose**: Prepare dependency, blast-radius, risk, freshness, and linked
+human-memory evidence for an edit. Use it when that context affects the edit;
+skip it for exact literals, known paths, and filesystem inventory.
 
 **Input**:
 ```json

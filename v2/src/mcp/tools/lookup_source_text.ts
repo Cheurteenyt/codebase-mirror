@@ -1,4 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { isAbsolute, posix, win32 } from 'node:path';
 import { BaseTool } from './base.js';
 import type { ToolDefinition } from './index.js';
@@ -16,6 +17,12 @@ const MAX_INDEXED_FILES = 20_000;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 500;
+const MAX_CALLERS = 1000;
+const DEFAULT_CALLERS = 200;
+const MAX_TRACKED_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_TOP_LEVEL_DIRECTORIES = 1024;
+const OPERATIONS = ['literal_matches', 'direct_callers', 'top_level_directories'] as const;
+type SourceOperation = typeof OPERATIONS[number];
 
 interface SourceMatch {
   path: string;
@@ -43,6 +50,40 @@ interface IncompleteReasons {
 
 function stablePathCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function topLevelDirectoriesFromTrackedPaths(paths: readonly string[]): string[] {
+  const directories = new Set<string>();
+  for (const rawPath of paths) {
+    const normalized = rawPath.replace(/\\/gu, '/').replace(/^\.\//u, '');
+    const separator = normalized.indexOf('/');
+    if (separator <= 0) continue;
+    const directory = normalized.slice(0, separator);
+    if (directory !== '.git') directories.add(directory);
+  }
+  return [...directories].sort(stablePathCompare);
+}
+
+function gitTrackedFiles(root: string): Promise<string[]> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile(
+      'git',
+      ['-C', root, 'ls-files', '-z', '--'],
+      {
+        encoding: 'utf8',
+        maxBuffer: MAX_TRACKED_OUTPUT_BYTES,
+        timeout: 15_000,
+        windowsHide: true,
+      },
+      (error, stdout) => {
+        if (error) {
+          rejectPromise(error);
+          return;
+        }
+        resolvePromise(stdout.split('\0').filter(Boolean));
+      },
+    );
+  });
 }
 
 function normalizedIndexedPath(filePath: string): string {
@@ -117,7 +158,7 @@ export class LookupSourceTextTool extends BaseTool {
   get definition(): ToolDefinition {
     return {
       name: 'lookup_source_text',
-      description: 'Find exact case-sensitive single-line literals in indexed project files. Use one bounded call to retrieve exact declaration values or 1-based source occurrence lines; accepts up to 10 literals and returns only matching line excerpts.',
+      description: 'Run one bounded exact-source operation. literal_matches finds case-sensitive literals and lines; direct_callers returns deterministic static caller counts without search loops; top_level_directories returns exact Git-tracked repository directories. Prefer these exact profiles over exploratory search when they match the question.',
       annotations: {
         title: 'Look up exact source text',
         readOnlyHint: true,
@@ -129,12 +170,18 @@ export class LookupSourceTextTool extends BaseTool {
         type: 'object',
         properties: {
           project: { type: 'string' },
+          operation: {
+            type: 'string',
+            enum: OPERATIONS,
+            default: 'literal_matches',
+            description: 'Exact operation. Existing calls default to literal_matches.',
+          },
           queries: {
             type: 'array',
             minItems: 1,
             maxItems: MAX_QUERIES,
             items: { type: 'string', minLength: 1, maxLength: MAX_QUERY_LENGTH },
-            description: 'Unique, case-sensitive, single-line literal strings to find.',
+            description: 'literal_matches only: unique case-sensitive single-line strings.',
           },
           max_results_per_query: {
             type: 'integer',
@@ -142,8 +189,30 @@ export class LookupSourceTextTool extends BaseTool {
             maximum: MAX_RESULTS_PER_QUERY,
             default: DEFAULT_RESULTS_PER_QUERY,
           },
+          symbol: {
+            type: 'string',
+            minLength: 1,
+            maxLength: MAX_QUERY_LENGTH,
+            description: 'direct_callers only: exact callee symbol name.',
+          },
+          include_tests: {
+            type: 'boolean',
+            default: false,
+            description: 'direct_callers only: include call-sites under test paths.',
+          },
+          max_callers: {
+            type: 'integer',
+            minimum: 1,
+            maximum: MAX_CALLERS,
+            default: DEFAULT_CALLERS,
+          },
+          inventory_scope: {
+            type: 'string',
+            enum: ['tracked', 'indexed'],
+            default: 'tracked',
+            description: 'top_level_directories only: tracked is exact Git inventory; indexed is graph-only and explicitly non-exhaustive.',
+          },
         },
-        required: ['queries'],
         additionalProperties: false,
       },
       handler: LookupSourceTextTool,
@@ -153,6 +222,13 @@ export class LookupSourceTextTool extends BaseTool {
   async handle(args: Record<string, unknown>) {
     try {
       const project = this.optionalString(args, 'project') ?? this.project;
+      const operation = (this.optionalString(args, 'operation') ?? 'literal_matches') as SourceOperation;
+      if (!OPERATIONS.includes(operation)) {
+        throw new Error(`Argument operation must be one of: ${OPERATIONS.join(', ')}.`);
+      }
+      if (operation === 'direct_callers') return this.handleDirectCallers(args, project);
+      if (operation === 'top_level_directories') return await this.handleTopLevelDirectories(args, project);
+
       const queries = this.validateQueries(args);
       const maxResults = Math.max(1, Math.min(
         MAX_RESULTS_PER_QUERY,
@@ -292,6 +368,92 @@ export class LookupSourceTextTool extends BaseTool {
       return this.json(response);
     } catch (error: unknown) {
       return this.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private handleDirectCallers(args: Record<string, unknown>, project: string) {
+    const symbol = this.requireString(args, 'symbol');
+    if (symbol.length > MAX_QUERY_LENGTH || /[\r\n\0]/u.test(symbol)) {
+      throw new Error(`Argument symbol must be a single-line string of at most ${MAX_QUERY_LENGTH} characters.`);
+    }
+    const includeTestsValue = args.include_tests;
+    if (includeTestsValue !== undefined && typeof includeTestsValue !== 'boolean') {
+      throw new Error('Argument include_tests must be a boolean.');
+    }
+    const maxCallers = Math.max(1, Math.min(
+      MAX_CALLERS,
+      Math.floor(this.optionalNumber(args, 'max_callers') ?? DEFAULT_CALLERS),
+    ));
+    const codeReader = this.codeReader;
+    if (!codeReader) return this.error('Code graph reader not configured. Index the project first.');
+    return this.json({
+      project,
+      operation: 'direct_callers',
+      ...codeReader.listDirectCallers(project, symbol, {
+        includeTests: includeTestsValue === true,
+        limit: maxCallers,
+      }),
+    });
+  }
+
+  private async handleTopLevelDirectories(args: Record<string, unknown>, project: string) {
+    const inventoryScope = this.optionalString(args, 'inventory_scope') ?? 'tracked';
+    if (!['tracked', 'indexed'].includes(inventoryScope)) {
+      throw new Error('Argument inventory_scope must be one of: tracked, indexed.');
+    }
+    const codeReader = this.codeReader;
+    if (!codeReader) return this.error('Code graph reader not configured. Index the project first.');
+
+    const indexedPathProbe = codeReader.listProjectFilePaths(project, MAX_INDEXED_FILES + 1);
+    const indexedPaths = indexedPathProbe.slice(0, MAX_INDEXED_FILES);
+    const indexedDirectories = topLevelDirectoriesFromTrackedPaths(indexedPaths);
+    if (inventoryScope === 'indexed') {
+      return this.json({
+        project,
+        operation: 'top_level_directories',
+        inventory_scope: 'indexed',
+        directories: indexedDirectories.slice(0, MAX_TOP_LEVEL_DIRECTORIES),
+        files_observed: indexedPaths.length,
+        complete: false,
+        incomplete_reasons: [
+          ...(indexedPathProbe.length > MAX_INDEXED_FILES ? ['indexed_file_limit'] : []),
+          ...(indexedDirectories.length > MAX_TOP_LEVEL_DIRECTORIES ? ['directories_truncated'] : []),
+          'indexed_sources_only',
+        ].sort(),
+      });
+    }
+
+    const root = codeReader.getProjectRoot(project);
+    if (!root) return this.error(`Indexed repository root is unavailable for project "${project}".`);
+    const realRoot = safeRealpathStrict(root);
+    try {
+      const trackedFiles = await gitTrackedFiles(realRoot);
+      const directories = topLevelDirectoriesFromTrackedPaths(trackedFiles);
+      const truncated = directories.length > MAX_TOP_LEVEL_DIRECTORIES;
+      return this.json({
+        project,
+        operation: 'top_level_directories',
+        inventory_scope: 'tracked',
+        directories: directories.slice(0, MAX_TOP_LEVEL_DIRECTORIES),
+        tracked_files: trackedFiles.length,
+        complete: !truncated,
+        ...(truncated ? { incomplete_reasons: ['directories_truncated'] } : {}),
+      });
+    } catch {
+      return this.json({
+        project,
+        operation: 'top_level_directories',
+        inventory_scope: 'indexed_fallback',
+        directories: indexedDirectories.slice(0, MAX_TOP_LEVEL_DIRECTORIES),
+        files_observed: indexedPaths.length,
+        complete: false,
+        incomplete_reasons: [
+          ...(indexedPathProbe.length > MAX_INDEXED_FILES ? ['indexed_file_limit'] : []),
+          ...(indexedDirectories.length > MAX_TOP_LEVEL_DIRECTORIES ? ['directories_truncated'] : []),
+          'git_inventory_unavailable',
+          'indexed_sources_only',
+        ].sort(),
+      });
     }
   }
 

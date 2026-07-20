@@ -9,7 +9,7 @@ export class GetProjectOverviewTool extends BaseTool {
   get definition(): ToolDefinition {
     return {
       name: 'get_project_overview',
-      description: 'Get a high-level overview of a project: counts of code nodes, human notes, ADRs, bugs, refactors, hotspots, and documentation coverage. Useful as the first call when an agent starts exploring a codebase.',
+      description: 'Get a high-level project health and architecture overview: code/human-memory counts, ADRs, bugs, refactors, hotspots, freshness, and documentation coverage. Call only when the task needs broad project state; do not use as automatic startup context for exact lookups.',
       annotations: {
         title: 'Get project overview',
         readOnlyHint: true,
@@ -146,9 +146,6 @@ export class GetProjectOverviewTool extends BaseTool {
       if (docCoverage && docCoverage.coverage_pct !== null && docCoverage.coverage_pct < 50) {
         const qualifier = docCoverage.critical_counts_are_lower_bounds ? 'at least ' : '';
         recommendations.push(`Documentation coverage is ${docCoverage.coverage_pct.toFixed(0)}% — ${qualifier}${docCoverage.critical_modules_total - docCoverage.critical_modules_documented} critical module(s) undocumented. Use get_undocumented_hotspots to identify them.`);
-      }
-      if (recommendations.length === 0) {
-        recommendations.push('Project is in good shape. Use prepare_edit_context before modifying any file to get full context.');
       }
       result['recommendations'] = recommendations;
 

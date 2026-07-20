@@ -133,6 +133,12 @@ describe('MCP server protocol compliance', () => {
       minItems: 1,
       maxItems: 10,
     });
+    expect(lookupTool.inputSchema.properties.operation).toMatchObject({
+      type: 'string',
+      enum: ['literal_matches', 'direct_callers', 'top_level_directories'],
+      default: 'literal_matches',
+    });
+    expect(lookupTool.inputSchema.required ?? []).not.toContain('queries');
   });
 
   it('returns -32601 Method not found for unknown method', async () => {

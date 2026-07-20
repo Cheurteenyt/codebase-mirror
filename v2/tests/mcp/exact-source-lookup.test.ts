@@ -9,9 +9,13 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { CodeGraphReader } from '../../src/bridge/sqlite-ro.js';
 import type { HumanMemoryStore } from '../../src/human/store.js';
-import { LookupSourceTextTool } from '../../src/mcp/tools/lookup_source_text.js';
+import {
+  LookupSourceTextTool,
+  topLevelDirectoriesFromTrackedPaths,
+} from '../../src/mcp/tools/lookup_source_text.js';
 
 const tempDirs: string[] = [];
 
@@ -19,6 +23,20 @@ interface Harness {
   root: string;
   tool: LookupSourceTextTool;
   addIndexedPath(path: string): void;
+  addCodeNode(node: {
+    label: string;
+    name: string;
+    qualifiedName: string;
+    path: string;
+    startLine?: number;
+  }): void;
+  addCallSite(callSite: {
+    path: string;
+    sourceQualifiedName: string;
+    callee: string;
+    line: number;
+  }): void;
+  initializeGit(): void;
   close(): void;
 }
 
@@ -50,7 +68,22 @@ function createHarness(files: Record<string, string>): Harness {
       type TEXT,
       properties_json TEXT
     );
-    CREATE TABLE projects (name TEXT, root_path TEXT);
+    CREATE TABLE projects (
+      name TEXT,
+      root_path TEXT,
+      cross_file_calls_stale INTEGER DEFAULT 0,
+      call_sites_initialized INTEGER DEFAULT 1
+    );
+    CREATE TABLE call_sites (
+      id INTEGER PRIMARY KEY,
+      project TEXT,
+      file_path TEXT,
+      source_qn TEXT,
+      callee TEXT,
+      last_segment TEXT,
+      call_kind TEXT,
+      line INTEGER
+    );
   `);
   db.prepare('INSERT INTO projects (name, root_path) VALUES (?, ?)').run('test', root);
   const insertNode = db.prepare(`
@@ -78,6 +111,37 @@ function createHarness(files: Record<string, string>): Harness {
     tool,
     addIndexedPath(filePath: string) {
       insertNode.run(filePath, `test::${filePath}`, filePath);
+    },
+    addCodeNode(node) {
+      db.prepare(`
+        INSERT INTO nodes
+          (project, label, name, qualified_name, file_path, start_line, end_line, properties_json)
+        VALUES ('test', ?, ?, ?, ?, ?, ?, '{}')
+      `).run(
+        node.label,
+        node.name,
+        node.qualifiedName,
+        node.path,
+        node.startLine ?? 1,
+        node.startLine ?? 1,
+      );
+    },
+    addCallSite(callSite) {
+      db.prepare(`
+        INSERT INTO call_sites
+          (project, file_path, source_qn, callee, last_segment, call_kind, line)
+        VALUES ('test', ?, ?, ?, ?, 'identifier_call', ?)
+      `).run(
+        callSite.path,
+        callSite.sourceQualifiedName,
+        callSite.callee,
+        callSite.callee.split('.').at(-1),
+        callSite.line,
+      );
+    },
+    initializeGit() {
+      execFileSync('git', ['init', '--quiet'], { cwd: root, windowsHide: true });
+      execFileSync('git', ['add', '--all'], { cwd: root, windowsHide: true });
     },
     close() {
       codeReader.close();
@@ -199,6 +263,166 @@ describe('lookup_source_text', () => {
     }
   });
 
+  it('aggregates deterministic direct caller counts and rolls anonymous callbacks into their owner', async () => {
+    const harness = createHarness({});
+    harness.addCodeNode({
+      label: 'Function',
+      name: 'target',
+      qualifiedName: 'test::src/target.ts::target',
+      path: 'src/target.ts',
+      startLine: 4,
+    });
+    harness.addCodeNode({
+      label: 'Function',
+      name: 'outer',
+      qualifiedName: 'test::src/a.ts::outer',
+      path: 'src/a.ts',
+      startLine: 10,
+    });
+    harness.addCodeNode({
+      label: 'Function',
+      name: 'anonymous#1',
+      qualifiedName: 'test::src/a.ts::outer::anonymous#1',
+      path: 'src/a.ts',
+      startLine: 12,
+    });
+    harness.addCodeNode({
+      label: 'Function',
+      name: 'second',
+      qualifiedName: 'test::src/b.ts::second',
+      path: 'src/b.ts',
+      startLine: 20,
+    });
+    harness.addCodeNode({
+      label: 'Function',
+      name: 'testCaller',
+      qualifiedName: 'test::tests/caller.test.ts::testCaller',
+      path: 'tests/caller.test.ts',
+      startLine: 1,
+    });
+    for (const callSite of [
+      { path: 'src/a.ts', sourceQualifiedName: 'test::src/a.ts::outer', callee: 'target', line: 11 },
+      { path: 'src/a.ts', sourceQualifiedName: 'test::src/a.ts::outer::anonymous#1', callee: 'target', line: 13 },
+      { path: 'src/b.ts', sourceQualifiedName: 'test::src/b.ts::second', callee: 'target', line: 22 },
+      { path: 'tests/caller.test.ts', sourceQualifiedName: 'test::tests/caller.test.ts::testCaller', callee: 'target', line: 2 },
+    ]) harness.addCallSite(callSite);
+
+    try {
+      const response = await harness.tool.handle({ operation: 'direct_callers', symbol: 'target' });
+      expect(response.isError).not.toBe(true);
+      expect(JSON.parse(response.content[0].text)).toEqual({
+        project: 'test',
+        operation: 'direct_callers',
+        symbol: 'target',
+        target_candidates: [{
+          qualified_name: 'test::src/target.ts::target',
+          path: 'src/target.ts',
+          definition_line: 4,
+        }],
+        callers: [
+          {
+            name: 'outer',
+            qualified_name: 'test::src/a.ts::outer',
+            path: 'src/a.ts',
+            definition_line: 10,
+            call_sites: 2,
+          },
+          {
+            name: 'second',
+            qualified_name: 'test::src/b.ts::second',
+            path: 'src/b.ts',
+            definition_line: 20,
+            call_sites: 1,
+          },
+        ],
+        callers_by_name: { outer: 2, second: 1 },
+        total_call_sites: 3,
+        callers_truncated: false,
+        complete: true,
+        incomplete_reasons: [],
+      });
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('bounds caller output and reports ambiguous duplicate target symbols', async () => {
+    const harness = createHarness({});
+    for (const path of ['src/a.ts', 'src/b.ts']) {
+      harness.addCodeNode({
+        label: 'Function',
+        name: 'duplicate',
+        qualifiedName: `test::${path}::duplicate`,
+        path,
+      });
+      harness.addCodeNode({
+        label: 'Function',
+        name: `caller_${path[4]}`,
+        qualifiedName: `test::${path}::caller_${path[4]}`,
+        path,
+      });
+      harness.addCallSite({
+        path,
+        sourceQualifiedName: `test::${path}::caller_${path[4]}`,
+        callee: 'duplicate',
+        line: 3,
+      });
+    }
+    try {
+      const response = await harness.tool.handle({
+        operation: 'direct_callers',
+        symbol: 'duplicate',
+        max_callers: 1,
+      });
+      const payload = JSON.parse(response.content[0].text);
+      expect(payload.total_call_sites).toBe(2);
+      expect(payload.callers).toHaveLength(1);
+      expect(payload.callers_truncated).toBe(true);
+      expect(payload.complete).toBe(false);
+      expect(payload.incomplete_reasons).toEqual(['callers_truncated', 'target_ambiguous']);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('returns exact Git-tracked top-level directories while excluding root files and untracked paths', async () => {
+    const harness = createHarness({
+      '.github/workflows/ci.yml': 'name: ci\n',
+      '.claude/instructions.md': 'rules\n',
+      'src/a.ts': 'export const a = 1;\n',
+      'README.md': '# test\n',
+    });
+    harness.initializeGit();
+    mkdirSync(join(harness.root, 'untracked'));
+    writeFileSync(join(harness.root, 'untracked', 'ignored.ts'), 'ignored\n', 'utf8');
+    try {
+      const response = await harness.tool.handle({
+        operation: 'top_level_directories',
+        inventory_scope: 'tracked',
+      });
+      expect(JSON.parse(response.content[0].text)).toEqual({
+        project: 'test',
+        operation: 'top_level_directories',
+        inventory_scope: 'tracked',
+        directories: ['.claude', '.github', 'src'],
+        tracked_files: 4,
+        complete: true,
+      });
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('normalizes Windows and POSIX tracked paths deterministically', () => {
+    expect(topLevelDirectoriesFromTrackedPaths([
+      'src\\windows.ts',
+      './.github/workflows/ci.yml',
+      'README.md',
+      'src/posix.ts',
+      '.git/config',
+    ])).toEqual(['.github', 'src']);
+  });
+
   it('rejects empty, multiline, duplicate, or oversized query batches', async () => {
     const harness = createHarness({ 'src/a.ts': 'value\n' });
     try {
@@ -212,6 +436,8 @@ describe('lookup_source_text', () => {
         const response = await harness.tool.handle({ queries });
         expect(response.isError).toBe(true);
       }
+      expect((await harness.tool.handle({ operation: 'direct_callers' })).isError).toBe(true);
+      expect((await harness.tool.handle({ operation: 'unknown' })).isError).toBe(true);
     } finally {
       harness.close();
     }

@@ -50,8 +50,12 @@ node dist/cli/index.js mcp --project my-app
 
 ## MCP integration
 
-The MCP server exposes 8 tools for code graph queries and human memory CRUD,
-including bounded exact-literal source lookup with 1-based locations.
+The MCP server exposes 8 tools for code graph queries and human memory CRUD.
+Its backward-compatible `lookup_source_text` profiles provide bounded exact
+literals, persistent direct-caller aggregation, and tracked top-level
+repository inventory with explicit completeness metadata. Use exact profiles
+for exact questions and graph context tools only when relationships, blast
+radius, architecture, or human memory affect the task.
 Those tools do not synchronize the Obsidian vault; use the separate
 `cbm-v2 obsidian ...` commands or `cbm-v2 watch` for vault synchronization.
 See the [MCP Tools documentation](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/MCP_TOOLS.md)

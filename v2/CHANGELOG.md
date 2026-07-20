@@ -4,6 +4,23 @@
 
 ### MCP precision and token economy
 
+- Extended `lookup_source_text` without adding a ninth MCP tool: the default
+  `literal_matches` contract remains compatible, while `direct_callers`
+  aggregates persistent call sites and `top_level_directories` returns exact
+  Git-tracked inventory. Both profiles use deterministic bounded output and
+  explicit completeness, ambiguity, staleness, fallback, and truncation
+  metadata.
+- Direct-caller aggregation preserves repeated call sites, rolls nested
+  anonymous callbacks up to the nearest named owner, and excludes tests by
+  default. Tracked inventory uses `git ls-files` through an argument array,
+  normalizes Windows and POSIX paths, includes hidden directories, and fails
+  honestly to an incomplete indexed fallback when Git is unavailable.
+- Removed unconditional overview-first and prepare-before-edit guidance.
+  Exact literals and inventory now route to exact profiles; graph context is
+  recommended only when the requested evidence requires it.
+- Added regressions for deterministic grouping, bounds, duplicate symbols,
+  legacy and stale metadata, Git fallback, path normalization, unchanged
+  literal requests, read-only annotations, and stable eight-tool discovery.
 - Added the read-only `lookup_source_text` MCP tool for batched,
   case-sensitive literal lookup with exact 1-based path, line, column, and
   declaration text. It fills the source-evidence gap without changing any of

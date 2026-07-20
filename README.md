@@ -134,8 +134,8 @@ The `cbm-v2 mcp` command exposes 8 tools via JSON-RPC 2.0 over stdio:
 | `create_human_note` | write | Create ADR/BugNote/etc. + link to code nodes |
 | `link_note_to_code_node` | write | Link existing note to a code node |
 | `search_code_and_memory` | read | Unified search across code graph + human memory |
-| `lookup_source_text` | read | Bounded exact-literal lookup with 1-based source lines and declaration text |
-| `prepare_edit_context` ⭐ | read | **Flagship** — call BEFORE editing any file. Returns code structure, dependencies, human notes, blast radius, risk score, freshness, and recommendations |
+| `lookup_source_text` | read | Bounded exact literals, direct-caller aggregation, and tracked top-level inventory with explicit completeness |
+| `prepare_edit_context` | read | Dependency, blast-radius, risk, freshness, and linked-memory evidence when an edit needs structural context |
 
 ### Connecting an AI agent
 
@@ -420,6 +420,7 @@ docker run --rm -i -v cbm-cache:/home/node/.cache/codebase-memory-mcp cbm-v2 mcp
 - [CLI Reference](docs/CLI_REFERENCE.md) — All CLI commands including `cbm-v2 index`
 - [Intelligence Layer](docs/INTELLIGENCE.md) — Graph awareness + prepare_edit_context
 - [Token Economy](docs/TOKEN_ECONOMY.md) — Historical v0.15.9 workflow estimates (-67% to -87%), not a current transport benchmark
+- [V1/V2 Token Truth Audit](docs/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) — Native agent-token comparison across V1 MCP, V2 MCP, grep/read, and hybrid workflows
 - [Performance, Token, and UI Audit](docs/PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md) — Current compact-vs-pretty whitespace transport measurement
 
 ### Project

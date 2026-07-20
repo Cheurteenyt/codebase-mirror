@@ -15,7 +15,7 @@ export class PrepareEditContextTool extends BaseTool {
   get definition(): ToolDefinition {
     return {
       name: 'prepare_edit_context',
-      description: 'The flagship V2 tool. Call this BEFORE editing any source file. Returns: code nodes in the file, their dependencies (callers/callees), linked human notes (ADRs, bugs, refactors, conventions), blast radius (how many routes/modules/functions depend on this file), risk score, stale data warnings, and recommendations. This is the single call that makes the agent "smart" about what it is about to modify.',
+      description: 'Prepare bounded edit-risk context for a source file: code nodes, callers/callees, linked ADRs/bugs/refactors/conventions, blast radius, freshness, risk, and recommendations. Use when an edit needs dependency or human-memory evidence; skip for exact literals, known paths, and filesystem inventory.',
       annotations: {
         title: 'Prepare edit context',
         readOnlyHint: true,

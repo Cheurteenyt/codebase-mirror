@@ -4,6 +4,21 @@ import { HumanMemoryStore } from '../../src/human/store.js';
 import { GetProjectOverviewTool } from '../../src/mcp/tools/get_project_overview.js';
 
 describe('get_project_overview count honesty', () => {
+  it('does not recommend exploratory tools when no finding requires follow-up', async () => {
+    const project = `overview-neutral-${Date.now()}`;
+    const humanStore = HumanMemoryStore.openMemory();
+    try {
+      const tool = new GetProjectOverviewTool({ project, humanStore });
+      const response = await tool.handle({});
+      expect(response.isError).not.toBe(true);
+      const payload = JSON.parse(response.content[0].text);
+
+      expect(payload.recommendations).toEqual([]);
+    } finally {
+      humanStore.close();
+    }
+  });
+
   it('separates active work from history and marks a bounded module scan as partial', async () => {
     const project = `overview-honesty-${Date.now()}`;
     const modules = Array.from({ length: 5001 }, (_, index) => ({
