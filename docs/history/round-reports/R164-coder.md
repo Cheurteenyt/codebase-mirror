@@ -211,7 +211,7 @@ Created `v2/tests/indexer/r164-verified-refusal.test.ts` with 16 tests:
 
 - `v2/CHANGELOG.md`: Added R164 entry (findings 258–262, 5 sections)
 - `v2/package.json`: 0.68.0 → 0.69.0
-- `docs/V2_CURRENT_STATE.md`:
+- `docs/reference/V2_CURRENT_STATE.md`:
   - Header updated to R164
   - New R164 section (5 findings + known limitations)
   - R163's "Stale-without-error still clears `last_index_error`"

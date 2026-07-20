@@ -39,11 +39,11 @@ implementer_role: codex
 - No new broad composite search, shell proxy, regex engine, or write-capable
   MCP surface.
 - No claim of success until the exact 12-task benchmark is rerun with native
-  token counts and appended to `docs/BENCHMARK_PROTOCOL.md`.
+  token counts and appended to `docs/performance/BENCHMARK_PROTOCOL.md`.
 
 ## Audit decisions and root cause
 
-The source is the executed benchmark in `docs/BENCHMARK_PROTOCOL.md`, anchored
+The source is the executed benchmark in `docs/performance/BENCHMARK_PROTOCOL.md`, anchored
 to target `5915e0624ed4376611fdc1f824d1d65a327c4a2f`.
 
 | Finding | Source | Decision | Root cause / evidence | Resolution code commit | Regression test | CI-validated head | Validation state |

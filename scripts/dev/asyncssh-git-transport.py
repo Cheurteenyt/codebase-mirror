@@ -197,7 +197,7 @@ def validate_known_hosts(path: str) -> str:
             f"Host key verification is MANDATORY. Install a GitHub host key "
             f"whose fingerprint was verified out of band, then set "
             f"ASYNCSSH_KNOWN_HOSTS to that file. See "
-            f"docs/RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md."
+            f"docs/operations/RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md."
         )
     if not p.is_file():
         raise ValueError(f"known_hosts is not a regular file: {path}")

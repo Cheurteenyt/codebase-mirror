@@ -388,7 +388,7 @@ d'architecture qui affiche :
 
 The graph UI shipped in 0.8.0 with 4 tabs. The originally-planned views
 (ModuleEgoGraph, RouteFlowView, BlastRadiusView, etc.) are deferred — see
-`docs/V2_ROADMAP.md` Phase 2.
+`docs/history/roadmaps/V2_ROADMAP.md` Phase 2.
 
 | Tab | Description | Composants React |
 |---|---|---|

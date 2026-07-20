@@ -290,7 +290,7 @@ describe("R167 — MAINTAINERS_GUIDE.md doc fidelity", () => {
 });
 
 describe("R167 — bridge doc operational completeness", () => {
-  const bridge = readRepoFile("docs/GITHUB_GITLAB_BRANCH_BRIDGE.md");
+  const bridge = readRepoFile("docs/operations/GITHUB_GITLAB_BRANCH_BRIDGE.md");
 
   it("bridge doc documents the host key verification failure incident", () => {
     expect(bridge).toContain("Host key verification failed");
@@ -494,7 +494,7 @@ describe("R167 — invariants preserved from R166", () => {
 });
 
 describe("R167 — CI_CONTINUITY.md exists", () => {
-  const continuity = readRepoFile("docs/CI_CONTINUITY.md");
+  const continuity = readRepoFile("docs/operations/CI_CONTINUITY.md");
 
   it("CI_CONTINUITY.md exists and is non-empty", () => {
     expect(continuity.length).toBeGreaterThan(1000);

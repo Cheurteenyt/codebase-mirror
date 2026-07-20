@@ -3204,4 +3204,4 @@ function runWorker(workerUrl: URL, batch: WorkerBatch): Promise<WorkerBatchResul
 // returns true for sibling-prefix paths (e.g. '/foo/bar' is a prefix of
 // '/foo/barbaz'), producing wrong relative paths in incremental mode.
 // Now using node:path.relative (imported as nodeRelative) everywhere.
-// See docs/RIGOROUS_BENCHMARK_R78.md Bug 4 for details.
+// See docs/history/benchmarks/RIGOROUS_BENCHMARK_R78.md Bug 4 for details.

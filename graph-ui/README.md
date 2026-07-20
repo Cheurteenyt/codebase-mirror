@@ -1,0 +1,56 @@
+# Graph UI development
+
+> **Status:** Canonical contributor entry point
+> **Audience:** Frontend contributors and maintainers
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-20
+
+The Graph UI is a React/Vite frontend embedded into the V2 npm package. Product
+usage starts in the [root README](../README.md); this file covers development
+and routes durable design information to the canonical documentation.
+
+## Local validation
+
+```text
+cd graph-ui
+npm ci
+npx tsc --noEmit
+npm run build
+npm test
+```
+
+To validate the complete package with the embedded UI:
+
+```text
+cd v2
+npm run build:package
+```
+
+Run the built local UI through the V2 CLI after indexing a project. Do not use
+the Vite development server as evidence that packaged assets or arbitrary-CWD
+startup work correctly.
+
+## Architecture and evidence
+
+- [Current product state](../docs/reference/V2_CURRENT_STATE.md)
+- [Graph UI architecture](../docs/architecture/V2_ARCHITECTURE.md#9-graph-ui)
+- [Performance and perception lab](../docs/performance/GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md)
+- [Deep Graph UI audit](../docs/performance/reports/GRAPH_UI_V2_DEEP_AUDIT_2026-07-16.md)
+- [Performance, token, and UI audit](../docs/performance/reports/PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md)
+
+## Product invariants
+
+- Keep representative overview data distinct from exact search and detail
+  results.
+- Bind paginated exact reads to the graph snapshot and discard stale pages.
+- Preserve one renderer and interaction model across Structure and
+  Dependencies views.
+- Keep output and simulation budgets explicit; visual density must not silently
+  become an unbounded transfer or layout cost.
+- Verify keyboard, pointer, touch, reduced-motion, responsive, loading,
+  partial, and error states.
+- Update the performance lab when a visual or renderer change alters a measured
+  contract.
+
+Repository-wide contribution and publication rules are in
+[CONTRIBUTING.md](../CONTRIBUTING.md) and the
+[documentation portal](../docs/README.md).

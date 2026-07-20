@@ -186,7 +186,7 @@ async function main() {
   const options = parseArgs(process.argv);
   const phase = options.phase ?? 'baseline';
   const resultsRoot = resolve(options.results_root ?? 'D:/Mycodex/benchmark-results/r173-v1-v2-truth');
-  const outputDir = resolve(options.output_dir ?? `docs/benchmarks/v1-v2-token-truth-${phase}-2026-07-20`);
+  const outputDir = resolve(options.output_dir ?? `docs/performance/benchmarks/v1-v2-token-truth-${phase}-2026-07-20`);
   const derivedDir = resolve(resultsRoot, 'derived', phase);
   const csvPath = resolve(derivedDir, 'runs.csv');
   const summaryPath = resolve(derivedDir, 'summary.json');

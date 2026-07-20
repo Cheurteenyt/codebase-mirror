@@ -1,6 +1,6 @@
 // v2/src/human/schema.ts
 // Human Memory Graph schema — SQLite DDL and migrations.
-// See docs/HUMAN_MEMORY_GRAPH_SCHEMA.md for the full reference.
+// See docs/reference/HUMAN_MEMORY_GRAPH_SCHEMA.md for the full reference.
 
 import type { Database } from 'better-sqlite3';
 

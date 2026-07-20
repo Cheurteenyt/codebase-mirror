@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
-const protocol = readFileSync(join(repoRoot, 'docs', 'BENCHMARK_PROTOCOL.md'), 'utf8');
+const protocol = readFileSync(join(repoRoot, 'docs', 'performance', 'BENCHMARK_PROTOCOL.md'), 'utf8');
 const spec = JSON.parse(readFileSync(join(here, 'tasks.json'), 'utf8'));
 
 function normalizeProse(value) {
@@ -68,4 +68,4 @@ for (let targetIndex = 0; targetIndex < spec.targets.length; targetIndex += 1) {
   }
 }
 
-console.log('Verified: 24 questions and reference answers match docs/BENCHMARK_PROTOCOL.md.');
+console.log('Verified: 24 questions and reference answers match docs/performance/BENCHMARK_PROTOCOL.md.');
