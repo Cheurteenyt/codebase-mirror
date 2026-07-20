@@ -873,3 +873,95 @@ change.
 This target identity, task list, reference answers, condition rules, and grade
 rules are committed before the first measured agent run. Results are appended
 below only after all 24 fresh processes complete.
+
+### 12.4 Run integrity and native extraction
+
+- The immutable pre-registration commit is
+  `a8377fa2fd56386a6c24097b32108f5aed57cb99`. Every measured process started
+  after that commit was pushed to GitHub.
+- The run used Codex CLI `0.144.4`, `gpt-5.6-sol`, reasoning `medium`, Windows
+  11, Node.js `v24.15.0`, and npm `11.12.1`. Each task/condition used one fresh
+  ephemeral read-only process, with the pre-registered odd/even condition
+  order.
+- The first attempted T01 MCP launcher used the PowerShell `codex.ps1` wrapper.
+  PowerShell promoted a model-cache warning to a native-command exception
+  before any agent turn; both raw files were zero bytes. They are retained with
+  an `invalid-preflight-` prefix, and T01 received one measured run through
+  `codex.cmd`.
+- The first T12 grep/read process used `ForEach-Object` and `Sort-Object`, which
+  were outside the allowed evidence operations. Its answer and native usage
+  are retained under an `invalid-` prefix and excluded. The one protocol-
+  mandated clean rerun used only `rg`/`rg --files` and is the measured T12
+  grep/read row below.
+- Raw JSONL and stderr streams are retained outside both repositories under
+  `D:\Mycodex\benchmark-results\r172-playwright-a8377fa`. An inline
+  PowerShell parser read only completed items, final agent messages, and native
+  `turn.completed.usage`; it did not invoke agents, answer tasks, or change a
+  grade.
+- The MCP call audit found only `get_project_overview`,
+  `get_module_context`, `search_code_and_memory`, `prepare_edit_context`, and
+  `lookup_source_text`; it found zero command executions and no write-tool
+  calls. The measured grep/read arm made zero MCP calls and used only the
+  permitted evidence sources. Cached input is reported as the provider's
+  subset of input and is not subtracted.
+- Mechanical grading produced 10 PASS, 1 PARTIAL, and 1 FAIL for MCP; grep/read
+  produced 11 PASS, 0 PARTIAL, and 1 FAIL. Both T08 answers changed the first
+  pre-registered trace label and therefore FAIL under the strict no-wrong-extra
+  rule even though their remaining three steps match. MCP T12 omits `.claude`
+  with no wrong extra directory and therefore qualifies as PARTIAL.
+
+### 12.5 Aggregate comparison and scale answer
+
+| Round | Condition | Runs | Input tokens | Cached input | Output tokens | Total tokens | Tool calls | PASS | PARTIAL | FAIL |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Corrected 512-file section 11 | MCP | 12 | 1,364,618 | 1,167,104 | 8,162 | 1,372,780 | 106 | 12 | 0 | 0 |
+| Corrected 512-file section 11 | grep/read | 12 | 560,258 | 461,568 | 3,612 | 563,870 | 23 | 12 | 0 | 0 |
+| Playwright 2,538-file index | MCP | 12 | 1,147,497 | 909,824 | 7,628 | 1,155,125 | 86 | 10 | 1 | 1 |
+| Playwright 2,538-file index | grep/read | 12 | 646,670 | 502,016 | 4,596 | 651,266 | 24 | 11 | 0 | 1 |
+
+The MCP/grep token ratio **moves toward parity** at this scale: it is exactly
+**1.773660839042726×** (`1,155,125 / 651,266`), compared with 2.43× on the
+512-file target. This is an improvement in the ratio, but it is not a token
+advantage: MCP still uses 503,859 more tokens, or **77.3660839042726% more**
+than grep/read (a **-77.3660839042726% token reduction** under the protocol's
+`1 - MCP_total / grep_total` formula). Calls also move from 4.61× to
+**3.583333333333333×** (86 versus 24), while exact accuracy is lower here.
+Mean totals are 96,260.4167 tokens per MCP task and 54,272.1667 per grep/read
+task. The larger-repository hypothesis therefore receives directional support
+from this one pinned target, but MCP still loses on total cost and does not earn
+a parity or superiority claim.
+
+### 12.6 Per-task results
+
+| Agent | Task | Condition | Input | Cached | Output | Total | Tool calls | Grade | Normalized answer |
+|---|---|---|---:|---:|---:|---:|---:|---|---|
+| Codex | T01 | MCP | 66,391 | 49,152 | 323 | 66,714 | 2 | PASS | Exact reference |
+| Codex | T01 | grep/read | 30,358 | 23,040 | 188 | 30,546 | 1 | PASS | Exact reference |
+| Codex | T02 | MCP | 37,251 | 32,000 | 160 | 37,411 | 1 | PASS | Exact reference |
+| Codex | T02 | grep/read | 30,095 | 17,920 | 125 | 30,220 | 1 | PASS | Exact reference |
+| Codex | T03 | MCP | 62,144 | 53,248 | 185 | 62,329 | 2 | PASS | Exact reference |
+| Codex | T03 | grep/read | 29,684 | 23,040 | 131 | 29,815 | 1 | PASS | Exact reference |
+| Codex | T04 | MCP | 66,878 | 54,272 | 285 | 67,163 | 2 | PASS | Exact reference |
+| Codex | T04 | grep/read | 30,177 | 23,040 | 162 | 30,339 | 1 | PASS | Exact reference |
+| Codex | T05 | MCP | 48,038 | 33,024 | 233 | 48,271 | 1 | PASS | Exact reference |
+| Codex | T05 | grep/read | 30,248 | 23,040 | 196 | 30,444 | 1 | PASS | Exact reference |
+| Codex | T06 | MCP | 47,922 | 37,120 | 172 | 48,094 | 1 | PASS | Exact reference |
+| Codex | T06 | grep/read | 29,793 | 23,040 | 191 | 29,984 | 1 | PASS | Exact reference |
+| Codex | T07 | MCP | 82,321 | 70,400 | 328 | 82,649 | 3 | PASS | Exact reference |
+| Codex | T07 | grep/read | 46,532 | 37,120 | 205 | 46,737 | 2 | PASS | Exact reference |
+| Codex | T08 | MCP | 128,513 | 98,048 | 1,257 | 129,770 | 13 | FAIL | First step `test@...:41`, not `test command@...:41` |
+| Codex | T08 | grep/read | 176,051 | 149,760 | 869 | 176,920 | 6 | FAIL | First step `addTestCommand@...:40`, not `test command@...:41` |
+| Codex | T09 | MCP | 296,102 | 235,520 | 1,778 | 297,880 | 10 | PASS | Exact reference |
+| Codex | T09 | grep/read | 40,308 | 32,000 | 378 | 40,686 | 2 | PASS | Exact reference |
+| Codex | T10 | MCP | 38,759 | 23,040 | 269 | 39,028 | 1 | PASS | Exact reference |
+| Codex | T10 | grep/read | 45,637 | 36,096 | 419 | 46,056 | 2 | PASS | Exact reference |
+| Codex | T11 | MCP | 38,217 | 32,000 | 203 | 38,420 | 1 | PASS | Exact reference |
+| Codex | T11 | grep/read | 30,132 | 23,040 | 145 | 30,277 | 1 | PASS | Exact reference |
+| Codex | T12 | MCP | 234,961 | 192,000 | 2,435 | 237,396 | 49 | PARTIAL | Missing `.claude`; other eight entries exact |
+| Codex | T12 | grep/read | 127,655 | 90,880 | 1,587 | 129,242 | 5 | PASS | Exact reference |
+
+T09 and T12 remain the dominant MCP costs: together they account for 535,276
+tokens and 59 of 86 MCP calls. Exact literal retrieval scales compactly in T05,
+T06, T10, and T11, but broad caller-set and repository-inventory work still
+drives exploratory loops. This result narrows the aggregate gap without hiding
+the remaining task-level regressions.
