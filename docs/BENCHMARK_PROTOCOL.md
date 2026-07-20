@@ -965,3 +965,19 @@ tokens and 59 of 86 MCP calls. Exact literal retrieval scales compactly in T05,
 T06, T10, and T11, but broad caller-set and repository-inventory work still
 drives exploratory loops. This result narrows the aggregate gap without hiding
 the remaining task-level regressions.
+
+## 13. V1/V2/native-accounting truth round — 2026-07-20
+
+This round is pre-registered in
+[`V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md`](V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md)
+and `scripts/benchmark/v1-v2-truth-audit/tasks.json`. It reuses the exact 12
+small-target questions from section 4 and exact 12 Playwright questions from
+section 12, but adds reproducible official V1, current V2, grep/read, and
+cost-aware hybrid conditions under identical native Codex accounting. It also
+measures both fresh one-shot processes and 12-turn continuous sessions.
+
+The pre-registration fixes product/target identities, prompts, answers,
+counterbalanced order, allowed tools, invalid-run handling, grading, native
+usage extraction, cost attribution, aggregation formulas, and engineering
+targets before any measured run. Baseline and post-fix result tables will be
+added only after their respective immutable checkpoints.
