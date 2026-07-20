@@ -134,7 +134,7 @@ jobs:
           approve the `glm-merge-gate` environment to release the supported
           squash-and-dispatch job.
 
-          See `docs/GLM_GITHUB_OPERATIONS.md` for the complete trust model.
+          See `docs/operations/GLM_GITHUB_OPERATIONS.md` for the complete trust model.
           """
           title_tail = branch.removeprefix("v2/glm/").replace("/", " / ")
           title = f"GLM: {title_tail}"

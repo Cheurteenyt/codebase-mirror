@@ -23,9 +23,9 @@ const watchdog = read(".github/workflows/main-exact-sha-watchdog.yml");
 const ci = read(".github/workflows/ci.yml");
 const codeql = read(".github/workflows/codeql.yml");
 const codeowners = read(".github/CODEOWNERS");
-const operations = read("docs/GLM_GITHUB_OPERATIONS.md");
+const operations = read("docs/operations/GLM_GITHUB_OPERATIONS.md");
 const quota = read(".github/workflows/quota-report.yml");
-const storagePolicy = read("docs/GITHUB_ACTIONS_STORAGE_POLICY.md");
+const storagePolicy = read("docs/operations/GITHUB_ACTIONS_STORAGE_POLICY.md");
 const dependabot = read(".github/dependabot.yml");
 
 describe("R169 GLM PR broker", () => {

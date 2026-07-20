@@ -408,26 +408,15 @@ docker run --rm -i -v cbm-cache:/home/node/.cache/codebase-memory-mcp cbm-v2 mcp
 
 ## Documentation
 
-### Architecture & Current State
-- [V2 Architecture](docs/V2_ARCHITECTURE.md) — Hybrid indexer, discovery, resolver, semantics
-- [V2 Current State](docs/V2_CURRENT_STATE.md) — Versions, stable features, limitations, blockers
-- [V2 Roadmap](docs/V2_ROADMAP.md) — Historical archive (0.15.9 era)
-- [Obsidian Integration](docs/OBSIDIAN_INTEGRATION.md) — Vault format and sync
-- [Human Memory Schema](docs/HUMAN_MEMORY_GRAPH_SCHEMA.md) — SQL schema
+Use the [documentation portal](docs/README.md) to choose the canonical source
+for architecture, reference, operations, performance evidence, or history.
+The primary entry points are:
 
-### Reference
-- [MCP Tools](docs/MCP_TOOLS.md) — All 8 MCP tools with input/output examples
-- [CLI Reference](docs/CLI_REFERENCE.md) — All CLI commands including `cbm-v2 index`
-- [Intelligence Layer](docs/INTELLIGENCE.md) — Graph awareness + prepare_edit_context
-- [Token Economy](docs/TOKEN_ECONOMY.md) — Historical v0.15.9 workflow estimates (-67% to -87%), not a current transport benchmark
-- [V1/V2 Token Truth Audit](docs/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) — Exact native comparison: post-fix V2 beats reproducible V1 but remains above optimized grep/read
-- [Performance, Token, and UI Audit](docs/PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md) — Current compact-vs-pretty whitespace transport measurement
-
-### Project
-- [Contributing](CONTRIBUTING.md) — How to contribute
-- [Maintainers Guide](MAINTAINERS_GUIDE.md) — Internal conventions and invariants
-- [AI Collaboration Protocol](docs/AI_COLLABORATION_PROTOCOL.md) — External audits, GLM checkpoints, and reset recovery
-- [License](LICENSE) — MIT
+- [Current product state](docs/reference/V2_CURRENT_STATE.md)
+- [CLI reference](docs/reference/CLI_REFERENCE.md)
+- [MCP tools reference](docs/reference/MCP_TOOLS.md)
+- [Graph UI development](graph-ui/README.md)
+- [Contributing](CONTRIBUTING.md) and [maintaining](MAINTAINERS_GUIDE.md)
 
 ## Security
 

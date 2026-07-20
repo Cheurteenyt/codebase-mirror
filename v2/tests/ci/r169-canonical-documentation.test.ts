@@ -13,9 +13,9 @@ const REPO_ROOT = join(__dirname, "..", "..", "..");
 const R169B_MERGE_SHA = "15a732d91984e5b4ffa29b4e129ac0d6316c9fca";
 
 const CANONICAL_PATHS = [
-  "docs/ATOMIC_GENERATION_PUBLICATION.md",
-  "docs/V2_ARCHITECTURE.md",
-  "docs/V2_CURRENT_STATE.md",
+  "docs/architecture/ATOMIC_GENERATION_PUBLICATION.md",
+  "docs/architecture/V2_ARCHITECTURE.md",
+  "docs/reference/V2_CURRENT_STATE.md",
   "v2/CHANGELOG.md",
 ] as const;
 
@@ -50,7 +50,7 @@ describe("CONF-R169-007 — canonical R169 status", () => {
   });
 
   it("documents the actual fd-copy and no-clobber-link promotion", () => {
-    const publication = docs["docs/ATOMIC_GENERATION_PUBLICATION.md"];
+    const publication = docs["docs/architecture/ATOMIC_GENERATION_PUBLICATION.md"];
     expect(publication).toMatch(/fd-based copy\+hash/i);
     expect(publication).toMatch(/no-clobber `link`/i);
     expect(canonicalCorpus).not.toMatch(
@@ -68,16 +68,16 @@ describe("CONF-R169-007 — canonical R169 status", () => {
     }
 
     const currentDocs = [
-      docs["docs/ATOMIC_GENERATION_PUBLICATION.md"],
-      docs["docs/V2_ARCHITECTURE.md"],
-      docs["docs/V2_CURRENT_STATE.md"],
+      docs["docs/architecture/ATOMIC_GENERATION_PUBLICATION.md"],
+      docs["docs/architecture/V2_ARCHITECTURE.md"],
+      docs["docs/reference/V2_CURRENT_STATE.md"],
     ].join("\n");
     expect(currentDocs).toMatch(/R169C[^\n]*(?:future|integration)/i);
     expect(currentDocs).toMatch(/legacy `<project>\.db`/i);
   });
 
   it("states the current bounded weekly Dependabot policy", () => {
-    const architecture = docs["docs/V2_ARCHITECTURE.md"];
+    const architecture = docs["docs/architecture/V2_ARCHITECTURE.md"];
     const dependabot = readRepoFile(".github/dependabot.yml");
     expect(architecture).toMatch(/grouped weekly minor\/patch updates/i);
     expect(architecture).toMatch(/GitHub\s+Actions, backend, Graph UI, and Docker/i);

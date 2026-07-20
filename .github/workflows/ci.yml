@@ -189,6 +189,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Documentation integrity
+        run: npm run docs:check
+
       # SIG-R4-CI-01: ShellCheck security-critical CI scripts.
       # SIG-R6: Moved BEFORE Vitest so ShellCheck always runs even if tests
       # fail (steps after a failure are skipped by default).
@@ -253,6 +256,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Documentation integrity
+        run: npm run docs:check
 
       - name: Targeted Windows product tests
         run: >-

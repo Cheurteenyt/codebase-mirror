@@ -59,7 +59,7 @@ when relationships, blast radius, architecture, or human memory affect the
 task.
 Those tools do not synchronize the Obsidian vault; use the separate
 `cbm-v2 obsidian ...` commands or `cbm-v2 watch` for vault synchronization.
-See the [MCP Tools documentation](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/MCP_TOOLS.md)
+See the [MCP Tools documentation](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/reference/MCP_TOOLS.md)
 for the full reference.
 
 To connect Codex over STDIO, add the server to `~/.codex/config.toml` or to a
@@ -136,13 +136,12 @@ mixing two graph states.
 ## Links
 
 - [GitHub Repository](https://github.com/Cheurteenyt/codebase-mirror)
-- [Architecture](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/V2_ARCHITECTURE.md)
-- [CLI Reference](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/CLI_REFERENCE.md)
-- [Current State](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/V2_CURRENT_STATE.md)
-- [V1/V2 Token Truth Audit](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) — Native V1, V2, grep/read, and hybrid results
-- [Changelog](CHANGELOG.md) — version history
+- [Documentation Portal](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/README.md)
+- [Architecture](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/architecture/V2_ARCHITECTURE.md)
+- [CLI Reference](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/reference/CLI_REFERENCE.md)
+- [Current State](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/reference/V2_CURRENT_STATE.md)
+- [Changelog](CHANGELOG.md) — current release window and historical archive link
 - [Contributing](https://github.com/Cheurteenyt/codebase-mirror/blob/main/CONTRIBUTING.md)
-- [Release Policy](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/RELEASE_POLICY.md)
 
 ## Pre-release notice
 

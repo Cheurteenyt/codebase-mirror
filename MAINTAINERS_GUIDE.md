@@ -173,7 +173,7 @@ Once any `permissions:` key is set at workflow level, every unlisted scope
 becomes `none`. Jobs that need extra scopes (e.g. `actions: read` for the
 quota-report API call) must have their own job-level override.
 
-## CI/CD setup (high-level — for secrets/keys, see [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md))
+## CI/CD setup (high-level — for secrets/keys, see [REPOSITORY_GOVERNANCE.md](docs/operations/REPOSITORY_GOVERNANCE.md))
 
 - **GitHub Actions** (`.github/workflows/ci.yml`): canonical CI. Jobs:
   backend (typecheck + build + test + benchmark smoke), frontend (same,
@@ -189,7 +189,7 @@ quota-report API call) must have their own job-level override.
   supported exact-SHA squash-and-dispatch job. The CODEOWNER review is the hard
   code-authorization boundary; the environment is an operational confirmation,
   not an exclusive merge credential. See
-  [GLM_GITHUB_OPERATIONS.md](docs/GLM_GITHUB_OPERATIONS.md).
+  [GLM_GITHUB_OPERATIONS.md](docs/operations/GLM_GITHUB_OPERATIONS.md).
   The same-repository write deploy key is not a contents-only sandbox: z.ai is
   a trusted operational principal outside protected `main`, and unexplained
   Actions/API activity requires immediate key revocation.
@@ -197,7 +197,7 @@ quota-report API call) must have their own job-level override.
   quota and stale-reference reporting. Artifact/log retention is seven days;
   cache deletion remains a maintainer-only, exact-ID operation after the ref is
   revalidated as absent. See
-  [GITHUB_ACTIONS_STORAGE_POLICY.md](docs/GITHUB_ACTIONS_STORAGE_POLICY.md).
+  [GITHUB_ACTIONS_STORAGE_POLICY.md](docs/operations/GITHUB_ACTIONS_STORAGE_POLICY.md).
 - **GitHub Actions mirror** (`.github/workflows/mirror-main-to-gitlab.yml`):
   triggers on `workflow_run` of `CI` with `conclusion=success`,
   `head_branch=main`, and event `push` or an exact-SHA `workflow_dispatch`.
@@ -236,7 +236,7 @@ quota-report API call) must have their own job-level override.
 ## Audit etiquette
 
 The canonical multi-agent and reset-recovery workflow is
-[AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md). External
+[AI_COLLABORATION_PROTOCOL.md](docs/operations/AI_COLLABORATION_PROTOCOL.md). External
 audits use `docs/templates/AI_AUDIT_REPORT_TEMPLATE.md`; implementation state
 is tracked separately with `docs/templates/GLM_HANDOFF_TEMPLATE.md`.
 
@@ -406,9 +406,9 @@ These invariants MUST hold for every round. Violations are P1 bugs.
 | R62 | 0.12.9 | code quality in importer.ts + generator.ts (importAllFiles dedup, 4 catch(any)→catch(unknown), existingBySlug typed) |
 | R63 | 0.13.0 | **architecture refactor** — server.ts 1212→290 lines, split into 7 files (types, helpers, routes/{graph,project,human,index,system}), RouteContext abstraction |
 | R64 | 0.13.1 | deep audit — 1 bug fixed (routeIndex 202→500 on spawn ENOENT), 36 catch(any)→catch(unknown) across MCP+CLI+graph-ui, schema r:any typed |
-| R65 | 0.13.2 | V1 C engine audit (65K LOC, reference read-only) — 1 HIGH strcat overflow, 2 MEDIUM unchecked malloc + slab_owns O(n), docs/V1_AUDIT_R65.md |
-| R66 | 0.13.3 | performance benchmark suite — 19 benchmarks, all excellent. SWR 0.0003ms, prepared 0.006ms, bulk 88x speedup. docs/PERFORMANCE_BENCHMARK_R66.md |
-| R67 | 0.13.4 | V1+V2 combined benchmark — V1 index 305ms (460 nodes), V2 query 0.006ms. Key gap: V2 depends entirely on V1 for code analysis. docs/V1_V2_BENCHMARK_R67.md |
+| R65 | 0.13.2 | V1 C engine audit (65K LOC, reference read-only) — 1 HIGH strcat overflow, 2 MEDIUM unchecked malloc + slab_owns O(n), docs/history/audits/V1_AUDIT_R65.md |
+| R66 | 0.13.3 | performance benchmark suite — 19 benchmarks, all excellent. SWR 0.0003ms, prepared 0.006ms, bulk 88x speedup. docs/history/benchmarks/PERFORMANCE_BENCHMARK_R66.md |
+| R67 | 0.13.4 | V1+V2 combined benchmark — V1 index 305ms (460 nodes), V2 query 0.006ms. Key gap: V2 depends entirely on V1 for code analysis. docs/history/benchmarks/V1_V2_BENCHMARK_R67.md |
 | R68 | 0.14.0 | **native TS/JS indexer** — V2 can index without V1 `cbm` binary. ts-morph, 48 files→352 nodes→1070 edges, 1833ms. New `cbm-v2 index` CLI. Schema-compatible with V1. |
 | R69 | 0.15.0 | **WASM tree-sitter** — 112 languages, 5.4x faster than R68 (340ms vs 1833ms). Within 12% of V1 C speed. No binary dependency. New deps: web-tree-sitter + tree-sitter-wasm. |
 | R69b | 0.15.1 | Fix: package.json deps lost during npm install. Restored all original + new deps. |
@@ -421,7 +421,9 @@ These invariants MUST hold for every round. Violations are P1 bugs.
 | R76 | 0.15.8 | single-pass complexity + skip anonymous. V2 **12% faster than V1 C** (267ms vs 305ms). |
 | R77 | 0.15.9 | **honest benchmark** — V2 is 11% SLOWER in wall time (401ms vs 361ms) but 20% faster in extraction only (267ms vs 335ms). V1 extracts 2.2x more edges (LSP). Previous "V2 faster" claims corrected. |
 
-See `v2/CHANGELOG.md` for the full history (R1 → current). `docs/V2_ROADMAP.md` is archived at 0.15.9.
+See `v2/CHANGELOG.md` for the current release window and
+`docs/history/changelog/CHANGELOG_0.12.0_TO_0.75.0.md` for older entries.
+`docs/history/roadmaps/V2_ROADMAP.md` is archived at 0.15.9.
 
 ---
 
@@ -555,6 +557,8 @@ bash invocations.
 Before committing any change, verify:
 
 - [ ] `cd v2 && npm run build` succeeds (0 TypeScript errors)
+- [ ] `cd v2 && npm run docs:check` succeeds (links, anchors, metadata,
+      organization, and portal reachability)
 - [ ] `cd v2 && npx vitest run` passes (0 failures — see CHANGELOG for count)
 - [ ] `cd graph-ui && npx tsc --noEmit` succeeds (0 TypeScript errors)
    - [ ] `cd v2 && npm run bench:incremental:smoke` passes (incremental invariants)
@@ -562,8 +566,10 @@ Before committing any change, verify:
 - [ ] Total: 0 regressions (see CHANGELOG for test count)
 - [ ] `v2/package.json` version bumped
 - [ ] `v2/CHANGELOG.md` has a new entry for the round
-- [ ] All `.md` files have consistent version refs (`grep -rn "<old-version>" *.md docs/*.md v2/*.md` returns nothing)
-- [ ] Test/bug/round counts in CHANGELOG.md are up to date (V2_ROADMAP.md is archived)
+- [ ] Active `.md` files have consistent version references; historical files
+      remain immutable for their pinned revision
+- [ ] Current test/bug information is accurate in `v2/CHANGELOG.md`; older
+      release history and `V2_ROADMAP.md` remain archived
 - [ ] If touching CI: YAML validated (`python3 -c "import yaml; yaml.safe_load(open('<file>'))"`)
 - [ ] If touching security: regression test added that would FAIL if the fix were reverted
 - [ ] Commit message follows the format: `<type>(v2): <version> R<n> <short-description> (<n> fixes, <details>)`
@@ -579,14 +585,14 @@ when you discover a new one.
 ### Environment resets
 The implementation environment may lose SSH keys, dependencies, cloned
 repositories, and terminal context. Follow
-[AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md):
+[AI_COLLABORATION_PROTOCOL.md](docs/operations/AI_COLLABORATION_PROTOCOL.md):
 
 1. Re-clone the single active `v2/**` branch from GitHub over HTTPS.
 2. Verify local `HEAD` equals the remote branch head and the worktree is clean.
 3. Read `docs/ai/CURRENT_HANDOFF.md` and its pinned audit before editing.
 4. Restore dependencies with `npm ci` and run the recorded smoke command.
 5. Restore push-only SSH transport using
-   [RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md](docs/RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md).
+   [RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md](docs/operations/RESTRICTED_ENVIRONMENT_GIT_TRANSPORT.md).
 6. Continue only the handoff's single `next_action`, then commit and push a
    new checkpoint.
 
@@ -607,10 +613,10 @@ Workarounds:
 - Use `--depth=N` for shallow fetches when possible
 
 ### `sed -i` over-replaces version strings
-Using `sed` to bump a version across all docs also changes the
-historical round entries in CHANGELOG.md. Always verify after sed:
-`grep -rn "<new-version>" v2/CHANGELOG.md` and fix historical entries
-that shouldn't have been changed.
+Using `sed` to bump a version across all docs also changes immutable evidence
+and the archived changelog. Update only the active canonical document and
+verify with `npm run docs:check`; never bulk-rewrite `docs/history/` or
+`docs/performance/reports/`.
 
 ### Branch protection blocks remote branch deletion
 `git push origin --delete v2/round50` fails silently if branch protection

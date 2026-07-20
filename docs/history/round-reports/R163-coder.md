@@ -78,7 +78,7 @@ work published".
 
 8. Added R163 entry (5 findings + 1 test-coverage entry, #253-#258).
 
-### `docs/V2_CURRENT_STATE.md`
+### `docs/reference/V2_CURRENT_STATE.md`
 
 9. Updated "Updated R" header to R163 (2026-07-12). Added R163 section
    with full finding descriptions and a "Known limitations (R163,
@@ -130,7 +130,7 @@ work published".
 - `v2/src/indexer/schema.ts` (success predicate fix)
 - `v2/package.json` (version bump)
 - `v2/CHANGELOG.md` (R163 entry)
-- `docs/V2_CURRENT_STATE.md` (R163 section)
+- `docs/reference/V2_CURRENT_STATE.md` (R163 section)
 - `v2/tests/indexer/r163-atomic-refusal-success-predicate.test.ts` (NEW — 12 tests)
 - `v2/tests/indexer/r162-root-early-refusal.test.ts` (4 R162 tests updated for R163)
 - `v2/tests/indexer/r161-root-snapshot-identity.test.ts` (version bump)

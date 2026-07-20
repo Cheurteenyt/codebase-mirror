@@ -36,6 +36,7 @@ Backend and MCP:
 ```text
 cd v2
 npm ci
+npm run docs:check
 npm run typecheck
 npm run build
 npx vitest run <target-test-file>
@@ -63,4 +64,6 @@ npm test
 - The root cause is fixed in tracked repository code.
 - A targeted regression protects the behavior, or the reason a test is impractical is documented.
 - Relevant typecheck/build/test commands pass on the supported platform.
+- Documentation links, anchors, metadata, organization, and portal
+  reachability pass `npm run docs:check`.
 - The final diff is scoped and does not contain unrelated worktree changes.

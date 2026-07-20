@@ -84,7 +84,7 @@ git switch -c v2/r<n>-<short-name>
 ```
 
 For work performed in a reset-prone AI environment, follow
-[AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md). Create
+[AI_COLLABORATION_PROTOCOL.md](docs/operations/AI_COLLABORATION_PROTOCOL.md). Create
 `docs/ai/CURRENT_HANDOFF.md` from the GLM handoff template on the work branch
 and push checkpoints frequently. At rest only `main` remains; one work branch
 is allowed during an active round.
@@ -94,6 +94,7 @@ is allowed during an active round.
 ```bash
 npm run typecheck      # tsc --noEmit
 npm run build          # clean + tsc
+npm run docs:check     # links, anchors, metadata, organization, reachability
 npm test               # pretest (build) + vitest run
 ```
 
@@ -104,7 +105,9 @@ The full suite must pass with 0 regressions. See `v2/CHANGELOG.md` for the curre
 - `v2/CHANGELOG.md` — add a round entry with bugs fixed, tests added
 - `v2/package.json` — bump version (patch for hotfix, minor for feature)
 - `README.md` / `docs/` — update if architecture or CLI changed
-- `docs/V2_CURRENT_STATE.md` — update if stable features or limitations changed
+- `docs/reference/V2_CURRENT_STATE.md` — update if stable features or limitations changed
+- `docs/README.md` — register any new canonical document; prefer updating an
+  existing authority over creating a competing overview
 
 ### 4. Commit + push
 
@@ -154,7 +157,7 @@ Known gaps:
 - No Windows/macOS matrix (PKG-CARRY-01)
 
 See [MAINTAINERS_GUIDE.md](MAINTAINERS_GUIDE.md) for the full workflow and invariants.
-See [AI_COLLABORATION_PROTOCOL.md](docs/AI_COLLABORATION_PROTOCOL.md) for
+See [AI_COLLABORATION_PROTOCOL.md](docs/operations/AI_COLLABORATION_PROTOCOL.md) for
 external audit handoff and environment-reset recovery.
 
 ## Code Style Guidelines
@@ -247,7 +250,7 @@ runners are free for public repositories; larger runners and storage
 follow separate billing/limits.
 
 ```bash
-cd v2 && npm run build && npx vitest run     # see v2/CHANGELOG.md for current test count
+cd v2 && npm run docs:check && npm run build && npx vitest run
 cd ../graph-ui && npx tsc --noEmit && npx vitest run
 ```
 All tests must pass with 0 regressions. A failed pipeline blocks merge.
@@ -276,7 +279,7 @@ branch protection, GitHub PR push options, etc.).
 ## Release Process
 
 Public releases are not automated yet. Follow
-[`docs/RELEASE_POLICY.md`](docs/RELEASE_POLICY.md); do not create or push a tag
+[`docs/operations/RELEASE_POLICY.md`](docs/operations/RELEASE_POLICY.md); do not create or push a tag
 until its full-CI, packed-install/UI, Docker/UI, release-note, and checksum
 gates have been completed on the exact release commit. At minimum:
 
