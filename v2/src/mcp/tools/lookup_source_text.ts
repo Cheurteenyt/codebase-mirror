@@ -266,7 +266,7 @@ export class LookupSourceTextTool extends BaseTool {
   get definition(): ToolDefinition {
     return {
       name: 'lookup_source_text',
-      description: 'Run one bounded exact-source operation. For any route-to-target or CLI-command-to-target trace, call call_chain first without pre-searching; pass target_symbol when known or the task phrase as target_hint, then copy formatted_chain. Other profiles find literals, aggregate callers, or list Git-tracked directories.',
+      description: 'Run one bounded exact-source operation. For exhaustive reverse caller impact, call direct_callers once with max_depth set to the requested hop bound, then copy formatted_callers. For any route-to-target or CLI-command-to-target trace, call call_chain first without pre-searching and copy formatted_chain. Other profiles find literals or list Git-tracked directories.',
       annotations: {
         title: 'Look up exact source text',
         readOnlyHint: true,
@@ -309,13 +309,21 @@ export class LookupSourceTextTool extends BaseTool {
           include_tests: {
             type: 'boolean',
             default: false,
-            description: 'direct_callers only: include call-sites under test paths.',
+            description: 'direct_callers only: include repository test roots and test/spec files. Product directories named src/.../test remain production when false.',
           },
           max_callers: {
             type: 'integer',
             minimum: 1,
             maximum: MAX_CALLERS,
             default: DEFAULT_CALLERS,
+            description: 'direct_callers only: maximum direct or transitive caller records returned. Truncation makes complete false.',
+          },
+          max_depth: {
+            type: 'integer',
+            minimum: 1,
+            maximum: MAX_CHAIN_HOPS,
+            default: 1,
+            description: 'direct_callers only: reverse caller depth. Keep 1 for the existing direct aggregation; use 2-8 to return identity-aware transitive_callers and copy-ready formatted_callers.',
           },
           inventory_scope: {
             type: 'string',
@@ -361,7 +369,7 @@ export class LookupSourceTextTool extends BaseTool {
       if (!OPERATIONS.includes(operation)) {
         throw new Error(`Argument operation must be one of: ${OPERATIONS.join(', ')}.`);
       }
-      if (operation === 'direct_callers') return this.handleDirectCallers(args, project);
+      if (operation === 'direct_callers') return await this.handleDirectCallers(args, project);
       if (operation === 'top_level_directories') return await this.handleTopLevelDirectories(args, project);
       if (operation === 'call_chain') return await this.handleCallChain(args, project);
 
@@ -507,7 +515,7 @@ export class LookupSourceTextTool extends BaseTool {
     }
   }
 
-  private handleDirectCallers(args: Record<string, unknown>, project: string) {
+  private async handleDirectCallers(args: Record<string, unknown>, project: string): Promise<ToolResponse> {
     const symbol = this.requireString(args, 'symbol');
     if (symbol.length > MAX_QUERY_LENGTH || /[\r\n\0]/u.test(symbol)) {
       throw new Error(`Argument symbol must be a single-line string of at most ${MAX_QUERY_LENGTH} characters.`);
@@ -520,15 +528,71 @@ export class LookupSourceTextTool extends BaseTool {
       MAX_CALLERS,
       Math.floor(this.optionalNumber(args, 'max_callers') ?? DEFAULT_CALLERS),
     ));
+    const maxDepth = Math.max(1, Math.min(
+      MAX_CHAIN_HOPS,
+      Math.floor(this.optionalNumber(args, 'max_depth') ?? 1),
+    ));
     const codeReader = this.codeReader;
     if (!codeReader) return this.error('Code graph reader not configured. Index the project first.');
+    const direct = codeReader.listDirectCallers(project, symbol, {
+      includeTests: includeTestsValue === true,
+      limit: maxCallers,
+    });
+    if (maxDepth === 1) return this.json({
+      project,
+      operation: 'direct_callers',
+      ...direct,
+    });
+
+    const root = codeReader.getProjectRoot(project);
+    if (!root) return this.error(`Indexed repository root is unavailable for project "${project}".`);
+    const indexedPathProbe = codeReader.listProjectFilePaths(project, MAX_INDEXED_FILES + 1);
+    const reasons = new Set<string>();
+    if (indexedPathProbe.length > MAX_INDEXED_FILES) reasons.add('indexed_file_limit');
+    if (direct.target_candidates.length !== 1) {
+      reasons.add(direct.target_candidates.length === 0
+        ? 'transitive_target_not_found'
+        : 'transitive_target_ambiguous');
+    }
+    const structural = direct.target_candidates.length === 1
+      ? (await import('../structural-callers.js')).traceStructuralCallers({
+          root,
+          indexedPaths: indexedPathProbe.slice(0, MAX_INDEXED_FILES),
+          target: {
+            name: symbol,
+            path: direct.target_candidates[0].path,
+            definitionLine: direct.target_candidates[0].definition_line,
+          },
+          maxDepth,
+          includeTests: includeTestsValue === true,
+        })
+      : {
+          callers: [],
+          complete: false,
+          incomplete_reasons: [],
+          source_files_analyzed: 0,
+    };
+    for (const reason of structural.incomplete_reasons) reasons.add(reason);
+    const transitiveCallersTruncated = structural.callers.length > maxCallers;
+    if (transitiveCallersTruncated) reasons.add('transitive_callers_truncated');
+    const transitiveCallers = structural.callers.slice(0, maxCallers);
+    const incompleteReasons = [...reasons].sort(stablePathCompare);
     return this.json({
       project,
       operation: 'direct_callers',
-      ...codeReader.listDirectCallers(project, symbol, {
-        includeTests: includeTestsValue === true,
-        limit: maxCallers,
-      }),
+      ...direct,
+      max_depth: maxDepth,
+      transitive_callers: transitiveCallers,
+      formatted_callers: transitiveCallers.map((caller) => (
+        `${caller.depth}|${caller.name}@${caller.path}:${caller.definition_line}`
+      )),
+      transitive_callers_truncated: transitiveCallersTruncated,
+      analysis: {
+        method: 'typescript_semantic',
+        source_files: structural.source_files_analyzed,
+      },
+      complete: structural.complete && incompleteReasons.length === 0,
+      incomplete_reasons: incompleteReasons,
     });
   }
 

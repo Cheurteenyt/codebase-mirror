@@ -355,6 +355,98 @@ describe('lookup_source_text', () => {
     }
   });
 
+  it('traces identity-aware transitive callers without changing the direct-caller default', async () => {
+    const harness = createHarness({
+      'src/target.ts': 'export function target() {}\n',
+      'src/callers.ts': [
+        "import { target } from './target.js';",
+        'export function direct() { target(); }',
+        'export function middle() { direct(); }',
+        'export function top() { middle(); }',
+        'export const namedArrow = () => target();',
+        'export function fromArrow() { namedArrow(); }',
+        '',
+      ].join('\n'),
+      'src/unrelated.ts': [
+        'export function target() {}',
+        'export function unrelated() { target(); }',
+        '',
+      ].join('\n'),
+      'src/mcp/test/production.ts': [
+        "import { target } from '../../target.js';",
+        'export function productionCaller() { target(); }',
+        '',
+      ].join('\n'),
+      'tests/target.test.ts': [
+        "import { target } from '../src/target.js';",
+        'export function excludedTestCaller() { target(); }',
+        '',
+      ].join('\n'),
+    });
+    harness.addCodeNode({
+      label: 'Function',
+      name: 'target',
+      qualifiedName: 'test::src/target.ts::target',
+      path: 'src/target.ts',
+      startLine: 1,
+    });
+
+    try {
+      const directResponse = await harness.tool.handle({
+        operation: 'direct_callers',
+        symbol: 'target',
+      });
+      expect(JSON.parse(directResponse.content[0].text)).not.toHaveProperty('transitive_callers');
+
+      const response = await harness.tool.handle({
+        operation: 'direct_callers',
+        symbol: 'target',
+        max_depth: 3,
+      });
+      expect(response.isError).not.toBe(true);
+      const payload = JSON.parse(response.content[0].text);
+      expect(payload.max_depth).toBe(3);
+      expect(payload.transitive_callers).toEqual([
+        { depth: 1, name: 'direct', path: 'src/callers.ts', definition_line: 2 },
+        { depth: 1, name: 'namedArrow', path: 'src/callers.ts', definition_line: 5 },
+        { depth: 1, name: 'productionCaller', path: 'src/mcp/test/production.ts', definition_line: 2 },
+        { depth: 2, name: 'middle', path: 'src/callers.ts', definition_line: 3 },
+        { depth: 2, name: 'fromArrow', path: 'src/callers.ts', definition_line: 6 },
+        { depth: 3, name: 'top', path: 'src/callers.ts', definition_line: 4 },
+      ]);
+      expect(payload.formatted_callers).toEqual([
+        '1|direct@src/callers.ts:2',
+        '1|namedArrow@src/callers.ts:5',
+        '1|productionCaller@src/mcp/test/production.ts:2',
+        '2|middle@src/callers.ts:3',
+        '2|fromArrow@src/callers.ts:6',
+        '3|top@src/callers.ts:4',
+      ]);
+      expect(payload.transitive_callers_truncated).toBe(false);
+      expect(payload.complete).toBe(true);
+      expect(payload.incomplete_reasons).toEqual([]);
+      expect(payload.formatted_callers).not.toContain('1|unrelated@src/unrelated.ts:2');
+      expect(payload.formatted_callers).not.toContain('1|excludedTestCaller@tests/target.test.ts:2');
+
+      const boundedResponse = await harness.tool.handle({
+        operation: 'direct_callers',
+        symbol: 'target',
+        max_depth: 3,
+        max_callers: 2,
+      });
+      const boundedPayload = JSON.parse(boundedResponse.content[0].text);
+      expect(boundedPayload.formatted_callers).toEqual([
+        '1|direct@src/callers.ts:2',
+        '1|namedArrow@src/callers.ts:5',
+      ]);
+      expect(boundedPayload.transitive_callers_truncated).toBe(true);
+      expect(boundedPayload.complete).toBe(false);
+      expect(boundedPayload.incomplete_reasons).toContain('transitive_callers_truncated');
+    } finally {
+      harness.close();
+    }
+  });
+
   it('bounds caller output and reports ambiguous duplicate target symbols', async () => {
     const harness = createHarness({});
     for (const path of ['src/a.ts', 'src/b.ts']) {

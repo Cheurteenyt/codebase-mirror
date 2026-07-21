@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "results_identity": "r177-multihop-callers-final",
+  "phase": "postfix",
+  "excludes": [
+    "derived/**"
+  ],
+  "artifact_count": 20,
+  "total_bytes": 54574,
+  "tree_sha256": "63f5cc436719788f3aec814123b67316c1db82bad1a11e9d7fe2296a284f8dce",
+  "artifacts": [
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 9152,
+      "sha256": "2b7cb2c3b33407f45100a9b3d6ec2bc14bcffd24afd03cdabd99cd7f80c063fd"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1117,
+      "sha256": "d685f70dcddc158777c47f0cbf631339f27b39c33c1d3b23bbb21ec86fbe8063"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3958,
+      "sha256": "113ee87cf21e9316475145ffa85ea7e7aefb0bfbbc53ab222a98d827ae33758e"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1457,
+      "sha256": "287cf9c2f3a5d54470bfc371f2e6a504155e22b4a8613a37fb688bca5ac89a7c"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 825,
+      "sha256": "891221d56cc7407de75e123572ade1955aaac2b7186ca58bdaf611f1e946187e"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 4152,
+      "sha256": "0b0360889e1d3bf2dd8f4e017b2fcf2eca6e30e84328e79f3b42449e45cacb96"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1116,
+      "sha256": "607b41806ab9d9cacb0ff57222967b226071da8729f98343e723006992b62127"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3793,
+      "sha256": "e265d5124543826a41ccebd7866600673c2eab545b6c83ce2c81b2ad0b2f29fe"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1277,
+      "sha256": "217fb5e4da9b97f0d7360abcf662377d398f0bfe8dc92219d17b98ff66fdce26"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "6d48513096b3f732933d581e5423fa8824d32babb7c48a07f4c3cb01961081a1"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 9152,
+      "sha256": "8dd2e7064b919972a7d4079ce18d43a4810b5f16742f68defa633106d53c51ae"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1115,
+      "sha256": "1f2c8039e0d5b501d50459abd7eaca0bf89836c6b24a6aff4e1697e8a0f3bf85"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3940,
+      "sha256": "dc1d268985532bba544acf9f66e828f29d75d98550a6fa07aed1de69060d11a7"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1446,
+      "sha256": "cc127531c705e458a32792809e9918ccf8b706995749ea08828775002d8c6ba0"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 825,
+      "sha256": "c267e22d71b7158cf7f2a0930ad05e4ec50f231ddf44174ffc30139a90d81560"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 4071,
+      "sha256": "0cd0d169058f82c6c0a2444d42ca394439b64c1ea45a258e7d7100ed356655a4"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1115,
+      "sha256": "2693626c18c8c02210f19cea60dae9296c9d18ed6719a93bbfc0eb50f039b07c"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3775,
+      "sha256": "298a7fe2823bc9465f7fb7e8681749d708103cbd02f2aedb7fd8e1eadcdb3dc5"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1266,
+      "sha256": "22d63eb87e7d63835978c1a233be94f662a46e0aff064ea2642eaed9574f1027"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "ff7ec08582e65048f2e08544d3286fbf9a40dd4fe67eb7af46ed3eaf63f1fc11"
+    }
+  ]
+}

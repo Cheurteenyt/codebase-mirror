@@ -330,6 +330,13 @@ async function main() {
   const targets = selectTargets(spec, options.target);
   const attempt = Number(options.attempt || 1);
   if (!Number.isSafeInteger(attempt) || attempt < 1 || attempt > 2) throw new Error('--attempt must be 1 or 2');
+  if (
+    mode === 'continuous'
+    && options.task
+    && targets.some((target) => target.tasks[0]?.id !== options.task)
+  ) {
+    throw new Error('--task may select only the first registered task in continuous mode, preserving its original first-turn prompt and context.');
+  }
 
   for (const target of targets) {
     if (mode === 'one-shot') {
@@ -365,7 +372,7 @@ async function main() {
       let sessionId;
       for (let taskIndex = 0; taskIndex < target.tasks.length; taskIndex += 1) {
         const task = target.tasks[taskIndex];
-        if (options.task && options.task !== task.id) throw new Error('--task filtering is not valid for continuous sessions');
+        if (options.task && options.task !== task.id) continue;
         const prompt = taskIndex === 0 ? initialPrompt(condition, target, task, true) : continuationPrompt(task);
         const paths = artifactPaths(runtime.results_root, phase, mode, target, condition, task, attempt);
         if (options.skip_existing && existsSync(paths.metadata)) {

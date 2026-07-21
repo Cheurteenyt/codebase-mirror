@@ -134,7 +134,7 @@ The `cbm-v2 mcp` command exposes 8 tools via JSON-RPC 2.0 over stdio:
 | `create_human_note` | write | Create ADR/BugNote/etc. + link to code nodes |
 | `link_note_to_code_node` | write | Link existing note to a code node |
 | `search_code_and_memory` | read | Unified search across code graph + human memory |
-| `lookup_source_text` | read | Bounded exact literals, caller sets, call chains, and tracked top-level inventory with explicit completeness |
+| `lookup_source_text` | read | Bounded exact literals, identity-aware direct/multi-hop callers, call chains, and tracked top-level inventory with explicit completeness |
 | `prepare_edit_context` | read | Dependency, blast-radius, risk, freshness, and linked-memory evidence when an edit needs structural context |
 
 ### Connecting an AI agent

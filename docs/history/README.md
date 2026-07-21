@@ -2,7 +2,7 @@
 
 > **Status:** Historical index
 > **Audience:** Maintainers and auditors
-> **Last verified:** 2026-07-20 documentation architecture audit
+> **Last verified:** 2026-07-21 R177 archive
 
 Everything below this directory is non-canonical evidence. A historical file
 remains valid for its pinned revision, but it must not be treated as current
@@ -36,6 +36,7 @@ Later native-accounting evidence lives under
 - [R163 implementation report](round-reports/R163-coder.md)
 - [R164 implementation report](round-reports/R164-coder.md)
 - [R171 exact-lookup benchmark report](round-reports/R171_EXACT_LOOKUP_BENCHMARK.md)
+- [R177 multi-hop caller correction](round-reports/R177_MULTI_HOP_CALLER_CORRECTION.md)
 
 ## Changelog archive
 
