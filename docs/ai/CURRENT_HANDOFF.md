@@ -13,7 +13,7 @@ base_sha: 29101436e64113815b5a8223ab0a4b1e7bab3ebb
 last_completed_code_sha: e4834d7b3f1a95d3616d71cafed4a8b493659d2b
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-21T21:17:58Z
+updated_at_utc: 2026-07-21T21:29:46Z
 implementer_role: codex
 ```
 
@@ -142,6 +142,7 @@ pre-registered because the response schema bytes nevertheless changed.
 | `9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc` | pending | R177-B01-F001 | Add identity-aware reverse multi-hop traversal behind optional `direct_callers.max_depth` while preserving the depth-one contract | targeted regression 13/13, MCP suite 44/44, typecheck, backend build, pinned small 8/8 and large 23/23 oracle smoke | pending |
 | `53e9bc5cbbd442e9c51c5d7a3237802684199798` | pending | R177-B01-F001 | Pre-register the exact four-cell T01 correction round and permit only first-turn T01 filtering in continuous mode | docs check, runner syntax, Codex/checkouts/environment verification | pending |
 | `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | pending | R177-B01-F001 | Bound transitive output with `max_callers`, fail closed on truncation, and pre-register a fresh final-candidate rerun in `c35b9c190575c98d9fa7e93ca81f33527ee566f2` | targeted regression 13/13, MCP suite 44/44, typecheck, backend build, docs check | pending |
+| `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | pending | R177-B01-F001 | Publish the fresh bounded-candidate 4/4 PASS checkpoint in `b635c8496f8e9ae62df99847f872ea6c990826ac` | final oracle verify, 4/4 valid agent cells, package build, docs check | pending |
 
 ## Exact validation evidence
 
@@ -217,6 +218,33 @@ result_summary: bounded-output regression passes including truncation fail-close
 not_run: fresh final bounded-candidate four-cell run and GitHub CI remain pending
 ```
 
+```text
+command: run, summarize, and checkpoint the pre-registered bounded-final four-cell postfix phase; derive-structural-references.mjs verify --target all --task T01
+working_directory: D:/Mycodex/codebase-mirror
+environment: Windows PowerShell, Codex CLI 0.144.4, gpt-5.6-sol medium
+exit_code: 0
+result_summary: 4/4 valid PASS with exact independent-oracle answers, one lookup_source_text call per cell, zero violations, no invalid attempts, and no T02-T04 artifacts; 236935 raw tokens and 4 calls versus 1179045 and 60 before
+not_run: GitHub CI remains pending
+```
+
+```text
+command: npm run build:package
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows PowerShell, Node.js repository checkout
+exit_code: 0
+result_summary: backend compiled, unchanged Graph UI rebuilt within all bundle budgets, embedded assets copied, and complete package is ready for npm pack
+not_run: npm publication is outside this round
+```
+
+```text
+command: npm test
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows PowerShell, Node.js repository checkout
+exit_code: 1
+result_summary: broad suite reaches unrelated POSIX permission and symlink tests that read Windows temporary-directory mode as 0o666 and reject it with STORE_LAYOUT_PERMISSIONS_INSECURE, predominantly in inactive atomic-generation publication; targeted MCP 44/44 remains green
+not_run: no out-of-scope atomic-publication or cross-platform test rewrite; authoritative Linux CI is pending
+```
+
 ## Reset recovery
 
 ```bash
@@ -242,13 +270,13 @@ node scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs
 
 ## Current working state
 
-- **Last completed finding:** R177-B01-F001 bounded implementation and final-candidate benchmark pre-registration checkpoints.
+- **Last completed finding:** R177-B01-F001 bounded implementation and final 4/4 PASS evidence checkpoint.
 - **Current finding:** R177-B01-F001 multi-hop caller completeness.
-- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` until the bounded-candidate pre-registration checkpoint is pushed.
-- **Unpushed commits expected:** bounded code, documentation/pre-registration, and handoff commits until pushed together.
+- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` until the final evidence checkpoint is pushed.
+- **Unpushed commits expected:** final evidence and handoff commits until pushed together.
 - **Known blocker:** none.
-- **Single next action:** run attempt 1 of the final bounded-candidate one-shot
-  small T01 condition-B cell, then continue in the fixed order only if valid.
+- **Single next action:** push the final evidence checkpoint, open one review
+  PR, and require CI on the exact candidate head before integration.
 
 ## Security confirmation
 
@@ -259,10 +287,10 @@ node scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs
 
 ## Pre-final-audit checklist
 
-- [ ] Every finding has a decision and evidence.
-- [ ] Every accepted finding has a pushed resolution commit.
-- [ ] Regression tests fail if their corrections are reverted.
-- [ ] The full affordable local suite is recorded above.
+- [x] Every finding has a decision and evidence.
+- [x] Every accepted finding has a pushed resolution commit.
+- [x] Regression tests fail if their corrections are reverted.
+- [x] The full affordable local suite is recorded above.
 - [ ] GitHub Actions is green on the candidate SHA.
 - [ ] No important work exists only in the current environment.
 - [ ] The handoff is ready to archive under `docs/history/round-reports/`.
