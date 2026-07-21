@@ -10,10 +10,10 @@ status: ACTIVE
 repository: Cheurteenyt/codebase-mirror
 branch: v2/r177-multihop-callers
 base_sha: 29101436e64113815b5a8223ab0a4b1e7bab3ebb
-last_completed_code_sha: 9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc
+last_completed_code_sha: 53e9bc5cbbd442e9c51c5d7a3237802684199798
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-21T21:04:56Z
+updated_at_utc: 2026-07-21T21:07:55Z
 implementer_role: codex
 ```
 
@@ -134,6 +134,7 @@ prior loading cost.
 |----------|-------------|----------|---------|------------------|------------|
 | `29101436e64113815b5a8223ab0a4b1e7bab3ebb` | pending | R177-B01-F001 | Initialize a bounded R177 diagnosis and resolve the apparent T05-T08 corpus gap | corpus and artifact inventory verified locally | pending |
 | `9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc` | pending | R177-B01-F001 | Add identity-aware reverse multi-hop traversal behind optional `direct_callers.max_depth` while preserving the depth-one contract | targeted regression 13/13, MCP suite 44/44, typecheck, backend build, pinned small 8/8 and large 23/23 oracle smoke | pending |
+| `53e9bc5cbbd442e9c51c5d7a3237802684199798` | pending | R177-B01-F001 | Pre-register the exact four-cell T01 correction round and permit only first-turn T01 filtering in continuous mode | docs check, runner syntax, Codex/checkouts/environment verification | pending |
 
 ## Exact validation evidence
 
@@ -182,6 +183,15 @@ result_summary: documentation validator passes for 58 Markdown files; all 48 req
 not_run: package build and GitHub CI remain pending
 ```
 
+```text
+command: node --check scripts/benchmark/v1-v2-truth-audit/run.mjs; node scripts/benchmark/v1-v2-truth-audit/run.mjs verify --results-root D:/Mycodex/benchmark-results/r177-multihop-callers-final --v2-home D:/Mycodex/benchmark-state/v2-r173-final
+working_directory: D:/Mycodex/codebase-mirror
+environment: Windows PowerShell, Codex CLI 0.144.4
+exit_code: 0
+result_summary: runner syntax is valid; both pinned checkouts are clean at their registered SHAs and all benchmark executables/state paths resolve
+not_run: no measured process started before pre-registration was committed and pushed
+```
+
 ## Reset recovery
 
 ```bash
@@ -207,13 +217,13 @@ node scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs
 
 ## Current working state
 
-- **Last completed finding:** R177-B01-F001 implementation checkpoint.
+- **Last completed finding:** R177-B01-F001 implementation and benchmark pre-registration checkpoints.
 - **Current finding:** R177-B01-F001 multi-hop caller completeness.
-- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` and its portal link in `docs/README.md` until this implementation checkpoint is pushed.
-- **Unpushed commits expected:** the code checkpoint and its handoff commit until both are pushed together.
+- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` until this pre-registration checkpoint is pushed.
+- **Unpushed commits expected:** the pre-registration code commit and its handoff commit until both are pushed together.
 - **Known blocker:** none.
-- **Single next action:** pre-register and run the exact four-cell small/large,
-  one-shot/continuous T01 benchmark with the existing r176 pipeline.
+- **Single next action:** run attempt 1 of the pre-registered one-shot small T01
+  condition-B cell, then continue in the fixed order only if it is valid.
 
 ## Security confirmation
 
