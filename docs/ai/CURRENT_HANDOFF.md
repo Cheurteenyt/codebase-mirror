@@ -10,10 +10,10 @@ status: ACTIVE
 repository: Cheurteenyt/codebase-mirror
 branch: v2/r177-multihop-callers
 base_sha: 29101436e64113815b5a8223ab0a4b1e7bab3ebb
-last_completed_code_sha: 53e9bc5cbbd442e9c51c5d7a3237802684199798
+last_completed_code_sha: e4834d7b3f1a95d3616d71cafed4a8b493659d2b
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-21T21:07:55Z
+updated_at_utc: 2026-07-21T21:17:58Z
 implementer_role: codex
 ```
 
@@ -44,7 +44,7 @@ implementer_role: codex
 
 | Finding | Audit source | Decision | Evidence or reason | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------------|----------|--------------------|------------------------|-----------------|-------------------|------------------|
-| R177-B01-F001 | `docs/performance/benchmarks/structural-correctness-baseline-2026-07-21/per-task.md` | IMPLEMENTED | r176 records V2 PARTIAL for both `small/T01` modes and FAIL for both `large/T01` modes; exact root cause and pinned-source reproduction are recorded below | `9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc` | `v2/tests/mcp/exact-source-lookup.test.ts` | pending | DECLARED_LOCAL |
+| R177-B01-F001 | `docs/performance/benchmarks/structural-correctness-baseline-2026-07-21/per-task.md` | IMPLEMENTED | r176 records V2 PARTIAL for both `small/T01` modes and FAIL for both `large/T01` modes; exact root cause and pinned-source reproduction are recorded below | `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | `v2/tests/mcp/exact-source-lookup.test.ts` | pending | DECLARED_LOCAL |
 
 ## Root-cause diagnosis recorded before product changes
 
@@ -128,6 +128,12 @@ reasons. The TypeScript compiler module is dynamically imported only when
 `max_depth > 1`, so ordinary MCP startup and all depth-one requests retain the
 prior loading cost.
 
+Final code commit `e4834d7b3f1a95d3616d71cafed4a8b493659d2b`
+also applies the existing `max_callers` ceiling to transitive output and marks
+truncation incomplete. This closes the post-measure response-size risk without
+changing the 8- and 23-caller oracle results; a fresh final-candidate run is
+pre-registered because the response schema bytes nevertheless changed.
+
 ## Pushed checkpoints
 
 | Code SHA | CI head SHA | Findings | Summary | Local validation | GitHub run |
@@ -135,6 +141,7 @@ prior loading cost.
 | `29101436e64113815b5a8223ab0a4b1e7bab3ebb` | pending | R177-B01-F001 | Initialize a bounded R177 diagnosis and resolve the apparent T05-T08 corpus gap | corpus and artifact inventory verified locally | pending |
 | `9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc` | pending | R177-B01-F001 | Add identity-aware reverse multi-hop traversal behind optional `direct_callers.max_depth` while preserving the depth-one contract | targeted regression 13/13, MCP suite 44/44, typecheck, backend build, pinned small 8/8 and large 23/23 oracle smoke | pending |
 | `53e9bc5cbbd442e9c51c5d7a3237802684199798` | pending | R177-B01-F001 | Pre-register the exact four-cell T01 correction round and permit only first-turn T01 filtering in continuous mode | docs check, runner syntax, Codex/checkouts/environment verification | pending |
+| `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | pending | R177-B01-F001 | Bound transitive output with `max_callers`, fail closed on truncation, and pre-register a fresh final-candidate rerun in `c35b9c190575c98d9fa7e93ca81f33527ee566f2` | targeted regression 13/13, MCP suite 44/44, typecheck, backend build, docs check | pending |
 
 ## Exact validation evidence
 
@@ -192,6 +199,24 @@ result_summary: runner syntax is valid; both pinned checkouts are clean at their
 not_run: no measured process started before pre-registration was committed and pushed
 ```
 
+```text
+command: run and summarize the pre-registered r177 four-cell postfix phase; publish checkpoint multihop-caller-correction-2026-07-21
+working_directory: D:/Mycodex/codebase-mirror
+environment: Windows PowerShell, Codex CLI 0.144.4, gpt-5.6-sol medium
+exit_code: 0
+result_summary: 4/4 valid PASS, one lookup_source_text call per cell, 252680 raw tokens versus 1179045 before; post-measure review retained these artifacts but required a fresh bounded-candidate rerun
+not_run: no T02-T04 task was executed
+```
+
+```text
+command: npx vitest run tests/mcp/exact-source-lookup.test.ts; npm run typecheck; npm run build; npx vitest run tests/mcp; npm run docs:check
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows PowerShell, Node.js repository checkout
+exit_code: 0
+result_summary: bounded-output regression passes including truncation fail-closed behavior; targeted 13/13, MCP 44/44, typecheck, backend build, and documentation checks pass
+not_run: fresh final bounded-candidate four-cell run and GitHub CI remain pending
+```
+
 ## Reset recovery
 
 ```bash
@@ -217,13 +242,13 @@ node scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs
 
 ## Current working state
 
-- **Last completed finding:** R177-B01-F001 implementation and benchmark pre-registration checkpoints.
+- **Last completed finding:** R177-B01-F001 bounded implementation and final-candidate benchmark pre-registration checkpoints.
 - **Current finding:** R177-B01-F001 multi-hop caller completeness.
-- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` until this pre-registration checkpoint is pushed.
-- **Unpushed commits expected:** the pre-registration code commit and its handoff commit until both are pushed together.
+- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` until the bounded-candidate pre-registration checkpoint is pushed.
+- **Unpushed commits expected:** bounded code, documentation/pre-registration, and handoff commits until pushed together.
 - **Known blocker:** none.
-- **Single next action:** run attempt 1 of the pre-registered one-shot small T01
-  condition-B cell, then continue in the fixed order only if it is valid.
+- **Single next action:** run attempt 1 of the final bounded-candidate one-shot
+  small T01 condition-B cell, then continue in the fixed order only if valid.
 
 ## Security confirmation
 
