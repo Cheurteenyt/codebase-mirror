@@ -1,4 +1,4 @@
-# Implementation Handoff
+# R177 multi-hop caller correction handoff
 
 ## Cycle metadata
 
@@ -6,14 +6,14 @@
 schema_version: 1
 kind: implementation-handoff
 round: R177
-status: ACTIVE
+status: COMPLETE
 repository: Cheurteenyt/codebase-mirror
 branch: v2/r177-multihop-callers
 base_sha: 29101436e64113815b5a8223ab0a4b1e7bab3ebb
 last_completed_code_sha: e4834d7b3f1a95d3616d71cafed4a8b493659d2b
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-21T21:29:46Z
+updated_at_utc: 2026-07-21T21:34:49Z
 implementer_role: codex
 ```
 
@@ -44,7 +44,7 @@ implementer_role: codex
 
 | Finding | Audit source | Decision | Evidence or reason | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------------|----------|--------------------|------------------------|-----------------|-------------------|------------------|
-| R177-B01-F001 | `docs/performance/benchmarks/structural-correctness-baseline-2026-07-21/per-task.md` | IMPLEMENTED | r176 records V2 PARTIAL for both `small/T01` modes and FAIL for both `large/T01` modes; exact root cause and pinned-source reproduction are recorded below | `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | `v2/tests/mcp/exact-source-lookup.test.ts` | pending | DECLARED_LOCAL |
+| R177-B01-F001 | `docs/performance/benchmarks/structural-correctness-baseline-2026-07-21/per-task.md` | CI_VERIFIED | r176 records V2 PARTIAL for both `small/T01` modes and FAIL for both `large/T01` modes; final bounded rerun records 4/4 exact PASS with one call per cell | `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | `v2/tests/mcp/exact-source-lookup.test.ts` | `65f009d95eceae96f1c8c76b2b619d4d9a8ccd8a` | CI_PASS |
 
 ## Root-cause diagnosis recorded before product changes
 
@@ -142,7 +142,7 @@ pre-registered because the response schema bytes nevertheless changed.
 | `9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc` | pending | R177-B01-F001 | Add identity-aware reverse multi-hop traversal behind optional `direct_callers.max_depth` while preserving the depth-one contract | targeted regression 13/13, MCP suite 44/44, typecheck, backend build, pinned small 8/8 and large 23/23 oracle smoke | pending |
 | `53e9bc5cbbd442e9c51c5d7a3237802684199798` | pending | R177-B01-F001 | Pre-register the exact four-cell T01 correction round and permit only first-turn T01 filtering in continuous mode | docs check, runner syntax, Codex/checkouts/environment verification | pending |
 | `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | pending | R177-B01-F001 | Bound transitive output with `max_callers`, fail closed on truncation, and pre-register a fresh final-candidate rerun in `c35b9c190575c98d9fa7e93ca81f33527ee566f2` | targeted regression 13/13, MCP suite 44/44, typecheck, backend build, docs check | pending |
-| `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | pending | R177-B01-F001 | Publish the fresh bounded-candidate 4/4 PASS checkpoint in `b635c8496f8e9ae62df99847f872ea6c990826ac` | final oracle verify, 4/4 valid agent cells, package build, docs check | pending |
+| `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` | `65f009d95eceae96f1c8c76b2b619d4d9a8ccd8a` | R177-B01-F001 | Publish the fresh bounded-candidate 4/4 PASS checkpoint in `b635c8496f8e9ae62df99847f872ea6c990826ac` | final oracle verify, 4/4 valid agent cells, package build, docs check | CI `29870317405`; CodeQL `29870317391` |
 
 ## Exact validation evidence
 
@@ -245,6 +245,15 @@ result_summary: broad suite reaches unrelated POSIX permission and symlink tests
 not_run: no out-of-scope atomic-publication or cross-platform test rewrite; authoritative Linux CI is pending
 ```
 
+```text
+command: GitHub Actions CI 29870317405 and CodeQL 29870317391
+working_directory: GitHub head 65f009d95eceae96f1c8c76b2b619d4d9a8ccd8a
+environment: protected pull-request checks
+exit_code: 0
+result_summary: backend, Windows smoke, frontend, npm pack/install/CLI, Docker non-root smoke, JavaScript/TypeScript CodeQL, and Python CodeQL all pass on the exact candidate head
+not_run: main-branch post-merge CI and GitLab mirror parity remain integration gates
+```
+
 ## Reset recovery
 
 ```bash
@@ -270,13 +279,13 @@ node scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs
 
 ## Current working state
 
-- **Last completed finding:** R177-B01-F001 bounded implementation and final 4/4 PASS evidence checkpoint.
-- **Current finding:** R177-B01-F001 multi-hop caller completeness.
-- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` until the final evidence checkpoint is pushed.
-- **Unpushed commits expected:** final evidence and handoff commits until pushed together.
+- **Last completed finding:** R177-B01-F001 is CI_VERIFIED on exact head `65f009d95eceae96f1c8c76b2b619d4d9a8ccd8a`.
+- **Current finding:** none; the implementation round is complete.
+- **Dirty files expected:** only the handoff archive move and documentation-index updates until pushed.
+- **Unpushed commits expected:** one trailing documentation-only archive commit.
 - **Known blocker:** none.
-- **Single next action:** push the final evidence checkpoint, open one review
-  PR, and require CI on the exact candidate head before integration.
+- **Single next action:** push the archive commit, rerun required checks on its
+  exact head, then mark PR #72 ready and squash-merge into protected `main`.
 
 ## Security confirmation
 
@@ -291,6 +300,6 @@ node scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs
 - [x] Every accepted finding has a pushed resolution commit.
 - [x] Regression tests fail if their corrections are reverted.
 - [x] The full affordable local suite is recorded above.
-- [ ] GitHub Actions is green on the candidate SHA.
-- [ ] No important work exists only in the current environment.
-- [ ] The handoff is ready to archive under `docs/history/round-reports/`.
+- [x] GitHub Actions is green on the candidate SHA.
+- [x] No important work exists only in the current environment.
+- [x] The handoff is ready to archive under `docs/history/round-reports/`.
