@@ -422,10 +422,26 @@ describe('lookup_source_text', () => {
         '2|fromArrow@src/callers.ts:6',
         '3|top@src/callers.ts:4',
       ]);
+      expect(payload.transitive_callers_truncated).toBe(false);
       expect(payload.complete).toBe(true);
       expect(payload.incomplete_reasons).toEqual([]);
       expect(payload.formatted_callers).not.toContain('1|unrelated@src/unrelated.ts:2');
       expect(payload.formatted_callers).not.toContain('1|excludedTestCaller@tests/target.test.ts:2');
+
+      const boundedResponse = await harness.tool.handle({
+        operation: 'direct_callers',
+        symbol: 'target',
+        max_depth: 3,
+        max_callers: 2,
+      });
+      const boundedPayload = JSON.parse(boundedResponse.content[0].text);
+      expect(boundedPayload.formatted_callers).toEqual([
+        '1|direct@src/callers.ts:2',
+        '1|namedArrow@src/callers.ts:5',
+      ]);
+      expect(boundedPayload.transitive_callers_truncated).toBe(true);
+      expect(boundedPayload.complete).toBe(false);
+      expect(boundedPayload.incomplete_reasons).toContain('transitive_callers_truncated');
     } finally {
       harness.close();
     }

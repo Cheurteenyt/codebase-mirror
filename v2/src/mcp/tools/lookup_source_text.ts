@@ -316,6 +316,7 @@ export class LookupSourceTextTool extends BaseTool {
             minimum: 1,
             maximum: MAX_CALLERS,
             default: DEFAULT_CALLERS,
+            description: 'direct_callers only: maximum direct or transitive caller records returned. Truncation makes complete false.',
           },
           max_depth: {
             type: 'integer',
@@ -570,18 +571,22 @@ export class LookupSourceTextTool extends BaseTool {
           complete: false,
           incomplete_reasons: [],
           source_files_analyzed: 0,
-        };
+    };
     for (const reason of structural.incomplete_reasons) reasons.add(reason);
+    const transitiveCallersTruncated = structural.callers.length > maxCallers;
+    if (transitiveCallersTruncated) reasons.add('transitive_callers_truncated');
+    const transitiveCallers = structural.callers.slice(0, maxCallers);
     const incompleteReasons = [...reasons].sort(stablePathCompare);
     return this.json({
       project,
       operation: 'direct_callers',
       ...direct,
       max_depth: maxDepth,
-      transitive_callers: structural.callers,
-      formatted_callers: structural.callers.map((caller) => (
+      transitive_callers: transitiveCallers,
+      formatted_callers: transitiveCallers.map((caller) => (
         `${caller.depth}|${caller.name}@${caller.path}:${caller.definition_line}`
       )),
+      transitive_callers_truncated: transitiveCallersTruncated,
       analysis: {
         method: 'typescript_semantic',
         source_files: structural.source_files_analyzed,
