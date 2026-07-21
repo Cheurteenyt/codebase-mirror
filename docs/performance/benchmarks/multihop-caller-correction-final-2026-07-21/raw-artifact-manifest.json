@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "results_identity": "r177-multihop-callers-bounded-final",
+  "phase": "postfix",
+  "excludes": [
+    "derived/**"
+  ],
+  "artifact_count": 20,
+  "total_bytes": 54451,
+  "tree_sha256": "6bcde967d91aea3cc7b93c907f724f63706adda86f53b2dfd433672ed90790e1",
+  "artifacts": [
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 9191,
+      "sha256": "058599a438512bfa901859c3561076d095e52104ad68011f1909c8f0d14ddbe6"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1117,
+      "sha256": "8324ed3036647ff8496ee950ace6e8c612207bb205ac08c9dd88a815225fe421"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3966,
+      "sha256": "d793578600b4db10cad3fafc67c6656f84f026e0fe948b9e5462383d6d0382a9"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1457,
+      "sha256": "287cf9c2f3a5d54470bfc371f2e6a504155e22b4a8613a37fb688bca5ac89a7c"
+    },
+    {
+      "path": "postfix/continuous/large/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "b73110b631554afddd0ab4208f57d98d93e389eae2726a8bd2c1404cfab756db"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 4111,
+      "sha256": "d96e96bc1c8ab9db58807dcdc259a7cf7c6c2b9092882a1713d89a98a3b91dbd"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1116,
+      "sha256": "ab3320703f900cedcd7963a4276c04b4284c7591b16447cbb621592af44a92ee"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3799,
+      "sha256": "550c5657bad321919c043490324d4bab8711e77ae38610e4623cc053c56dd7bf"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1277,
+      "sha256": "217fb5e4da9b97f0d7360abcf662377d398f0bfe8dc92219d17b98ff66fdce26"
+    },
+    {
+      "path": "postfix/continuous/small/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "3edd599661c9f8810befa82f72fdfeeb2c8518d46f6bc329e07c1fda9d14f618"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 9191,
+      "sha256": "312e451b7b80bfb90da8970aa9238245063a66b76f674b5f225c7a1325b4d3b9"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1117,
+      "sha256": "94e2eb6243dda25b2a11759904cc211d521b4da002423b6edca9a696a03a1835"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3948,
+      "sha256": "37ee6e1c2c34e661a74faacbb5f22a5242f5851227e391996ebcd2a76731510c"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1446,
+      "sha256": "cc127531c705e458a32792809e9918ccf8b706995749ea08828775002d8c6ba0"
+    },
+    {
+      "path": "postfix/one-shot/large/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 668,
+      "sha256": "7cae170f3799aa58dc4977620412b6cdf401a94e5c910f61dc1e754abda96a08"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.jsonl",
+      "bytes": 4192,
+      "sha256": "c954dbd3b0bdffbad9fe4f4cdc9191c4c236c8ff8d393551c04d37978d9193e0"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.mcp-trace.jsonl",
+      "bytes": 1116,
+      "sha256": "31f70365214a0411a0f46f5054970a9cf72a4d1d90f7a887f1b474c97152940e"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.meta.json",
+      "bytes": 3783,
+      "sha256": "f1aab92f682fe1aae44c8e479047e1feea9868052488b7669e857ae68c7efe7d"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.prompt.txt",
+      "bytes": 1266,
+      "sha256": "22d63eb87e7d63835978c1a233be94f662a46e0aff064ea2642eaed9574f1027"
+    },
+    {
+      "path": "postfix/one-shot/small/T01-B-v2-mcp-a1.stderr.txt",
+      "bytes": 511,
+      "sha256": "42fd80330e2ec619d6be09b64b221a25f3acbba94f9c7dea2b104df08a16b3e0"
+    }
+  ]
+}

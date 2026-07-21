@@ -2,7 +2,7 @@
 
 > **Status:** Canonical product snapshot
 > **Audience:** Users, integrators, contributors, and maintainers
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-20 at merged `main`
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-21 at candidate `e4834d7`
 
 This document answers one question: **what is active in the product now?**
 Implementation history belongs in the [changelog](../../v2/CHANGELOG.md),
@@ -109,6 +109,10 @@ The native-accounting audit on the pinned small and large targets establishes:
   evidence, so it does not prove graph-caused token savings;
 - exact T09 and T12 operations complete in one evidence call, while continuous
   sessions retain substantial accumulated-context cost.
+- the [focused r177 correction rerun](../performance/BENCHMARK_PROTOCOL.md#156-final-bounded-candidate-result), limited to the four r176 multi-hop T01
+  cells, improves 0 PASS / 2 PARTIAL / 2 FAIL to 4 PASS with one bounded
+  `lookup_source_text` call per cell; raw native tokens fall 79.904% and calls
+  fall from 60 to 4. This does not revise the unrerun T02–T04 categories.
 
 These findings are repository- and protocol-specific. Historical `-67%` to
 `-87%` scenario estimates are not native transport measurements. See
@@ -123,6 +127,9 @@ These findings are repository- and protocol-specific. Historical `-67%` to
   the confirmed T08 residual defect and can trigger fallback exploration.
 - Fixed tool-schema cost, tool selection, and cumulative conversation context
   remain the highest-value token-efficiency problems after exact aggregation.
+- Identity-aware `direct_callers(max_depth > 1)` is currently a
+  TypeScript/JavaScript semantic profile. It trades a slower isolated query on
+  the measured small target for exact bounded output and fewer agent loops.
 - Graph evidence must not be claimed when the agent completed a hybrid task
   using source operations only.
 

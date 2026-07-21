@@ -1444,7 +1444,7 @@ artifacts (54,574 bytes) under the external r177 result root, with tree
 SHA-256
 `63f5cc436719788f3aec814123b67316c1db82bad1a11e9d7fe2296a284f8dce`.
 
-### 15.4 Before/after grades and accounting
+### 15.4 Preliminary before/after grades and accounting
 
 Each cell improved to `PASS` while reducing native tokens and completed calls:
 
@@ -1494,3 +1494,45 @@ raw artifacts and preliminary checkpoint remain immutable and disclosed.
 Final results and the exact pushed pre-registration head will be appended only
 after this subsection, the bounded code, canonical MCP reference, and first
 checkpoint are committed and pushed before the first final-candidate process.
+
+### 15.6 Final bounded-candidate result
+
+The final pre-registration head was
+`b6ae9a41f55b83e44344d3b85cf0394cec584670`; all four bounded-candidate
+processes started afterward. Attempt 1 produced **4/4 valid PASS** results,
+with one `mcp:lookup_source_text` call, zero exploratory calls, and zero
+violations in every cell. Both continuous T01 cells again have zero prior
+observed context, no T02–T04 artifacts exist, and every normalized answer
+exactly equals its independent oracle array.
+
+The final canonical checkpoint is
+[`multihop-caller-correction-final-2026-07-21`](benchmarks/multihop-caller-correction-final-2026-07-21/aggregate-and-ratios.md).
+Its [selected-run CSV](benchmarks/multihop-caller-correction-final-2026-07-21/selected-runs.csv),
+[per-task table](benchmarks/multihop-caller-correction-final-2026-07-21/per-task.md),
+and [raw manifest](benchmarks/multihop-caller-correction-final-2026-07-21/raw-artifact-manifest.json)
+retain the exact accounting and hashes. The manifest covers 20 raw artifacts
+(54,451 bytes) under the fresh bounded-final root, with tree SHA-256
+`6bcde967d91aea3cc7b93c907f724f63706adda86f53b2dfd433672ed90790e1`.
+
+| Usage | Target | Grade before → final | Raw tokens before → final | Uncached + output before → final | Calls before → final | Response bytes before → final |
+|---|---|---|---:|---:|---:|---:|
+| one-shot | small | PARTIAL → PASS | 100,040 → 49,301 (-50.719%) | 18,632 → 26,261 (+40.946%) | 7 → 1 (-85.714%) | 5,534 → 2,767 (-50.000%) |
+| one-shot | large | FAIL → PASS | 615,435 → 67,084 (-89.100%) | 78,859 → 11,788 (-85.052%) | 30 → 1 (-96.667%) | 104,935 → 6,747 (-93.570%) |
+| continuous | small | PARTIAL → PASS | 106,822 → 50,895 (-52.355%) | 11,078 → 9,679 (-12.629%) | 7 → 1 (-85.714%) | 5,534 → 2,767 (-50.000%) |
+| continuous | large | FAIL → PASS | 356,748 → 69,655 (-80.475%) | 44,684 → 18,455 (-58.699%) | 16 → 1 (-93.750%) | 92,379 → 6,747 (-92.696%) |
+| **All four** | **both** | **0/2/2 → 4/0/0 PASS/PARTIAL/FAIL** | **1,179,045 → 236,935 (-79.904%)** | **153,253 → 66,183 (-56.815%)** | **60 → 4 (-93.333%)** | **208,382 → 19,028 (-90.869%)** |
+
+The uncached-plus-output count for one-shot small rises in this single rerun
+because substantially less prompt input hit the native cache; raw native tokens
+still fall by 50.719%, and no correctness or call-count trade was made. Across
+all four cells, total MCP query time falls 30.238% (43,328.8 → 30,227.1 ms)
+and measured wall time falls 65.912% (345,896.3 → 117,909.1 ms). Individual
+semantic queries remain slower on both small cells and on continuous large;
+these descriptive one-run timings have no variance estimate.
+
+The bounded final candidate therefore satisfies the pre-registered criterion
+without relying on the preliminary run: all four formerly weak T01 cells are
+exact, output is fail-closed and capped, raw native tokens fall 79.904%, and
+completed evidence calls fall from 60 to 4. This closes only the r176
+multi-hop-caller finding. It neither rewrites the historical r176 aggregate
+nor claims a result for the intentionally unrerun T02–T04 categories.
