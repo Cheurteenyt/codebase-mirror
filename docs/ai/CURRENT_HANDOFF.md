@@ -10,10 +10,10 @@ status: ACTIVE
 repository: Cheurteenyt/codebase-mirror
 branch: v2/r177-multihop-callers
 base_sha: 29101436e64113815b5a8223ab0a4b1e7bab3ebb
-last_completed_code_sha: 29101436e64113815b5a8223ab0a4b1e7bab3ebb
+last_completed_code_sha: 9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-21T04:24:00Z
+updated_at_utc: 2026-07-21T21:04:56Z
 implementer_role: codex
 ```
 
@@ -44,7 +44,7 @@ implementer_role: codex
 
 | Finding | Audit source | Decision | Evidence or reason | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------------|----------|--------------------|------------------------|-----------------|-------------------|------------------|
-| R177-B01-F001 | `docs/performance/benchmarks/structural-correctness-baseline-2026-07-21/per-task.md` | ACCEPTED | r176 records V2 PARTIAL for both `small/T01` modes and FAIL for both `large/T01` modes; exact local mechanism still pending reproduction | pending | pending | pending | NOT_STARTED |
+| R177-B01-F001 | `docs/performance/benchmarks/structural-correctness-baseline-2026-07-21/per-task.md` | IMPLEMENTED | r176 records V2 PARTIAL for both `small/T01` modes and FAIL for both `large/T01` modes; exact root cause and pinned-source reproduction are recorded below | `9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc` | `v2/tests/mcp/exact-source-lookup.test.ts` | pending | DECLARED_LOCAL |
 
 ## Root-cause diagnosis recorded before product changes
 
@@ -107,11 +107,33 @@ therefore provide one identity-aware reverse traversal behind the existing
 tool, while retaining the depth-one default so T02-T04 and existing direct
 caller behavior are not changed.
 
+## Implemented correction
+
+Commit `9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc` adds an optional
+`max_depth` parameter to the existing `lookup_source_text.direct_callers`
+operation. Depth one follows the old database-backed path and preserves its
+response byte-for-byte. Depths two through eight lazily load an independently
+bounded TypeScript semantic analysis, resolve the exact graph-selected target
+declaration, and walk reverse call identities breadth-first. The result
+includes deterministic `transitive_callers` and copy-ready
+`formatted_callers`; it excludes repository tests by default while retaining
+production directories such as `src/mcp/test`.
+
+The semantic path fixes all three reproduced loss mechanisms without changing
+the indexer, the seven-tool product contract, forward `call_chain`, or
+unrelated lookup modes. Its runtime dependency is explicit, its source scan is
+confined to graph-owned paths under the canonical repository root, and its
+file-count, per-file, and total-byte budgets fail closed through incomplete
+reasons. The TypeScript compiler module is dynamically imported only when
+`max_depth > 1`, so ordinary MCP startup and all depth-one requests retain the
+prior loading cost.
+
 ## Pushed checkpoints
 
 | Code SHA | CI head SHA | Findings | Summary | Local validation | GitHub run |
 |----------|-------------|----------|---------|------------------|------------|
 | `29101436e64113815b5a8223ab0a4b1e7bab3ebb` | pending | R177-B01-F001 | Initialize a bounded R177 diagnosis and resolve the apparent T05-T08 corpus gap | corpus and artifact inventory verified locally | pending |
+| `9bcb3a65b9ba6bb2949e03120a512ff7d454bbfc` | pending | R177-B01-F001 | Add identity-aware reverse multi-hop traversal behind optional `direct_callers.max_depth` while preserving the depth-one contract | targeted regression 13/13, MCP suite 44/44, typecheck, backend build, pinned small 8/8 and large 23/23 oracle smoke | pending |
 
 ## Exact validation evidence
 
@@ -131,6 +153,33 @@ environment: Windows PowerShell, XDG_CACHE_HOME=D:/Mycodex/benchmark-state/v2-r1
 exit_code: 0
 result_summary: reproduced false-complete empty intra-file hops on both targets, bare-name ambiguity on Playwright, and anonymous-owner loss for finalizeMembership
 not_run: no product code or regression test has been written yet
+```
+
+```text
+command: npx vitest run tests/mcp/exact-source-lookup.test.ts; npm run typecheck; npm run build; npx vitest run tests/mcp
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows PowerShell, Node.js repository checkout
+exit_code: 0
+result_summary: targeted regression 13/13, MCP tests 44/44, TypeScript typecheck and backend build all pass
+not_run: exact four-cell agent benchmark, package build, and GitHub CI remain pending
+```
+
+```text
+command: invoke updated source MCP direct_callers(max_depth=5, include_tests=false) against the pinned small and large r176 databases
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows PowerShell, XDG_CACHE_HOME=D:/Mycodex/benchmark-state/v2-r173-final
+exit_code: 0
+result_summary: deterministic semantic output matches all 8/8 small and 23/23 large pre-registered production callers, including intra-file, arrow-function, and overloaded-symbol branches
+not_run: this is a mechanism smoke, not the required one-shot/continuous Codex benchmark
+```
+
+```text
+command: npm run docs:check
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows PowerShell, Node.js repository checkout
+exit_code: 0
+result_summary: documentation validator passes for 58 Markdown files; all 48 required docs are reachable and all 8 structural questions/references match the canonical protocol
+not_run: package build and GitHub CI remain pending
 ```
 
 ## Reset recovery
@@ -158,14 +207,13 @@ node scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs
 
 ## Current working state
 
-- **Last completed finding:** Part 1 corpus-gap resolution and pre-fix root-cause diagnosis.
+- **Last completed finding:** R177-B01-F001 implementation checkpoint.
 - **Current finding:** R177-B01-F001 multi-hop caller completeness.
-- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` until this diagnosis checkpoint is pushed.
-- **Unpushed commits expected:** `0` before the diagnosis handoff commit.
+- **Dirty files expected:** `docs/ai/CURRENT_HANDOFF.md` and its portal link in `docs/README.md` until this implementation checkpoint is pushed.
+- **Unpushed commits expected:** the code checkpoint and its handoff commit until both are pushed together.
 - **Known blocker:** none.
-- **Single next action:** add a focused failing regression for an optional
-  identity-aware multi-hop mode without changing the depth-one direct-caller
-  default.
+- **Single next action:** pre-register and run the exact four-cell small/large,
+  one-shot/continuous T01 benchmark with the existing r176 pipeline.
 
 ## Security confirmation
 

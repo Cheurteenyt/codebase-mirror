@@ -86,6 +86,7 @@ finding.
 
 Templates and reset-recovery material live in the
 [AI handoff guide](ai/README.md),
+[active implementation handoff](ai/CURRENT_HANDOFF.md),
 [audit report template](templates/AI_AUDIT_REPORT_TEMPLATE.md), and
 [GLM handoff template](templates/GLM_HANDOFF_TEMPLATE.md). They support the
 operational protocol; they are not product references.
