@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "id": "small",
+      "repository": "Cheurteenyt/codebase-mirror",
+      "sha": "5915e0624ed4376611fdc1f824d1d65a327c4a2f",
+      "checkout": "D:/Mycodex/benchmark-targets/codebase-mirror-5915e06",
+      "v1_project": "D-Mycodex-benchmark-targets-codebase-mirror-5915e06",
+      "v2_project": "truth-small-v2-5915e06",
+      "tasks": [
+        {
+          "id": "T01",
+          "question": "Return the exact seven MCP tool names registered by `v2/src/mcp/tools/index.ts`, sorted lexicographically, as a JSON string array.",
+          "answer_format": "json",
+          "answer": ["create_human_note", "get_module_context", "get_project_overview", "get_undocumented_hotspots", "link_note_to_code_node", "prepare_edit_context", "search_code_and_memory"]
+        },
+        {
+          "id": "T02",
+          "question": "Return the repository-relative definition path and 1-based start line of the exported interface `ArchitectureDomainDependencySummary`, formatted as `path:line`.",
+          "answer_format": "text",
+          "answer": "v2/src/bridge/sqlite-ro.ts:109"
+        },
+        {
+          "id": "T03",
+          "question": "Return the repository-relative definition path and 1-based start line of `GraphScopeSelection`, formatted as `path:line`.",
+          "answer_format": "text",
+          "answer": "graph-ui/src/components/GraphCanvas.tsx:61"
+        },
+        {
+          "id": "T04",
+          "question": "Return every exported async function in `v2/src/ui/routes/graph.ts` whose name starts with `route`, sorted lexicographically, as a JSON string array.",
+          "answer_format": "json",
+          "answer": ["routeDashboard", "routeGraphStatus", "routeLayout", "routeNeighborhood", "routeNodeSearch", "routePath", "routeScope"]
+        },
+        {
+          "id": "T05",
+          "question": "Return the values of the five dependency-atlas layout constants as one JSON object with keys in the order shown: `DEPENDENCY_ATLAS_MAX_DOMAINS`, `DEPENDENCY_ATLAS_MIN_RADIUS`, `DEPENDENCY_ATLAS_RADIUS_RANGE`, `DEPENDENCY_ATLAS_GAP`, and `DOMAIN_SPIRAL_STEP`.",
+          "answer_format": "json",
+          "answer": {"DEPENDENCY_ATLAS_MAX_DOMAINS": 12, "DEPENDENCY_ATLAS_MIN_RADIUS": 72, "DEPENDENCY_ATLAS_RADIUS_RANGE": 150, "DEPENDENCY_ATLAS_GAP": 92, "DOMAIN_SPIRAL_STEP": 80}
+        },
+        {
+          "id": "T06",
+          "question": "Find the two production TS/TSX occurrences that render the phrases `Dependency atlas:` and `exact cross-domain relations`. Return their repository-relative `path:line` values sorted lexicographically as a JSON string array. Exclude tests.",
+          "answer_format": "json",
+          "answer": ["graph-ui/src/components/GraphCanvas.tsx:3689", "graph-ui/src/components/GraphTab.tsx:1035"]
+        },
+        {
+          "id": "T07",
+          "question": "Find the only production call to `listArchitectureDomainDependencies`. Return the enclosing caller function and call-site `path:line`, formatted as `function@path:line`.",
+          "answer_format": "text",
+          "answer": "routeLayout@v2/src/ui/routes/graph.ts:651"
+        },
+        {
+          "id": "T08",
+          "question": "Trace the dependency-atlas path from the `GET /api/layout` route table entry to the shared circle-packing function. Return this exact four-step ordered chain, using route-entry or function definition locations and the format `name@path:line -> ...`. Do not add anonymous-lambda steps.",
+          "answer_format": "chain",
+          "answer": ["GET /api/layout@v2/src/ui/server.ts:140", "routeLayout@v2/src/ui/routes/graph.ts:631", "buildDependencyAtlas@v2/src/ui/routes/graph.ts:366", "packGraphCircles@v2/src/graph-layout-primitives.ts:23"]
+        },
+        {
+          "id": "T09",
+          "question": "Return every production function that directly calls `packGraphCircles`, with its number of static call sites, plus the total call sites. Sort callers lexicographically. Use this JSON shape: `{\"callers\":{\"name\":count},\"total_call_sites\":number}`.",
+          "answer_format": "json",
+          "answer": {"callers": {"buildDependencyAtlas": 1, "buildExactScopeLayout": 2, "buildStructuredOverview": 2}, "total_call_sites": 5}
+        },
+        {
+          "id": "T10",
+          "question": "If the `GraphData.layout.dependency_atlas` contract changes, return the exact sorted set of production TS/TSX files that directly define, read, or write the `dependency_atlas` identifier. Exclude tests. Return a JSON string array.",
+          "answer_format": "json",
+          "answer": ["graph-ui/src/components/FilterPanel.tsx", "graph-ui/src/components/GraphCanvas.tsx", "graph-ui/src/components/GraphTab.tsx", "graph-ui/src/lib/types.ts", "v2/src/ui/routes/graph.ts"]
+        },
+        {
+          "id": "T11",
+          "question": "Return the exact sorted set of production classes under `v2/src/mcp/tools` that directly extend `BaseTool`, as a JSON string array.",
+          "answer_format": "json",
+          "answer": ["CreateHumanNoteTool", "GetModuleContextTool", "GetProjectOverviewTool", "GetUndocumentedHotspotsTool", "LinkNoteToCodeNodeTool", "PrepareEditContextTool", "SearchCodeAndMemoryTool"]
+        },
+        {
+          "id": "T12",
+          "question": "Return every top-level directory tracked at the target commit, excluding `.git`, sorted lexicographically, as a JSON string array.",
+          "answer_format": "json",
+          "answer": [".github", "docs", "graph-ui", "scripts", "v1-reference", "v2"]
+        }
+      ]
+    },
+    {
+      "id": "large",
+      "repository": "microsoft/playwright",
+      "sha": "ef3a5830f960c00018f810cebf26133b35ec2b6f",
+      "checkout": "D:/Mycodex/benchmark-targets/playwright-ef3a583",
+      "v1_project": "D-Mycodex-benchmark-targets-playwright-ef3a583",
+      "v2_project": "truth-large-v2-ef3a583",
+      "tasks": [
+        {
+          "id": "T01",
+          "question": "Return the exact seven CLI command names registered by the local `add*Command` helpers in `packages/playwright/src/program.ts`. Strip positional argument suffixes such as `[report]`, include hidden commands, sort lexicographically, and return a JSON string array.",
+          "answer_format": "json",
+          "answer": ["clear-cache", "init-agents", "merge-reports", "run-test-mcp-server", "show-report", "test", "test-server"]
+        },
+        {
+          "id": "T02",
+          "question": "Return the repository-relative definition path and 1-based start line of the exported interface `BrowserServerLauncher`, formatted as `path:line`.",
+          "answer_format": "text",
+          "answer": "packages/playwright-core/src/client/browserType.ts:35"
+        },
+        {
+          "id": "T03",
+          "question": "Return the repository-relative definition path and 1-based start line of the exported interface `ActionListProps`, formatted as `path:line`.",
+          "answer_format": "text",
+          "answer": "packages/trace-viewer/src/ui/actionList.tsx:33"
+        },
+        {
+          "id": "T04",
+          "question": "Return every exported async function declared in `packages/playwright-core/src/cli/installActions.ts`, sorted lexicographically, as a JSON string array.",
+          "answer_format": "json",
+          "answer": ["installBrowsers", "installDeps", "markDockerImage", "uninstallBrowsers"]
+        },
+        {
+          "id": "T05",
+          "question": "Return the values of these five production constants as one JSON object with keys in the order shown: `minimumMajorNodeVersion`, `defaultExpectTimeout`, `GIT_OPERATIONS_TIMEOUT_MS`, `DEFAULT_TTY_WIDTH`, and `DEFAULT_TTY_HEIGHT`.",
+          "answer_format": "json",
+          "answer": {"minimumMajorNodeVersion": 20, "defaultExpectTimeout": 5000, "GIT_OPERATIONS_TIMEOUT_MS": 3000, "DEFAULT_TTY_WIDTH": 100, "DEFAULT_TTY_HEIGHT": 40}
+        },
+        {
+          "id": "T06",
+          "question": "Find the two production TS/TSX occurrences that render the exact phrases `Open snapshot in a new tab` and `Network requests`. Return their repository-relative `path:line` values sorted lexicographically as a JSON string array. Exclude tests.",
+          "answer_format": "json",
+          "answer": ["packages/trace-viewer/src/ui/networkTab.tsx:100", "packages/trace-viewer/src/ui/snapshotTab.tsx:86"]
+        },
+        {
+          "id": "T07",
+          "question": "Find the only production call to `runAllTestsWithConfig`. Return the enclosing caller function and call-site `path:line`, formatted as `function@path:line`.",
+          "answer_format": "text",
+          "answer": "runTests@packages/playwright/src/cli/testActions.ts:89"
+        },
+        {
+          "id": "T08",
+          "question": "Trace the normal non-UI, non-watch execution path from the Playwright `test` CLI command registration to the shared task executor. Return this exact four-step ordered chain, using the command registration and function definition locations with the format `name@path:line -> ...`. Do not add the anonymous Commander action callback.",
+          "answer_format": "chain",
+          "answer": ["test command@packages/playwright/src/program.ts:41", "runTests@packages/playwright/src/cli/testActions.ts:28", "runAllTestsWithConfig@packages/playwright/src/runner/testRunner.ts:445", "runTasks@packages/playwright/src/runner/tasks.ts:123"]
+        },
+        {
+          "id": "T09",
+          "question": "Return every production function or method that directly calls `runTasks`, with its number of static call sites, plus the total call sites. Sort callers lexicographically. Use this JSON shape: `{\"callers\":{\"name\":count},\"total_call_sites\":number}`.",
+          "answer_format": "json",
+          "answer": {"callers": {"_innerListTests": 1, "_innerRunTests": 1, "clearCache": 1, "findRelatedTestFiles": 1, "listFiles": 1, "runAllTestsWithConfig": 1}, "total_call_sites": 6}
+        },
+        {
+          "id": "T10",
+          "question": "If the `TraceViewerServerOptions` contract changes, return the exact sorted set of production TS files that directly define, import, or reference that identifier. Exclude tests. Return a JSON string array.",
+          "answer_format": "json",
+          "answer": ["packages/playwright-core/src/cli/program.ts", "packages/playwright-core/src/server/index.ts", "packages/playwright-core/src/server/trace/viewer/traceViewer.ts", "packages/playwright/src/runner/testServer.ts"]
+        },
+        {
+          "id": "T11",
+          "question": "Return the exact sorted set of production classes under `packages/playwright/src/reporters` that directly extend `TerminalReporter`, as a JSON string array.",
+          "answer_format": "json",
+          "answer": ["DotReporter", "GitHubReporter", "LineReporter", "ListReporter"]
+        },
+        {
+          "id": "T12",
+          "question": "Return every top-level directory tracked at the target commit, excluding `.git`, sorted lexicographically, as a JSON string array.",
+          "answer_format": "json",
+          "answer": [".azure-pipelines", ".claude", ".github", "browser_patches", "docs", "examples", "packages", "tests", "utils"]
+        }
+      ]
+    }
+  ]
+}

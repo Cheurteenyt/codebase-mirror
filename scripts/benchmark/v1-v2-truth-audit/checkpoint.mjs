@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 function parseArgs(argv) {
@@ -94,6 +95,11 @@ function fixed(value, digits = 3) {
   return Number(value).toFixed(digits);
 }
 
+function ratio(numerator, denominator) {
+  if (numerator == null || denominator == null || Number(denominator) === 0) return 'n/a';
+  return fixed(Number(numerator) / Number(denominator));
+}
+
 function aggregateTable(aggregates) {
   const lines = [
     '| Usage | Target | Arm | Raw tokens | Uncached + output | Calls | Response bytes | Query ms | PASS/PARTIAL/FAIL |',
@@ -119,24 +125,35 @@ function ratioTable(aggregates) {
   }
   for (const [key, group] of groups) {
     const [mode, target] = key.split('\0');
-    lines.push(`| ${mode} | ${target} | ${fixed(group.B.raw_total_tokens / group.A.raw_total_tokens)} | ${fixed(group.A.raw_total_tokens / group.C.raw_total_tokens)} | ${fixed(group.B.raw_total_tokens / group.C.raw_total_tokens)} | ${fixed(group.D.raw_total_tokens / group.C.raw_total_tokens)} | ${fixed(group.B.tool_calls / group.A.tool_calls)} | ${fixed(group.D.tool_calls / group.C.tool_calls)} |`);
+    lines.push(`| ${mode} | ${target} | ${ratio(group.B?.raw_total_tokens, group.A?.raw_total_tokens)} | ${ratio(group.A?.raw_total_tokens, group.C?.raw_total_tokens)} | ${ratio(group.B?.raw_total_tokens, group.C?.raw_total_tokens)} | ${ratio(group.D?.raw_total_tokens, group.C?.raw_total_tokens)} | ${ratio(group.B?.tool_calls, group.A?.tool_calls)} | ${ratio(group.D?.tool_calls, group.C?.tool_calls)} |`);
   }
   return lines.join('\n');
 }
 
-function perTaskTables(runs, phase) {
+function perTaskTables(runs, title) {
+  const conditionOrder = ['A', 'B', 'C', 'D'];
+  const conditions = conditionOrder.filter((condition) => runs.some((run) => run.condition === condition));
+  const conditionNames = new Map([
+    ['A', 'v1-mcp'],
+    ['B', 'v2-mcp'],
+    ['C', 'grep-read'],
+    ['D', 'hybrid'],
+  ]);
+  const modes = ['one-shot', 'continuous'].filter((mode) => runs.some((run) => run.mode === mode));
+  const targets = ['small', 'large'].filter((target) => runs.some((run) => run.target === target));
   const lines = [
-    `# V1/V2 token-truth ${phase}: complete selected per-task tables`,
+    `# ${title}: complete selected per-task tables`,
     '',
     'Each arm cell is `raw native tokens / completed calls / response bytes / grade / validity`.',
     'The committed CSV beside this file is the canonical machine-readable table and retains every registered attribution field.',
   ];
-  for (const mode of ['one-shot', 'continuous']) {
-    for (const target of ['small', 'large']) {
-      lines.push('', `## ${mode} — ${target}`, '', '| Task | A: V1 MCP | B: V2 MCP | C: grep/read | D: hybrid |', '|---|---:|---:|---:|---:|');
-      for (let taskNumber = 1; taskNumber <= 12; taskNumber += 1) {
-        const task = `T${String(taskNumber).padStart(2, '0')}`;
-        const cells = ['A', 'B', 'C', 'D'].map((condition) => {
+  for (const mode of modes) {
+    for (const target of targets) {
+      const tasks = [...new Set(runs.filter((run) => run.mode === mode && run.target === target).map((run) => run.task))].sort();
+      const header = `| Task | ${conditions.map((condition) => `${condition}: ${conditionNames.get(condition)}`).join(' | ')} |`;
+      lines.push('', `## ${mode} — ${target}`, '', header, `|---|${conditions.map(() => '---:').join('|')}|`);
+      for (const task of tasks) {
+        const cells = conditions.map((condition) => {
           const run = runs.find((item) => item.mode === mode && item.target === target && item.task === task && item.condition === condition);
           if (!run) return 'missing';
           return `${comma(run.raw_total_tokens)} / ${run.tool_calls} / ${comma(run.tool_response_bytes)} / ${run.grade} / ${run.valid === 'true' ? 'valid' : `INVALID a${run.attempt}`}`;
@@ -196,8 +213,9 @@ async function main() {
   const runs = parseCsv(csv);
   const summary = JSON.parse(readFileSync(summaryPath, 'utf8'));
   const manifest = await rawManifest(resultsRoot, phase);
+  const title = options.title ?? `V1/V2 token-truth ${phase}`;
   const markdown = [
-    `# V1/V2 token-truth ${phase} checkpoint`,
+    `# ${title} checkpoint`,
     '',
     `Selected cells: **${summary.selected_runs.length}**. Selected invalid cells: **${runs.filter((run) => run.valid !== 'true').length}**.`,
     '',
@@ -211,7 +229,7 @@ async function main() {
   ].join('\n');
 
   writeNew(resolve(outputDir, 'aggregate-and-ratios.md'), `${markdown}\n`, options.force);
-  writeNew(resolve(outputDir, 'per-task.md'), perTaskTables(runs, phase), options.force);
+  writeNew(resolve(outputDir, 'per-task.md'), perTaskTables(runs, title), options.force);
   writeNew(resolve(outputDir, 'selected-runs.csv'), csv, options.force);
   writeNew(resolve(outputDir, 'raw-artifact-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, options.force);
   console.log(JSON.stringify({
@@ -223,7 +241,11 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exitCode = 1;
-});
+export { perTaskTables, ratioTable };
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exitCode = 1;
+  });
+}
