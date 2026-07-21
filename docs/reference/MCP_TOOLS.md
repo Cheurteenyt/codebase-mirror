@@ -2,7 +2,7 @@
 
 > **Status:** Canonical MCP contract reference
 > **Audience:** MCP integrators, agent authors, users, and maintainers
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-20
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-21
 
 V2 exposes **8 MCP tools** via JSON-RPC 2.0 over stdio. This document describes each tool's input, output, and usage.
 
@@ -262,9 +262,10 @@ shortened by `limit`.
 ### 7. `lookup_source_text`
 
 **Purpose**: One bounded gateway for exact source truth. It preserves literal
-lookup and adds server-side direct-caller aggregation and top-level inventory,
-avoiding repeated search/read loops without adding a ninth MCP schema. It is
-not a regex engine, shell proxy, or broad composite search.
+lookup and adds server-side direct- and multi-hop caller analysis, top-level
+inventory, and route/CLI call chains, avoiding repeated search/read loops
+without adding a ninth MCP schema. It is not a regex engine, shell proxy, or
+broad composite search.
 
 **Input**:
 ```json
@@ -332,6 +333,38 @@ collapsed like graph edges. Nested anonymous callbacks roll up to their nearest
 named owner. Missing/stale call-site metadata, duplicate target symbols,
 duplicate caller names, and caps make `complete` false rather than silently
 claiming an exhaustive answer. Tests are excluded by default.
+
+For exhaustive reverse impact beyond one edge, keep the same operation and
+set a depth from 2 to 8:
+
+```json
+{
+  "operation": "direct_callers",
+  "symbol": "runTasks",
+  "max_depth": 5,
+  "include_tests": false,
+  "max_callers": 200
+}
+```
+
+This optional profile resolves the graph-selected target at its exact source
+declaration, loads a bounded TypeScript/JavaScript semantic program lazily,
+and follows canonical symbol identities in reverse. It covers cross-file and
+intra-file calls, variable-assigned arrows, and overloaded names without
+pooling unrelated declarations. The response adds deterministic
+`transitive_callers` records (`depth`, `name`, `path`, `definition_line`) and
+copy-ready `formatted_callers` strings. Depth is the shortest reverse path.
+
+`max_callers` bounds both direct and transitive output to `1..1000` (default
+200). Transitive truncation sets `transitive_callers_truncated=true`,
+`complete=false`, and adds `transitive_callers_truncated` to
+`incomplete_reasons`. The semantic scan is independently capped at 20,000
+graph-owned source paths, 4 MiB per file, and 128 MiB total; unsafe,
+unreadable, oversized, over-budget, missing, or ambiguous inputs likewise fail
+closed. Repository tests are excluded by default, but product directories
+named `src/.../test` remain production. Omitting `max_depth`, or setting it to
+1, retains the original persistent direct-caller response contract and does
+not load the TypeScript compiler.
 
 For exact tracked repository inventory:
 

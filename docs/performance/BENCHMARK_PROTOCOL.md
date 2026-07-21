@@ -1421,3 +1421,76 @@ response bytes, and aggregate deltas. Lower tokens or calls do not compensate
 for an inexact answer; a non-PASS cell leaves the finding open. Results and the
 exact pushed pre-registration SHA are appended only after this section is
 committed and pushed before the first measured process starts.
+
+### 15.3 Executed result and integrity
+
+The pushed pre-registration head was
+`d2dc7102500aded2857cda54cfddbda393e62cb1`; all four measured processes
+started afterward. They used Codex CLI `0.144.4`, the exact candidate and
+pinned state declared above, and attempt 1. All **4/4 selected cells are
+valid**. Every answer exactly equals its independent TypeScript-oracle array,
+every tool sequence is the single call `mcp:lookup_source_text`, exploratory
+calls are zero, and there are no forbidden operations or invalid-run records.
+Both continuous artifacts report zero prior observed context bytes and no
+T02–T04 artifact exists.
+
+The canonical checkpoint is
+[`multihop-caller-correction-2026-07-21`](benchmarks/multihop-caller-correction-2026-07-21/aggregate-and-ratios.md).
+Its [selected-run CSV](benchmarks/multihop-caller-correction-2026-07-21/selected-runs.csv),
+[per-task table](benchmarks/multihop-caller-correction-2026-07-21/per-task.md),
+and [raw manifest](benchmarks/multihop-caller-correction-2026-07-21/raw-artifact-manifest.json)
+retain the native accounting and artifact hashes. The manifest covers 20 raw
+artifacts (54,574 bytes) under the external r177 result root, with tree
+SHA-256
+`63f5cc436719788f3aec814123b67316c1db82bad1a11e9d7fe2296a284f8dce`.
+
+### 15.4 Before/after grades and accounting
+
+Each cell improved to `PASS` while reducing native tokens and completed calls:
+
+| Usage | Target | Grade before → after | Raw tokens before → after | Uncached + output before → after | Calls before → after | Response bytes before → after |
+|---|---|---|---:|---:|---:|---:|
+| one-shot | small | PARTIAL → PASS | 100,040 → 48,593 (-51.426%) | 18,632 → 9,425 (-49.415%) | 7 → 1 (-85.714%) | 5,534 → 2,728 (-50.705%) |
+| one-shot | large | FAIL → PASS | 615,435 → 83,620 (-86.413%) | 78,859 → 12,196 (-84.534%) | 30 → 1 (-96.667%) | 104,935 → 6,708 (-93.607%) |
+| continuous | small | PARTIAL → PASS | 106,822 → 50,912 (-52.339%) | 11,078 → 9,696 (-12.475%) | 7 → 1 (-85.714%) | 5,534 → 2,728 (-50.705%) |
+| continuous | large | FAIL → PASS | 356,748 → 69,555 (-80.503%) | 44,684 → 12,211 (-72.673%) | 16 → 1 (-93.750%) | 92,379 → 6,708 (-92.739%) |
+| **All four** | **both** | **0/2/2 → 4/0/0 PASS/PARTIAL/FAIL** | **1,179,045 → 252,680 (-78.569%)** | **153,253 → 43,528 (-71.597%)** | **60 → 4 (-93.333%)** | **208,382 → 18,872 (-90.944%)** |
+
+The semantic compiler makes each small-target MCP query slower in isolation
+(1,696.8 → 3,261.2 ms one-shot and 1,618.7 → 2,974.5 ms continuous), and the
+large continuous query rises modestly (10,250.7 → 11,246.0 ms). This is the
+explicit cost of identity-aware completeness. The removal of repeated,
+lossy exploration nevertheless lowers total MCP query time across the four
+cells by 33.963% (43,328.8 → 28,613.0 ms) and measured end-to-end wall time by
+67.599% (345,896.3 → 112,075.3 ms). These one-run latency observations have no
+variance estimate and are not generalized beyond the two pinned targets.
+
+The first candidate satisfies the accuracy criterion and demonstrates the
+intended one-call mechanism. A post-measure implementation review then found
+that `max_callers` bounded the legacy direct list but not the new transitive
+array. Although the measured targets return only 8 and 23 callers, a large
+pathological graph could produce an unnecessarily large MCP response. The
+first artifacts remain valid evidence for code commit `9bcb3a6`, but they are
+not treated as final-candidate evidence after that safety finding.
+
+### 15.5 Final bounded-candidate pre-registration
+
+Commit `e4834d7b3f1a95d3616d71cafed4a8b493659d2b` applies the existing
+`max_callers` limit to transitive records, returns a deterministic prefix, and
+sets `transitive_callers_truncated=true`, `complete=false`, plus the explicit
+incomplete reason when capped. The regression covers both the uncapped and
+capped paths. This does not change either oracle array, but it changes the
+candidate and response schema bytes, so the four-cell result above will not be
+silently reused.
+
+The final rerun uses the exact Section 15.2 order, tasks, condition, targets,
+model, reasoning, state, validity rules, and attempt policy. Its fresh external
+root is
+`D:/Mycodex/benchmark-results/r177-multihop-callers-bounded-final`, phase
+`postfix`; its checkpoint destination is
+`docs/performance/benchmarks/multihop-caller-correction-final-2026-07-21`.
+Success again requires 4/4 valid mechanical `PASS` answers. The original 20
+raw artifacts and preliminary checkpoint remain immutable and disclosed.
+Final results and the exact pushed pre-registration head will be appended only
+after this subsection, the bounded code, canonical MCP reference, and first
+checkpoint are committed and pushed before the first final-candidate process.

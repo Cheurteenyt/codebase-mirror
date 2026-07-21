@@ -2,7 +2,7 @@
 
 > **Status:** Canonical claim-boundary reference
 > **Audience:** Users, integrators, maintainers, and auditors
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-20
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-21
 >
 > Updated 2026-07-07 for version 0.15.9.
 >
@@ -155,8 +155,9 @@ For a team of 10 developers: **~$41/month, ~$492/year**.
 2. **Use graph tools for call relationships, blast radius, architecture, and human memory** when the graph can answer directly and completely.
 3. **Do not call `get_project_overview` automatically** — call it when project health, freshness, or broad architecture is part of the question.
 4. **Use `lookup_source_text` for bounded exact lookups in MCP-only workflows** — batch up to 10 exact strings and inspect its coverage metadata.
-5. **Use `prepare_edit_context` when an edit needs blast-radius, risk, or human-memory context**, not as unconditional startup overhead.
-6. **Do not duplicate MCP and source evidence** unless completeness is uncertain or verification is necessary.
-7. **Use `search_code_and_memory` for exploration** — it combines graph and memory search but does not replace arbitrary source-text search.
-8. **Check freshness and completeness fields** before treating an answer as exhaustive; reindex or verify source when coverage is incomplete.
+5. **For exhaustive reverse caller impact, make one `direct_callers` request with `max_depth` and copy `formatted_callers`** instead of recursively searching bare names.
+6. **Use `prepare_edit_context` when an edit needs blast-radius, risk, or human-memory context**, not as unconditional startup overhead.
+7. **Do not duplicate MCP and source evidence** unless completeness is uncertain or verification is necessary.
+8. **Use `search_code_and_memory` for exploration** — it combines graph and memory search but does not replace arbitrary source-text search.
+9. **Check freshness and completeness fields** before treating an answer as exhaustive; reindex or verify source when coverage is incomplete.
 
