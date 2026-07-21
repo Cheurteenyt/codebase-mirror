@@ -1072,10 +1072,11 @@ specification is `scripts/benchmark/v1-v2-truth-audit/tasks.json`.
 Reference answers are generated from the clean pinned checkouts by
 `scripts/benchmark/v1-v2-truth-audit/derive-structural-references.mjs`. The
 script loads Git-tracked TypeScript and TSX files with the repository's
-TypeScript compiler API, resolves aliases to canonical symbols, and never
-reads a Codebase Memory index or an evaluated agent answer. Production scope
-excludes `test`, `tests`, `__tests__`, `*.test.*`, `*.spec.*`, and
-`node_modules` paths.
+TypeScript compiler API, resolves aliases to canonical declaration identities,
+and never reads a Codebase Memory index or an evaluated agent answer.
+Production scope excludes `tests`, `__tests__`, non-`src` test directories,
+`*.test.*`, `*.spec.*`, and `node_modules`, while retaining real product code
+such as `packages/playwright/src/mcp/test`.
 
 The three derivation operators are fixed before measurement:
 
@@ -1102,7 +1103,7 @@ reproduce all eight registered arrays before and after the measured run.
 **Reference answer.**
 
 ```json
-["1|buildExactScopeLayout@v2/src/exact-scope-layout.ts:127","1|buildStructuredOverview@v2/src/ui/routes/graph.ts:213","1|buildDependencyAtlas@v2/src/ui/routes/graph.ts:366","2|getExactScopeMembership@v2/src/bridge/sqlite-ro.ts:1005","2|finalizeMembership@v2/src/bridge/sqlite-ro.ts:1036","2|getExactScopePage@v2/src/bridge/sqlite-ro.ts:1134","2|routeLayout@v2/src/ui/routes/graph.ts:631"]
+["1|buildExactScopeLayout@v2/src/exact-scope-layout.ts:127","1|buildStructuredOverview@v2/src/ui/routes/graph.ts:213","1|buildDependencyAtlas@v2/src/ui/routes/graph.ts:366","2|getExactScopeMembership@v2/src/bridge/sqlite-ro.ts:1005","2|finalizeMembership@v2/src/bridge/sqlite-ro.ts:1036","2|getExactScopePage@v2/src/bridge/sqlite-ro.ts:1134","2|routeLayout@v2/src/ui/routes/graph.ts:631","3|routeScope@v2/src/ui/routes/graph.ts:993"]
 ```
 
 #### T02 — shared-type transitive impact
@@ -1139,12 +1140,12 @@ reproduce all eight registered arrays before and after the measured run.
 
 #### T01 — multi-hop transitive impact
 
-**Question.** Starting at the production function `runTasks`, return every named production caller reachable in the reverse call graph within five edges under `packages/playwright/src`. For each caller, return its shortest hop depth and function-definition location as `depth|name@path:line`. Sort by depth, then path, line, and name. Return a JSON string array.
+**Question.** Starting at the production function `runTasks`, return every named production caller reachable in the reverse call graph within five edges under `packages/playwright/src`. For each caller, return its shortest hop depth and function-definition location as `depth|name@path:line`. Production scope includes `packages/playwright/src/mcp/test`; exclude `tests`, `__tests__`, non-`src` test directories, and `*.test.*` or `*.spec.*` files. Sort by depth, then path, line, and name. Return a JSON string array.
 
 **Reference answer.**
 
 ```json
-["1|clearCache@packages/playwright/src/runner/testRunner.ts:194","1|listFiles@packages/playwright/src/runner/testRunner.ts:206","1|_innerListTests@packages/playwright/src/runner/testRunner.ts:232","1|_innerRunTests@packages/playwright/src/runner/testRunner.ts:293","1|findRelatedTestFiles@packages/playwright/src/runner/testRunner.ts:363","1|runAllTestsWithConfig@packages/playwright/src/runner/testRunner.ts:445","2|runTests@packages/playwright/src/cli/testActions.ts:28","2|listTests@packages/playwright/src/runner/testRunner.ts:220","2|runTests@packages/playwright/src/runner/testRunner.ts:284","3|addTestCommand@packages/playwright/src/program.ts:40"]
+["1|clearCache@packages/playwright/src/runner/testRunner.ts:194","1|listFiles@packages/playwright/src/runner/testRunner.ts:206","1|_innerListTests@packages/playwright/src/runner/testRunner.ts:232","1|_innerRunTests@packages/playwright/src/runner/testRunner.ts:293","1|findRelatedTestFiles@packages/playwright/src/runner/testRunner.ts:363","1|runAllTestsWithConfig@packages/playwright/src/runner/testRunner.ts:445","2|runTests@packages/playwright/src/cli/testActions.ts:28","2|clearCache@packages/playwright/src/cli/testActions.ts:103","2|listTests@packages/playwright/src/runner/testRunner.ts:220","2|runTests@packages/playwright/src/runner/testRunner.ts:284","2|clearCache@packages/playwright/src/runner/testServer.ts:194","2|listFiles@packages/playwright/src/runner/testServer.ts:198","2|findRelatedTestFiles@packages/playwright/src/runner/testServer.ts:225","3|_runTestsImpl@packages/playwright/src/mcp/test/testContext.ts:208","3|handle@packages/playwright/src/mcp/test/testTools.ts:30","3|addTestCommand@packages/playwright/src/program.ts:40","3|addClearCacheCommand@packages/playwright/src/program.ts:80","3|listTests@packages/playwright/src/runner/testServer.ts:204","3|runTests@packages/playwright/src/runner/testServer.ts:210","4|runTestsWithGlobalSetupAndPossiblePause@packages/playwright/src/mcp/test/testContext.ts:204","5|runSeedTest@packages/playwright/src/mcp/test/testContext.ts:186","5|handle@packages/playwright/src/mcp/test/testTools.ts:50","5|handle@packages/playwright/src/mcp/test/testTools.ts:74"]
 ```
 
 #### T02 — shared type through aliases and re-exports
@@ -1154,7 +1155,7 @@ reproduce all eight registered arrays before and after the measured run.
 **Reference answer.**
 
 ```json
-["packages/playwright-ct-core/index.d.ts","packages/playwright-ct-core/src/viteUtils.ts","packages/playwright-ct-react/index.d.ts","packages/playwright-ct-react17/index.d.ts","packages/playwright-ct-vue/index.d.ts","packages/playwright/types/test.d.ts"]
+["packages/playwright-ct-core/index.d.ts","packages/playwright-ct-core/src/viteUtils.ts","packages/playwright-ct-react/index.d.ts","packages/playwright-ct-react17/index.d.ts","packages/playwright-ct-vue/index.d.ts","packages/playwright-test/index.d.ts","packages/playwright/test.d.ts","packages/playwright/types/test.d.ts"]
 ```
 
 #### T03 — alias-aware exhaustive call sites
@@ -1182,7 +1183,7 @@ reproduce all eight registered arrays before and after the measured run.
 The existing `scripts/benchmark/v1-v2-truth-audit/` pipeline is reused without
 a second harness: `verify-spec.mjs`, `run.mjs`, `summarize.mjs`,
 `proxy.mjs`, and `checkpoint.mjs`. Raw artifacts go to the new external root
-`D:/Mycodex/benchmark-results/r174-structural-correctness`; the immutable
+`D:/Mycodex/benchmark-results/r175-structural-correctness-final`; the immutable
 publication checkpoint goes to
 `docs/performance/benchmarks/structural-correctness-baseline-2026-07-21`.
 
@@ -1215,3 +1216,23 @@ classification. It will not infer dollar costs, generalize beyond these two
 pinned commits, or claim superiority when the grade evidence does not show it.
 The immutable pre-registration commit SHA and all measured results are added
 only after this section and `tasks.json` have been pushed before the first run.
+
+### 14.5 Invalid oracle-validation pilot
+
+Commit `466e661359cfe32305857a0a0f2266cf762ea791` was pushed before a 32-cell
+pilot in `D:/Mycodex/benchmark-results/r174-structural-correctness`. All cells
+were protocol-valid, but inspection of their disagreements exposed three
+independent defects in the reference derivation itself:
+
+- transient TypeScript symbol objects hid method callers such as
+  `routeScope` until symbols were keyed by canonical declaration identity;
+- bare `export *` declarations were not counted as type-contract re-exports;
+- the generic path filter incorrectly treated the product directory
+  `packages/playwright/src/mcp/test` as a test-only directory.
+
+Direct source inspection confirmed each defect. Consequently, the pilot's
+grades are invalid for product comparison and will not be pooled with the
+final result. Its raw artifacts remain immutable and disclosed. The corrected
+oracle adds a synthetic regression test covering production `src/.../test`
+callers and chained star re-exports. A new pushed pre-registration commit and a
+fresh r175 run are required before any comparative conclusion.

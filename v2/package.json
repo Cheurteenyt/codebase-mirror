@@ -16,7 +16,7 @@
     "pretest": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "docs:check": "node --test ../scripts/docs/validate-docs.test.mjs && node ../scripts/docs/validate-docs.mjs && node ../scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs",
+    "docs:check": "node --test ../scripts/docs/validate-docs.test.mjs ../scripts/benchmark/v1-v2-truth-audit/derive-structural-references.test.mjs && node ../scripts/docs/validate-docs.mjs && node ../scripts/benchmark/v1-v2-truth-audit/verify-spec.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.graph-ui-lab.json --noEmit",
     "prepublishOnly": "npm run typecheck && npm test",
     "bench:incremental": "tsx scripts/incremental-benchmark-r87.ts",

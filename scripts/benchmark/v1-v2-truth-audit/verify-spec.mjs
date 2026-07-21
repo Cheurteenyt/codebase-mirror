@@ -79,7 +79,7 @@ function verifySpecAgainstProtocol(candidate, sourceSets, expectedTaskCount, lab
 
 verifySpecAgainstProtocol(historicalSpec, historicalSourceSets, 12, 'historical-r173');
 verifySpecAgainstProtocol(spec, structuralSourceSets, 4, 'structural-correctness');
-assert.equal(spec.benchmark_id, 'structural-correctness-2026-07-21');
+assert.equal(spec.benchmark_id, 'structural-correctness-2026-07-21-r2');
 assert.equal(spec.reference_derivation?.script, 'scripts/benchmark/v1-v2-truth-audit/derive-structural-references.mjs');
 for (const target of spec.targets) {
   for (const task of target.tasks) {

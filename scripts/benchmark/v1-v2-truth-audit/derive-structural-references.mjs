@@ -44,7 +44,8 @@ function repositoryPath(checkout, path) {
 function isProductionPath(path) {
   const normalized = path.replaceAll('\\', '/');
   return !(
-    /(^|\/)(?:test|tests|__tests__)(\/|$)/.test(normalized)
+    /(^|\/)(?:tests|__tests__)(\/|$)/.test(normalized)
+    || (/(^|\/)test(\/|$)/.test(normalized) && !/(^|\/)src\/.*\/test(\/|$)/.test(normalized))
     || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(normalized)
     || /(^|\/)node_modules(\/|$)/.test(normalized)
   );
@@ -98,6 +99,31 @@ function symbolAt(checker, node) {
   return canonicalSymbol(checker, checker.getSymbolAtLocation(node));
 }
 
+function symbolKey(checker, symbol) {
+  const canonical = canonicalSymbol(checker, symbol);
+  if (!canonical) return null;
+  const roots = typeof checker.getRootSymbols === 'function' ? checker.getRootSymbols(canonical) : [];
+  const identitySymbols = roots.length ? roots : [canonical];
+  const declarations = identitySymbols.flatMap((identity) => (
+    identity.declarations ?? (identity.valueDeclaration ? [identity.valueDeclaration] : [])
+  ));
+  if (declarations.length) {
+    return declarations.map((declaration) => {
+      const source = declaration.getSourceFile();
+      return `${source.fileName.replaceAll('\\', '/')}:${declaration.pos}:${declaration.end}`;
+    }).sort().join('|');
+  }
+  return `synthetic:${canonical.flags}:${analysisSafeFullyQualifiedName(checker, canonical)}`;
+}
+
+function analysisSafeFullyQualifiedName(checker, symbol) {
+  try {
+    return checker.getFullyQualifiedName(symbol);
+  } catch {
+    return symbol.getName();
+  }
+}
+
 function declarationName(node) {
   return node.name && ts.isIdentifier(node.name) ? node.name : null;
 }
@@ -127,7 +153,7 @@ function targetSymbol(analysis, derivation) {
     ts.forEachChild(node, visit);
   }
   visit(source);
-  const unique = [...new Set(matches.filter(Boolean))];
+  const unique = [...new Map(matches.filter(Boolean).map((symbol) => [symbolKey(analysis.checker, symbol), symbol])).values()];
   if (unique.length !== 1) {
     throw new Error(`${derivation.declaration}#${derivation.symbol}: expected one symbol, found ${unique.length}`);
   }
@@ -200,12 +226,14 @@ function analyzeCalls(analysis, derivation) {
         const callee = calleeSymbol(analysis.checker, node.expression);
         const caller = namedCallableSymbol(analysis.checker, node);
         if (callee) {
+          const calleeKey = symbolKey(analysis.checker, callee);
           if (caller?.symbol) {
-            if (!reverse.has(callee)) reverse.set(callee, new Map());
-            reverse.get(callee).set(caller.symbol, caller);
+            const callerKey = symbolKey(analysis.checker, caller.symbol);
+            if (!reverse.has(calleeKey)) reverse.set(calleeKey, new Map());
+            reverse.get(calleeKey).set(callerKey, caller);
           }
-          if (!callSites.has(callee)) callSites.set(callee, []);
-          callSites.get(callee).push({ caller, call: node });
+          if (!callSites.has(calleeKey)) callSites.set(calleeKey, []);
+          callSites.get(calleeKey).push({ caller, call: node });
         }
       }
       ts.forEachChild(node, visit);
@@ -217,24 +245,25 @@ function analyzeCalls(analysis, derivation) {
 
 function transitiveCallers(analysis, derivation) {
   const origin = targetSymbol(analysis, derivation);
+  const originKey = symbolKey(analysis.checker, origin);
   const { reverse } = analyzeCalls(analysis, derivation);
-  const depths = new Map([[origin, 0]]);
+  const depths = new Map([[originKey, 0]]);
   const details = new Map();
-  const queue = [origin];
+  const queue = [originKey];
   while (queue.length) {
     const callee = queue.shift();
     const nextDepth = depths.get(callee) + 1;
-    for (const caller of reverse.get(callee)?.values() ?? []) {
-      if (!depths.has(caller.symbol) || nextDepth < depths.get(caller.symbol)) {
-        depths.set(caller.symbol, nextDepth);
-        details.set(caller.symbol, caller);
-        queue.push(caller.symbol);
+    for (const [callerKey, caller] of reverse.get(callee)?.entries() ?? []) {
+      if (!depths.has(callerKey) || nextDepth < depths.get(callerKey)) {
+        depths.set(callerKey, nextDepth);
+        details.set(callerKey, caller);
+        queue.push(callerKey);
       }
     }
   }
-  const rows = [...details.entries()].map(([symbol, detail]) => {
+  const rows = [...details.entries()].map(([key, detail]) => {
     const location = sourceLocation(analysis.target, detail.declaration);
-    return { depth: depths.get(symbol), name: detail.name, ...location };
+    return { depth: depths.get(key), name: detail.name, ...location };
   }).filter((row) => row.depth <= (derivation.max_depth ?? Number.POSITIVE_INFINITY));
   rows.sort((left, right) => left.depth - right.depth
     || left.path.localeCompare(right.path)
@@ -246,7 +275,7 @@ function transitiveCallers(analysis, derivation) {
 function directCallerSites(analysis, derivation) {
   const origin = targetSymbol(analysis, derivation);
   const { callSites } = analyzeCalls(analysis, derivation);
-  const rows = (callSites.get(origin) ?? []).map(({ call }) => {
+  const rows = (callSites.get(symbolKey(analysis.checker, origin)) ?? []).map(({ call }) => {
     const location = sourceLocation(analysis.target, call);
     return `${location.path}:${location.line}:${location.column}`;
   });
@@ -255,12 +284,13 @@ function directCallerSites(analysis, derivation) {
 
 function symbolReferenceFiles(analysis, derivation) {
   const origin = targetSymbol(analysis, derivation);
+  const originKey = symbolKey(analysis.checker, origin);
   const files = new Set();
   for (const source of analysis.program.getSourceFiles()) {
     const path = repositoryPath(analysis.target.checkout, source.fileName);
     if (!includePath(path, derivation)) continue;
     function visit(node) {
-      if (ts.isIdentifier(node) && symbolAt(analysis.checker, node) === origin) files.add(path);
+      if (ts.isIdentifier(node) && symbolKey(analysis.checker, symbolAt(analysis.checker, node)) === originKey) files.add(path);
       ts.forEachChild(node, visit);
     }
     visit(source);
@@ -279,6 +309,7 @@ function namedTypeDeclaration(node) {
 
 function transitiveTypeReferenceFiles(analysis, derivation) {
   const origin = targetSymbol(analysis, derivation);
+  const originKey = symbolKey(analysis.checker, origin);
   const reverseDependencies = new Map();
 
   for (const source of analysis.program.getSourceFiles()) {
@@ -287,11 +318,11 @@ function transitiveTypeReferenceFiles(analysis, derivation) {
     function visitDeclaration(node) {
       const name = namedTypeDeclaration(node);
       if (name) {
-        const dependent = symbolAt(analysis.checker, name);
+        const dependent = symbolKey(analysis.checker, symbolAt(analysis.checker, name));
         const dependencies = new Set();
         function visitType(nodeWithinDeclaration) {
           if (nodeWithinDeclaration !== name && ts.isIdentifier(nodeWithinDeclaration)) {
-            const referenced = symbolAt(analysis.checker, nodeWithinDeclaration);
+            const referenced = symbolKey(analysis.checker, symbolAt(analysis.checker, nodeWithinDeclaration));
             if (referenced && referenced !== dependent) dependencies.add(referenced);
           }
           ts.forEachChild(nodeWithinDeclaration, visitType);
@@ -307,8 +338,8 @@ function transitiveTypeReferenceFiles(analysis, derivation) {
     visitDeclaration(source);
   }
 
-  const impacted = new Set([origin]);
-  const queue = [origin];
+  const impacted = new Set([originKey]);
+  const queue = [originKey];
   while (queue.length) {
     const dependency = queue.shift();
     for (const dependent of reverseDependencies.get(dependency) ?? []) {
@@ -323,10 +354,22 @@ function transitiveTypeReferenceFiles(analysis, derivation) {
     const path = repositoryPath(analysis.target.checkout, source.fileName);
     if (!includePath(path, derivation)) continue;
     function visitReference(node) {
-      if (ts.isIdentifier(node) && impacted.has(symbolAt(analysis.checker, node))) files.add(path);
+      if (ts.isIdentifier(node) && impacted.has(symbolKey(analysis.checker, symbolAt(analysis.checker, node)))) files.add(path);
       ts.forEachChild(node, visitReference);
     }
     visitReference(source);
+
+    function visitStarExports(node) {
+      if (ts.isExportDeclaration(node) && !node.exportClause && node.moduleSpecifier) {
+        const moduleSymbol = analysis.checker.getSymbolAtLocation(node.moduleSpecifier);
+        if (moduleSymbol) {
+          const exported = analysis.checker.getExportsOfModule(moduleSymbol);
+          if (exported.some((symbol) => impacted.has(symbolKey(analysis.checker, symbol)))) files.add(path);
+        }
+      }
+      ts.forEachChild(node, visitStarExports);
+    }
+    visitStarExports(source);
   }
   return [...files].sort();
 }
@@ -392,9 +435,13 @@ function main() {
   if (results.length === 0) throw new Error('No tasks with derivation metadata matched the selection.');
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error.stack || error.message);
-  process.exitCode = 1;
+export { buildAnalysis, derive, isProductionPath };
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error.stack || error.message);
+    process.exitCode = 1;
+  }
 }

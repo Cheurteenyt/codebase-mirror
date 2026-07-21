@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "benchmark_id": "structural-correctness-2026-07-21",
+  "benchmark_id": "structural-correctness-2026-07-21-r2",
   "reference_derivation": {
     "method": "typescript-compiler-api-canonical-symbol-identity",
     "script": "scripts/benchmark/v1-v2-truth-audit/derive-structural-references.mjs",
     "source_universe": "git ls-files -- '*.ts' '*.tsx' at each pinned checkout",
-    "production_filter": "exclude test, tests, __tests__, *.test.*, *.spec.*, and node_modules paths",
+    "production_filter": "exclude tests, __tests__, non-src test directories, *.test.*, *.spec.*, and node_modules; retain production paths such as packages/playwright/src/mcp/test",
     "independence": "reference answers are derived from pinned source and TypeScript symbols, without Codebase Memory indexes or measured agents"
   },
   "targets": [
@@ -29,7 +29,8 @@
             "2|getExactScopeMembership@v2/src/bridge/sqlite-ro.ts:1005",
             "2|finalizeMembership@v2/src/bridge/sqlite-ro.ts:1036",
             "2|getExactScopePage@v2/src/bridge/sqlite-ro.ts:1134",
-            "2|routeLayout@v2/src/ui/routes/graph.ts:631"
+            "2|routeLayout@v2/src/ui/routes/graph.ts:631",
+            "3|routeScope@v2/src/ui/routes/graph.ts:993"
           ],
           "derivation": {
             "method": "typescript-compiler-api-canonical-symbol-identity",
@@ -134,7 +135,7 @@
         {
           "id": "T01",
           "category": "multi-hop-transitive-impact",
-          "question": "Starting at the production function `runTasks`, return every named production caller reachable in the reverse call graph within five edges under `packages/playwright/src`. For each caller, return its shortest hop depth and function-definition location as `depth|name@path:line`. Sort by depth, then path, line, and name. Return a JSON string array.",
+          "question": "Starting at the production function `runTasks`, return every named production caller reachable in the reverse call graph within five edges under `packages/playwright/src`. For each caller, return its shortest hop depth and function-definition location as `depth|name@path:line`. Production scope includes `packages/playwright/src/mcp/test`; exclude `tests`, `__tests__`, non-`src` test directories, and `*.test.*` or `*.spec.*` files. Sort by depth, then path, line, and name. Return a JSON string array.",
           "answer_format": "json",
           "answer": [
             "1|clearCache@packages/playwright/src/runner/testRunner.ts:194",
@@ -144,9 +145,22 @@
             "1|findRelatedTestFiles@packages/playwright/src/runner/testRunner.ts:363",
             "1|runAllTestsWithConfig@packages/playwright/src/runner/testRunner.ts:445",
             "2|runTests@packages/playwright/src/cli/testActions.ts:28",
+            "2|clearCache@packages/playwright/src/cli/testActions.ts:103",
             "2|listTests@packages/playwright/src/runner/testRunner.ts:220",
             "2|runTests@packages/playwright/src/runner/testRunner.ts:284",
-            "3|addTestCommand@packages/playwright/src/program.ts:40"
+            "2|clearCache@packages/playwright/src/runner/testServer.ts:194",
+            "2|listFiles@packages/playwright/src/runner/testServer.ts:198",
+            "2|findRelatedTestFiles@packages/playwright/src/runner/testServer.ts:225",
+            "3|_runTestsImpl@packages/playwright/src/mcp/test/testContext.ts:208",
+            "3|handle@packages/playwright/src/mcp/test/testTools.ts:30",
+            "3|addTestCommand@packages/playwright/src/program.ts:40",
+            "3|addClearCacheCommand@packages/playwright/src/program.ts:80",
+            "3|listTests@packages/playwright/src/runner/testServer.ts:204",
+            "3|runTests@packages/playwright/src/runner/testServer.ts:210",
+            "4|runTestsWithGlobalSetupAndPossiblePause@packages/playwright/src/mcp/test/testContext.ts:204",
+            "5|runSeedTest@packages/playwright/src/mcp/test/testContext.ts:186",
+            "5|handle@packages/playwright/src/mcp/test/testTools.ts:50",
+            "5|handle@packages/playwright/src/mcp/test/testTools.ts:74"
           ],
           "derivation": {
             "method": "typescript-compiler-api-canonical-symbol-identity",
@@ -169,6 +183,8 @@
             "packages/playwright-ct-react/index.d.ts",
             "packages/playwright-ct-react17/index.d.ts",
             "packages/playwright-ct-vue/index.d.ts",
+            "packages/playwright-test/index.d.ts",
+            "packages/playwright/test.d.ts",
             "packages/playwright/types/test.d.ts"
           ],
           "derivation": {
