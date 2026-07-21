@@ -1047,3 +1047,171 @@ SHA-256
 The complete causal analysis, target disposition, validation evidence, and
 remaining CLI-entry defect are in
 [`V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md`](reports/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md#15-immutable-post-fix-checkpoint).
+
+## 14. Structural-correctness round — 2026-07-21
+
+This round tests a narrower claim than the token-accounting round: whether V2
+MCP produces **more correct answers than optimized grep/read** on questions
+where missing one alias, re-export, anonymous callback, or second-order caller
+changes the result. It does not assume that graph retrieval is superior, and
+it will not convert token counts into monetary estimates.
+
+The two targets and commits are unchanged:
+
+- small: `Cheurteenyt/codebase-mirror` at
+  `5915e0624ed4376611fdc1f824d1d65a327c4a2f`;
+- large: `microsoft/playwright` at
+  `ef3a5830f960c00018f810cebf26133b35ec2b6f`.
+
+The historical 24-task round remains frozen in
+`scripts/benchmark/v1-v2-truth-audit/tasks-r173.json`. The active eight-task
+specification is `scripts/benchmark/v1-v2-truth-audit/tasks.json`.
+
+### 14.1 Independent reference derivation
+
+Reference answers are generated from the clean pinned checkouts by
+`scripts/benchmark/v1-v2-truth-audit/derive-structural-references.mjs`. The
+script loads Git-tracked TypeScript and TSX files with the repository's
+TypeScript compiler API, resolves aliases to canonical symbols, and never
+reads a Codebase Memory index or an evaluated agent answer. Production scope
+excludes `test`, `tests`, `__tests__`, `*.test.*`, `*.spec.*`, and
+`node_modules` paths.
+
+The three derivation operators are fixed before measurement:
+
+- `transitive_callers` builds a static reverse call graph, retains named
+  production callers, and reports each caller at its shortest hop depth;
+- `transitive_type_reference_files` follows dependencies between named type,
+  interface, class, and enum declarations, then records files referencing any
+  impacted canonical symbol through aliases or re-exports;
+- `direct_caller_sites` records every statically resolved call expression,
+  including calls inside anonymous callbacks, as `path:line:column`.
+
+This is a static TypeScript oracle. Dynamic string dispatch, reflection,
+runtime-only module resolution, and untyped CommonJS calls are outside its
+claim. Each task records its declaration, symbol, included path prefixes, and
+operator in `tasks.json`; `derive-structural-references.mjs verify` must exactly
+reproduce all eight registered arrays before and after the measured run.
+
+### 14.2 Pre-registered small-target task mapping
+
+#### T01 — multi-hop transitive impact
+
+**Question.** Starting at the production function `packGraphCircles`, return every named production caller reachable in the reverse call graph within five edges. For each caller, return its shortest hop depth and function-definition location as `depth|name@path:line`. Sort by depth, then path, line, and name. Return a JSON string array.
+
+**Reference answer.**
+
+```json
+["1|buildExactScopeLayout@v2/src/exact-scope-layout.ts:127","1|buildStructuredOverview@v2/src/ui/routes/graph.ts:213","1|buildDependencyAtlas@v2/src/ui/routes/graph.ts:366","2|getExactScopeMembership@v2/src/bridge/sqlite-ro.ts:1005","2|finalizeMembership@v2/src/bridge/sqlite-ro.ts:1036","2|getExactScopePage@v2/src/bridge/sqlite-ro.ts:1134","2|routeLayout@v2/src/ui/routes/graph.ts:631"]
+```
+
+#### T02 — shared-type transitive impact
+
+**Question.** If the `GraphData` structural type changes, return the exact sorted set of production files under `graph-ui/src` that reference `GraphData` or any named type, interface, class, or enum transitively dependent on it. Follow TypeScript symbol identity through aliases. Exclude tests and return a JSON string array.
+
+**Reference answer.**
+
+```json
+["graph-ui/src/api/client.ts","graph-ui/src/components/FilterPanel.tsx","graph-ui/src/components/GraphCanvas.tsx","graph-ui/src/components/GraphTab.tsx","graph-ui/src/hooks/useExactScope.ts","graph-ui/src/hooks/useGraphData.ts","graph-ui/src/lib/types.ts"]
+```
+
+#### T03 — negative exhaustive call sites
+
+**Question.** Return every production call site under `v2/src` that resolves to the exported function `resolveActiveCodeDb`. Use `path:line:column`, sort lexicographically, and return a JSON string array. If there are no production call sites, return `[]`.
+
+**Reference answer.**
+
+```json
+[]
+```
+
+#### T04 — exhaustive call sites
+
+**Question.** Return every production call site under `v2/src` that resolves to the exported function `defaultCodeDbPath`. Use `path:line:column`, sort lexicographically, and return a JSON string array. Count distinct calls separately even when two calls share one line.
+
+**Reference answer.**
+
+```json
+["v2/src/cli/commands/human.ts:213:46","v2/src/cli/commands/obsidian.ts:176:46","v2/src/cli/commands/obsidian.ts:207:46","v2/src/cli/commands/obsidian.ts:279:46","v2/src/cli/commands/obsidian.ts:339:46","v2/src/cli/commands/obsidian.ts:405:46","v2/src/cli/commands/obsidian.ts:91:44","v2/src/cli/commands/report.ts:31:40","v2/src/cli/commands/stats.ts:21:42","v2/src/cli/commands/watch.ts:85:42","v2/src/cli/index.ts:166:46","v2/src/cli/index.ts:169:39","v2/src/cli/index.ts:53:40","v2/src/indexer/indexer.ts:620:18","v2/src/intelligence/graph-status.ts:137:18","v2/src/intelligence/graph-status.ts:195:18","v2/src/ui/project-store-registry.ts:101:31","v2/src/ui/project-store-registry.ts:101:6","v2/src/ui/project-store-registry.ts:199:29","v2/src/ui/project-store-registry.ts:254:24","v2/src/ui/routes/index.ts:323:5","v2/src/ui/routes/index.ts:324:5","v2/src/ui/routes/project.ts:161:18","v2/src/ui/routes/project.ts:214:18","v2/src/ui/server.ts:431:36","v2/src/ui/server.ts:431:61"]
+```
+
+### 14.3 Pre-registered large-target task mapping
+
+#### T01 — multi-hop transitive impact
+
+**Question.** Starting at the production function `runTasks`, return every named production caller reachable in the reverse call graph within five edges under `packages/playwright/src`. For each caller, return its shortest hop depth and function-definition location as `depth|name@path:line`. Sort by depth, then path, line, and name. Return a JSON string array.
+
+**Reference answer.**
+
+```json
+["1|clearCache@packages/playwright/src/runner/testRunner.ts:194","1|listFiles@packages/playwright/src/runner/testRunner.ts:206","1|_innerListTests@packages/playwright/src/runner/testRunner.ts:232","1|_innerRunTests@packages/playwright/src/runner/testRunner.ts:293","1|findRelatedTestFiles@packages/playwright/src/runner/testRunner.ts:363","1|runAllTestsWithConfig@packages/playwright/src/runner/testRunner.ts:445","2|runTests@packages/playwright/src/cli/testActions.ts:28","2|listTests@packages/playwright/src/runner/testRunner.ts:220","2|runTests@packages/playwright/src/runner/testRunner.ts:284","3|addTestCommand@packages/playwright/src/program.ts:40"]
+```
+
+#### T02 — shared type through aliases and re-exports
+
+**Question.** If the exported `PlaywrightTestConfig` type declared in `packages/playwright/types/test.d.ts` changes, return the exact sorted set of production files under `packages/` that reference it or any named type, interface, class, or enum transitively dependent on it. Follow TypeScript symbol identity through renamed imports and re-exports. Exclude tests and return a JSON string array.
+
+**Reference answer.**
+
+```json
+["packages/playwright-ct-core/index.d.ts","packages/playwright-ct-core/src/viteUtils.ts","packages/playwright-ct-react/index.d.ts","packages/playwright-ct-react17/index.d.ts","packages/playwright-ct-vue/index.d.ts","packages/playwright/types/test.d.ts"]
+```
+
+#### T03 — alias-aware exhaustive call sites
+
+**Question.** Return every production call site under `packages/playwright-core/src/tools` that resolves to the exported function `outputDir` declared in `backend/context.ts`. Follow renamed imports such as `outputDir as resolveOutputDir`. Use `path:line:column`, sort lexicographically, and return a JSON string array.
+
+**Reference answer.**
+
+```json
+["packages/playwright-core/src/tools/backend/context.ts:402:37","packages/playwright-core/src/tools/backend/context.ts:415:18","packages/playwright-core/src/tools/backend/response.ts:227:17","packages/playwright-core/src/tools/mcp/browserFactory.ts:212:23"]
+```
+
+#### T04 — negative exhaustive call sites
+
+**Question.** Return every production call site under `packages/playwright-core/src/tools` that resolves to the exported function `generateReadme`. Use `path:line:column`, sort lexicographically, and return a JSON string array. If there are no production call sites, return `[]`.
+
+**Reference answer.**
+
+```json
+[]
+```
+
+### 14.4 Pre-registered execution, grading, and interpretation
+
+The existing `scripts/benchmark/v1-v2-truth-audit/` pipeline is reused without
+a second harness: `verify-spec.mjs`, `run.mjs`, `summarize.mjs`,
+`proxy.mjs`, and `checkpoint.mjs`. Raw artifacts go to the new external root
+`D:/Mycodex/benchmark-results/r174-structural-correctness`; the immutable
+publication checkpoint goes to
+`docs/performance/benchmarks/structural-correctness-baseline-2026-07-21`.
+
+Only the two conditions relevant to this claim are measured:
+
+- **B, V2 MCP-only:** the existing six read-only evidence tools, with shell,
+  direct file reads, Web, write tools, and other MCP servers forbidden;
+- **C, optimized grep/read-only:** `rg`, `rg --files`, focused
+  `Get-Content`, and `Select-String`, with MCP, Git, custom analysis scripts,
+  Web, and writes forbidden.
+
+Both one-shot and continuous modes are run with native Codex token and
+completed tool-call accounting. One-shot order alternates B/C by task and is
+reversed between targets. Continuous order is B then C on the small target and
+C then B on the large target. A protocol-invalid cell may receive one clean
+rerun; every invalid artifact is retained and disclosed. Section 5's existing
+mechanical `PASS`/`PARTIAL`/`FAIL` grader remains unchanged.
+
+Every C `PARTIAL` or `FAIL` receives one evidence-based classification:
+
+- **catchable-by-inspection** when the raw permitted evidence or final answer
+  itself exposes a concrete incompleteness, contradiction, truncation, or
+  malformed result without consulting the reference answer;
+- **plausibly-undetected** when the answer is clean and confident and its raw
+  permitted evidence exposes no such signal, so the error would plausibly
+  survive ordinary review without the independent oracle.
+
+The conclusion will report exact grades, native tokens, calls, and this failure
+classification. It will not infer dollar costs, generalize beyond these two
+pinned commits, or claim superiority when the grade evidence does not show it.
+The immutable pre-registration commit SHA and all measured results are added
+only after this section and `tasks.json` have been pushed before the first run.

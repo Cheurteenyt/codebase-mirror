@@ -9,6 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
 const protocol = readFileSync(join(repoRoot, 'docs', 'performance', 'BENCHMARK_PROTOCOL.md'), 'utf8');
 const spec = JSON.parse(readFileSync(join(here, 'tasks.json'), 'utf8'));
+const historicalSpec = JSON.parse(readFileSync(join(here, 'tasks-r173.json'), 'utf8'));
 
 function normalizeProse(value) {
   return value.replaceAll('\r', '').replace(/\s+/g, ' ').trim();
@@ -43,29 +44,48 @@ function extractTasks(markdown) {
   });
 }
 
-const sourceSets = [
+const historicalSourceSets = [
   extractTasks(section('## 4. Fixed questions and reference answers', '## 5. Mechanical grading')),
   extractTasks(section('### 12.2 Pre-registered task mapping', '### 12.3 Pre-registered execution and grading')),
 ];
 
-for (let targetIndex = 0; targetIndex < spec.targets.length; targetIndex += 1) {
-  const target = spec.targets[targetIndex];
-  const source = sourceSets[targetIndex];
-  assert.equal(source.length, 12, `${target.id}: source task count`);
-  assert.equal(target.tasks.length, 12, `${target.id}: spec task count`);
-  for (let taskIndex = 0; taskIndex < 12; taskIndex += 1) {
-    const expected = source[taskIndex];
-    const task = target.tasks[taskIndex];
-    assert.equal(task.id, expected.id, `${target.id}/${task.id}: id`);
-    assert.equal(normalizeProse(task.question), expected.question, `${target.id}/${task.id}: question drift`);
-    if (task.answer_format === 'json') {
-      assert.deepEqual(stable(task.answer), stable(JSON.parse(expected.answer)), `${target.id}/${task.id}: JSON answer drift`);
-    } else if (task.answer_format === 'chain') {
-      assert.equal(task.answer.join(' -> '), expected.answer, `${target.id}/${task.id}: chain answer drift`);
-    } else {
-      assert.equal(task.answer, expected.answer, `${target.id}/${task.id}: text answer drift`);
+const structuralSourceSets = [
+  extractTasks(section('### 14.2 Pre-registered small-target task mapping', '### 14.3 Pre-registered large-target task mapping')),
+  extractTasks(section('### 14.3 Pre-registered large-target task mapping', '### 14.4 Pre-registered execution, grading, and interpretation')),
+];
+
+function verifySpecAgainstProtocol(candidate, sourceSets, expectedTaskCount, label) {
+  assert.equal(candidate.targets.length, 2, `${label}: target count`);
+  for (let targetIndex = 0; targetIndex < candidate.targets.length; targetIndex += 1) {
+    const target = candidate.targets[targetIndex];
+    const source = sourceSets[targetIndex];
+    assert.equal(source.length, expectedTaskCount, `${label}/${target.id}: source task count`);
+    assert.equal(target.tasks.length, expectedTaskCount, `${label}/${target.id}: spec task count`);
+    for (let taskIndex = 0; taskIndex < expectedTaskCount; taskIndex += 1) {
+      const expected = source[taskIndex];
+      const task = target.tasks[taskIndex];
+      assert.equal(task.id, expected.id, `${label}/${target.id}/${task.id}: id`);
+      assert.equal(normalizeProse(task.question), expected.question, `${label}/${target.id}/${task.id}: question drift`);
+      if (task.answer_format === 'json') {
+        assert.deepEqual(stable(task.answer), stable(JSON.parse(expected.answer)), `${label}/${target.id}/${task.id}: JSON answer drift`);
+      } else if (task.answer_format === 'chain') {
+        assert.equal(task.answer.join(' -> '), expected.answer, `${label}/${target.id}/${task.id}: chain answer drift`);
+      } else {
+        assert.equal(task.answer, expected.answer, `${label}/${target.id}/${task.id}: text answer drift`);
+      }
     }
   }
 }
 
-console.log('Verified: 24 questions and reference answers match docs/performance/BENCHMARK_PROTOCOL.md.');
+verifySpecAgainstProtocol(historicalSpec, historicalSourceSets, 12, 'historical-r173');
+verifySpecAgainstProtocol(spec, structuralSourceSets, 4, 'structural-correctness');
+assert.equal(spec.benchmark_id, 'structural-correctness-2026-07-21');
+assert.equal(spec.reference_derivation?.script, 'scripts/benchmark/v1-v2-truth-audit/derive-structural-references.mjs');
+for (const target of spec.targets) {
+  for (const task of target.tasks) {
+    assert.ok(task.category, `${target.id}/${task.id}: missing category`);
+    assert.ok(task.derivation?.kind, `${target.id}/${task.id}: missing derivation`);
+  }
+}
+
+console.log('Verified: 24 historical and 8 structural-correctness questions and reference answers match docs/performance/BENCHMARK_PROTOCOL.md.');
