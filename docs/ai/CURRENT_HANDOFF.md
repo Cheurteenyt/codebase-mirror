@@ -10,10 +10,10 @@ status: ACTIVE
 repository: Cheurteenyt/Ariad
 branch: v2/r181-structural-cost-root-cause
 base_sha: 93e0d5c99fa5dd09a5276a9c5c7e922b16f64315
-last_completed_code_sha: 93e0d5c99fa5dd09a5276a9c5c7e922b16f64315
+last_completed_code_sha: 1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-22T23:25:54Z
+updated_at_utc: 2026-07-22T23:29:07Z
 implementer_role: codex
 ```
 
@@ -38,13 +38,14 @@ No external audit is active. R181 is an evidence-first root-cause round initiate
 
 | Finding | Audit source | Decision | Evidence or reason | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------------|----------|--------------------|------------------------|-----------------|-------------------|------------------|
-| R181-LOCAL-F001 | R176 T02-T04 single-sample evidence | ACCEPTED | Repeat N=3 and attribute token cost before deciding whether a repository defect exists. | pending | pending | pending | NOT_STARTED |
+| R181-LOCAL-F001 | R176 T02-T04 single-sample evidence | ACCEPTED | Repeat N=3 and attribute token cost before deciding whether a repository defect exists. | `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe` | environment helper smoke plus existing mechanical benchmark checks | pending | IMPLEMENTED_PUSHED |
 
 ## Pushed checkpoints
 
 | Code SHA | CI head SHA | Findings | Summary | Local validation | GitHub run |
 |----------|-------------|----------|---------|------------------|------------|
 | `93e0d5c99fa5dd09a5276a9c5c7e922b16f64315` | pending | R181-LOCAL-F001 | Post-PR #76 clean-main anchor. | `git status`; exact local/origin SHA | pending |
+| `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe` | pending | R181-LOCAL-F001 | N=3 protocol, mechanism/noise gates, and append-once environment capture. | helper syntax/smoke; `git diff --check`; `npm --prefix v2 run docs:check` | pending |
 
 ## Exact validation evidence
 
@@ -55,6 +56,15 @@ environment: Windows benchmark host
 exit_code: 0
 result_summary: clean main and origin/main both at 93e0d5c99fa5dd09a5276a9c5c7e922b16f64315; origin is Cheurteenyt/Ariad
 not_run: build, oracle verification, and repeated measurements wait for the pushed pre-registration
+```
+
+```text
+command: node --check scripts/benchmark/v1-v2-truth-audit/capture-environment.mjs; helper smoke to a disposable external file; git diff --check; npm --prefix v2 run docs:check
+working_directory: D:/Mycodex/codebase-mirror
+environment: Windows 11 Pro 10.0.26200 x64; Node v24.15.0; npm 11.12.1; Codex CLI 0.144.4
+exit_code: 0
+result_summary: helper captured the full environment and refused overwrite semantics by construction; 7 documentation/benchmark tests passed; 74 Markdown files validated; 8 structural questions matched the protocol
+not_run: product build and repeated measurements intentionally wait for remote pre-registration
 ```
 
 ## Reset recovery
@@ -82,12 +92,12 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify --results-root D:/Mycode
 
 ## Current working state
 
-- **Last completed finding:** post-PR #76 main anchored; no product finding yet.
+- **Last completed finding:** immutable R181 N=3 pre-registration and environment helper committed at `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe`; no product finding yet.
 - **Current finding:** R181-LOCAL-F001, repeated T02-T04 cost attribution.
-- **Dirty files expected:** protocol pre-registration, environment helper, and this handoff until the first checkpoint.
-- **Unpushed commits expected:** 0 before the pre-registration commit is created.
+- **Dirty files expected:** `NONE` at the pushed checkpoint.
+- **Unpushed commits expected:** `0` after this handoff checkpoint is pushed.
 - **Known blocker:** none.
-- **Single next action:** validate, commit, and push the immutable R181 pre-registration before creating a raw result root.
+- **Single next action:** build V2, verify the runner and T02-T04 oracles, prove all three raw roots absent, then execute the fixed baseline schedule without inspecting results mid-run.
 
 ## Security confirmation
 
