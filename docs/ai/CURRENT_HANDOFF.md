@@ -13,7 +13,7 @@ base_sha: 148e4b65849efc3fcfbc4fb716abf0898424293d
 last_completed_code_sha: 148e4b65849efc3fcfbc4fb716abf0898424293d
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-22T18:58:13Z
+updated_at_utc: 2026-07-22T19:30:38Z
 implementer_role: codex
 ```
 
@@ -40,13 +40,14 @@ implementer_role: codex
 
 | Finding | Scope | Pre-registered decision | Validation state |
 |---------|-------|-------------------------|------------------|
-| R179-METH-T01 | 4 configurations × B/C × N=3 | token-stable iff each cell/arm has max/min <= 1.20; grade-stable iff all three grades match; aggregate direction and ratio spread must also hold | pre-registration written; no raw root created |
+| R179-METH-T01 | 4 configurations × B/C × N=3 | token-stable iff each cell/arm has max/min <= 1.20; grade-stable iff all three grades match; aggregate direction and ratio spread must also hold | **UNSTABLE**: 3/8 token-stable, 6/8 grade-stable, aggregate ratio spread 1.270665 |
 
 ## Pushed checkpoints
 
 | Code SHA | CI head SHA | Finding | Summary | Local validation | GitHub run |
 |----------|-------------|---------|---------|------------------|------------|
 | `148e4b65849efc3fcfbc4fb716abf0898424293d` | `148e4b65849efc3fcfbc4fb716abf0898424293d` | R179-INIT | Anchor the no-product methodology round at merged R178 main | clean exact main; prior R178 checkpoint present | prior main CI PASS |
+| `c2fbaeeb7228bd7f832e25ffa0f3115bdf2b6b57` | `c2fbaeeb7228bd7f832e25ffa0f3115bdf2b6b57` | R179-PREREG | Freeze N=3, cells, order, tolerance, environment, and no-rerun rule before data | docs check, build, runner verify, both T01 oracles PASS | GitHub CI 29949018208 PASS |
 
 ## Exact validation evidence
 
@@ -102,13 +103,15 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify `
 ## Current working state
 
 - **Last completed finding:** R178 is merged and mirrored at `148e4b6`.
-- **Current finding:** immutable N=3 T01 stability pre-registration.
-- **Dirty files expected:** benchmark protocol, active handoff, and pointer.
-- **Unpushed commits expected:** one initialization/pre-registration checkpoint.
+- **Current finding:** R179 disproves stability under its pre-registered rule;
+  V2 remains 12/12 PASS and cheaper in all three matched aggregates.
+- **Dirty files expected:** generated repetition checkpoints, aggregate report,
+  benchmark protocol result, and this handoff update.
+- **Unpushed commits expected:** one measured-result checkpoint.
 - **Known blocker:** none.
-- **Single next action:** validate docs, commit and push the pre-registration,
-  open a draft PR, then verify green base/branch CI, runner, oracles, and all
-  three absent result roots before repetition 1.
+- **Single next action:** validate and push the measured-result checkpoint,
+  complete the independent final audit, remove this active handoff, then merge
+  and verify exact-main CI and cleanup.
 
 ## Security confirmation
 
@@ -119,10 +122,10 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify `
 
 ## Pre-final-audit checklist
 
-- [ ] Pre-registration is committed and pushed before any measured process.
-- [ ] All 24 selected cells are valid or invalid attempts remain disclosed.
-- [ ] Every repetition has a full environment row.
-- [ ] Per-cell samples, min/max/mean, grades, and calls are published.
-- [ ] The 5.166401365x historical point is located against the new range.
+- [x] Pre-registration is committed and pushed before any measured process.
+- [x] All 24 selected cells are valid or invalid attempts remain disclosed.
+- [x] Every repetition has a full environment row.
+- [x] Per-cell samples, min/max/mean, grades, and calls are published.
+- [x] The 5.166401365x historical point is located against the new range.
 - [ ] No important work exists only in the current environment.
 - [ ] The handoff is archived and removed before merge.

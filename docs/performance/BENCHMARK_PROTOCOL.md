@@ -1811,3 +1811,33 @@ grade, token count, call count, variance, or ratio is never a rerun reason. The
 future canonical evidence directory is
 `docs/performance/benchmarks/t01-stability-repetitions-2026-07-22`, with one
 immutable checkpoint subdirectory per repetition.
+
+### 17.2 Result: the R178 point is not stable
+
+All 24 selected cells completed on attempt 1, exit 0, with no protocol
+violation. The earliest process started at `2026-07-22T19:01:13.546Z`, after
+the immutable pre-registration commit `c2fbaeeb7228bd7f832e25ffa0f3115bdf2b6b57`
+was recorded remotely at `2026-07-22T18:58:30Z`. The two registered target
+SHAs, model, reasoning, Codex version, policies, and environment did not drift.
+
+The pre-registered stability verdict is **FAIL**. Only 3/8 cell/arm groups
+meet the native-token `max / min <= 1.20` rule. All four C groups are unstable;
+continuous/small B also misses narrowly at `1.203925`. Two C groups change
+grade, and the required R178 C grade pattern is not preserved. B remains
+12/12 PASS. C totals 5 PASS, 5 PARTIAL, and 2 FAIL, rather than repeating the
+R178 0/2/2 result in any repetition.
+
+Matched aggregate C/B raw-token ratios are `4.279942665x`, `4.693265194x`,
+and `5.438372088x`. Their max/min spread is `1.270664706`, above the `1.20`
+ceiling. C remains more expensive than B in all three repetitions, and the
+historical `5.166401365x` point lies inside the new range, but it is not a
+stable point estimate under this protocol. Across the full round, B uses
+697,852 raw tokens and C uses 3,346,322, for 4,044,174 measured tokens and a
+descriptive combined C/B ratio of `4.795174335x`.
+
+The canonical
+[`R179 aggregate and stability report`](benchmarks/t01-stability-repetitions-2026-07-22/aggregate-and-stability.md)
+lists every token sample, call count, grade, min, max, mean, environment row,
+matched ratio, and raw manifest identity. Because instability is the primary
+finding, R179 does not replace the R178 point with a single new headline
+number and makes no product-code change.
