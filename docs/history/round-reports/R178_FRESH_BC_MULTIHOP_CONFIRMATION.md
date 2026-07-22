@@ -66,6 +66,11 @@ apples-to-apples B/C comparison.
 | `d542d666a048eb14e6b6ca314efd47239cca92e5` | `5d5d2e8f2f2fdbc702167e8f1e3ab36bdc7c6957` | R178-RESULT | Eight fresh same-round B/C cells: B 4/4 PASS and 236,837 raw tokens; C 0/4 PASS and 1,223,595; C/B 5.166401365x | build, runner/oracle verify, 8/8 valid cells, immutable checkpoint, docs check, typecheck, benchmark tests, package build | exact-SHA preflight failed because the renamed repository still had the legacy workflow binding |
 | `432878eb0dbea9d016ef4d43ad20f0792cba1933` | `432878eb0dbea9d016ef4d43ad20f0792cba1933` | R178-REPOSITORY-MIGRATION | Six sensitive workflows, public metadata, active documentation, and validator migrated to `Cheurteenyt/Ariad`; frozen benchmark evidence preserved | governance/watchdog 28/28, docs 7/7, typecheck, build, package, YAML parse | CI push `29885944993` PASS; CI PR `29885947072` PASS; CodeQL `29885947052` PASS |
 
+Later repetition in R179 found a matched C/B range of about 4.28x-5.44x and
+showed that the R178 point does not repeat precisely; use
+[section 17](../../performance/BENCHMARK_PROTOCOL.md#172-result-the-r178-point-is-not-stable)
+and that range when citing this checkpoint going forward.
+
 ## Exact validation evidence
 
 ```text
@@ -112,6 +117,10 @@ exit_code: 0
 result_summary: 8/8 valid attempt-1 cells with zero violations; B is 4 PASS/0 PARTIAL/0 FAIL and 236837 raw tokens/4 calls; C is 0 PASS/2 PARTIAL/2 FAIL and 1223595 raw tokens/52 calls; fresh C/B is 5.166401365x; 40-artifact tree ed0349cfe9608b960693c77c891f6cda982a7c49dc355b8a801a3446aee181c0
 not_run: no attempt 2, no T02-T04, no product modification
 ```
+
+The later R179 repetition range is about 4.28x-5.44x, so this preserved
+single-run result must not be cited as a precise repeatable estimate; see
+[section 17](../../performance/BENCHMARK_PROTOCOL.md#172-result-the-r178-point-is-not-stable).
 
 ```text
 command: npm run docs:check; npm run typecheck; node --test summarize/checkpoint/derive structural tests; npm run build:package
