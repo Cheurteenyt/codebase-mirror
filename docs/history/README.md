@@ -38,6 +38,7 @@ Later native-accounting evidence lives under
 - [R171 exact-lookup benchmark report](round-reports/R171_EXACT_LOOKUP_BENCHMARK.md)
 - [R177 multi-hop caller correction](round-reports/R177_MULTI_HOP_CALLER_CORRECTION.md)
 - [R178 fresh B/C multi-hop confirmation](round-reports/R178_FRESH_BC_MULTIHOP_CONFIRMATION.md)
+- [R180 R179 forward-reference correction](round-reports/R180_R179_FORWARD_REFERENCE.md)
 
 ## Changelog archive
 

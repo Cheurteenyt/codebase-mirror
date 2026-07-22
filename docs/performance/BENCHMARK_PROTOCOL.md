@@ -1716,6 +1716,12 @@ figure; the fresh ratio is only 1.209% lower and is now measured within one
 disclosed environment and round. The evidence is the canonical
 [`R178 checkpoint`](benchmarks/fresh-multihop-v2-vs-grep-2026-07-22/aggregate-and-ratios.md).
 
+> **Later repetition note:** R179 found that this valid single-sample point
+> estimate does not repeat precisely; the matched C/B ratios ranged from about
+> 4.28x to 5.44x. Cite the range and
+> [section 17](#172-result-the-r178-point-is-not-stable), rather than `5.1664x`
+> alone, going forward.
+
 This is not a claim that V2 saves tokens on every small or large repository.
 It is a controlled confirmation for the two pinned projects, one T01 question,
 two usage modes, and one attempt per cell. Moreover, C did not reach exact
