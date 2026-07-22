@@ -13,7 +13,7 @@ base_sha: d542d666a048eb14e6b6ca314efd47239cca92e5
 last_completed_code_sha: d542d666a048eb14e6b6ca314efd47239cca92e5
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-22T01:50:17.4113114Z
+updated_at_utc: 2026-07-22T01:51:18.4241625Z
 implementer_role: codex
 ```
 
@@ -52,7 +52,7 @@ apples-to-apples B/C comparison.
 
 | Code SHA | CI head SHA | Findings | Summary | Local validation | GitHub run |
 |----------|-------------|----------|---------|------------------|------------|
-| `d542d666a048eb14e6b6ca314efd47239cca92e5` | pending | R178-PROTOCOL | Exact environment, R176 environment gap, eight-cell order, immutable roots, and acceptance rules fixed before measurement | `npm run docs:check` PASS | pending |
+| `d542d666a048eb14e6b6ca314efd47239cca92e5` | `38d10e93d27fc46d13329648d000a9c072d21622` | R178-PROTOCOL | Exact environment, R176 environment gap, eight-cell order, immutable roots, and acceptance rules fixed and pushed before measurement | `npm run docs:check` PASS | pending |
 
 ## Exact validation evidence
 
@@ -113,8 +113,8 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify `
   pre-registration checkpoint is committed.
 - **Unpushed commits expected:** 0 before the pre-registration commit.
 - **Known blocker:** none.
-- **Single next action:** run `npm run docs:check`, commit and push this exact
-  pre-registration, then build/verify and execute the four fixed B/C commands.
+- **Single next action:** build the exact candidate, run runner/oracle
+  verification, then execute the four fixed B/C commands in registered order.
 
 ## Security confirmation
 
@@ -128,7 +128,7 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify `
 - [x] The environment and historical comparison limits are disclosed.
 - [x] The exact cells, order, roots, task, candidate, and acceptance rules are
   fixed before measurement.
-- [ ] The pre-registration commit is pushed before every measured process.
+- [x] The pre-registration commit is pushed before every measured process.
 - [ ] All eight fresh cells are valid and mechanically graded.
 - [ ] The canonical checkpoint and plain-language ratio are published.
 - [ ] The affordable local validation and GitHub CI are green.

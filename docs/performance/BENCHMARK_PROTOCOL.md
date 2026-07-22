@@ -1635,9 +1635,9 @@ For context only, the cross-round hand combination was R176 C
 the R177 B count was 80.8781361% lower. R178 will state directly whether the
 fresh same-round ratio confirms, weakens, or reverses that descriptive figure.
 
-The exact pushed pre-registration SHA will be added only after this section is
-committed and pushed, and all measured process start times must be later than
-that push.
+The exact pre-registration SHA is
+`38d10e93d27fc46d13329648d000a9c072d21622`. It was pushed before the raw R178
+root existed. All measured process start times must be later than that push.
 
 ### 16.3 Fresh aggregate result
 
