@@ -11,7 +11,7 @@ schema_version: 1
 kind: implementation-handoff
 round: R000
 status: ACTIVE
-repository: Cheurteenyt/codebase-mirror
+repository: Cheurteenyt/Ariad
 branch: v2/r000-short-name
 base_sha: 0000000000000000000000000000000000000000
 last_completed_code_sha: REPLACE_WITH_BASE_SHA
@@ -95,11 +95,11 @@ not_run:
 ## Reset recovery
 
 ```bash
-REPOSITORY=https://github.com/Cheurteenyt/codebase-mirror.git
+REPOSITORY=https://github.com/Cheurteenyt/Ariad.git
 WORK_BRANCH=v2/r000-short-name
 
-git clone --single-branch --branch "$WORK_BRANCH" "$REPOSITORY" codebase-mirror
-cd codebase-mirror
+git clone --single-branch --branch "$WORK_BRANCH" "$REPOSITORY" Ariad
+cd Ariad
 git fetch origin main "$WORK_BRANCH"
 test "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$WORK_BRANCH")"
 git status --short --branch

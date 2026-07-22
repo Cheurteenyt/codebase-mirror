@@ -146,7 +146,7 @@ jobs:
           import urllib.request
 
           API_VERSION = "2026-03-10"
-          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_REPOSITORY = "Cheurteenyt/Ariad"
           EXPECTED_WORKFLOW_NAME = "CI"
           EXPECTED_WORKFLOW_PATH = ".github/workflows/ci.yml"
           EXPECTED_PREFLIGHT_NAME = "Exact main SHA preflight"
@@ -175,7 +175,7 @@ jobs:
                       "Accept": "application/vnd.github+json",
                       "Authorization": f"Bearer {token}",
                       "X-GitHub-Api-Version": API_VERSION,
-                      "User-Agent": "codebase-mirror-exact-ci-mirror",
+                      "User-Agent": "ariad-exact-ci-mirror",
                   },
               )
               try:
@@ -188,7 +188,7 @@ jobs:
                   fail(f"GitHub API GET {path} failed: {exc}")
 
           if repository != EXPECTED_REPOSITORY or head_repository != repository:
-              fail("The mirror is bound to same-repository codebase-mirror runs.")
+              fail("The mirror is bound to same-repository Ariad runs.")
           if event not in {"push", "workflow_dispatch"}:
               fail(f"Unsupported canonical CI event: {event}")
           if conclusion != "success" or branch != "main":
@@ -460,7 +460,7 @@ jobs:
                   "Accept": "application/vnd.github+json",
                   "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
                   "X-GitHub-Api-Version": API_VERSION,
-                  "User-Agent": "codebase-mirror-pre-credential-main-check",
+                  "User-Agent": "ariad-pre-credential-main-check",
               },
           )
 

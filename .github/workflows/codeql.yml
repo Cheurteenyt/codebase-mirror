@@ -53,7 +53,7 @@ jobs:
           import urllib.request
 
           API_VERSION = "2026-03-10"
-          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_REPOSITORY = "Cheurteenyt/Ariad"
           SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 
           event = os.environ["EVENT_NAME"]
@@ -64,7 +64,7 @@ jobs:
               raise SystemExit(1)
 
           if repository != EXPECTED_REPOSITORY:
-              fail("This exact-SHA gate is bound to Cheurteenyt/codebase-mirror.")
+              fail("This exact-SHA gate is bound to Cheurteenyt/Ariad.")
 
           if event != "workflow_dispatch":
               if event not in {"push", "pull_request", "schedule"}:
@@ -88,7 +88,7 @@ jobs:
                   "Accept": "application/vnd.github+json",
                   "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
                   "X-GitHub-Api-Version": API_VERSION,
-                  "User-Agent": "codebase-mirror-codeql-exact-sha",
+                  "User-Agent": "ariad-codeql-exact-sha",
               },
           )
           try:

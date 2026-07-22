@@ -11,8 +11,8 @@ human memory graph (SQLite), Obsidian sync, and a web-based graph UI.
 
 ```bash
 # From source (development)
-git clone https://github.com/Cheurteenyt/codebase-mirror.git
-cd codebase-mirror/v2
+git clone https://github.com/Cheurteenyt/Ariad.git
+cd Ariad/v2
 npm ci
 
 # Choose one build target. Backend CLI + MCP server only:
@@ -59,7 +59,7 @@ for exact questions and graph context tools only when relationships, blast
 radius, architecture, or human memory affect the task.
 Those tools do not synchronize the Obsidian vault; use the separate
 `cbm-v2 obsidian ...` commands or `cbm-v2 watch` for vault synchronization.
-See the [MCP Tools documentation](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/reference/MCP_TOOLS.md)
+See the [MCP Tools documentation](https://github.com/Cheurteenyt/Ariad/blob/main/docs/reference/MCP_TOOLS.md)
 for the full reference.
 
 To connect Codex over STDIO, add the server to `~/.codex/config.toml` or to a
@@ -68,12 +68,12 @@ trusted project's `.codex/config.toml`:
 ```toml
 [mcp_servers.codebase_memory_v2]
 command = "node"
-args = ["/absolute/path/to/codebase-mirror/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
+args = ["/absolute/path/to/Ariad/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
 ```
 
 On Windows, edit `%USERPROFILE%\.codex\config.toml` and use an absolute path
 with forward slashes, such as
-`D:/Mycodex/codebase-mirror/v2/dist/cli/index.js`. Restart Codex, then run
+`D:/Mycodex/Ariad/v2/dist/cli/index.js`. Restart Codex, then run
 `codex mcp list` or use `/mcp` to confirm that the server is connected.
 
 ## Graph UI
@@ -135,13 +135,13 @@ mixing two graph states.
 
 ## Links
 
-- [GitHub Repository](https://github.com/Cheurteenyt/codebase-mirror)
-- [Documentation Portal](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/README.md)
-- [Architecture](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/architecture/V2_ARCHITECTURE.md)
-- [CLI Reference](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/reference/CLI_REFERENCE.md)
-- [Current State](https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/reference/V2_CURRENT_STATE.md)
+- [GitHub Repository](https://github.com/Cheurteenyt/Ariad)
+- [Documentation Portal](https://github.com/Cheurteenyt/Ariad/blob/main/docs/README.md)
+- [Architecture](https://github.com/Cheurteenyt/Ariad/blob/main/docs/architecture/V2_ARCHITECTURE.md)
+- [CLI Reference](https://github.com/Cheurteenyt/Ariad/blob/main/docs/reference/CLI_REFERENCE.md)
+- [Current State](https://github.com/Cheurteenyt/Ariad/blob/main/docs/reference/V2_CURRENT_STATE.md)
 - [Changelog](CHANGELOG.md) — current release window and historical archive link
-- [Contributing](https://github.com/Cheurteenyt/codebase-mirror/blob/main/CONTRIBUTING.md)
+- [Contributing](https://github.com/Cheurteenyt/Ariad/blob/main/CONTRIBUTING.md)
 
 ## Pre-release notice
 

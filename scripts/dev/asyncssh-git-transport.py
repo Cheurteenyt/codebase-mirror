@@ -398,8 +398,8 @@ def self_test() -> int:
     # 4. Command validation: valid commands.
     def test_valid_commands():
         valid = [
-            "git-receive-pack 'Cheurteenyt/codebase-mirror.git'",
-            "git-upload-pack 'Cheurteenyt/codebase-mirror.git'",
+            "git-receive-pack 'Cheurteenyt/Ariad.git'",
+            "git-upload-pack 'Cheurteenyt/Ariad.git'",
             'git-receive-pack "owner/repo.git"',
             "git-upload-pack owner/name.git",
         ]

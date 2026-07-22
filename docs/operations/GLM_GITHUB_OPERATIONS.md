@@ -234,11 +234,11 @@ prevention.
 Start a round from current GitHub `main`:
 
 ```bash
-REPOSITORY=https://github.com/Cheurteenyt/codebase-mirror.git
+REPOSITORY=https://github.com/Cheurteenyt/Ariad.git
 BRANCH=v2/glm/r<n>-<short-name>
 
-git clone "$REPOSITORY" codebase-mirror
-cd codebase-mirror
+git clone "$REPOSITORY" Ariad
+cd Ariad
 git switch -c "$BRANCH" origin/main
 ```
 
@@ -255,7 +255,7 @@ git status --short --branch
 git add <explicit-paths>
 git diff --cached --check
 git commit -m "<scoped message>"
-git push -u git@github.com:Cheurteenyt/codebase-mirror.git "$BRANCH"
+git push -u git@github.com:Cheurteenyt/Ariad.git "$BRANCH"
 ```
 
 Verify the remote checkpoint:
@@ -263,7 +263,7 @@ Verify the remote checkpoint:
 ```bash
 LOCAL_SHA="$(git rev-parse HEAD)"
 REMOTE_SHA="$(git ls-remote --heads \
-  git@github.com:Cheurteenyt/codebase-mirror.git \
+  git@github.com:Cheurteenyt/Ariad.git \
   "refs/heads/$BRANCH" | awk '{print $1}')"
 
 test -n "$REMOTE_SHA"

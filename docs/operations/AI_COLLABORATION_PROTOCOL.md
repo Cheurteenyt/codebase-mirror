@@ -223,11 +223,11 @@ Never commit those recovery files.
 The first objective is recovery, not new implementation:
 
 ```bash
-REPOSITORY=https://github.com/Cheurteenyt/codebase-mirror.git
+REPOSITORY=https://github.com/Cheurteenyt/Ariad.git
 WORK_BRANCH=v2/r<n>-<short-name>
 
-git clone --single-branch --branch "$WORK_BRANCH" "$REPOSITORY" codebase-mirror
-cd codebase-mirror
+git clone --single-branch --branch "$WORK_BRANCH" "$REPOSITORY" Ariad
+cd Ariad
 git fetch origin main "$WORK_BRANCH"
 
 test "$(git branch --show-current)" = "$WORK_BRANCH"

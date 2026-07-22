@@ -75,7 +75,7 @@ jobs:
           import urllib.request
 
           API_VERSION = "2026-03-10"
-          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_REPOSITORY = "Cheurteenyt/Ariad"
           EXPECTED_WORKFLOW_PATH = ".github/workflows/ci.yml"
           EXPECTED_PR_AUTHOR = "github-actions[bot]"
           BRANCH_PATTERN = re.compile(
@@ -99,7 +99,7 @@ jobs:
               raise SystemExit(1)
 
           if repository != EXPECTED_REPOSITORY or head_repository != repository:
-              fail("Only same-repository runs for Cheurteenyt/codebase-mirror qualify.")
+              fail("Only same-repository runs for Cheurteenyt/Ariad qualify.")
           if event != "push" or conclusion != "success":
               fail("Only a successful branch-push CI run qualifies.")
           if not BRANCH_PATTERN.fullmatch(branch):
@@ -126,7 +126,7 @@ jobs:
                       "Authorization": f"Bearer {token}",
                       "Content-Type": "application/json",
                       "X-GitHub-Api-Version": API_VERSION,
-                      "User-Agent": "codebase-mirror-glm-merge-qualifier",
+                      "User-Agent": "ariad-glm-merge-qualifier",
                   },
               )
               try:
@@ -297,7 +297,7 @@ jobs:
           import urllib.request
 
           API_VERSION = "2026-03-10"
-          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_REPOSITORY = "Cheurteenyt/Ariad"
           EXPECTED_WORKFLOW_PATH = ".github/workflows/ci.yml"
           EXPECTED_PR_AUTHOR = "github-actions[bot]"
           EXPECTED_REVIEWER = "Cheurteenyt"
@@ -319,7 +319,7 @@ jobs:
               raise SystemExit(1)
 
           if repository != EXPECTED_REPOSITORY:
-              fail("The merge gate is bound to Cheurteenyt/codebase-mirror.")
+              fail("The merge gate is bound to Cheurteenyt/Ariad.")
           if not pr_number.isdecimal() or not run_id.isdecimal():
               fail("The validated PR or workflow run ID is malformed.")
           if not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
@@ -340,7 +340,7 @@ jobs:
                       "Authorization": f"Bearer {token}",
                       "Content-Type": "application/json",
                       "X-GitHub-Api-Version": API_VERSION,
-                      "User-Agent": "codebase-mirror-glm-merge-gate",
+                      "User-Agent": "ariad-glm-merge-gate",
                   },
               )
               try:

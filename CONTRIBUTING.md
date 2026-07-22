@@ -6,8 +6,8 @@ Thank you for your interest in contributing! This guide covers everything you ne
 
 ```bash
 # Clone
-git clone https://github.com/Cheurteenyt/codebase-mirror.git
-cd codebase-mirror/v2
+git clone https://github.com/Cheurteenyt/Ariad.git
+cd Ariad/v2
 
 # Install the committed dependency graph
 npm ci
@@ -294,6 +294,6 @@ gates have been completed on the exact release commit. At minimum:
 
 ## Questions?
 
-- Open an issue on GitHub: https://github.com/Cheurteenyt/codebase-mirror/issues
+- Open an issue on GitHub: https://github.com/Cheurteenyt/Ariad/issues
 - Read the docs: `docs/` directory
 - Check the CHANGELOG: `v2/CHANGELOG.md`

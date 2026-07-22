@@ -126,7 +126,7 @@ function decodePath(value) {
 }
 
 function asRepositoryDestination(destination) {
-  const internal = /^https:\/\/github\.com\/Cheurteenyt\/codebase-mirror\/(?:blob|tree)\/main\/([^#?]+)(#[^?]*)?$/i.exec(destination);
+  const internal = /^https:\/\/github\.com\/Cheurteenyt\/Ariad\/(?:blob|tree)\/main\/([^#?]+)(#[^?]*)?$/i.exec(destination);
   if (internal) return {
     repositoryPath: decodePath(internal[1]),
     fragment: internal[2]?.slice(1) ?? "",

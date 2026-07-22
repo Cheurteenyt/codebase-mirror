@@ -20,7 +20,7 @@ jobs:
   broker:
     name: Open or refresh the GLM pull request
     if: >-
-      github.repository == 'Cheurteenyt/codebase-mirror' &&
+      github.repository == 'Cheurteenyt/Ariad' &&
       github.ref_type == 'branch' &&
       startsWith(github.ref_name, 'v2/glm/')
     runs-on: ubuntu-latest
@@ -53,7 +53,7 @@ jobs:
           import urllib.request
 
           API_VERSION = "2026-03-10"
-          EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror"
+          EXPECTED_REPOSITORY = "Cheurteenyt/Ariad"
           EXPECTED_PR_AUTHOR = "github-actions[bot]"
           BRANCH_PATTERN = re.compile(
               r"^v2/glm/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$"
@@ -72,7 +72,7 @@ jobs:
               raise SystemExit(1)
 
           if repository != EXPECTED_REPOSITORY:
-              fail("This broker is bound to Cheurteenyt/codebase-mirror.")
+              fail("This broker is bound to Cheurteenyt/Ariad.")
           if not BRANCH_PATTERN.fullmatch(branch):
               fail("The pushed branch does not satisfy the v2/glm/** contract.")
           if ".." in branch or "//" in branch or branch.endswith(("/", ".")):
@@ -95,7 +95,7 @@ jobs:
                       "Authorization": f"Bearer {token}",
                       "Content-Type": "application/json",
                       "X-GitHub-Api-Version": API_VERSION,
-                      "User-Agent": "codebase-mirror-glm-pr-broker",
+                      "User-Agent": "ariad-glm-pr-broker",
                   },
               )
               try:

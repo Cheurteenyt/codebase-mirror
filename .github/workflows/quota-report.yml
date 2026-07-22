@@ -151,7 +151,7 @@ jobs:
               headers = {
                   "Accept": "application/vnd.github+json",
                   "Authorization": f"Bearer {token}",
-                  "User-Agent": "codebase-mirror-quota-report",
+                  "User-Agent": "ariad-quota-report",
                   "X-GitHub-Api-Version": API_VERSION,
               }
 

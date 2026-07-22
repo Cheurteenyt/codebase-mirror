@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Private security report
-    url: https://github.com/Cheurteenyt/codebase-mirror/security/advisories/new
+    url: https://github.com/Cheurteenyt/Ariad/security/advisories/new
     about: Report vulnerabilities and exposed credentials privately.

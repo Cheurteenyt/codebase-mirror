@@ -23,7 +23,7 @@ concurrency:
 jobs:
   recover:
     name: Recover missing exact-main validations
-    if: github.repository == 'Cheurteenyt/codebase-mirror'
+    if: github.repository == 'Cheurteenyt/Ariad'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -44,7 +44,7 @@ jobs:
 
           node <<'NODE'
           const API_VERSION = "2026-03-10";
-          const EXPECTED_REPOSITORY = "Cheurteenyt/codebase-mirror";
+          const EXPECTED_REPOSITORY = "Cheurteenyt/Ariad";
           const EXPECTED_TRIGGER_PATH = ".github/workflows/glm-merge-gate.yml";
           const SHA_PATTERN = /^[0-9a-f]{40}$/;
           const SETTLE_ATTEMPTS = 4;
@@ -84,7 +84,7 @@ jobs:
                   Authorization: `Bearer ${token}`,
                   "Content-Type": "application/json",
                   "X-GitHub-Api-Version": API_VERSION,
-                  "User-Agent": "codebase-mirror-main-exact-sha-watchdog",
+                  "User-Agent": "ariad-main-exact-sha-watchdog",
                 },
                 body: payload === undefined ? undefined : JSON.stringify(payload),
                 signal: AbortSignal.timeout(30_000),
@@ -235,7 +235,7 @@ jobs:
 
           async function main() {
             if (repository !== EXPECTED_REPOSITORY) {
-              fail("This watchdog is bound to Cheurteenyt/codebase-mirror.");
+              fail("This watchdog is bound to Cheurteenyt/Ariad.");
             }
             if (!token || !apiUrl) fail("GitHub API environment is incomplete.");
 

@@ -160,7 +160,7 @@ git fsck --full --no-reflogs
 
 # 3. Verify the SHA matches GitHub main
 GITLAB_MAIN=$(git rev-parse HEAD)
-GITHUB_MAIN=$(git ls-remote https://github.com/Cheurteenyt/codebase-mirror.git refs/heads/main | awk '{print $1}')
+GITHUB_MAIN=$(git ls-remote https://github.com/Cheurteenyt/Ariad.git refs/heads/main | awk '{print $1}')
 echo "GitLab main:  $GITLAB_MAIN"
 echo "GitHub main:  $GITHUB_MAIN"
 test "$GITLAB_MAIN" = "$GITHUB_MAIN" && echo "✓ SHAs match" || echo "✗ DIVERGENCE"

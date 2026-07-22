@@ -7,7 +7,7 @@
 > **Hybrid code intelligence** — native WASM indexer (112 languages) + human memory graph + Obsidian vault sync.
 > V1 (C engine, 158 languages) remains an optional, separately run database producer and reference; V2 never launches it automatically.
 
-[![CI](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheurteenyt/codebase-mirror/actions/workflows/ci.yml)
+[![CI](https://github.com/Cheurteenyt/Ariad/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheurteenyt/Ariad/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## What is this?
@@ -146,7 +146,7 @@ Add to your MCP client config (Claude Desktop, Cursor, Zed, etc.):
   "mcpServers": {
     "codebase-memory-v2": {
       "command": "node",
-      "args": ["/absolute/path/to/codebase-mirror/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
+      "args": ["/absolute/path/to/Ariad/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
     }
   }
 }
@@ -158,12 +158,12 @@ project's `.codex/config.toml` after running `npm run build`:
 ```toml
 [mcp_servers.codebase_memory_v2]
 command = "node"
-args = ["/absolute/path/to/codebase-mirror/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
+args = ["/absolute/path/to/Ariad/v2/dist/cli/index.js", "mcp", "--project", "my-app"]
 ```
 
 On Windows, the global file is `%USERPROFILE%\.codex\config.toml`. Use an
 absolute path with forward slashes, for example
-`D:/Mycodex/codebase-mirror/v2/dist/cli/index.js`, or escape each backslash in
+`D:/Mycodex/Ariad/v2/dist/cli/index.js`, or escape each backslash in
 the TOML string. Restart Codex after editing the configuration, then use
 `codex mcp list` or `/mcp` to verify the connection.
 

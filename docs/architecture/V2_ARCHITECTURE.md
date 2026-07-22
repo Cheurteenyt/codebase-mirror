@@ -381,7 +381,9 @@ See [RELEASE_POLICY.md](../operations/RELEASE_POLICY.md) for release governance.
 - Node.js requirement: `>=22.12.0` (from `v2/package.json`). CI verifies the
   exact floor on Linux and Windows; development and Docker use Node 24 LTS.
 - No GitHub Release yet (pre-release after R169 + R170)
-- Repository name `codebase-mirror` is misleading (rename deferred)
+- The canonical GitHub repository was renamed to `Cheurteenyt/Ariad`; active
+  workflows, package metadata, and documentation are bound to that identity.
+
 ## 15. R169 Generation Store Architecture (MERGED / INACTIVE)
 
 > **Status: R169A and R169B are merged; R169B is on `main` at

@@ -58,12 +58,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Cheurteenyt/codebase-mirror.git",
+    "url": "https://github.com/Cheurteenyt/Ariad.git",
     "directory": "v2"
   },
-  "homepage": "https://github.com/Cheurteenyt/codebase-mirror#readme",
+  "homepage": "https://github.com/Cheurteenyt/Ariad#readme",
   "bugs": {
-    "url": "https://github.com/Cheurteenyt/codebase-mirror/issues"
+    "url": "https://github.com/Cheurteenyt/Ariad/issues"
   },
   "keywords": [
     "codebase",

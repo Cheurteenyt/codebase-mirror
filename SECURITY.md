@@ -11,7 +11,7 @@ not maintained as separate supported versions.
 Do not open a public issue for a suspected vulnerability, exposed credential,
 or bypass of a trust boundary. Use GitHub's private vulnerability reporting:
 
-https://github.com/Cheurteenyt/codebase-mirror/security/advisories/new
+https://github.com/Cheurteenyt/Ariad/security/advisories/new
 
 Include the affected commit or version, impact, reproduction steps, and the
 smallest safe proof of concept. Remove tokens, private keys, personal data, and

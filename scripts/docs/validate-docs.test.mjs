@@ -49,7 +49,7 @@ test("resolves relative, fragment-only, and repository GitHub links", () => {
   assert.deepEqual(
     resolveMarkdownDestination(
       "v2/README.md",
-      "https://github.com/Cheurteenyt/codebase-mirror/blob/main/docs/README.md#start-here",
+      "https://github.com/Cheurteenyt/Ariad/blob/main/docs/README.md#start-here",
     ),
     { repositoryPath: "docs/README.md", fragment: "start-here" },
   );

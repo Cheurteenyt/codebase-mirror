@@ -22,17 +22,20 @@ const gate = read(".github/workflows/glm-merge-gate.yml");
 const watchdog = read(".github/workflows/main-exact-sha-watchdog.yml");
 const ci = read(".github/workflows/ci.yml");
 const codeql = read(".github/workflows/codeql.yml");
+const mirror = read(".github/workflows/mirror-main-to-gitlab.yml");
 const codeowners = read(".github/CODEOWNERS");
 const operations = read("docs/operations/GLM_GITHUB_OPERATIONS.md");
 const quota = read(".github/workflows/quota-report.yml");
 const storagePolicy = read("docs/operations/GITHUB_ACTIONS_STORAGE_POLICY.md");
 const dependabot = read(".github/dependabot.yml");
+const CANONICAL_REPOSITORY = "Cheurteenyt/Ariad";
+const LEGACY_REPOSITORY = "Cheurteenyt/codebase-mirror";
 
 describe("R169 GLM PR broker", () => {
   it("is limited to same-repository v2/glm checkpoints", () => {
     expect(broker).toContain('- "v2/glm/**"');
     expect(broker).toContain(
-      "github.repository == 'Cheurteenyt/codebase-mirror'",
+      `github.repository == '${CANONICAL_REPOSITORY}'`,
     );
     expect(broker).toContain("startsWith(github.ref_name, 'v2/glm/')");
     expect(broker).toContain("BRANCH_PATTERN.fullmatch(branch)");
@@ -168,6 +171,13 @@ describe("R169 post-merge exact-SHA watchdog", () => {
 });
 
 describe("R169 native authorization and exact-main recovery", () => {
+  it("binds every repository-sensitive workflow to the canonical Ariad identity", () => {
+    for (const workflow of [broker, gate, watchdog, ci, codeql, mirror]) {
+      expect(workflow).toContain(CANONICAL_REPOSITORY);
+      expect(workflow).not.toContain(LEGACY_REPOSITORY);
+    }
+  });
+
   it("assigns every path to the sole native CODEOWNER", () => {
     expect(codeowners).toMatch(/^\*\s+@Cheurteenyt\s*$/m);
     expect(codeowners).toMatch(/^\/.github\/\s+@Cheurteenyt\s*$/m);

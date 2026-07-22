@@ -18,7 +18,7 @@ const WORKFLOW_PATH = join(
   "workflows",
   "main-exact-sha-watchdog.yml",
 );
-const REPOSITORY = "Cheurteenyt/codebase-mirror";
+const REPOSITORY = "Cheurteenyt/Ariad";
 const MAIN_SHA = "a".repeat(40);
 const ADVANCED_SHA = "b".repeat(40);
 

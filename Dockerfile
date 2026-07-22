@@ -37,4 +37,4 @@ CMD ["--help"]
 LABEL org.opencontainers.image.title="Codebase Memory V2"
 LABEL org.opencontainers.image.description="Codebase Memory V2 — hybrid code intelligence (native WASM indexer + human memory graph + Obsidian sync + Graph UI)"
 LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.source="https://github.com/Cheurteenyt/codebase-mirror"
+LABEL org.opencontainers.image.source="https://github.com/Cheurteenyt/Ariad"

@@ -529,7 +529,7 @@ KEY=/path/to/gitlab_mirror_ed25519
 GITLAB_URL=git@gitlab.com:cheurteen1/codebase-memory-V2.git
 
 # Use the current GitHub main SHA — do not hard-code an old SHA
-CURRENT_GITHUB_MAIN="$(git ls-remote https://github.com/Cheurteenyt/codebase-mirror.git refs/heads/main | awk '{print $1}')"
+CURRENT_GITHUB_MAIN="$(git ls-remote https://github.com/Cheurteenyt/Ariad.git refs/heads/main | awk '{print $1}')"
 
 # Verify GitLab main is an ancestor (fast-forward eligible)
 REMOTE_GITLAB_MAIN="$(git ls-remote "$GITLAB_URL" refs/heads/main | awk '{print $1}')"

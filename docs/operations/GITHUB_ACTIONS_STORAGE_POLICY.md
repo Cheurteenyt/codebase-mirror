@@ -118,7 +118,7 @@ authorize an agent to delete anything.
    part after `refs/` (for example `heads/old-branch`):
 
    ```powershell
-   gh api "repos/Cheurteenyt/codebase-mirror/git/ref/REF_SUFFIX"
+   gh api "repos/Cheurteenyt/Ariad/git/ref/REF_SUFFIX"
    ```
 
    Continue only when GitHub returns `404`. Any `200`, `403`, timeout, or other
@@ -127,7 +127,7 @@ authorize an agent to delete anything.
 
    ```powershell
    gh api --paginate `
-     "repos/Cheurteenyt/codebase-mirror/actions/caches?ref=refs/heads/old-branch&per_page=100" `
+     "repos/Cheurteenyt/Ariad/actions/caches?ref=refs/heads/old-branch&per_page=100" `
      --jq '.actions_caches[] | [.id, .ref, .key, .size_in_bytes, .last_accessed_at] | @tsv'
    ```
 
@@ -135,7 +135,7 @@ authorize an agent to delete anything.
 
    ```powershell
    gh api --method DELETE `
-     "repos/Cheurteenyt/codebase-mirror/actions/caches/CACHE_ID"
+     "repos/Cheurteenyt/Ariad/actions/caches/CACHE_ID"
    ```
 
 6. Run Quota Report again and retain the successful run as evidence.
