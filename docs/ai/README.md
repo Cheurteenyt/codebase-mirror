@@ -6,6 +6,10 @@
 
 This directory is intentionally idle on `main`.
 
+The active R179 methodology branch records its recoverable state in
+[`CURRENT_HANDOFF.md`](CURRENT_HANDOFF.md). R179 changes no product code and
+repeats only the four R178 T01 B/C cells.
+
 During one active `v2/r<n>-<short-name>` round, the implementation agent
 creates and commits:
 
