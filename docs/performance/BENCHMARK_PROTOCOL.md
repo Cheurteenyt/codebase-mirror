@@ -1722,3 +1722,122 @@ two usage modes, and one attempt per cell. Moreover, C did not reach exact
 correctness in any cell, so the ratio describes a more expensive and less
 accurate grep/read attempt rather than equal-quality successful answers. R178
 does not change or generalize the wider mixed findings from R176 T02-T04.
+
+## 17. R179 T01 repetition and stability round — 2026-07-22
+
+R178 established a fresh same-round T01 result from exactly one sample per
+cell: V2 B was 4/4 PASS at 236,837 native raw tokens; grep/read C was 0/4 PASS
+at 1,223,595; C/B was 5.166401365x. R179 changes no product, task, oracle,
+runner, prompt, tool policy, model, or grading rule. Its only purpose is to
+measure whether that flagship single-sample result repeats.
+
+### 17.1 Immutable pre-registration before any repetition
+
+The product anchor is clean current `main` at
+`148e4b65849efc3fcfbc4fb716abf0898424293d`, exactly the merged R178 head. R179
+will use **three repetitions per cell and arm**. Three is the minimum that
+provides an individual list, min, max, mean, and one-outlier visibility. R178's
+observed B+C cost was 1,460,432 native tokens, so three repetitions project to
+about 4,381,296 measured native tokens. A fourth or fifth repetition would add
+approximately 1.46 million tokens each, dominated by the knowingly expensive
+grep/read arm. N=3 is the pre-registered budget/statistical-value compromise;
+the actual total is reported at the end and is never hidden behind the project
+savings claim.
+
+The unchanged cells are the four R178 T01 configurations — one-shot small,
+one-shot large, continuous small, and continuous large — in both B V2 MCP-only
+and C optimized grep/read-only. Every repetition uses the already registered
+question and independent TypeScript-oracle answer at small target
+`5915e0624ed4376611fdc1f824d1d65a327c4a2f` and large target
+`ef3a5830f960c00018f810cebf26133b35ec2b6f`. No new task is designed.
+
+Three append-once roots keep the runner's unchanged attempt semantics while
+making repetition identity unambiguous:
+
+```text
+D:/Mycodex/benchmark-results/r179-t01-stability-rep-1
+D:/Mycodex/benchmark-results/r179-t01-stability-rep-2
+D:/Mycodex/benchmark-results/r179-t01-stability-rep-3
+```
+
+Within each configuration, repetitions 1, 2, and 3 run back-to-back. Each
+invocation selects `--phase postfix --condition B,C --task T01 --attempt 1`.
+The existing counterbalancing is unchanged: small runs B then C and large runs
+C then B. The exact configuration order is one-shot small, one-shot large,
+continuous small, then continuous large. Thus the round contains 24 selected
+cells and 12 runner invocations.
+
+Before every one of those 12 invocations, R179 records a full environment row:
+UTC timestamp, OS caption/version/build/architecture, CPU and memory, Node,
+npm, Codex CLI, exact model `gpt-5.6-sol`, and reasoning `medium`. A version
+drift is reported per repetition and is not silently averaged. The existing
+runner metadata independently records the target SHA, model, reasoning, Codex
+version, prompt, condition, and policy for every arm.
+
+#### Pre-registered stability rule
+
+A cell/arm group is token-stable only when its three native raw-token samples
+satisfy `max / min <= 1.20`, meaning the largest sample is no more than 20%
+above the smallest. It is grade-stable only when all three mechanical grades
+are identical. The flagship R178 finding is declared **stable** only if all of
+the following hold:
+
+1. all eight cell/arm groups are token-stable and grade-stable;
+2. every B repetition is PASS in all four configurations, while every C
+   repetition preserves the corresponding R178 grade (FAIL for small and
+   PARTIAL for large in both usage modes);
+3. for each repetition number, aggregate C raw tokens across the four cells
+   remain greater than aggregate B raw tokens;
+4. the three matched aggregate C/B ratios themselves satisfy
+   `max / min <= 1.20`.
+
+This 20% band is intentionally strict enough to expose material agent/tool
+variance while allowing modest runtime nondeterminism. It was fixed before any
+R179 raw root existed. Call counts do not decide stability, but every count is
+listed and its variation discussed. The historical `5.166401365x` point is not
+part of the pass/fail rule: after measurement it is located inside or outside
+the new three-ratio min/max range, as requested.
+
+For each cell/arm, the final report must list all three raw token counts and
+call counts individually, then min, max, arithmetic mean, the max/min spread,
+and grade invariance. It must also list the three matched aggregate B totals, C
+totals, and C/B ratios. If any grade flips or the tolerance fails, instability
+is the primary finding even if V2 remains cheaper on average. A range replaces
+the single 5.166401365x point only when the evidence supports that wording.
+
+Only a mechanically proven protocol-invalid artifact may use attempt 2 in its
+own repetition root, and the invalid attempt remains disclosed. An unfavorable
+grade, token count, call count, variance, or ratio is never a rerun reason. The
+future canonical evidence directory is
+`docs/performance/benchmarks/t01-stability-repetitions-2026-07-22`, with one
+immutable checkpoint subdirectory per repetition.
+
+### 17.2 Result: the R178 point is not stable
+
+All 24 selected cells completed on attempt 1, exit 0, with no protocol
+violation. The earliest process started at `2026-07-22T19:01:13.546Z`, after
+the immutable pre-registration commit `c2fbaeeb7228bd7f832e25ffa0f3115bdf2b6b57`
+was recorded remotely at `2026-07-22T18:58:30Z`. The two registered target
+SHAs, model, reasoning, Codex version, policies, and environment did not drift.
+
+The pre-registered stability verdict is **FAIL**. Only 3/8 cell/arm groups
+meet the native-token `max / min <= 1.20` rule. All four C groups are unstable;
+continuous/small B also misses narrowly at `1.203925`. Two C groups change
+grade, and the required R178 C grade pattern is not preserved. B remains
+12/12 PASS. C totals 5 PASS, 5 PARTIAL, and 2 FAIL, rather than repeating the
+R178 0/2/2 result in any repetition.
+
+Matched aggregate C/B raw-token ratios are `4.279942665x`, `4.693265194x`,
+and `5.438372088x`. Their max/min spread is `1.270664706`, above the `1.20`
+ceiling. C remains more expensive than B in all three repetitions, and the
+historical `5.166401365x` point lies inside the new range, but it is not a
+stable point estimate under this protocol. Across the full round, B uses
+697,852 raw tokens and C uses 3,346,322, for 4,044,174 measured tokens and a
+descriptive combined C/B ratio of `4.795174335x`.
+
+The canonical
+[`R179 aggregate and stability report`](benchmarks/t01-stability-repetitions-2026-07-22/aggregate-and-stability.md)
+lists every token sample, call count, grade, min, max, mean, environment row,
+matched ratio, and raw manifest identity. Because instability is the primary
+finding, R179 does not replace the R178 point with a single new headline
+number and makes no product-code change.
