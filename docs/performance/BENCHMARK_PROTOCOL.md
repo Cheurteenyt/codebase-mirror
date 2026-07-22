@@ -1536,3 +1536,117 @@ exact, output is fail-closed and capped, raw native tokens fall 79.904%, and
 completed evidence calls fall from 60 to 4. This closes only the r176
 multi-hop-caller finding. It neither rewrites the historical r176 aggregate
 nor claims a result for the intentionally unrerun T02–T04 categories.
+
+## 16. R178 fresh V2-versus-grep multi-hop confirmation — 2026-07-22
+
+R177 corrected and freshly remeasured only condition B. Combining its final B
+total with the historical R176 condition-C total suggested that grep/read used
+about 5.2 times as many native tokens, but those two values came from different
+rounds. R178 replaces that hand-combined comparison with one bounded,
+same-round B/C confirmation. It changes no product or benchmark code.
+
+### 16.1 Environment disclosure and R176 difference
+
+The following environment was captured **before any R178 measured process**.
+It is the shared host and toolchain for both fresh arms:
+
+```text
+CapturedAtUtc            : 2026-07-22T01:46:08.9978008Z
+OSCaption                : Microsoft Windows 11 Professionnel
+OSVersion                : 10.0.26200
+OSBuild                  : 26200
+OSArchitecture           : 64 bits
+CPUName                  : AMD Ryzen 9 5900X 12-Core Processor
+PhysicalCores            : 12
+LogicalProcessors        : 24
+TotalPhysicalMemoryBytes : 42849894400
+TotalPhysicalMemoryGiB   : 39.907
+Node                     : v24.15.0
+Npm                      : 11.12.1
+Codex                    : codex-cli 0.144.4
+ArmBModelAndReasoning     : gpt-5.6-sol / medium
+ArmCModelAndReasoning     : gpt-5.6-sol / medium
+Candidate                : d542d666a048eb14e6b6ca314efd47239cca92e5
+```
+
+| Field | R178 fresh B/C | R176 T01 artifacts | Difference or limit |
+|---|---|---|---|
+| Model | `gpt-5.6-sol` for B and C | `gpt-5.6-sol` in all eight T01 metadata files | Exact match |
+| Reasoning | `medium` for B and C | `medium` in all eight T01 metadata files | Exact match |
+| Codex CLI | `codex-cli 0.144.4` | `codex-cli 0.144.4` in all eight T01 metadata files | Exact match |
+| Target SHAs | small `5915e0624ed4376611fdc1f824d1d65a327c4a2f`; large `ef3a5830f960c00018f810cebf26133b35ec2b6f` | Same SHAs in all corresponding metadata files | Exact match |
+| OS | Windows 11 Professionnel `10.0.26200`, build `26200`, 64-bit | Not recorded | Cannot establish a match or difference |
+| Node / npm | `v24.15.0` / `11.12.1` | Not recorded | Cannot establish a match or difference |
+| CPU / RAM | Ryzen 9 5900X, 12 physical/24 logical cores, 42,849,894,400 bytes | Not recorded | Cannot establish a match or difference |
+
+The R176 published manifest records artifact identity, bytes, hashes, and tree
+hash, while its per-cell metadata records the model, reasoning, CLI, command,
+target, and timestamps. Neither source contains the missing OS/runtime/hardware
+fields. Therefore comparisons to R176 may be described as model-, CLI-, task-,
+and target-matched, but not as fully environment-identical. The fresh R178 B/C
+ratio itself does not have this limitation because both arms run on the single
+environment disclosed above. The arms remain isolated evidence sessions, as
+required to prevent cross-condition contamination; “same round” means the same
+host, versions, candidate, targets, task, pipeline, and fixed execution window,
+not a shared conversation history.
+
+### 16.2 Immutable eight-cell pre-registration
+
+The candidate is current post-R177 `main` at
+`d542d666a048eb14e6b6ca314efd47239cca92e5`. The active
+`scripts/benchmark/v1-v2-truth-audit/tasks.json` supplies the unchanged T01
+question and TypeScript-oracle answer for both pinned targets. Only conditions
+B (V2 MCP-only) and C (grep/read shell-only), T01, attempt 1, and phase
+`postfix` are selected. T02-T04 and conditions A/D are excluded.
+
+The four runner invocations and their internally counterbalanced arm order are
+fixed as follows, producing exactly eight cells:
+
+1. one-shot small T01: B then C;
+2. one-shot large T01: C then B;
+3. continuous small T01: B then C;
+4. continuous large T01: C then B.
+
+Each invocation uses `--condition B,C --task T01 --attempt 1`, the fresh raw
+root `D:/Mycodex/benchmark-results/r178-fresh-bc-multihop-final`, and the pinned
+V2 state `D:/Mycodex/benchmark-state/v2-r173-final`. The future canonical
+checkpoint is
+`docs/performance/benchmarks/fresh-multihop-v2-vs-grep-2026-07-22`.
+Artifacts may not be overwritten. One attempt-2 replacement is permitted only
+for a mechanically identified protocol-invalid cell; the invalid attempt must
+remain disclosed. No rerun is permitted merely because an answer, token count,
+or ratio is unfavorable.
+
+Before execution, current `main` is rebuilt, the existing runner verification
+must confirm both clean pinned checkouts and projects, and the independent
+oracle must pass on each target. The existing runner, native-accounting
+summarizer, mechanical grader, audit, and checkpoint scripts are the only
+measurement path. Validity, answers, prompts, policies, model, effort, schema,
+order, metrics, and aggregation may not change after observing a result.
+
+The primary comparison is aggregate native raw tokens, reported both as C/B
+and B/C with the percentage delta. Per-cell grade, raw tokens, uncached input
+plus output, completed calls, response bytes, and wall time are also published.
+Every cell must be protocol-valid; correctness is reported before efficiency
+and is never traded for a smaller count.
+
+For context only, the cross-round hand combination was R176 C
+`1,239,079` divided by final R177 B `236,935`, or `5.229615717x`; equivalently,
+the R177 B count was 80.8781361% lower. R178 will state directly whether the
+fresh same-round ratio confirms, weakens, or reverses that descriptive figure.
+
+The exact pushed pre-registration SHA will be added only after this section is
+committed and pushed, and all measured process start times must be later than
+that push.
+
+### 16.3 Fresh aggregate result
+
+Pending the pushed pre-registration and eight measured cells.
+
+### 16.4 Fresh per-cell result
+
+Pending the pushed pre-registration and eight measured cells.
+
+### 16.5 Plain-language ratio and evidence link
+
+Pending the pushed pre-registration and eight measured cells.
