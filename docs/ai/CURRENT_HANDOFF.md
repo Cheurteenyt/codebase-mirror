@@ -13,7 +13,7 @@ base_sha: 93e0d5c99fa5dd09a5276a9c5c7e922b16f64315
 last_completed_code_sha: df4298caea146b4a5a1d8cc5a07440e22bd20922
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-23T01:50:08Z
+updated_at_utc: 2026-07-23T01:56:13Z
 implementer_role: codex
 ```
 
@@ -39,7 +39,7 @@ No external audit is active. R181 is an evidence-first root-cause round initiate
 | Finding | Audit source | Decision | Evidence or reason | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------------|----------|--------------------|------------------------|-----------------|-------------------|------------------|
 | R181-LOCAL-F001 | R176 T02-T04 single-sample evidence | ACCEPTED | Repeat N=3 and attribute token cost before deciding whether a repository defect exists. | `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe` | environment helper smoke plus existing mechanical benchmark checks | pending | IMPLEMENTED_PUSHED |
-| R181-LOCAL-F002 | R181 N=3 traces and pinned indexes | ACCEPTED | T02 lacks alias-aware type-impact evidence; 10-19 distinct B calls cause 87.5% of the one-shot gap. Add a general bounded operation inside `lookup_source_text`; do not touch T01/direct callers. | `1c151232f1d49042d9e7ecfc3f44987fa5612625` | `tests/mcp/exact-source-lookup.test.ts`; `tests/mcp/server.test.ts` | pending | MEASURED_ACCEPTED_LOCAL |
+| R181-LOCAL-F002 | R181 N=3 traces and pinned indexes | ACCEPTED | T02 lacks alias-aware type-impact evidence; 10-19 distinct B calls cause 87.5% of the one-shot gap. Add a general bounded operation inside `lookup_source_text`; do not touch T01/direct callers. | `1c151232f1d49042d9e7ecfc3f44987fa5612625` | `tests/mcp/exact-source-lookup.test.ts`; `tests/mcp/server.test.ts` | pending | MEASURED_ACCEPTED_PUSHED |
 
 ## Pushed checkpoints
 
@@ -50,6 +50,7 @@ No external audit is active. R181 is an evidence-first root-cause round initiate
 | `6b80e3a36481c69ad397de69297542ae80069ab5` | pending | R181-LOCAL-F001 | Ensure raw manifests hash every pre-registered environment capture. | targeted 2-test checkpoint suite; full `docs:check` (8 tests) | pending |
 | `61af45679ad28a4cef7d7888cab04dfdbe07758b` | pending | R181-LOCAL-F001, R181-LOCAL-F002 | Three immutable baseline checkpoints and pre-fix mechanism/noise diagnosis. | 72/72 decision cells valid; `docs:check` (8 tests) | pending |
 | `1c151232f1d49042d9e7ecfc3f44987fa5612625` | pending | R181-LOCAL-F002 | Add one bounded alias-aware TypeScript `type_dependents` profile inside the existing `lookup_source_text` tool. | typecheck; build; MCP 47/47; docs check; pinned small 7/7 and large 8/8 oracle smoke | pending |
+| `df4298caea146b4a5a1d8cc5a07440e22bd20922` | pending | R181-LOCAL-F002 | Publish the accepted N=3 postfix comparison and three immutable checkpoints. | 24/24 invocations; 84 raw cells; 0 invalid; all four T02 B groups HELPED; no selected B group WORSE; docs check | pending |
 
 ## Exact validation evidence
 
@@ -125,6 +126,33 @@ result_summary: 24 invocations and 84 raw cells completed on attempt 1 in 2817.9
 not_run: full backend, package, and Graph UI validation plus remote CI wait are the next action
 ```
 
+```text
+command: npm run typecheck; npm test
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows PowerShell, Node.js repository checkout
+exit_code: 1 after typecheck and the pretest build passed
+result_summary: broad suite reaches the documented pre-existing POSIX mode/symlink fixtures for inactive R169A/B generation publication; Windows reports temporary-directory mode 0o666 and the POSIX validator rejects it with STORE_LAYOUT_PERMISSIONS_INSECURE, matching the R177 and current-state limitation rather than the R181 MCP path
+not_run: no out-of-scope Windows ACL/directory-durability design for inactive publication primitives; authoritative Linux CI remains pending
+```
+
+```text
+command: Windows CI product test list plus exact-source regression; Windows UI lifecycle/security list; npm run bench:incremental:smoke; npm run build:package
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows PowerShell, same clean candidate tree
+exit_code: 0
+result_summary: 93/93 portable product tests and 58/58 UI lifecycle/security tests pass; all incremental correctness invariants pass; package build installs Graph UI with zero audit vulnerabilities, respects every bundle budget, compiles the backend, and embeds verified UI assets
+not_run: npm publication is outside this round
+```
+
+```text
+command: npx tsc --noEmit; npm run build; npm test
+working_directory: D:/Mycodex/codebase-mirror/graph-ui
+environment: Windows PowerShell, same clean candidate tree
+exit_code: 0
+result_summary: typecheck passes; production build transforms 1,910 modules and stays within Graph/main/CSS/manifest budgets; 23 test files and 216 tests pass
+not_run: browser runtime smoke waits for the final merged local server restart
+```
+
 ## Reset recovery
 
 ```bash
@@ -151,11 +179,11 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify --results-root D:/Mycode
 ## Current working state
 
 - **Last completed finding:** R181-LOCAL-F002 accepted same-N postfix measurement, published locally at `df4298caea146b4a5a1d8cc5a07440e22bd20922`.
-- **Current finding:** final local validation and remote candidate verification.
+- **Current finding:** remote candidate verification.
 - **Dirty files expected:** `NONE` at the pushed checkpoint.
 - **Unpushed commits expected:** `0` after this handoff checkpoint is pushed.
 - **Known blocker:** none.
-- **Single next action:** push the measurement checkpoint, run the full backend/package/Graph UI validation matrix, then update the candidate handoff for remote CI.
+- **Single next action:** push this clean candidate checkpoint and wait for the exact-head GitHub Actions and CodeQL gates before archiving the handoff.
 
 ## Security confirmation
 
