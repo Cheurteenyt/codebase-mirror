@@ -2,7 +2,7 @@
 
 > **Status:** Reference architecture — merged foundation, inactive product path
 > **Audience:** Maintainers, storage engineers, and auditors
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-20
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-23
 
 > **Authoritative status (2026-07-15): R169A and R169B are merged on
 > `main`; the R169B merge commit is
@@ -18,8 +18,16 @@
 > `DATA-CARRY-01` remains open.
 >
 > R169C is the future indexer integration and outcome-contract round;
-> R169D is the future reader/lifecycle cutover; R169E is the future
-> activation, integrated crash-matrix, concurrency, and performance gate.
+> R169D is the future reader/lifecycle cutover. **R169E is paused, not
+> scheduled:** the production-scale reindexing-safety need it addresses has
+> not been demonstrated at the project's current test scale (2 repositories,
+> no large-scale continuous deployment).
+>
+> This is a deliberate pause, not an abandonment. The completed foundation
+> and its technical record remain available for reactivation if a demonstrated
+> need emerges. `DATA-CARRY-01` stays open; the pause is not evidence that its
+> activation contract has been completed.
+>
 > Statements below about reader-visible atomic generations describe the
 > merged primitive contract or the future activated product, as labelled.
 >
@@ -45,7 +53,7 @@ Activation is staged across R169B–R169E (validated roadmap):
 | R169B | Durable Staging Publisher + Validator + fsync + CAS + GC/recovery primitives | **merged / inactive** (`15a732d91984e5b4ffa29b4e129ac0d6316c9fca`) |
 | R169C | Indexer Integration + Outcome Contract | future |
 | R169D | Reader Cutover + Legacy Migration + Project Lifecycle | future |
-| R169E | Integrated Crash Matrix + Performance + Activation + Version | future |
+| R169E | Integrated Crash Matrix + Performance + Activation + Version | **paused, not scheduled** |
 
 `DATA-CARRY-01` (P1) is **not** closed by the merged R169A/R169B
 foundation. It remains **OPEN until
@@ -747,8 +755,9 @@ falls back to the legacy DB. The reasoning:
   is exactly what R169 is supposed to eliminate.
 
 Migration to generation-only operation follows the validated R169A→R169E
-roadmap. R169A and R169B are merged foundations; R169C–R169E remain future
-integration and activation work. There is no "big bang" activation.
+roadmap. R169A and R169B are merged foundations; R169C and R169D remain future
+integration work, while R169E is paused and not scheduled. There is no
+"big bang" activation.
 
 - **R169A — Generation Store Contract + Resolver Foundation.** Merged /
   inactive resolver, manifest V1 types, and atomic JSON writer.
@@ -768,10 +777,11 @@ integration and activation work. There is no "big bang" activation.
 - **R169D — Reader Cutover + Legacy Migration + Project Lifecycle.**
   Future reader switch from `legacyCodeDbPath` to `resolveActiveCodeDb`,
   legacy migration, and lifecycle wiring.
-- **R169E — Crash Matrix + Performance + Activation + Version.** Future
-  work: replay C01–C20 against the integrated pipeline, verify performance,
-  complete the concurrency analysis (single-host safety and multi-host
-  boundary), and remove the legacy read fallback for re-indexed projects.
+- **R169E — Crash Matrix + Performance + Activation + Version.** **Paused,
+  not scheduled.** If reactivated, replay C01–C20 against the integrated
+  pipeline, verify performance, complete the concurrency analysis (single-host
+  safety and multi-host boundary), and remove the legacy read fallback for
+  re-indexed projects.
   **Only after R169E
   passes all four (crash matrix + concurrency + performance +
   activation) is `DATA-CARRY-01` (P1) marked closed.**
@@ -1170,7 +1180,7 @@ indeterminate state and the caller must run recovery.
 - R169C indexer integration is absent.
 - R169B includes targeted fault injection, child-process crash, concurrency,
   publisher/GC race, GC, CAS, and recovery tests. The end-to-end product
-  crash matrix remains a future R169E activation gate because the indexer
+  crash matrix remains part of the paused R169E activation gate because the indexer
   and readers have not been integrated.
 
 ## 13. Performance contract
@@ -1272,13 +1282,14 @@ What the merged foundation delivers:
 - `v2/tests/storage/r169b-*.test.ts` — publisher, CAS, GC, recovery,
   concurrency, race, and crash-harness evidence.
 
-What remains future:
+What remains unactivated:
 
 - R169C — Indexer Integration + Outcome Contract. Wire those primitives
   into `indexProjectWasm` and outcome paths.
 - R169D — Reader Cutover + Legacy Migration + Project Lifecycle.
-- R169E — Crash Matrix + Performance + Activation + Version (and the
-  formal close-out of `DATA-CARRY-01`).
+- R169E — **paused, not scheduled** Crash Matrix + Performance + Activation
+  + Version (and the formal close-out of `DATA-CARRY-01` if reactivated and
+  completed).
 - R170 — Multi-host fencing / lease.
 
 The R169A/R169B foundation is merged and remains inactive so that
@@ -1295,11 +1306,11 @@ The merged generation-store primitives are **Linux certified** — their code pa
 fchmod 0700, dev/ino identity checks, path-traversal rejection) is
 exercised by the test matrix on Linux.
 
-**macOS verification is deferred to R169E.** The primitives
+**macOS verification remains deferred as part of the paused R169E scope.** The primitives
 used (`O_NOFOLLOW`, `O_DIRECTORY`, `fsync(fd)`, `fchmod`, lstat +
 dev/ino) are POSIX and available on macOS, but the generation-store matrix
-was run on Linux only. R169E will repeat the full matrix on macOS as
-part of the crash + performance + activation evidence. Until then,
+was run on Linux only. If R169E is reactivated, it must repeat the full matrix
+on macOS as part of the crash + performance + activation evidence. Until then,
 macOS is NOT certified and the foundation MUST NOT be activated on
 macOS production hosts.
 
@@ -1307,8 +1318,9 @@ macOS production hosts.
 not available on Windows; the code falls back to a lstat → open →
 fstat → dev/ino-compare path. This fallback is exercised by unit
 tests but is NOT certified for production use. Windows remains a
-legacy / inactive platform for the generation store; R169E will
-decide whether to certify Windows or to formally drop support.
+legacy / inactive platform for the generation store; R169E would decide
+whether to certify Windows or to formally drop support if that paused round
+is reactivated.
 
 ## 16. References
 
