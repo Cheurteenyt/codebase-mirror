@@ -50,6 +50,7 @@ production build; do not relax a budget to accept an update.
 - [Current product state](../docs/reference/V2_CURRENT_STATE.md)
 - [Graph UI architecture](../docs/architecture/V2_ARCHITECTURE.md#9-graph-ui)
 - [Performance and perception lab](../docs/performance/GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md)
+- [R183 visual-intelligence evidence](../docs/performance/reports/R183_GRAPH_UI_VISUAL_INTELLIGENCE_2026-07-23.md)
 - [Deep Graph UI audit](../docs/performance/reports/GRAPH_UI_V2_DEEP_AUDIT_2026-07-16.md)
 - [Performance, token, and UI audit](../docs/performance/reports/PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md)
 
@@ -60,6 +61,9 @@ production build; do not relax a budget to accept an update.
 - Bind paginated exact reads to the graph snapshot and discard stale pages.
 - Preserve one renderer and interaction model across Structure and
   Dependencies views.
+- Keep macro-domain signatures deterministic and bounded to two already loaded
+  symbols per planned domain. They are previews, not new hit targets or claims
+  of exact scope coverage.
 - Keep output and simulation budgets explicit; visual density must not silently
   become an unbounded transfer or layout cost.
 - Keep UI primitives independently upgradable; do not import a component-suite

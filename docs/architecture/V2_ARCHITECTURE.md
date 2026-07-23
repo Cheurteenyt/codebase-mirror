@@ -148,13 +148,21 @@ internal values remain `architecture` and `stellar` so existing preferences do
 not require a migration. `Structure` is the default and follows the
 server-authored domain/community anchors. At macro scale it labels only the 12
 largest communities whose projected circles can carry text, using the existing
-collision budget. `Dependencies` installs deterministic targets into that same
-  simulation. Without a focus, an exact domain dependency atlas replaces the
-  representative particle frame. Hover or keyboard domain focus emphasizes
-  one bounded scope; activating it opens the sampled domain and its existing
-  exact-scope action. Zoom progressively reveals the representative
-  constellation, where node hover or
-  virtual keyboard focus adds a read-only first-hop paint lens. That lens traces
+collision budget. Large domain centers also expose a bounded semantic
+signature: the server-selected representative followed by at most one
+informative symbol and an exact hidden-count disclosure. The signature is a
+non-interactive preview of the already loaded topology, not a duplicate node or
+an exact-scope substitute. It remains visible through the domain-to-community
+handoff and fades before raw topology enters.
+
+`Dependencies` installs deterministic targets into that same simulation.
+Without a focus, an exact domain dependency atlas replaces the representative
+particle frame. Its domain centers reuse the same bounded signatures while the
+surrounding surfaces and bundles report exact domain volume and traffic. Hover
+or keyboard domain focus emphasizes one bounded scope; activating it opens the
+sampled domain and its existing exact-scope action. Zoom progressively reveals
+the representative constellation, where node hover or virtual keyboard focus
+adds a read-only first-hop paint lens. That lens traces
   at most two incident edges per semantic group from topology already loaded in
   the Canvas, adds direction markers and a focus ring, and never changes d3
   coordinates, filters, navigation, or network state. Pointer focus is
@@ -189,13 +197,23 @@ bundles; selected-to-omitted relations contribute to exact in/out totals but do
 not create a false `(other)` node. The contract separately reports complete or
 partial domain/node coverage.
 
-At the atlas camera, representative nodes, their raw edges, labels, previews,
+At the atlas camera, representative node glyphs, their raw edges, raw labels,
 and hit targets are skipped. The Canvas paints domain surfaces, four traffic
-tiers, collision-checked exact summaries, and at most 28 directed bundles.
-Zoom performs a quiet semantic handoff to the existing symbol constellation;
-domain scopes stop intercepting input before symbol hit targets become active.
-Domain and relation filters reuse the layout response, so no additional request,
-full-graph client scan, renderer, or simulation is introduced.
+tiers, collision-checked exact summaries, at most 28 directed bundles, and at
+most two non-interactive semantic signatures per retained domain. A single
+load-time plan is capped at 24 domains globally, so the preview cannot turn a
+large project into an unbounded paint or sort. Zoom performs a quiet semantic
+handoff to the existing symbol constellation; signatures leave before the raw
+topology becomes readable, and domain scopes stop intercepting input before
+symbol hit targets become active. Domain and relation filters reuse the layout
+response, so no additional request, full-graph client scan, renderer, or
+simulation is introduced.
+
+Macro Fit uses the complete retained domain or dependency-atlas bounds rather
+than representative-node bounds. Fit, wheel, pinch, buttons, and keyboard share
+one 0.02 minimum scale, allowing a narrow viewport to contain the whole bounded
+architecture without clipping outer domains or jumping to a different zoom
+floor on the next interaction.
 
 The focused camera is composed from directed targets only; the 1,000-node dim
 context cannot shrink the active neighborhood. Screen-space safe insets reserve

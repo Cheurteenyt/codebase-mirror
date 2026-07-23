@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   analyzeFrames,
   assertGraphBrowserSmoke,
+  assertRenderedGraphIdentity,
   assertSameCompleteTopology,
   blindLabels,
   isHelpRequest,
@@ -52,6 +53,34 @@ describe('graph UI comparison lab contract', () => {
       .toThrow(/complete layouts/);
     expect(() => assertSameCompleteTopology('v1', complete, 'v2', different))
       .toThrow(/Topology mismatch/);
+  });
+
+  it('rejects a stale browser project even when the preflight topology passed', () => {
+    const expected = topologyFingerprint(completeLayout);
+    const rendered = {
+      url: 'http://127.0.0.1:9752/api/layout?project=stale-project&max_nodes=2000',
+      layout: completeLayout,
+    };
+
+    expect(() => assertRenderedGraphIdentity('V1', 'controlled-project', expected, [rendered]))
+      .toThrow(/rendered project "stale-project" instead of "controlled-project"/);
+  });
+
+  it('verifies the project and topology rendered by the browser', () => {
+    const expected = topologyFingerprint(completeLayout);
+    const observation = {
+      url: 'http://127.0.0.1:9752/api/layout?project=controlled-project&max_nodes=2000',
+      layout: completeLayout,
+    };
+
+    expect(assertRenderedGraphIdentity('V1', 'controlled-project', expected, [observation]))
+      .toEqual({ url: observation.url, topology: expected });
+    expect(() => assertRenderedGraphIdentity('V1', 'controlled-project', expected, [{
+      ...observation,
+      layout: { ...completeLayout, nodes: [{ id: 1 }, { id: 2 }, { id: 4 }] },
+    }])).toThrow(/Topology mismatch/);
+    expect(() => assertRenderedGraphIdentity('V1', 'controlled-project', expected, []))
+      .toThrow(/did not render an \/api\/layout response/);
   });
 
   it('uses nearest-rank percentiles and reports dispersion', () => {

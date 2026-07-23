@@ -71,6 +71,7 @@ copied into several documents.
 | [Token economy](performance/TOKEN_ECONOMY.md) | Current claim boundaries plus clearly labeled historical estimates |
 | [Graph UI performance lab](performance/GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md) | Reproducible UI performance and perception methodology |
 | [V1/V2 token truth audit](performance/reports/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) | Immutable current native-token evidence |
+| [R183 Graph UI visual intelligence](performance/reports/R183_GRAPH_UI_VISUAL_INTELLIGENCE_2026-07-23.md) | Current matched runtime, blind task, root-cause, and bounded-rendering evidence |
 | [Graph UI deep audit](performance/reports/GRAPH_UI_V2_DEEP_AUDIT_2026-07-16.md) | Dated UI fidelity and performance evidence |
 | [Performance, token, and UI audit](performance/reports/PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md) | Dated transport and UI evidence |
 | [Committed benchmark artifacts](performance/benchmarks/) | Selected tables and raw-artifact checksum manifests |

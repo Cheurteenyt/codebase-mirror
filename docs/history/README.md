@@ -2,7 +2,7 @@
 
 > **Status:** Historical index
 > **Audience:** Maintainers and auditors
-> **Last verified:** 2026-07-23 R182 archive
+> **Last verified:** 2026-07-23 R183 archive
 
 Everything below this directory is non-canonical evidence. A historical file
 remains valid for its pinned revision, but it must not be treated as current
@@ -41,6 +41,7 @@ Later native-accounting evidence lives under
 - [R180 R179 forward-reference correction](round-reports/R180_R179_FORWARD_REFERENCE.md)
 - [R181 structural cost root-cause correction](round-reports/R181_STRUCTURAL_COST_ROOT_CAUSE.md)
 - [R182 maintenance consolidation](round-reports/R182_MAINTENANCE_CONSOLIDATION.md)
+- [R183 Graph UI visual intelligence](round-reports/R183_GRAPH_UI_VISUAL_INTELLIGENCE.md)
 
 ## Changelog archive
 

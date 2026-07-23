@@ -5,6 +5,7 @@ import {
   isHelpRequest,
   type GraphBrowserSmokeObservation,
 } from './graph-ui-lab-core.js';
+import { graphKeyboardTraversalAction } from './graph-ui-browser-smoke-core.js';
 
 interface Options {
   baseUrl: string;
@@ -135,11 +136,19 @@ async function exerciseGraph(page: Page, options: Options): Promise<GraphBrowser
   ), undefined, { timeout: options.timeoutMs });
   await canvas.focus();
   const keyboardStatus = page.locator('span[role="status"][aria-live="polite"][aria-atomic="true"]');
+  const zoomInButton = page.getByRole('button', { name: 'Zoom in', exact: true });
   let keyboardAnnouncement = '';
-  for (let attempt = 0; attempt < 12 && !/^Node\b/u.test(keyboardAnnouncement); attempt += 1) {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     await page.keyboard.press('n');
     await page.waitForTimeout(75);
     keyboardAnnouncement = (await keyboardStatus.textContent())?.trim() ?? '';
+    const action = graphKeyboardTraversalAction(keyboardAnnouncement);
+    if (action === 'complete') break;
+    if (action === 'zoom') {
+      await zoomInButton.click();
+      await page.waitForTimeout(120);
+      await canvas.focus();
+    }
   }
   if (!/^Node\b/u.test(keyboardAnnouncement)) {
     throw new Error(

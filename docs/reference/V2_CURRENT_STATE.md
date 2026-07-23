@@ -73,6 +73,9 @@ This boundary is intentional and regression-tested.
   details, and a bounded graph renderer.
 - Structure and Dependencies views share one renderer, selection model,
   keyboard model, and exact-detail contracts.
+- Fitted macro domains preview at most two deterministic semantic symbols and
+  disclose how many indexed nodes remain inside. The preview is non-interactive,
+  reuses loaded topology, and fades before exact symbols take over.
 - The overview is an explicit representative sample; exact search and
   snapshot-bound pagination provide off-sample access.
 - Responsive navigation, keyboard access, reduced-motion handling, and
@@ -152,6 +155,9 @@ These findings are repository- and protocol-specific. Historical `-67%` to
 
 - The graph overview is bounded for predictable transfer and simulation cost;
   it is not an exhaustive drawing of every indexed node.
+- Macro signatures summarize domain interiors but do not prove that every
+  symbol is present in the representative frame; exact search and scope
+  pagination remain the authoritative paths.
 - Visual quality and perceived performance require continued measurement
   against the reproducible Graph UI lab, not screenshot-only claims.
 

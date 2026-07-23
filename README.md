@@ -312,10 +312,12 @@ d3-force canvas and two task views over the same graph:
 - **Dashboard tab** (default): KPIs, graph freshness, smart recommendations
 - **Graph tab**: 2D force-directed canvas with filters, pan/zoom, node detail panel
   - **Structure** (default): domains contain bounded, informative community
-    captions before zoom reveals individual symbols. Hovering or focusing a
-    domain with the keyboard activates one progressive insight lens: its exact
-    volume summary and related bundles remain visible while community captions
-    are limited to that domain; the idle overview gains no permanent annotation
+    captions and up to two deterministic semantic signatures before zoom
+    reveals individual symbols. A compact `+N more inside` disclosure makes the
+    preview honest without drawing every node. Hovering or focusing a domain
+    with the keyboard activates one progressive insight lens: its exact volume
+    summary and related bundles remain visible while community captions are
+    limited to that domain.
   - **Dependencies** (optional, persisted locally): exact-degree hubs form a
     deterministic constellation. Before selection, pointer hover or keyboard
     node focus paints a transient visible-first-hop lens in the settled frame:
@@ -376,6 +378,8 @@ The unselected Dependencies overview is an exact, bounded **dependency atlas**
 rather than a 1,000-symbol particle ring. The layout response ranks at most 12
 top-level domains, packs their exact node totals into stable circles, and
 aggregates every directed relationship touching those domains inside SQLite.
+Each retained domain may show the same two-symbol non-interactive signature as
+Structure, then fades it before raw representative topology enters.
 Traffic to omitted domains remains included in the selected domains' exact
 in/out totals; it is not rendered as a misleading synthetic node. Coverage is
 labelled complete or partial, and relation-type filters reuse the returned

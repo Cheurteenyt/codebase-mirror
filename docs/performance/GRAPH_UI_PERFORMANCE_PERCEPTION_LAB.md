@@ -51,10 +51,15 @@ For a strict renderer comparison:
 - the V1 and V2 servers open byte-identical snapshots of that database;
 - `/api/layout` must return every node on both sides;
 - sorted node IDs and sorted `(source, target, type)` edges must have identical
-  SHA-256 fingerprints.
+  SHA-256 fingerprints;
+- each browser must open the exact project card requested by the run;
+- the browser-observed layout URL, project parameter, node/edge counts, and
+  topology digest must match the preflight response.
 
-The runner stops before launching a browser if either response is sampled or a
-fingerprint differs. `--allow-sampled` exists only for an explicitly labelled
+The runner stops before launching a browser if either preflight response is
+sampled or a fingerprint differs. It then fails the run if the rendered
+identity differs: an API preflight cannot certify a UI that selected another
+project. `--allow-sampled` exists only for an explicitly labelled
 product-default exploration; its result is graded `exploratory` and cannot
 support a V1/V2 superiority claim.
 
@@ -157,6 +162,11 @@ Each timestamped output contains:
 - `blind-captures/A-*.png` and `B-*.png` — anonymous cold/warm captures;
 - `blind-key.json` — the A/B mapping, kept away from participants.
 
+Captures are taken from the settled frame before the scripted FPS gesture.
+`report.json` records `layoutUrl`, rendered topology, and
+`screenshotStage: pre-interaction`; a capture after pan/zoom is not an initial
+perception baseline.
+
 The runner records:
 
 - navigation to first useful graph (layout response plus two rendered frames);
@@ -201,7 +211,57 @@ Keep raw evidence with the decision. A visual change that looks impressive but
 increases task errors, hides exactness or leaves the browser busy after cooldown
 is a regression.
 
+## Current matched evidence - R183 / 2026-07-23
+
+The current comparison targets code commit
+`0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` and lab-contract correction
+`d54b6ac6472a42f4f445c74b3251a4df1978551e`. It ran on Windows
+10.0.26200 x64, Node.js 24.15.0, Microsoft Edge 150.0.4078.83, and a
+1440 x 960 viewport at DPR 1. Both five-run modes are graded
+`comparison-candidate`: every browser rendered the same complete 38-node /
+84-edge topology and emitted no runtime error.
+
+| Mode | Cache | First useful V1 p50 / p95 | First useful V2 p50 / p95 | Long task V1 / V2 p95 | FPS V1 / V2 p50 | Idle CPU V1 / V2 p50 | Heap V1 / V2 p50 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Architecture | cold | 3864.5 / 4123.1 ms | 407.7 / 425.7 ms | 120 / 0 ms | 165 / 165 | 7.68% / 0.02% | 7.3 / 4.1 MiB |
+| Architecture | warm | 3887.7 / 3968.5 ms | 408.7 / 413.9 ms | 83 / 0 ms | 165 / 165 | 8.16% / 0.02% | 7.3 / 4.1 MiB |
+| Stellar | cold | 3832.7 / 3935.8 ms | 403.4 / 409.5 ms | 126 / 0 ms | 165 / 165 | 8.32% / 0.02% | 7.3 / 3.9 MiB |
+| Stellar | warm | 3841.2 / 3925.6 ms | 395.2 / 403.0 ms | 102 / 0 ms | 165 / 165 | 7.39% / 0.03% | 7.3 / 3.9 MiB |
+
+These results support a runtime advantage on this fixture, not an automatic
+aesthetic winner or a product-scale claim. The controlled fixture is too small
+and has too little domain diversity for a serious interior-hierarchy task.
+R183 therefore used the separate committed
+`v2/tests/fixtures/graph-ui-perception-lab` target: 65 nodes, 136 edges, six
+domains, byte-identical V1/V2 snapshots, and a single-evaluator blind
+engineering task sheet. That study is task evidence, not a performance sample
+or human-subject study.
+
+The blind key mapped A to V2 and B to V1. Both identified the largest areas.
+V2 completed exact hidden-symbol context, directed-flow, context restoration,
+and hub-justification tasks; V1 could search and select, but lacked the exact
+source range, directional counts/rails, defined architecture return path, and
+visible degree evidence required by those tasks. V1 still provided stronger
+immediate node-and-edge spectacle. The actionable V2 defect was therefore not
+missing data or a second renderer: fitted Structure and Dependencies domains
+were visually hollow.
+
+R183 addresses that defect with a load-time, deterministic plan capped at 24
+domains and two already loaded semantic symbols per domain. Structure and the
+exact dependency atlas paint those non-interactive signatures plus a truthful
+hidden-count disclosure, then fade them before raw topology becomes readable.
+No request, topology copy, d3 force, hit target, or exactness claim was added.
+The detailed evidence and remaining limitations are in the
+[R183 Graph UI visual-intelligence report](reports/R183_GRAPH_UI_VISUAL_INTELLIGENCE_2026-07-23.md).
+
 ## Local evidence — 2026-07-17
+
+> **Historical / superseded for current V1/V2 comparison.** Lab contract v1
+> preflighted one API project but did not record or verify which project and
+> topology the V1 browser actually rendered. R183 reproduced a case where the
+> broad V1 card selector opened a 4,287-node project after a valid 38-node
+> preflight. The tables below remain as tuning history, but they cannot support
+> a strict cross-version claim. Use the lab-v2 R183 section above.
 
 The following measurements were collected on Windows 10.0.26200 x64 with
 Node.js 24.15.0, Microsoft Edge 150.0.4078.65, a 1440 x 960 viewport at DPR 1,
@@ -535,11 +595,11 @@ canvas mount, keyboard path, or view-control interaction could still pass CI.
 `npm run smoke:graph-ui:browser -- --project <name> --base-url <url>` now runs a
 bounded Playwright smoke against an already running packaged server. It requires
 a useful non-empty Canvas, the selected project and Graph tab, then exercises
-Structure -> Dependencies -> keyboard node preview -> Enter selection ->
-Structure -> Fit. The run fails closed unless the selected dependency frame
-exposes `semantic-depth-v2`, the keyboard status announces a node, Structure is
-restored, and console errors, uncaught page errors, and failed HTTP responses are
-all empty.
+Structure -> Dependencies -> semantic zoom when the exact atlas requests it ->
+keyboard node preview -> Enter selection -> Structure -> Fit. The run fails
+closed unless the selected dependency frame exposes `semantic-depth-v2`, the
+keyboard status announces a node, Structure is restored, and console errors,
+uncaught page errors, and failed HTTP responses are all empty.
 
 The npm-package job installs the Chromium revision associated with the locked
 `playwright-core` dependency into an explicit `PLAYWRIGHT_BROWSERS_PATH`, kept

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const GRAPH_UI_LAB_VERSION = 1 as const;
+export const GRAPH_UI_LAB_VERSION = 2 as const;
 
 export function isHelpRequest(argv: readonly string[]): boolean {
   return argv.includes('--help') || argv.includes('-h');
@@ -31,6 +31,16 @@ export interface TopologyFingerprint {
   nodeDigest: string;
   edgeDigest: string;
   topologyDigest: string;
+}
+
+export interface RenderedGraphObservation {
+  url: string;
+  layout: LayoutLike;
+}
+
+export interface RenderedGraphIdentity {
+  url: string;
+  topology: TopologyFingerprint;
 }
 
 export interface TimingSummary {
@@ -179,6 +189,46 @@ export function assertSameCompleteTopology(
       + `${rightName}=${right.topologyDigest.slice(0, 12)}`,
     );
   }
+}
+
+/**
+ * Fail closed unless the graph that the browser actually rendered is the
+ * requested project and the same complete topology as the preflight probe.
+ *
+ * A separate API fingerprint is insufficient: a stale project-card selector
+ * can render another graph while the preflight probe still passes.
+ */
+export function assertRenderedGraphIdentity(
+  variant: string,
+  project: string,
+  expected: TopologyFingerprint,
+  observations: readonly RenderedGraphObservation[],
+): RenderedGraphIdentity {
+  const rendered = observations.at(-1);
+  if (!rendered) {
+    throw new Error(`${variant} did not render an /api/layout response`);
+  }
+
+  let renderedProject: string | null;
+  try {
+    const url = new URL(rendered.url);
+    if (!url.pathname.endsWith('/api/layout')) {
+      throw new Error(`${variant} rendered an unexpected layout URL: ${rendered.url}`);
+    }
+    renderedProject = url.searchParams.get('project');
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith(`${variant} rendered`)) throw error;
+    throw new Error(`${variant} rendered an invalid layout URL: ${rendered.url}`, { cause: error });
+  }
+  if (renderedProject !== project) {
+    throw new Error(
+      `${variant} rendered project ${JSON.stringify(renderedProject)} instead of ${JSON.stringify(project)}`,
+    );
+  }
+
+  const topology = topologyFingerprint(rendered.layout);
+  assertSameCompleteTopology(`${variant} rendered`, topology, `${variant} preflight`, expected);
+  return { url: rendered.url, topology };
 }
 
 export function percentile(values: readonly number[], ratio: number): number {

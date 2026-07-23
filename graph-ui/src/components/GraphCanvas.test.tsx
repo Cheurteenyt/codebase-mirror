@@ -5,7 +5,12 @@
 import { createRef } from "react";
 import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
-import { GraphCanvas, computeSemanticZoomLayers, type GraphCanvasHandle } from "./GraphCanvas";
+import {
+  GraphCanvas,
+  computeDomainPreviewOpacity,
+  computeSemanticZoomLayers,
+  type GraphCanvasHandle,
+} from "./GraphCanvas";
 import { stellarNodeColor, stellarNodeGlyph } from "../lib/graph-visual-mode";
 import { NodeTooltip } from "./NodeTooltip";
 import type { GraphData, GraphNode, GraphEdge } from "../lib/types";
@@ -107,6 +112,29 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
       expect(domains > 0 && communities > 0).toBe(false);
       expect(communities > 0 && raw > 0).toBe(false);
     }
+  });
+
+  it("keeps domain signatures visible through the fitted macro handoff", () => {
+    const structure = {
+      dependencyAtlasOverview: false,
+      detailMode: false,
+      stellarFlow: false,
+    };
+    expect(computeDomainPreviewOpacity(4, structure)).toBe(1);
+    expect(computeDomainPreviewOpacity(7.1, structure)).toBe(1);
+    expect(computeDomainPreviewOpacity(13.5, structure)).toBeCloseTo(0.5);
+    expect(computeDomainPreviewOpacity(17, structure)).toBe(0);
+    expect(computeDomainPreviewOpacity(8, { ...structure, detailMode: true })).toBe(0);
+    expect(computeDomainPreviewOpacity(8, { ...structure, stellarFlow: true })).toBe(0);
+
+    const atlas = {
+      dependencyAtlasOverview: true,
+      detailMode: false,
+      stellarFlow: true,
+    };
+    expect(computeDomainPreviewOpacity(8, atlas)).toBe(1);
+    expect(computeDomainPreviewOpacity(10, atlas)).toBeCloseTo(0.5);
+    expect(computeDomainPreviewOpacity(11.5, atlas)).toBe(0);
   });
 
   it("maps exact degree to a bounded stellar spectrum and keeps type semantics in the glyph", () => {
@@ -475,7 +503,7 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(container.querySelector("canvas")).toHaveAttribute("data-flow-lens", "semantic-depth-v2");
   });
 
-  it("opens an exact dependency domain before revealing representative symbols", () => {
+  it("previews bounded domain signatures before opening the exact dependency scope", () => {
     const ctx = installCanvasMock(800, 600);
     const onScopeSelect = vi.fn();
     const atlasData: GraphData = {
@@ -543,7 +571,8 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(canvas).toHaveAccessibleName("Dependency atlas: 2 exact domains");
     expect(ctx.fillText.mock.calls.some(([text]) => text === "src")).toBe(true);
     expect(ctx.fillText.mock.calls.some(([text]) => text === "180 nodes · 12 in · 6 out")).toBe(true);
-    expect(ctx.fillText.mock.calls.some(([text]) => text === "source-symbol")).toBe(false);
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "source-symbol")).toBe(true);
+    expect(ctx.fillText.mock.calls.some(([text]) => text === "+179 more inside")).toBe(true);
     expect(ctx.quadraticCurveTo).toHaveBeenCalledTimes(1);
 
     fireEvent.keyDown(canvas, { key: "d" });
@@ -2420,6 +2449,48 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     const [translatedX, translatedY] = ctx.translate.mock.calls.at(-1) as [number, number];
     expect(translatedX).toBeCloseTo(400 - 200 * initialFitScale, 4);
     expect(translatedY).toBeCloseTo(300 - 50 * initialFitScale, 4);
+  });
+
+  it("fits every macro domain below the former 0.1 floor on a narrow viewport", () => {
+    const ctx = installCanvasMock(380, 958);
+    const noop = () => {};
+    const wideArchitecture: GraphData = {
+      nodes: [
+        makeNode(1, "left-symbol", { x: -3_000, y: 0, cluster_id: 0 }),
+        makeNode(2, "right-symbol", { x: 3_000, y: 0, cluster_id: 1 }),
+      ],
+      edges: [],
+      total_nodes: 2,
+      layout: {
+        strategy: "hierarchical-v2",
+        node_spacing: 16,
+        counts_scope: "all_nodes",
+        clusters: [
+          { id: 0, key: "left", domain_id: 0, x: -3_000, y: 0, radius: 120, node_count: 1 },
+          { id: 1, key: "right", domain_id: 1, x: 3_000, y: 0, radius: 120, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "left", x: -3_000, y: 0, radius: 200, node_count: 1, cluster_count: 1 },
+          { id: 1, key: "right", x: 3_000, y: 0, radius: 200, node_count: 1, cluster_count: 1 },
+        ],
+      },
+    } as GraphData;
+
+    render(
+      <GraphCanvas
+        data={wideArchitecture}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    const fittedScale = ctx.scale.mock.calls.at(-1)[0] as number;
+    expect(fittedScale).toBeCloseTo((380 - 128) / 6_400, 6);
+    expect(fittedScale).toBeLessThan(0.1);
+    const [translatedX] = ctx.translate.mock.calls.at(-1) as [number, number];
+    expect(translatedX).toBeCloseTo(190, 6);
   });
 
   it("re-fits a changed semantic frame without rebuilding or reheating d3", async () => {

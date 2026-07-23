@@ -2,15 +2,15 @@
 
 > **Status:** Canonical reset-recovery entry point
 > **Audience:** Maintainers and external AI collaborators
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-20
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-23
 
 This directory is intentionally idle on `main`.
 
 During one active `v2/r<n>-<short-name>` round, the implementation agent
 creates and commits:
 
-- `CURRENT_HANDOFF.md`, copied from
-  `../templates/GLM_HANDOFF_TEMPLATE.md`;
+- `CURRENT_HANDOFF.md`, copied from the
+  [implementation handoff template](../templates/GLM_HANDOFF_TEMPLATE.md);
 - `audits/<round>/AUDIT-<sequence>-<short-sha>.md`, copied verbatim from an
   external read-only audit based on
   `../templates/AI_AUDIT_REPORT_TEMPLATE.md`.
