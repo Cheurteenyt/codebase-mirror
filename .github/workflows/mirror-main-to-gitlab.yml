@@ -271,7 +271,7 @@ jobs:
       # SIG-R169 Phase B: Load the verifier and runtime from the immutable
       # audited squash SHA. NOT from main, HEAD, TARGET_SHA, or github.sha.
       - name: Checkout trusted signature verifier
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: 15a732d91984e5b4ffa29b4e129ac0d6316c9fca
           fetch-depth: 1
@@ -423,7 +423,7 @@ jobs:
       # ── Step 4: Checkout exact CI-validated SHA ──────────────────────
       # Only reached if signature verification PASSED.
       - name: Checkout exact CI-validated SHA
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
