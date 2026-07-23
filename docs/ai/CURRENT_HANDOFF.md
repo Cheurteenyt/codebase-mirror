@@ -10,10 +10,10 @@ status: ACTIVE
 repository: Cheurteenyt/Ariad
 branch: v2/r181-structural-cost-root-cause
 base_sha: 93e0d5c99fa5dd09a5276a9c5c7e922b16f64315
-last_completed_code_sha: 1c151232f1d49042d9e7ecfc3f44987fa5612625
+last_completed_code_sha: df4298caea146b4a5a1d8cc5a07440e22bd20922
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-23T00:54:15Z
+updated_at_utc: 2026-07-23T01:50:08Z
 implementer_role: codex
 ```
 
@@ -39,7 +39,7 @@ No external audit is active. R181 is an evidence-first root-cause round initiate
 | Finding | Audit source | Decision | Evidence or reason | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------------|----------|--------------------|------------------------|-----------------|-------------------|------------------|
 | R181-LOCAL-F001 | R176 T02-T04 single-sample evidence | ACCEPTED | Repeat N=3 and attribute token cost before deciding whether a repository defect exists. | `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe` | environment helper smoke plus existing mechanical benchmark checks | pending | IMPLEMENTED_PUSHED |
-| R181-LOCAL-F002 | R181 N=3 traces and pinned indexes | ACCEPTED | T02 lacks alias-aware type-impact evidence; 10-19 distinct B calls cause 87.5% of the one-shot gap. Add a general bounded operation inside `lookup_source_text`; do not touch T01/direct callers. | `1c151232f1d49042d9e7ecfc3f44987fa5612625` | `tests/mcp/exact-source-lookup.test.ts`; `tests/mcp/server.test.ts` | pending | IMPLEMENTED_PUSHED |
+| R181-LOCAL-F002 | R181 N=3 traces and pinned indexes | ACCEPTED | T02 lacks alias-aware type-impact evidence; 10-19 distinct B calls cause 87.5% of the one-shot gap. Add a general bounded operation inside `lookup_source_text`; do not touch T01/direct callers. | `1c151232f1d49042d9e7ecfc3f44987fa5612625` | `tests/mcp/exact-source-lookup.test.ts`; `tests/mcp/server.test.ts` | pending | MEASURED_ACCEPTED_LOCAL |
 
 ## Pushed checkpoints
 
@@ -116,6 +116,15 @@ result_summary: typecheck and build pass; all 47 MCP tests pass; all 8 documenta
 not_run: identical N=3 postfix schedule waits for this correction and handoff checkpoint to be pushed cleanly
 ```
 
+```text
+command: capture 24 postfix environments; execute fixed 24-invocation N=3 B/C schedule; summarize.mjs and checkpoint.mjs for repetitions 1-3; apply pre-registered non-overlapping-range gates; npm --prefix v2 run docs:check
+working_directory: D:/Mycodex/codebase-mirror
+environment: 24/24 captures agree on clean cd78ae40c4f834d6a1dfdb02c2eabcb688f4f329, Windows host, Node v24.15.0, npm 11.12.1, Codex CLI 0.144.4, gpt-5.6-sol medium
+exit_code: 0
+result_summary: 24 invocations and 84 raw cells completed on attempt 1 in 2817.9 seconds; 28 selected and 0 invalid per repetition; all four T02 B groups HELPED, no selected B group WORSE; B moves 34 PASS/2 PARTIAL to 36 PASS and 11,575,204 to 5,372,595 tokens; docs/links/oracles pass
+not_run: full backend, package, and Graph UI validation plus remote CI wait are the next action
+```
+
 ## Reset recovery
 
 ```bash
@@ -141,12 +150,12 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify --results-root D:/Mycode
 
 ## Current working state
 
-- **Last completed finding:** R181-LOCAL-F002 implementation and deterministic oracle validation at `1c151232f1d49042d9e7ecfc3f44987fa5612625`.
-- **Current finding:** R181-LOCAL-F002 repeated postfix measurement and acceptance gate.
+- **Last completed finding:** R181-LOCAL-F002 accepted same-N postfix measurement, published locally at `df4298caea146b4a5a1d8cc5a07440e22bd20922`.
+- **Current finding:** final local validation and remote candidate verification.
 - **Dirty files expected:** `NONE` at the pushed checkpoint.
 - **Unpushed commits expected:** `0` after this handoff checkpoint is pushed.
 - **Known blocker:** none.
-- **Single next action:** push the clean correction checkpoint, capture fresh postfix environments, and execute the identical pre-registered N=3 B/C schedule without inspecting intermediate cells.
+- **Single next action:** push the measurement checkpoint, run the full backend/package/Graph UI validation matrix, then update the candidate handoff for remote CI.
 
 ## Security confirmation
 
