@@ -15,6 +15,7 @@ silently override current behavior.
 | Install and use the project | [Root README](../README.md) |
 | Understand project lineage and attribution | [Lineage and attribution](../README.md#lineage-and-attribution) |
 | Understand what is active now | [V2 current state](reference/V2_CURRENT_STATE.md) |
+| Understand the token benchmark conclusion | [Benchmark summary](performance/BENCHMARK_SUMMARY.md) |
 | Understand the system | [V2 architecture](architecture/V2_ARCHITECTURE.md) |
 | Use the CLI | [CLI reference](reference/CLI_REFERENCE.md) |
 | Integrate the MCP server | [MCP tools reference](reference/MCP_TOOLS.md) |
@@ -65,6 +66,7 @@ copied into several documents.
 
 | Document | Status |
 |---|---|
+| [Benchmark summary](performance/BENCHMARK_SUMMARY.md) | Canonical plain-language conclusion and evidence limits |
 | [Benchmark protocol](performance/BENCHMARK_PROTOCOL.md) | Canonical task, grading, and native-accounting protocol |
 | [Token economy](performance/TOKEN_ECONOMY.md) | Current claim boundaries plus clearly labeled historical estimates |
 | [Graph UI performance lab](performance/GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md) | Reproducible UI performance and perception methodology |

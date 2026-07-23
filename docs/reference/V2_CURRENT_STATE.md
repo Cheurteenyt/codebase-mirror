@@ -2,7 +2,7 @@
 
 > **Status:** Canonical product snapshot
 > **Audience:** Users, integrators, contributors, and maintainers
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-21 at candidate `e4834d7`
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-23 at `2420906`
 
 This document answers one question: **what is active in the product now?**
 Implementation history belongs in the [changelog](../../v2/CHANGELOG.md),
@@ -180,9 +180,16 @@ legacy `<project>.db` through `defaultCodeDbPath`.
   outcome contract.
 - **R169D — future reader cutover:** resolve generations, migrate legacy data,
   and complete project lifecycle behavior.
-- **R169E — future activation gate:** pass the integrated crash, concurrency,
-  performance, platform, and activation matrix.
+- **R169E — paused, not scheduled:** if reactivated, pass the integrated
+  crash, concurrency, performance, platform, and activation matrix.
 - **R170 — out of scope:** multi-host lease and fencing.
+
+The owner has deliberately paused R169E because the production-scale
+reindexing-safety need it addresses has not been demonstrated at the project's
+current test scale (2 repositories, no large-scale continuous deployment).
+This is not an abandonment: the existing R169 technical work remains available
+for reactivation if a real need emerges. `DATA-CARRY-01` remains open and must
+not be described as closed while the activation gate is incomplete.
 
 The full inactive contract is documented in
 [Atomic generation publication](../architecture/ATOMIC_GENERATION_PUBLICATION.md).
@@ -195,8 +202,8 @@ The full inactive contract is documented in
    weakening correctness or evidence.
 3. Continue Graph UI fidelity and perception work through the benchmark lab.
 4. Remove portable-product tests from POSIX shell assumptions.
-5. Activate generation publication only after its missing integration and
-   platform gates are proved.
+5. Revisit generation publication only if production scale demonstrates the
+   need; if reactivated, require its missing integration and platform gates.
 
 ## Validation contract
 
