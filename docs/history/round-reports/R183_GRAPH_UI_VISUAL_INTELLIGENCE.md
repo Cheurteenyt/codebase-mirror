@@ -6,14 +6,15 @@
 schema_version: 1
 kind: implementation-handoff
 round: R183
-status: ACTIVE
+status: COMPLETE
 repository: Cheurteenyt/Ariad
 branch: v2/r183-graph-visual-intelligence
 base_sha: b6a95f23ca34ba1a141c943f1be0b045be23b9dd
 last_completed_code_sha: 56ae321d9ef1d92e7ee078c21d86e7c54cb5d808
+ci_verified_head_sha: 7e6c91c7f6e6f0a8280db0ba10e833c0dcf015c6
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-23T12:56:32Z
+updated_at_utc: 2026-07-23T13:02:05Z
 implementer_role: codex
 ```
 
@@ -47,16 +48,16 @@ implementer_role: codex
 ## Audit decisions
 
 No external audit is active. R183 is an owner-directed, evidence-first product
-round. Findings below are provisional until the matched baseline is committed.
+round. The findings below are closed against the CI-verified candidate head.
 
 | Finding | Source | Decision | Evidence or reason | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------|----------|--------------------|------------------------|-----------------|-------------------|------------------|
-| R183-E01 | owner objective | IMPLEMENTED | Lab v2 produced strict matched 38-node/84-edge five-run Architecture and Stellar comparisons. A separate 65-node/136-edge perception fixture supported the anonymous task sheet without being misrepresented as performance evidence. | `0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` | evidence harness and perception fixture | pending | LOCAL_PASS |
-| R183-E02 | owner objective | IMPLEMENTED | The task review found that V2 won exact-search and directed-flow work but its fitted macro domains were visually hollow. Structure and Dependencies now show at most two deterministic semantic signatures per domain plus a hidden-count disclosure, with a bounded fade before exact topology. | `0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` | `graph-domain-preview.test.ts`; `GraphCanvas.test.tsx` | pending | LOCAL_PASS |
-| R183-E03 | owner objective | IMPLEMENTED | Empty, disconnected, dense, filtered, exact, pointer, keyboard, touch, reduced-motion, oversized, and narrow macro states pass the complete 237-test Graph UI suite. Backend typecheck/build, embedded package, browser smoke, and documentation checks pass locally. | `56ae321d9ef1d92e7ee078c21d86e7c54cb5d808` | existing Graph UI state matrix, bounded perception fixture, and narrow macro-fit regression | pending | LOCAL_PASS |
-| R183-E04 | local reproduction | IMPLEMENTED | The comparison lab selected the first V1 card whose broad ancestor contained the target name, so the 38-node API preflight could be paired with a rendered 4,287-node project. Captures were also taken after the FPS pan/zoom. The lab now selects a card-local exact heading, verifies the rendered layout URL and complete topology, records that identity, and captures the settled pre-interaction frame. | `d54b6ac6472a42f4f445c74b3251a4df1978551e` | `v2/tests/benchmark/graph-ui-lab.test.ts` | pending | LOCAL_PASS |
-| R183-E05 | packaged browser smoke | IMPLEMENTED | The packaged smoke requested keyboard node traversal immediately after opening the exact dependency atlas. The product correctly announced that symbols require domain drill-down or semantic zoom, so the stale smoke failed on a valid large project. It now follows that explicit prompt with bounded Zoom-in actions before requiring a node, while other missing-target states still fail closed. | `b8a349e3f06a4ec237af18cf9908d1ceaec10625` | `v2/tests/benchmark/graph-ui-browser-smoke.test.ts` plus packaged Edge smoke | pending | LOCAL_PASS |
-| R183-E06 | responsive browser validation | IMPLEMENTED | At 380 CSS pixels, Fit computed complete macro bounds but clamped scale to 0.1, clipping the outer Structure domains. One shared 0.02 camera floor now applies to fit, wheel, pinch, controls, and keyboard zoom; the narrow product frame contains all domains and preserves manual zoom-in. | `56ae321d9ef1d92e7ee078c21d86e7c54cb5d808` | narrow 6,400-world-unit GraphCanvas fit regression plus visible packaged check | pending | LOCAL_PASS |
+| R183-E01 | owner objective | CI_VERIFIED | Lab v2 produced strict matched 38-node/84-edge five-run Architecture and Stellar comparisons. A separate 65-node/136-edge perception fixture supported the anonymous task sheet without being misrepresented as performance evidence. | `0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` | evidence harness and perception fixture | `7e6c91c7f6e6f0a8280db0ba10e833c0dcf015c6` | CI_PASS |
+| R183-E02 | owner objective | CI_VERIFIED | The task review found that V2 won exact-search and directed-flow work but its fitted macro domains were visually hollow. Structure and Dependencies now show at most two deterministic semantic signatures per domain plus a hidden-count disclosure, with a bounded fade before exact topology. | `0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` | `graph-domain-preview.test.ts`; `GraphCanvas.test.tsx` | `7e6c91c7f6e6f0a8280db0ba10e833c0dcf015c6` | CI_PASS |
+| R183-E03 | owner objective | CI_VERIFIED | Empty, disconnected, dense, filtered, exact, pointer, keyboard, touch, reduced-motion, oversized, and narrow macro states pass the complete 237-test Graph UI suite. Backend typecheck/build, embedded package, browser smoke, and documentation checks pass locally. | `56ae321d9ef1d92e7ee078c21d86e7c54cb5d808` | existing Graph UI state matrix, bounded perception fixture, and narrow macro-fit regression | `7e6c91c7f6e6f0a8280db0ba10e833c0dcf015c6` | CI_PASS |
+| R183-E04 | local reproduction | CI_VERIFIED | The comparison lab selected the first V1 card whose broad ancestor contained the target name, so the 38-node API preflight could be paired with a rendered 4,287-node project. Captures were also taken after the FPS pan/zoom. The lab now selects a card-local exact heading, verifies the rendered layout URL and complete topology, records that identity, and captures the settled pre-interaction frame. | `d54b6ac6472a42f4f445c74b3251a4df1978551e` | `v2/tests/benchmark/graph-ui-lab.test.ts` | `7e6c91c7f6e6f0a8280db0ba10e833c0dcf015c6` | CI_PASS |
+| R183-E05 | packaged browser smoke | CI_VERIFIED | The packaged smoke requested keyboard node traversal immediately after opening the exact dependency atlas. The product correctly announced that symbols require domain drill-down or semantic zoom, so the stale smoke failed on a valid large project. It now follows that explicit prompt with bounded Zoom-in actions before requiring a node, while other missing-target states still fail closed. | `b8a349e3f06a4ec237af18cf9908d1ceaec10625` | `v2/tests/benchmark/graph-ui-browser-smoke.test.ts` plus packaged Edge smoke | `7e6c91c7f6e6f0a8280db0ba10e833c0dcf015c6` | CI_PASS |
+| R183-E06 | responsive browser validation | CI_VERIFIED | At 380 CSS pixels, Fit computed complete macro bounds but clamped scale to 0.1, clipping the outer Structure domains. One shared 0.02 camera floor now applies to fit, wheel, pinch, controls, and keyboard zoom; the narrow product frame contains all domains and preserves manual zoom-in. | `56ae321d9ef1d92e7ee078c21d86e7c54cb5d808` | narrow 6,400-world-unit GraphCanvas fit regression plus visible packaged check | `7e6c91c7f6e6f0a8280db0ba10e833c0dcf015c6` | CI_PASS |
 
 ## Pushed checkpoints
 
@@ -66,7 +67,7 @@ round. Findings below are provisional until the matched baseline is committed.
 | `d54b6ac6472a42f4f445c74b3251a4df1978551e` | pending | R183-E01, R183-E04 | fail-closed rendered graph identity and pre-interaction blind captures | targeted Vitest 9/9; backend/lab typecheck; 38-node strict browser smoke | pending |
 | `0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` | pending | R183-E01-E03 | bounded macro-domain intelligence and a controlled multi-domain perception fixture | Graph UI 236/236; targeted preview 65/65; frontend and backend/lab typecheck; frontend build/budgets; strict five-run Architecture and Stellar comparison candidates | pending |
 | `b8a349e3f06a4ec237af18cf9908d1ceaec10625` | pending | R183-E05 | packaged browser smoke follows the exact dependency-atlas disclosure contract | targeted backend 10/10; backend/lab typecheck; packaged Edge smoke on 1,000-node project with no console, page, or HTTP errors | pending |
-| `56ae321d9ef1d92e7ee078c21d86e7c54cb5d808` | pending | R183-E06 | narrow macro Fit no longer clips complete domain bounds | targeted Graph UI 66/66; complete Graph UI 237/237; frontend typecheck/build; embedded package build; narrow visible check; packaged smoke | pending |
+| `56ae321d9ef1d92e7ee078c21d86e7c54cb5d808` | `7e6c91c7f6e6f0a8280db0ba10e833c0dcf015c6` | R183-E06 | narrow macro Fit no longer clips complete domain bounds | targeted Graph UI 66/66; complete Graph UI 237/237; frontend typecheck/build; embedded package build; narrow visible check; packaged smoke | [push CI](https://github.com/Cheurteenyt/Ariad/actions/runs/30009117869), [PR CI](https://github.com/Cheurteenyt/Ariad/actions/runs/30009120607), and [CodeQL](https://github.com/Cheurteenyt/Ariad/actions/runs/30009120619) passed |
 
 ## Exact validation evidence
 
@@ -154,7 +155,8 @@ working_directory: v2
 environment: Windows 11 / Edge 150.0.4078.83 / packaged Graph UI
 exit_code: 0
 result_summary: Final responsive Graph UI assets remained within budgets and the 1,000-node packaged workflow passed with zero browser errors.
-not_run: Publication gates, remote CI, and exact-main validation.
+github_result: Push CI, PR CI, and CodeQL passed on ci_verified_head_sha.
+not_run: Squash merge, exact-main validation, mirror parity, and branch deletion.
 ```
 
 ## Reset recovery
@@ -186,15 +188,14 @@ npx tsc --noEmit
 - **Last completed finding:** R183-E06 removed the stale 0.1 camera floor that
   clipped complete macro-domain bounds at 380 CSS pixels and validated the
   corrected packaged frame.
-- **Current finding:** Publish the final candidate, verify exact-head CI and
-  CodeQL, merge, delete the work branch, and validate the resulting main SHA.
+- **Current finding:** The final code candidate and its documentation-only head
+  are CI verified; the handoff is ready to archive before squash merge.
 - **Dirty files expected:** two pre-existing CRLF status markers with
   byte-identical index/worktree blobs; never stage them.
-- **Unpushed commits expected:** the responsive evidence documentation and this
-  handoff checkpoint until the final candidate push.
+- **Unpushed commits expected:** the archive-only documentation commit.
 - **Known blocker:** None.
-- **Single next action:** Push the final candidate head and monitor every
-  required GitHub check before merge.
+- **Single next action:** Archive this handoff, push the documentation-only
+  head, then squash-merge and validate exact main.
 
 ## Security confirmation
 
@@ -206,9 +207,9 @@ npx tsc --noEmit
 ## Pre-final-audit checklist
 
 - [x] Every finding has a decision and evidence.
-- [ ] Every accepted finding has a pushed resolution commit.
+- [x] Every accepted finding has a pushed resolution commit.
 - [x] Regression tests fail if their corrections are reverted.
 - [x] The full affordable local suite is recorded above.
-- [ ] GitHub Actions is green on the candidate SHA.
-- [ ] No important work exists only in the current environment.
-- [ ] The handoff is ready to archive under `docs/history/round-reports/`.
+- [x] GitHub Actions is green on the candidate SHA.
+- [x] No important work exists only in the current environment.
+- [x] The handoff is ready to archive under `docs/history/round-reports/`.
