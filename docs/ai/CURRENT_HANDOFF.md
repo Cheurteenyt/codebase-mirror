@@ -10,10 +10,10 @@ status: ACTIVE
 repository: Cheurteenyt/Ariad
 branch: v2/r181-structural-cost-root-cause
 base_sha: 93e0d5c99fa5dd09a5276a9c5c7e922b16f64315
-last_completed_code_sha: 1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe
+last_completed_code_sha: 6b80e3a36481c69ad397de69297542ae80069ab5
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-22T23:29:07Z
+updated_at_utc: 2026-07-23T00:27:09Z
 implementer_role: codex
 ```
 
@@ -46,6 +46,7 @@ No external audit is active. R181 is an evidence-first root-cause round initiate
 |----------|-------------|----------|---------|------------------|------------|
 | `93e0d5c99fa5dd09a5276a9c5c7e922b16f64315` | pending | R181-LOCAL-F001 | Post-PR #76 clean-main anchor. | `git status`; exact local/origin SHA | pending |
 | `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe` | pending | R181-LOCAL-F001 | N=3 protocol, mechanism/noise gates, and append-once environment capture. | helper syntax/smoke; `git diff --check`; `npm --prefix v2 run docs:check` | pending |
+| `6b80e3a36481c69ad397de69297542ae80069ab5` | pending | R181-LOCAL-F001 | Ensure raw manifests hash every pre-registered environment capture. | targeted 2-test checkpoint suite; full `docs:check` (8 tests) | pending |
 
 ## Exact validation evidence
 
@@ -65,6 +66,33 @@ environment: Windows 11 Pro 10.0.26200 x64; Node v24.15.0; npm 11.12.1; Codex CL
 exit_code: 0
 result_summary: helper captured the full environment and refused overwrite semantics by construction; 7 documentation/benchmark tests passed; 74 Markdown files validated; 8 structural questions matched the protocol
 not_run: product build and repeated measurements intentionally wait for remote pre-registration
+```
+
+```text
+command: npm ci; npm run build
+working_directory: D:/Mycodex/codebase-mirror/v2
+environment: Windows host while the local V2 MCP process was still using the built native addon
+exit_code: 1
+result_summary: npm ci could not unlink better_sqlite3.node (EPERM); the following build saw the intentionally incomplete node_modules tree. Process inspection identified PID 30548 as this repository's dist/cli/index.js mcp process; no source failure was inferred.
+not_run: no benchmark cell started until the process was stopped and install/build passed
+```
+
+```text
+command: npm ci; npm run build; runner verify; derive-structural-references.mjs verify --target all --task T02/T03/T04; fixed 24-invocation baseline schedule
+working_directory: D:/Mycodex/codebase-mirror (npm commands in v2)
+environment: Windows 11 Pro 10.0.26200 x64; Node v24.15.0; npm 11.12.1; Codex CLI 0.144.4; gpt-5.6-sol medium
+exit_code: 0 after stopping the local V2 MCP process that held better_sqlite3.node during the first npm ci attempt
+result_summary: deterministic install and build passed; both pinned checkouts and all six T02-T04 oracles verified; all 24 baseline invocations and 84 raw cells completed on attempt 1 in 3182.3 seconds
+not_run: aggregation and trace diagnosis intentionally waited until the complete schedule finished
+```
+
+```text
+command: node --test scripts/benchmark/v1-v2-truth-audit/checkpoint.test.mjs; npm --prefix v2 run docs:check
+working_directory: D:/Mycodex/codebase-mirror
+environment: same disclosed R181 host
+exit_code: 0
+result_summary: 2 targeted tests and all 8 documentation/benchmark tests pass; raw manifest test proves environment is included and derived output excluded
+not_run: raw checkpoints and diagnosis are the next action
 ```
 
 ## Reset recovery
@@ -92,12 +120,12 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify --results-root D:/Mycode
 
 ## Current working state
 
-- **Last completed finding:** immutable R181 N=3 pre-registration and environment helper committed at `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe`; no product finding yet.
+- **Last completed finding:** all N=3 baseline cells completed; environment-manifest coverage is protected at `6b80e3a36481c69ad397de69297542ae80069ab5`; no product finding yet.
 - **Current finding:** R181-LOCAL-F001, repeated T02-T04 cost attribution.
 - **Dirty files expected:** `NONE` at the pushed checkpoint.
 - **Unpushed commits expected:** `0` after this handoff checkpoint is pushed.
 - **Known blocker:** none.
-- **Single next action:** build V2, verify the runner and T02-T04 oracles, prove all three raw roots absent, then execute the fixed baseline schedule without inspecting results mid-run.
+- **Single next action:** create and audit the three immutable baseline checkpoints, then publish the per-cell trace diagnosis before considering product code.
 
 ## Security confirmation
 
