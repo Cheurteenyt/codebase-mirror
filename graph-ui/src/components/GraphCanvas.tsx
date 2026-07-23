@@ -39,6 +39,11 @@ import {
   GRAPH_TOOLTIP_POSITION_EVENT,
   type GraphTooltipPositionDetail,
 } from "../lib/graph-tooltip-position";
+import {
+  buildDomainPreviewPlan,
+  type DomainPreviewPlan,
+} from "../lib/graph-domain-preview";
+import { truncate } from "../lib/utils";
 
 /**
  * R41 (UI-9): imperative handle exposed by GraphCanvas. Lets the parent
@@ -199,6 +204,31 @@ export function computeSemanticZoomLayers(projectedNodeSpacing: number) {
     communityReveal,
     rawTopologyReveal,
   ] as const;
+}
+
+export function computeDomainPreviewOpacity(
+  projectedNodeSpacing: number,
+  options: {
+    dependencyAtlasOverview: boolean;
+    detailMode: boolean;
+    stellarFlow: boolean;
+  },
+): number {
+  if (options.dependencyAtlasOverview) {
+    return 1 - fadeBetween(
+      projectedNodeSpacing,
+      DEPENDENCY_ATLAS_RAW_START - 1.5,
+      DEPENDENCY_ATLAS_RAW_START + 1.5,
+    );
+  }
+  if (options.detailMode || options.stellarFlow) return 0;
+
+  // Domain circles remain the primary visual grammar after the coarse
+  // domain-flow layer hands off to community bundles. Keep their semantic
+  // signatures present across that handoff, then retire them before exact
+  // topology enters. Restricting previews to `domainOverview` created a
+  // hollow 7..18 px/spacing band at the default fitted viewport.
+  return 1 - fadeBetween(projectedNodeSpacing, 10, 17);
 }
 
 type LayoutCluster = NonNullable<GraphData["layout"]>["clusters"][number];
@@ -875,7 +905,12 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   const clustersRef = useRef<LayoutCluster[]>([]);
   const clusterMapRef = useRef<Map<number, LayoutCluster>>(new Map());
   const domainsRef = useRef<LayoutDomain[]>([]);
-  const domainCatalogRef = useRef<Map<string, { node_count: number; file_count: number }>>(new Map());
+  const domainCatalogRef = useRef<Map<string, {
+    node_count: number;
+    file_count: number;
+    representative_node_id: number;
+  }>>(new Map());
+  const domainPreviewPlanRef = useRef<Map<string, DomainPreviewPlan>>(new Map());
   const dependencyAtlasDomainsRef = useRef<DependencyAtlasDomain[]>([]);
   const dependencyAtlasBundleBatchesRef = useRef<Map<string, OverviewBundle[]>>(new Map());
   const dependencyAtlasTrafficTiersRef = useRef<Map<number, number>>(new Map());
@@ -1302,6 +1337,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       clusterMapRef.current = new Map();
       domainsRef.current = [];
       domainCatalogRef.current = new Map();
+      domainPreviewPlanRef.current = new Map();
       dependencyAtlasDomainsRef.current = [];
       dependencyAtlasBundleBatchesRef.current = new Map();
       dependencyAtlasTrafficTiersRef.current = new Map();
@@ -1498,6 +1534,40 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     let maxDegree = 1;
     for (const node of nodes) maxDegree = Math.max(maxDegree, node.rank);
     for (const node of nodes) node.rank = Math.sqrt(node.rank / maxDegree);
+    const atlasDomainByKey = new Map(
+      dependencyAtlasDomains.map((domain) => [domain.key, domain]),
+    );
+    const domainKeyByClusterId = new Map(
+      clustersRef.current.flatMap((cluster) => {
+        const domain = domainMap.get(cluster.domain_id);
+        return domain ? [[cluster.id, domain.key] as const] : [];
+      }),
+    );
+    domainPreviewPlanRef.current = new Map(buildDomainPreviewPlan(
+      domainsRef.current.map((domain) => {
+        const catalogDomain = domainCatalogRef.current.get(domain.key);
+        const atlasDomain = atlasDomainByKey.get(domain.key);
+        return {
+          key: domain.key,
+          nodeCount: catalogDomain?.node_count ?? atlasDomain?.node_count ?? domain.node_count,
+          representativeNodeId: catalogDomain?.representative_node_id
+            ?? atlasDomain?.representative_node_id,
+        };
+      }),
+      nodes.flatMap((node) => {
+        const domainKey = node.cluster_id == null
+          ? undefined
+          : domainKeyByClusterId.get(node.cluster_id);
+        return domainKey == null ? [] : [{
+          id: node.id,
+          domainKey,
+          name: node.name,
+          label: node.label,
+          rank: node.rank,
+          size: node.size,
+        }];
+      }),
+    ).map((preview) => [preview.domainKey, preview]));
     const stellarNodeBatches = new Map<string, SimNode[]>();
     for (const node of nodes) {
       const key = stellarNodeColor(node) + Math.min(3, Math.floor(node.rank * 4));
@@ -2110,6 +2180,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const rawTopologyReveal = dependencyAtlasOverview
       ? dependencyAtlasRawReveal
       : detailMode || stellarFlow ? 1 : overviewRawTopologyReveal;
+    const domainPreviewOpacity = computeDomainPreviewOpacity(projectedNodeSpacing, {
+      dependencyAtlasOverview,
+      detailMode: Boolean(detailMode),
+      stellarFlow,
+    });
     // Raw topology enters only after the community backbone has fully left.
     // Nodes lead their lower-contrast edges so intermediate frames disclose
     // readable symbols rather than a hairball.
@@ -2810,6 +2885,88 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       ctx.globalAlpha = previousAlpha;
     }
 
+    if (domainPreviewOpacity > 0 && renderedDomains.length > 0) {
+      // Macro domains should answer both "where is the code?" and "what is in
+      // there?". Paint at most two deterministic signatures per large domain.
+      // These are previews, not duplicate interactive nodes: activating the
+      // surrounding domain still opens its exact scope.
+      const previousAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = previousAlpha * domainPreviewOpacity;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const domain of renderedDomains) {
+        if (activeDomainId != null && domain.id !== activeDomainId) continue;
+        const projectedRadius = domain.radius * tk;
+        if (projectedRadius < 48) continue;
+        const preview = domainPreviewPlanRef.current.get(domain.key);
+        if (!preview) continue;
+        const previewNodes = preview.nodeIds
+          .map((nodeId) => nodeMap.get(nodeId))
+          .filter((node): node is SimNode => node != null)
+          .slice(0, projectedRadius >= 68 ? 2 : 1);
+        if (previewNodes.length === 0) continue;
+
+        const rowGap = 15 / tk;
+        const showHiddenCount = projectedRadius >= 62
+          && preview.hiddenCount + (preview.nodeIds.length - previewNodes.length) > 0;
+        const footerGap = showHiddenCount ? 12 / tk : 0;
+        const startY = domain.y
+          - ((previewNodes.length - 1) * rowGap + footerGap) / 2
+          + 4 / tk;
+        let paintedRows = 0;
+        for (let index = 0; index < previewNodes.length; index += 1) {
+          const node = previewNodes[index]!;
+          const label = truncate(node.name, projectedRadius >= 88 ? 24 : 17);
+          const y = startY + index * rowGap;
+          ctx.font = `650 ${9.5 / tk}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+          const textWidth = ctx.measureText(label).width;
+          const box = {
+            left: domain.x - textWidth / 2 - 10 / tk,
+            right: domain.x + textWidth / 2 + 4 / tk,
+            top: y - 6 / tk,
+            bottom: y + 6 / tk,
+          };
+          if (hitsOccupied(box, occupied)) continue;
+          occupied.push(box);
+
+          const dotX = domain.x - textWidth / 2 - 5.5 / tk;
+          ctx.beginPath();
+          ctx.arc(dotX, y, 2.4 / tk, 0, Math.PI * 2);
+          ctx.fillStyle = colorForLabel(node.label);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(3, 8, 14, 0.94)";
+          ctx.lineWidth = 3 / tk;
+          ctx.strokeText(label, domain.x + 2 / tk, y);
+          ctx.fillStyle = "rgba(218, 241, 248, 0.9)";
+          ctx.fillText(label, domain.x + 2 / tk, y);
+          paintedRows += 1;
+        }
+
+        const hiddenCount = Math.max(
+          0,
+          preview.hiddenCount + preview.nodeIds.length - paintedRows,
+        );
+        if (showHiddenCount && hiddenCount > 0 && paintedRows > 0) {
+          const footerY = startY + previewNodes.length * rowGap + 1 / tk;
+          const footer = `+${compactArchitectureCount(hiddenCount)} more inside`;
+          ctx.font = `500 ${8.5 / tk}px Inter, ui-sans-serif, system-ui, sans-serif`;
+          const footerWidth = ctx.measureText(footer).width;
+          const footerBox = {
+            left: domain.x - footerWidth / 2 - 3 / tk,
+            right: domain.x + footerWidth / 2 + 3 / tk,
+            top: footerY - 5 / tk,
+            bottom: footerY + 6 / tk,
+          };
+          if (!hitsOccupied(footerBox, occupied)) {
+            occupied.push(footerBox);
+            ctx.fillStyle = domainPalette(domain.id).meta;
+            ctx.fillText(footer, domain.x, footerY);
+          }
+        }
+      }
+      ctx.globalAlpha = previousAlpha;
+    }
+
     const structureLabelReveal = detailMode ? 1 : domainOverview ? 0.62 : communityReveal;
     if (!stellarFlow && structureLabelReveal && clustersRef.current.length) {
       const previousAlpha = ctx.globalAlpha;
@@ -2833,6 +2990,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         const domainKey = domainsRef.current.find((domain) => domain.id === cluster.domain_id)?.key;
         const prefix = domainKey && cluster.key.startsWith(`${domainKey}/`) ? `${domainKey}/` : "";
         const label = cluster.key.slice(prefix.length);
+        if (
+          domainOverview
+          && domainKey === label
+          && domainPreviewPlanRef.current.has(domainKey)
+        ) continue;
         const showSummary = cluster.id === activeCommunityId;
         const traffic = clusterTrafficRef.current.get(cluster.id);
         const countScope = detailMode ? "exact" : "shown";
@@ -3741,11 +3903,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       <span id={keyboardInstructionsId} className="sr-only">
         {visualMode === "stellar"
           ? selectedNodeId == null && !detailMode && data.layout?.dependency_atlas
-            ? "Dependency atlas. D browses domains; Enter opens files and symbols. Zoom in, then N browses representatives. Lines show exact traffic. "
+            ? "Dependency atlas. Large domain centers preview up to two deterministic important symbols and state how many remain inside. D browses domains; Enter opens files and symbols. Zoom in, then N browses representatives. Lines show exact traffic. "
             : "Dependencies graph. Hover a symbol or press N or Shift+N to preview its visible first hop without graph changes. Activate it for the complete visible flow: incoming left, outgoing right. Numbered rails show hop depth and the focus label names relation types. "
           : detailMode
             ? "Exact Structure. N browses symbols. "
-            : "Structure map. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}
+            : "Structure map. Large domain centers preview up to two deterministic important symbols and state how many remain inside. Press D or Shift+D to browse up to 32 visible domains, C or Shift+C for up to 64 communities, and N or Shift+N for up to 64 representative nodes. "}
         Press Enter or Space to activate the announced target.
         Arrow keys pan, plus and minus zoom, zero fits the active frame, and Escape goes up.
       </span>
