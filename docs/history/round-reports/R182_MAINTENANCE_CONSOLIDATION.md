@@ -6,14 +6,15 @@
 schema_version: 1
 kind: implementation-handoff
 round: R182
-status: ACTIVE
+status: COMPLETE
 repository: Cheurteenyt/Ariad
 branch: v2/r182-maintenance-consolidation
 base_sha: 2420906d38e585c87b3f692116531cc3e7e838f2
 last_completed_code_sha: 10e04583d7a7870370e422152a614a66828ad248
+ci_verified_head_sha: 28de40b8b1789f237730f111ed258a76989fbbf8
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-23T10:44:54Z
+updated_at_utc: 2026-07-23T10:51:49Z
 implementer_role: codex
 ```
 
@@ -50,7 +51,7 @@ No external audit is active in this owner-directed maintenance round.
 |----------|-------------|----------|---------|------------------|------------|
 | `2420906d38e585c87b3f692116531cc3e7e838f2` | pending | owner decision | R182 baseline and contracts | repository state inspected | pending |
 | `d1e7a81f039bbc30c2964f9ad0d9cab5a419546e` | pending | owner decision | R169E is paused and unscheduled; `DATA-CARRY-01` remains open | `npm run docs:check` passed | pending |
-| `10e04583d7a7870370e422152a614a66828ad248` | pending | owner decision | canonical benchmark synthesis added and linked from the portal | `npm run docs:check` passed | [PR #82](https://github.com/Cheurteenyt/Ariad/pull/82) pending |
+| `10e04583d7a7870370e422152a614a66828ad248` | `28de40b8b1789f237730f111ed258a76989fbbf8` | owner decision | canonical benchmark synthesis added and linked from the portal | `npm run docs:check` passed; two targeted Windows UI files passed locally | [push CI](https://github.com/Cheurteenyt/Ariad/actions/runs/30000503266), [PR CI](https://github.com/Cheurteenyt/Ariad/actions/runs/30000506201), and [CodeQL](https://github.com/Cheurteenyt/Ariad/actions/runs/30000506350) passed |
 
 ## Exact validation evidence
 
@@ -60,7 +61,9 @@ working_directory: v2
 environment: Windows / PowerShell / GitHub CLI
 exit_code: 0
 result_summary: 90 Markdown files validated; 80 are portal-reachable; all link, metadata, reachability, and benchmark specification checks passed.
-not_run: Product suites are outside this documentation-only candidate; GitHub CI and CodeQL are the publication authority.
+additional_command: npx vitest run tests/ui/ui-project-store-routing.test.ts tests/ui/ui-reader-refresh-after-index.test.ts
+additional_result: 2 files and 5 tests passed locally in 1.26 seconds after the first push CI attempt timed out under concurrent workflow load.
+github_result: Push CI attempt 2, PR CI, and CodeQL passed on ci_verified_head_sha.
 ```
 
 ## Reset recovery
@@ -92,13 +95,13 @@ npm run docs:check
 - **Last completed finding:** The canonical benchmark summary now distinguishes
   the broad V1 improvement, mixed `grep/read` result, fixed T01/T02 mechanisms,
   evidence-based T03/T04 no-fix decision, and experiment limits.
-- **Current finding:** Candidate publication checks are running on PR #82.
+- **Current finding:** The documentation-only candidate and its recoverable
+  handoff checkpoint are CI verified.
 - **Dirty files expected:** `NONE` at a pushed checkpoint.
 - **Unpushed commits expected:** `0` at a pushed checkpoint.
 - **Known blocker:** None.
-- **Single next action:** Wait for candidate CI and CodeQL, then archive this
-  handoff, restore the inactive handoff-guide wording, and publish the final
-  documentation-only candidate.
+- **Single next action:** Mark PR #82 ready, squash-merge it, then verify exact
+  main CI, CodeQL, GitLab mirror parity, and branch deletion.
 
 ## Security confirmation
 
@@ -113,6 +116,6 @@ npm run docs:check
 - [x] The R169 status is updated in both canonical documents.
 - [x] The consolidated benchmark summary is sourced and portal-reachable.
 - [x] The full affordable local documentation suite is recorded above.
-- [ ] GitHub Actions is green on the candidate SHA.
+- [x] GitHub Actions is green on the candidate SHA.
 - [x] No important work exists only in the current environment.
-- [ ] The handoff is ready to archive under `docs/history/round-reports/`.
+- [x] The handoff is ready to archive under `docs/history/round-reports/`.

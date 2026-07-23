@@ -9,7 +9,7 @@ This directory is intentionally idle on `main`.
 During one active `v2/r<n>-<short-name>` round, the implementation agent
 creates and commits:
 
-- [`CURRENT_HANDOFF.md`](CURRENT_HANDOFF.md), copied from
+- `CURRENT_HANDOFF.md`, copied from
   `../templates/GLM_HANDOFF_TEMPLATE.md`;
 - `audits/<round>/AUDIT-<sequence>-<short-sha>.md`, copied verbatim from an
   external read-only audit based on
