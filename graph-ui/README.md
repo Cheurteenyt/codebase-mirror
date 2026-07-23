@@ -2,7 +2,7 @@
 
 > **Status:** Canonical contributor entry point
 > **Audience:** Frontend contributors and maintainers
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-20
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-23
 
 The Graph UI is a React/Vite frontend embedded into the V2 npm package. Product
 usage starts in the [root README](../README.md); this file covers development
@@ -29,6 +29,22 @@ Run the built local UI through the V2 CLI after indexing a project. Do not use
 the Vite development server as evidence that packaged assets or arbitrary-CWD
 startup work correctly.
 
+## Dependency and bundle boundary
+
+Import Radix primitives from their direct `@radix-ui/react-*` packages. The
+aggregate `radix-ui` entry point is forbidden because a patch release changed
+its generated re-export shape and caused Rollup to retain unrelated
+primitives. The production build inspects the GraphTab source map and accepts
+only packages in the dependency closure of its direct Slot and ScrollArea
+roots.
+
+`npm run build` applies multi-pass Terser compression and fails when the graph,
+main, CSS, manifest-wide JavaScript, or manifest-wide CSS budgets are exceeded.
+It also fails if the aggregate Radix package or an unrelated Radix primitive
+appears in GraphTab. Dependency updates must regenerate `package-lock.json`
+with the repository's declared npm version and pass both `npm test` and the
+production build; do not relax a budget to accept an update.
+
 ## Architecture and evidence
 
 - [Current product state](../docs/reference/V2_CURRENT_STATE.md)
@@ -46,6 +62,8 @@ startup work correctly.
   Dependencies views.
 - Keep output and simulation budgets explicit; visual density must not silently
   become an unbounded transfer or layout cost.
+- Keep UI primitives independently upgradable; do not import a component-suite
+  aggregate when a direct primitive package exists.
 - Verify keyboard, pointer, touch, reduced-motion, responsive, loading,
   partial, and error states.
 - Update the performance lab when a visual or renderer change alters a measured

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { ScrollArea as ScrollAreaPrimitive } from "radix-ui"
+import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area"
 
 import { cn } from "@/lib/utils"
 
@@ -21,7 +21,8 @@ function ScrollArea({
         {children}
       </ScrollAreaPrimitive.Viewport>
       <ScrollBar />
-      <ScrollAreaPrimitive.Corner />
+      {/* This wrapper mounts only a vertical scrollbar. Radix Corner is
+          required only when horizontal and vertical scrollbars intersect. */}
     </ScrollAreaPrimitive.Root>
   )
 }

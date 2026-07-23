@@ -1,9 +1,12 @@
-import { readFileSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
+const require = createRequire(import.meta.url);
 const defaultDistDir = fileURLToPath(new URL("../dist/", import.meta.url));
+const graphUiDir = fileURLToPath(new URL("../", import.meta.url));
 const distDir = resolve(process.argv[2] ?? defaultDistDir);
 const html = readFileSync(resolve(distDir, "index.html"), "utf8");
 const manifest = JSON.parse(
@@ -79,6 +82,68 @@ function readAsset(file) {
   };
 }
 
+function packageNameFromSource(source) {
+  const normalized = source.replaceAll("\\", "/");
+  const marker = "/node_modules/";
+  const markerIndex = normalized.lastIndexOf(marker);
+  if (markerIndex === -1) return null;
+
+  const [first, second] = normalized.slice(markerIndex + marker.length).split("/");
+  if (!first) return null;
+  return first.startsWith("@") && second ? `${first}/${second}` : first;
+}
+
+function isRadixPackage(packageName) {
+  return packageName === "radix-ui" || packageName?.startsWith("@radix-ui/");
+}
+
+function resolvePackageManifest(packageName, resolveFrom) {
+  let directory = dirname(require.resolve(packageName, { paths: [resolveFrom] }));
+
+  while (true) {
+    const candidate = resolve(directory, "package.json");
+    if (existsSync(candidate)) {
+      const manifest = JSON.parse(readFileSync(candidate, "utf8"));
+      if (manifest.name === packageName) return { path: candidate, manifest };
+    }
+
+    const parent = dirname(directory);
+    if (parent === directory) {
+      throw new Error(`Unable to resolve package manifest for ${packageName}`);
+    }
+    directory = parent;
+  }
+}
+
+function radixDependencyClosure(roots) {
+  const closure = new Set();
+  const visitedManifests = new Set();
+  const queue = roots.map((packageName) => ({ packageName, resolveFrom: graphUiDir }));
+
+  while (queue.length > 0) {
+    const { packageName, resolveFrom } = queue.shift();
+    const {
+      path: packageManifestPath,
+      manifest: packageManifest,
+    } = resolvePackageManifest(packageName, resolveFrom);
+    if (visitedManifests.has(packageManifestPath)) continue;
+    visitedManifests.add(packageManifestPath);
+    closure.add(packageName);
+
+    const radixDependencies = Object.keys({
+      ...(packageManifest.dependencies ?? {}),
+      ...(packageManifest.optionalDependencies ?? {}),
+    }).filter(isRadixPackage);
+
+    queue.push(...radixDependencies.map((dependency) => ({
+      packageName: dependency,
+      resolveFrom: dirname(packageManifestPath),
+    })));
+  }
+
+  return closure;
+}
+
 const graphAsset = readAsset(graphChunk.file);
 const mainAsset = readAsset(mainChunk.file);
 const cssAsset = readAsset(mainCssPath);
@@ -98,20 +163,45 @@ const fail = (message) => {
 };
 
 const budgets = {
-  graphGzip: 40 * 1024,
+  graphGzip: 39 * 1024,
   mainGzip: 80 * 1024,
   cssGzip: 15 * 1024,
   totalCssGzip: 18 * 1024,
-  totalJsGzip: 125 * 1024,
+  totalJsGzip: 123 * 1024,
 };
 const totalJsGzip = javascriptAssets.reduce((sum, asset) => sum + asset.gzip, 0);
 const totalCssGzip = stylesheetAssets.reduce((sum, asset) => sum + asset.gzip, 0);
 const productionCss = readFileSync(resolve(distDir, mainCssPath), "utf8");
+const graphSourceMap = JSON.parse(
+  readFileSync(resolve(distDir, `${graphChunk.file}.map`), "utf8"),
+);
+const graphRadixPackages = [...new Set(
+  (graphSourceMap.sources ?? [])
+    .map(packageNameFromSource)
+    .filter(isRadixPackage),
+)].sort();
+const allowedGraphRadixPackages = radixDependencyClosure([
+  "@radix-ui/react-scroll-area",
+  "@radix-ui/react-slot",
+]);
 
 for (const selector of [".text-foreground", ".text-primary", ".border-border"]) {
   if (!productionCss.includes(selector)) {
     fail(`semantic selector ${selector} is missing from ${cssAsset.name}`);
   }
+}
+
+if (graphRadixPackages.includes("radix-ui")) {
+  fail(`${graphAsset.name} contains the forbidden aggregate package radix-ui`);
+}
+const unexpectedGraphRadixPackages = graphRadixPackages.filter(
+  (packageName) => !allowedGraphRadixPackages.has(packageName),
+);
+if (unexpectedGraphRadixPackages.length > 0) {
+  fail(
+    `${graphAsset.name} contains unexpected Radix packages: `
+    + unexpectedGraphRadixPackages.join(", "),
+  );
 }
 
 if (graphAsset.gzip > budgets.graphGzip) {
@@ -135,5 +225,6 @@ console.log(
   + `main ${mainAsset.name} ${kib(mainAsset.gzip)}, `
   + `CSS ${cssAsset.name} ${kib(cssAsset.gzip)}, `
   + `manifest CSS ${kib(totalCssGzip)}, `
-  + `manifest JS ${kib(totalJsGzip)}`,
+  + `manifest JS ${kib(totalJsGzip)}, `
+  + `Radix packages ${graphRadixPackages.length}`,
 );

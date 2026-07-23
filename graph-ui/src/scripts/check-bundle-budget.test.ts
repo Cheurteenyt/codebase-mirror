@@ -27,6 +27,10 @@ function createDistFixture(): string {
   );
   writeFileSync(join(dist, "assets", "entry-real.js"), "console.log('entry');");
   writeFileSync(join(dist, "assets", "lazy-real.js"), "console.log('graph');");
+  writeFileSync(
+    join(dist, "assets", "lazy-real.js.map"),
+    JSON.stringify({ version: 3, sources: [], names: [], mappings: "" }),
+  );
   writeFileSync(join(dist, "assets", "control-real.js"), "console.log('control');");
   writeFileSync(
     join(dist, "assets", "theme-real.css"),
@@ -69,6 +73,7 @@ describe("bundle budget asset resolution", () => {
     expect(result.stdout).toContain("main assets/entry-real.js");
     expect(result.stdout).toContain("CSS assets/theme-real.css");
     expect(result.stdout).toContain("manifest CSS");
+    expect(result.stdout).toContain("Radix packages 0");
     expect(result.stdout).not.toContain("decoy");
   });
 
@@ -94,5 +99,43 @@ describe("bundle budget asset resolution", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("semantic selector .text-foreground is missing");
+  });
+
+  it("rejects the aggregate radix-ui entry point even when byte budgets pass", () => {
+    const dist = createDistFixture();
+    writeFileSync(
+      join(dist, "assets", "lazy-real.js.map"),
+      JSON.stringify({
+        version: 3,
+        sources: ["../../node_modules/radix-ui/dist/index.mjs"],
+        names: [],
+        mappings: "",
+      }),
+    );
+
+    const result = spawnSync(process.execPath, [SCRIPT, dist], { encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("forbidden aggregate package radix-ui");
+  });
+
+  it("rejects Radix primitives outside GraphTab's dependency closure", () => {
+    const dist = createDistFixture();
+    writeFileSync(
+      join(dist, "assets", "lazy-real.js.map"),
+      JSON.stringify({
+        version: 3,
+        sources: ["../../node_modules/@radix-ui/react-dialog/dist/index.mjs"],
+        names: [],
+        mappings: "",
+      }),
+    );
+
+    const result = spawnSync(process.execPath, [SCRIPT, dist], { encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "contains unexpected Radix packages: @radix-ui/react-dialog",
+    );
   });
 });

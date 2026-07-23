@@ -29,6 +29,18 @@ export default defineConfig({
     // Match the TypeScript contract and the Chromium-family local runtime.
     // Avoid downlevelling modern syntax into larger helper expressions.
     target: "es2022",
+    // Terser costs a small amount of build time but materially reduces the
+    // transferred graph and manifest bytes. Multiple compression passes keep
+    // dependency patch growth from consuming the production safety margin.
+    minify: "terser",
+    terserOptions: {
+      compress: {
+        passes: 2,
+      },
+      format: {
+        comments: false,
+      },
+    },
     sourcemap: true,
     rollupOptions: {
       output: {

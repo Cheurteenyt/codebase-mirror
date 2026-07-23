@@ -2,7 +2,7 @@
 
 > **Status:** Canonical architecture
 > **Audience:** Contributors, maintainers, integrators, and auditors
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-21
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-23
 >
 > R169A and R169B are merged;
 > R169B is on `main` at
@@ -225,8 +225,10 @@ is released when selection or mode changes, preventing high-fan-out link forces
 from moving the semantic origin. Hub bloom, orbit guides, depth rails, and the
 focused flow axis are batched Canvas paths; there are no shadows, per-node gradients,
 Three.js scene, WebGL backend, or second layout engine. The Graph application
-chunk remains protected by its 40 KiB gzip budget; the stable `d3-*` force stack
-is cached separately and both remain covered by the global JavaScript budget.
+chunk remains protected by its 39 KiB gzip budget; the stable `d3-*` force stack
+is cached separately and both remain covered by the 123 KiB manifest-wide
+JavaScript budget. Multi-pass Terser compression preserves real transfer
+headroom rather than weakening either limit.
 
 The bounded overview is followed by a revision-bound exact drill-down rather
 than a second renderer. `GET /api/scope` keyset-pages a domain, a semantic
@@ -287,7 +289,11 @@ documented Chromium-family local runtime. Tailwind v4 receives an explicit
 semantic color mapping, so `foreground`, `primary`, `accent`, `border`, and
 related opacity utilities are present in production CSS rather than silently
 discarded. Static node-detail and graph-control styles remain in CSS to protect
-the JavaScript transfer budget.
+the JavaScript transfer budget. Radix components import only the direct Slot,
+Checkbox, ScrollArea, and Separator packages. The aggregate `radix-ui` entry
+point is forbidden in production source and the build checks GraphTab's source
+map against the transitive closure of its allowed Radix roots, preventing a
+dependency patch from silently bundling unrelated primitives.
 The loopback server keeps an idle LRU budget of four project-store entries;
 code and human SQLite connections use 64 MiB and 8 MiB page-cache ceilings.
 Control browsing/indexing is confined to the user's home directory, the
