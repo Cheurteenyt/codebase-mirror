@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "rename": [
+    {
+      "from": "src/delivery/publish.ts",
+      "to": "src/delivery/commit.ts",
+      "replacement": "src/delivery/commit.ts"
+    }
+  ],
+  "replace": [
+    {
+      "path": "src/orchestration/pipeline.ts",
+      "replacement": "src/orchestration/pipeline.ts"
+    }
+  ],
+  "add": [
+    {
+      "path": "src/monitoring/audit.ts",
+      "source": "src/monitoring/audit.ts"
+    }
+  ],
+  "delete": [
+    "src/legacy/obsolete.ts"
+  ]
+}

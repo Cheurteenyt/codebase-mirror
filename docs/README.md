@@ -68,6 +68,7 @@ copied into several documents.
 |---|---|
 | [Benchmark summary](performance/BENCHMARK_SUMMARY.md) | Canonical plain-language conclusion and evidence limits |
 | [Benchmark protocol](performance/BENCHMARK_PROTOCOL.md) | Canonical task, grading, and native-accounting protocol |
+| [Ariad versus Graphify protocol](performance/GRAPHIFY_COMPETITIVE_PROTOCOL.md) | Frozen R184 four-arm competitive task, token, update, human-memory, and UI protocol |
 | [Token economy](performance/TOKEN_ECONOMY.md) | Current claim boundaries plus clearly labeled historical estimates |
 | [Graph UI performance lab](performance/GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md) | Reproducible UI performance and perception methodology |
 | [V1/V2 token truth audit](performance/reports/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) | Immutable current native-token evidence |
