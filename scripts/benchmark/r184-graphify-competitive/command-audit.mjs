@@ -12,7 +12,7 @@ export function splitPowerShellCommands(command) {
   let current = '';
   let quote = null;
   let escaped = false;
-  const explicitPipelineHead = /^(?:rg|Get-Content|Select-String|Select-Object|Sort-Object|ForEach-Object|Where-Object|Test-Path|git|python|py|node|npm|npx|pnpm|yarn|curl|wget|Invoke-WebRequest|Invoke-RestMethod|Get-ChildItem|Remove-Item|Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|sqlite3|jq|findstr|where)(?:\.exe|\.cmd)?\b/iu;
+  const explicitCommandHead = /^(?:(?:rg|Get-Content|Select-String|Select-Object|Sort-Object|ForEach-Object|Where-Object|Test-Path|git|python|py|node|npm|npx|pnpm|yarn|curl|wget|Invoke-WebRequest|Invoke-RestMethod|Get-ChildItem|Remove-Item|Set-Content|Add-Content|Out-File|New-Item|Copy-Item|Move-Item|sqlite3|jq|findstr|where)(?:\.exe|\.cmd)?|[A-Za-z]+-[A-Za-z]+|foreach|for|if|while|switch)\s/iu;
   for (let index = 0; index < script.length; index += 1) {
     const character = script[index];
     if (escaped) {
@@ -42,12 +42,13 @@ export function splitPowerShellCommands(command) {
       current += character;
       continue;
     }
-    const pipelineBoundary = character === '|'
-      && (
-        /\s/u.test(script[index - 1] ?? '')
-        || explicitPipelineHead.test(script.slice(index + 1).trimStart().replace(/^["']+/u, ''))
-      );
-    if (pipelineBoundary || character === ';' || character === '\n') {
+    const tail = script.slice(index + 1).trimStart().replace(/^["']+/u, '');
+    const commandBoundary = tail.startsWith('$')
+      || explicitCommandHead.test(`${tail} `);
+    const separatorBoundary = (
+      (character === '|' || character === ';') && commandBoundary
+    ) || character === '\n';
+    if (separatorBoundary) {
       if (current.trim()) parts.push(current.trim());
       current = '';
       continue;

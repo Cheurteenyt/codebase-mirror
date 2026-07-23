@@ -73,6 +73,10 @@ test('PowerShell audit judges executed commands rather than words in paths and p
     auditCommand(String.raw`powershell.exe -Command "rg -n \"handler|    route_handler|from\" src"`),
     null,
   );
+  assert.equal(
+    auditCommand(String.raw`powershell.exe -Command "rg -n \"from [^;]+|export |interface |type |node\" src"`),
+    null,
+  );
 });
 
 test('PowerShell audit handles mismatched recorded wrapper quotes without splitting a regex', () => {
