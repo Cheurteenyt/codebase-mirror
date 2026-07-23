@@ -10,10 +10,10 @@ status: ACTIVE
 repository: Cheurteenyt/Ariad
 branch: v2/r183-graph-visual-intelligence
 base_sha: b6a95f23ca34ba1a141c943f1be0b045be23b9dd
-last_completed_code_sha: 0e0c4ac694393c2bc0d8ed73c0801e30533fad6c
+last_completed_code_sha: b8a349e3f06a4ec237af18cf9908d1ceaec10625
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-23T12:34:27Z
+updated_at_utc: 2026-07-23T12:45:10Z
 implementer_role: codex
 ```
 
@@ -55,6 +55,7 @@ round. Findings below are provisional until the matched baseline is committed.
 | R183-E02 | owner objective | IMPLEMENTED | The task review found that V2 won exact-search and directed-flow work but its fitted macro domains were visually hollow. Structure and Dependencies now show at most two deterministic semantic signatures per domain plus a hidden-count disclosure, with a bounded fade before exact topology. | `0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` | `graph-domain-preview.test.ts`; `GraphCanvas.test.tsx` | pending | LOCAL_PASS |
 | R183-E03 | owner objective | ACCEPTED | Validate small, medium, empty, disconnected, dense, filtered, and oversized states without regressions. The complete 236-test Graph UI suite is green; backend/package and exact-main gates remain. | `0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` | existing Graph UI state matrix plus bounded perception fixture | pending | IN_PROGRESS |
 | R183-E04 | local reproduction | ACCEPTED | The comparison lab selected the first V1 card whose broad ancestor contained the target name, so the 38-node API preflight could be paired with a rendered 4,287-node project. Captures were also taken after the FPS pan/zoom. The lab now selects a card-local exact heading, verifies the rendered layout URL and complete topology, records that identity, and captures the settled pre-interaction frame. | `d54b6ac6472a42f4f445c74b3251a4df1978551e` | `v2/tests/benchmark/graph-ui-lab.test.ts` | pending | LOCAL_PASS |
+| R183-E05 | packaged browser smoke | IMPLEMENTED | The packaged smoke requested keyboard node traversal immediately after opening the exact dependency atlas. The product correctly announced that symbols require domain drill-down or semantic zoom, so the stale smoke failed on a valid large project. It now follows that explicit prompt with bounded Zoom-in actions before requiring a node, while other missing-target states still fail closed. | `b8a349e3f06a4ec237af18cf9908d1ceaec10625` | `v2/tests/benchmark/graph-ui-browser-smoke.test.ts` plus packaged Edge smoke | pending | LOCAL_PASS |
 
 ## Pushed checkpoints
 
@@ -63,6 +64,7 @@ round. Findings below are provisional until the matched baseline is committed.
 | `b6a95f23ca34ba1a141c943f1be0b045be23b9dd` | pending | R183-E01–E03 | baseline and round contracts | repository identity and worktree inspected | pending |
 | `d54b6ac6472a42f4f445c74b3251a4df1978551e` | pending | R183-E01, R183-E04 | fail-closed rendered graph identity and pre-interaction blind captures | targeted Vitest 9/9; backend/lab typecheck; 38-node strict browser smoke | pending |
 | `0e0c4ac694393c2bc0d8ed73c0801e30533fad6c` | pending | R183-E01-E03 | bounded macro-domain intelligence and a controlled multi-domain perception fixture | Graph UI 236/236; targeted preview 65/65; frontend and backend/lab typecheck; frontend build/budgets; strict five-run Architecture and Stellar comparison candidates | pending |
+| `b8a349e3f06a4ec237af18cf9908d1ceaec10625` | pending | R183-E05 | packaged browser smoke follows the exact dependency-atlas disclosure contract | targeted backend 10/10; backend/lab typecheck; packaged Edge smoke on 1,000-node project with no console, page, or HTTP errors | pending |
 
 ## Exact validation evidence
 
@@ -114,7 +116,31 @@ working_directory: v2
 environment: Windows 11 / Node runtime from repository
 exit_code: 0
 result_summary: Backend and Graph UI lab TypeScript configurations passed after the implementation.
-not_run: Documentation update/check, backend build, embedded package build, publication gates, and exact-main validation.
+
+command: npx vitest run tests/benchmark/graph-ui-browser-smoke.test.ts tests/benchmark/graph-ui-lab.test.ts
+working_directory: v2
+environment: Windows 11 / Node runtime from repository
+exit_code: 0
+result_summary: 2 files and 10 tests passed, including dependency-atlas zoom handoff and fail-closed identity checks.
+
+command: npm run smoke:graph-ui:browser -- --project codebase-mirror --base-url http://127.0.0.1:9749
+working_directory: v2
+environment: Windows 11 / Edge 150.0.4078.83 / packaged Graph UI / 1,000-node representative frame
+exit_code: 0
+result_summary: Structure, exact dependency-atlas zoom, keyboard node traversal, semantic-depth focus, Structure restore, and Fit passed with zero console, page, or failed-HTTP errors.
+
+command: npm run docs:check
+working_directory: v2
+environment: Windows 11 / Node runtime from repository
+exit_code: 0
+result_summary: 92 Markdown files valid, 27 active, 82 reachable; links, anchors, metadata, and structural reference answers passed.
+
+command: npm run build && npm run build:package
+working_directory: v2
+environment: Windows 11 / Node runtime from repository
+exit_code: 0
+result_summary: Backend compiled; locked Graph UI install audited 0 vulnerabilities; unchanged bundle budgets passed; embedded assets were copied and verified.
+not_run: Final post-documentation package rebuild, publication gates, remote CI, and exact-main validation.
 ```
 
 ## Reset recovery
@@ -143,19 +169,19 @@ npx tsc --noEmit
 
 ## Current working state
 
-- **Last completed finding:** R183-E02 added bounded, deterministic macro-domain
-  signatures after the corrected lab and anonymous task review proved the
-  fitted Structure and Dependencies frames were visually hollow.
-- **Current finding:** Document the corrected evidence and semantic-zoom
-  contract, then finish the backend, package, browser, and publication gates.
+- **Last completed finding:** R183-E05 aligned the packaged browser gate with
+  the exact dependency-atlas semantic-zoom contract and passed it on the
+  1,000-node local project without runtime errors.
+- **Current finding:** Finalize the current evidence documentation, rerun the
+  package gate against the complete diff, then finish remote publication.
 - **Dirty files expected:** two pre-existing CRLF status markers with
   byte-identical index/worktree blobs; never stage them.
 - **Unpushed commits expected:** the code and this handoff checkpoint until the
   next paired push.
 - **Known blocker:** None.
-- **Single next action:** Update the Graph UI architecture, user guidance, lab
-  truth record, and R183 evidence report; run `npm run docs:check`, then execute
-  the complete backend and embedded-package validation matrix.
+- **Single next action:** Commit the current documentation, rerun docs,
+  frontend, backend, package, and packaged-browser gates on that exact head,
+  then push and monitor the GitHub candidate.
 
 ## Security confirmation
 
