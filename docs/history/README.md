@@ -2,7 +2,7 @@
 
 > **Status:** Historical index
 > **Audience:** Maintainers and auditors
-> **Last verified:** 2026-07-22 R178 archive
+> **Last verified:** 2026-07-23 R181 archive
 
 Everything below this directory is non-canonical evidence. A historical file
 remains valid for its pinned revision, but it must not be treated as current
@@ -39,6 +39,7 @@ Later native-accounting evidence lives under
 - [R177 multi-hop caller correction](round-reports/R177_MULTI_HOP_CALLER_CORRECTION.md)
 - [R178 fresh B/C multi-hop confirmation](round-reports/R178_FRESH_BC_MULTIHOP_CONFIRMATION.md)
 - [R180 R179 forward-reference correction](round-reports/R180_R179_FORWARD_REFERENCE.md)
+- [R181 structural cost root-cause correction](round-reports/R181_STRUCTURAL_COST_ROOT_CAUSE.md)
 
 ## Changelog archive
 

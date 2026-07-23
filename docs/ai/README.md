@@ -6,10 +6,6 @@
 
 This directory is intentionally idle on `main`.
 
-The active R181 work branch is tracked in
-[`CURRENT_HANDOFF.md`](CURRENT_HANDOFF.md). This link is removed with the
-active handoff before the round is squash-merged to `main`.
-
 During one active `v2/r<n>-<short-name>` round, the implementation agent
 creates and commits:
 

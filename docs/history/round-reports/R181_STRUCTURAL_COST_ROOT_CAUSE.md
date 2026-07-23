@@ -6,14 +6,14 @@
 schema_version: 1
 kind: implementation-handoff
 round: R181
-status: ACTIVE
+status: COMPLETE
 repository: Cheurteenyt/Ariad
 branch: v2/r181-structural-cost-root-cause
 base_sha: 93e0d5c99fa5dd09a5276a9c5c7e922b16f64315
 last_completed_code_sha: df4298caea146b4a5a1d8cc5a07440e22bd20922
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-23T01:56:13Z
+updated_at_utc: 2026-07-23T01:59:49Z
 implementer_role: codex
 ```
 
@@ -38,8 +38,8 @@ No external audit is active. R181 is an evidence-first root-cause round initiate
 
 | Finding | Audit source | Decision | Evidence or reason | Resolution code commit | Regression test | CI-validated head | Validation state |
 |---------|--------------|----------|--------------------|------------------------|-----------------|-------------------|------------------|
-| R181-LOCAL-F001 | R176 T02-T04 single-sample evidence | ACCEPTED | Repeat N=3 and attribute token cost before deciding whether a repository defect exists. | `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe` | environment helper smoke plus existing mechanical benchmark checks | pending | IMPLEMENTED_PUSHED |
-| R181-LOCAL-F002 | R181 N=3 traces and pinned indexes | ACCEPTED | T02 lacks alias-aware type-impact evidence; 10-19 distinct B calls cause 87.5% of the one-shot gap. Add a general bounded operation inside `lookup_source_text`; do not touch T01/direct callers. | `1c151232f1d49042d9e7ecfc3f44987fa5612625` | `tests/mcp/exact-source-lookup.test.ts`; `tests/mcp/server.test.ts` | pending | MEASURED_ACCEPTED_PUSHED |
+| R181-LOCAL-F001 | R176 T02-T04 single-sample evidence | CI_VERIFIED | Repeat N=3 and attribute token cost before deciding whether a repository defect exists. | `1ced999a49a647b22fc5e08a6a1d5a50fafc1bbe` | environment helper smoke plus existing mechanical benchmark checks | `debdebff0e696c1250734aeb009c6515bd90a02f` | CI_PASS |
+| R181-LOCAL-F002 | R181 N=3 traces and pinned indexes | CI_VERIFIED | T02 lacks alias-aware type-impact evidence; 10-19 distinct B calls cause 87.5% of the one-shot gap. Add a general bounded operation inside `lookup_source_text`; do not touch T01/direct callers. | `1c151232f1d49042d9e7ecfc3f44987fa5612625` | `tests/mcp/exact-source-lookup.test.ts`; `tests/mcp/server.test.ts` | `debdebff0e696c1250734aeb009c6515bd90a02f` | CI_PASS |
 
 ## Pushed checkpoints
 
@@ -50,7 +50,7 @@ No external audit is active. R181 is an evidence-first root-cause round initiate
 | `6b80e3a36481c69ad397de69297542ae80069ab5` | pending | R181-LOCAL-F001 | Ensure raw manifests hash every pre-registered environment capture. | targeted 2-test checkpoint suite; full `docs:check` (8 tests) | pending |
 | `61af45679ad28a4cef7d7888cab04dfdbe07758b` | pending | R181-LOCAL-F001, R181-LOCAL-F002 | Three immutable baseline checkpoints and pre-fix mechanism/noise diagnosis. | 72/72 decision cells valid; `docs:check` (8 tests) | pending |
 | `1c151232f1d49042d9e7ecfc3f44987fa5612625` | pending | R181-LOCAL-F002 | Add one bounded alias-aware TypeScript `type_dependents` profile inside the existing `lookup_source_text` tool. | typecheck; build; MCP 47/47; docs check; pinned small 7/7 and large 8/8 oracle smoke | pending |
-| `df4298caea146b4a5a1d8cc5a07440e22bd20922` | pending | R181-LOCAL-F002 | Publish the accepted N=3 postfix comparison and three immutable checkpoints. | 24/24 invocations; 84 raw cells; 0 invalid; all four T02 B groups HELPED; no selected B group WORSE; docs check | pending |
+| `df4298caea146b4a5a1d8cc5a07440e22bd20922` | `debdebff0e696c1250734aeb009c6515bd90a02f` | R181-LOCAL-F002 | Publish the accepted N=3 postfix comparison and three immutable checkpoints. | 24/24 invocations; 84 raw cells; 0 invalid; all four T02 B groups HELPED; no selected B group WORSE; docs check | CI `29973115177`; CodeQL `29973115080` |
 
 ## Exact validation evidence
 
@@ -153,6 +153,15 @@ result_summary: typecheck passes; production build transforms 1,910 modules and 
 not_run: browser runtime smoke waits for the final merged local server restart
 ```
 
+```text
+command: GitHub Actions CI 29973115177 and CodeQL 29973115080
+working_directory: GitHub head debdebff0e696c1250734aeb009c6515bd90a02f
+environment: protected pull-request checks
+exit_code: 0
+result_summary: backend Linux suite and benchmark invariants, Windows smoke, frontend, npm pack/install/embedded-browser smoke, Docker non-root smoke, JavaScript/TypeScript CodeQL, and Python CodeQL all pass on the exact candidate head
+not_run: archive-head checks, squash merge, main-branch CI, GitLab mirror parity, and local server restart remain integration gates
+```
+
 ## Reset recovery
 
 ```bash
@@ -178,12 +187,12 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify --results-root D:/Mycode
 
 ## Current working state
 
-- **Last completed finding:** R181-LOCAL-F002 accepted same-N postfix measurement, published locally at `df4298caea146b4a5a1d8cc5a07440e22bd20922`.
-- **Current finding:** remote candidate verification.
-- **Dirty files expected:** `NONE` at the pushed checkpoint.
-- **Unpushed commits expected:** `0` after this handoff checkpoint is pushed.
+- **Last completed finding:** R181-LOCAL-F001 and R181-LOCAL-F002 are CI_VERIFIED on exact head `debdebff0e696c1250734aeb009c6515bd90a02f`.
+- **Current finding:** none; the implementation round is complete.
+- **Dirty files expected:** only the handoff archive move and documentation-index update until pushed.
+- **Unpushed commits expected:** one trailing documentation-only archive commit.
 - **Known blocker:** none.
-- **Single next action:** push this clean candidate checkpoint and wait for the exact-head GitHub Actions and CodeQL gates before archiving the handoff.
+- **Single next action:** push the archive commit, rerun required checks on its exact head, then mark PR #77 ready and squash-merge into protected `main`.
 
 ## Security confirmation
 
@@ -194,10 +203,10 @@ node scripts/benchmark/v1-v2-truth-audit/run.mjs verify --results-root D:/Mycode
 
 ## Pre-final-audit checklist
 
-- [ ] Every finding has a decision and evidence.
-- [ ] Every accepted finding has a pushed resolution commit or an evidence-backed no-fix conclusion.
-- [ ] Regression tests fail if an implemented correction is reverted.
-- [ ] The full affordable local suite is recorded above.
-- [ ] GitHub Actions is green on the candidate SHA.
-- [ ] No important work exists only in the current environment.
-- [ ] The handoff is ready to archive under `docs/history/round-reports/`.
+- [x] Every finding has a decision and evidence.
+- [x] Every accepted finding has a pushed resolution commit or an evidence-backed no-fix conclusion.
+- [x] Regression tests fail if an implemented correction is reverted.
+- [x] The full affordable local suite is recorded above.
+- [x] GitHub Actions is green on the candidate SHA.
+- [x] No important work exists only in the current environment.
+- [x] The handoff is ready to archive under `docs/history/round-reports/`.
