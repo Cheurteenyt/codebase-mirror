@@ -2451,6 +2451,48 @@ describe("R45 (F5): GraphCanvas sim-reuse (R40 UI-2)", () => {
     expect(translatedY).toBeCloseTo(300 - 50 * initialFitScale, 4);
   });
 
+  it("fits every macro domain below the former 0.1 floor on a narrow viewport", () => {
+    const ctx = installCanvasMock(380, 958);
+    const noop = () => {};
+    const wideArchitecture: GraphData = {
+      nodes: [
+        makeNode(1, "left-symbol", { x: -3_000, y: 0, cluster_id: 0 }),
+        makeNode(2, "right-symbol", { x: 3_000, y: 0, cluster_id: 1 }),
+      ],
+      edges: [],
+      total_nodes: 2,
+      layout: {
+        strategy: "hierarchical-v2",
+        node_spacing: 16,
+        counts_scope: "all_nodes",
+        clusters: [
+          { id: 0, key: "left", domain_id: 0, x: -3_000, y: 0, radius: 120, node_count: 1 },
+          { id: 1, key: "right", domain_id: 1, x: 3_000, y: 0, radius: 120, node_count: 1 },
+        ],
+        domains: [
+          { id: 0, key: "left", x: -3_000, y: 0, radius: 200, node_count: 1, cluster_count: 1 },
+          { id: 1, key: "right", x: 3_000, y: 0, radius: 200, node_count: 1, cluster_count: 1 },
+        ],
+      },
+    } as GraphData;
+
+    render(
+      <GraphCanvas
+        data={wideArchitecture}
+        highlightedIds={null}
+        deadCodeView={false}
+        onNodeClick={noop}
+        onNodeHover={noop}
+      />,
+    );
+
+    const fittedScale = ctx.scale.mock.calls.at(-1)[0] as number;
+    expect(fittedScale).toBeCloseTo((380 - 128) / 6_400, 6);
+    expect(fittedScale).toBeLessThan(0.1);
+    const [translatedX] = ctx.translate.mock.calls.at(-1) as [number, number];
+    expect(translatedX).toBeCloseTo(190, 6);
+  });
+
   it("re-fits a changed semantic frame without rebuilding or reheating d3", async () => {
     const ctx = installCanvasMock(800, 600);
     const { forceSimulation } = await import("d3-force");

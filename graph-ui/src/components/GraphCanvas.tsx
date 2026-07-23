@@ -153,6 +153,7 @@ const SETTLED_FIT_DELAY_MS = 700;
 const TOUCH_TAP_SLOP_PX = 8;
 const MAX_RENDER_DPR = 2;
 const MAX_CANVAS_PIXELS = 16_000_000;
+const MIN_ZOOM_SCALE = 0.02;
 const DEFERRED_INITIAL_FIT_NODE_THRESHOLD = 500;
 const STELLAR_OVERVIEW_SIMULATION_NODE_THRESHOLD = 500;
 const MID_LABEL_LIMIT = 24;
@@ -1106,7 +1107,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     const graphHeight = Math.max(1, maxY - minY);
     const availableWidth = Math.max(1, viewportWidth - FIT_PADDING * 2);
     const availableHeight = Math.max(1, viewportHeight - FIT_PADDING * 2);
-    const k = Math.max(0.1, Math.min(10, availableWidth / graphWidth, availableHeight / graphHeight));
+    const k = Math.max(
+      MIN_ZOOM_SCALE,
+      Math.min(10, availableWidth / graphWidth, availableHeight / graphHeight),
+    );
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
 
@@ -1224,7 +1228,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
     if (rect && target.kind !== "node") {
       const availableWidth = Math.max(1, rect.width - FIT_PADDING * 2);
       const availableHeight = Math.max(1, rect.height - FIT_PADDING * 2);
-      zoom = Math.max(0.1, Math.min(3, availableWidth / (radius * 2), availableHeight / (radius * 2)));
+      zoom = Math.max(
+        MIN_ZOOM_SCALE,
+        Math.min(3, availableWidth / (radius * 2), availableHeight / (radius * 2)),
+      );
     } else if (target.kind === "node") {
       zoom = Math.max(1.25, Math.min(3, transformRef.current.k));
     }
@@ -3483,7 +3490,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       cancelViewAnimation();
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
       const oldK = transformRef.current.k;
-      const newK = Math.max(0.1, Math.min(10, oldK * delta));
+      const newK = Math.max(MIN_ZOOM_SCALE, Math.min(10, oldK * delta));
       if (newK === oldK) return;
 
       // Zoom toward the mouse position so the point under the cursor stays fixed.
@@ -3628,7 +3635,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         const viewportCenterX = rect.width / 2;
         const viewportCenterY = rect.height / 2;
         const startTransform = pinchStart.transform;
-        const newK = Math.max(0.1, Math.min(10, startTransform.k * distance / pinchStart.distance));
+        const newK = Math.max(
+          MIN_ZOOM_SCALE,
+          Math.min(10, startTransform.k * distance / pinchStart.distance),
+        );
         const worldX = (canvasStartX - viewportCenterX - startTransform.x) / startTransform.k;
         const worldY = (canvasStartY - viewportCenterY - startTransform.y) / startTransform.k;
 
@@ -3770,7 +3780,10 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       hasUserInteractedRef.current = true;
       cancelPendingAutoFit();
       cancelViewAnimation();
-      const newK = Math.max(0.1, Math.min(10, transformRef.current.k * factor));
+      const newK = Math.max(
+        MIN_ZOOM_SCALE,
+        Math.min(10, transformRef.current.k * factor),
+      );
       transformRef.current.k = newK;
       drawRef.current?.();
     },
@@ -3878,7 +3891,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
           if (event.key === "+" || event.key === "=") {
             transform.k = Math.min(10, transform.k * 1.15);
           } else if (event.key === "-" || event.key === "_") {
-            transform.k = Math.max(0.1, transform.k / 1.15);
+            transform.k = Math.max(MIN_ZOOM_SCALE, transform.k / 1.15);
           } else if (event.key === "0") {
             if (!fitStellarFocus()) fitVisibleGraph();
           } else if (event.key === "ArrowLeft") {
