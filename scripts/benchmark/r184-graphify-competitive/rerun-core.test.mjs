@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildRerunPlan } from './rerun-core.mjs';
+import { buildRerunPlan, reconcileReruns } from './rerun-core.mjs';
 
 const spec = {
   tasks: [{ id: 'T01' }, { id: 'T02' }, { id: 'T03' }],
@@ -63,4 +63,66 @@ test('rerun plan rejects duplicate primary cells', () => {
     () => buildRerunPlan([duplicate, duplicate], spec),
     /Duplicate primary result cell/u,
   );
+});
+
+test('rerun reconciliation accepts clean replacements and rejects contaminated warm prefixes', () => {
+  const primary = [
+    {
+      mode: 'cold', repetition: 1, condition: 'A', task: 'T01',
+      valid: false, violations: ['first invalid'], grade: 'FAIL',
+    },
+    {
+      mode: 'warm', repetition: 2, condition: 'B', task: 'T01',
+      valid: true, violations: [], grade: 'PASS',
+    },
+    {
+      mode: 'warm', repetition: 2, condition: 'B', task: 'T02',
+      valid: false, violations: ['first invalid'], grade: 'PASS',
+    },
+    {
+      mode: 'warm', repetition: 2, condition: 'B', task: 'T03',
+      valid: true, violations: [], grade: 'PASS',
+    },
+  ];
+  const plan = {
+    invalid_cells: [primary[0], primary[2]],
+    expected_rerun_metadata_count: 4,
+    groups: [
+      {
+        mode: 'cold', repetition: 1, condition: 'A',
+        replacement_tasks: ['T01'], requested_tasks: ['T01'],
+      },
+      {
+        mode: 'warm', repetition: 2, condition: 'B',
+        replacement_tasks: ['T02'], requested_tasks: ['T01', 'T02', 'T03'],
+      },
+    ],
+  };
+  const reruns = [
+    {
+      mode: 'cold', repetition: 1, condition: 'A', task: 'T01',
+      valid: true, violations: [], grade: 'PASS',
+    },
+    {
+      mode: 'warm', repetition: 2, condition: 'B', task: 'T01',
+      valid: false, violations: ['support invalid'], grade: 'PASS',
+    },
+    {
+      mode: 'warm', repetition: 2, condition: 'B', task: 'T02',
+      valid: true, violations: [], grade: 'PASS',
+    },
+    {
+      mode: 'warm', repetition: 2, condition: 'B', task: 'T03',
+      valid: true, violations: [], grade: 'PASS',
+    },
+  ];
+
+  const reconciled = reconcileReruns(primary, reruns, plan, ['T01', 'T02', 'T03']);
+  assert.equal(reconciled.accepted_replacements, 1);
+  assert.equal(reconciled.unresolved_replacements, 1);
+  assert.equal(reconciled.rows[0].replacement_status, 'accepted');
+  assert.equal(reconciled.rows[0].valid, true);
+  assert.equal(reconciled.rows[2].replacement_status, 'warm-prefix-contaminated');
+  assert.equal(reconciled.rows[2].valid, false);
+  assert.match(reconciled.rows[2].violations.at(-1), /prefix invalid at T01/u);
 });
