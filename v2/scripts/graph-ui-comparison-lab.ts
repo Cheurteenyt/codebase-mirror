@@ -6,6 +6,7 @@ import {
   GRAPH_UI_LAB_VERSION,
   PERCEPTION_TASKS,
   analyzeFrames,
+  assertRenderedGraphIdentity,
   assertSameCompleteTopology,
   blindLabels,
   isHelpRequest,
@@ -13,6 +14,7 @@ import {
   topologyFingerprint,
   type FrameSummary,
   type LayoutLike,
+  type RenderedGraphObservation,
   type TimingSummary,
   type TopologyFingerprint,
 } from './graph-ui-lab-core.js';
@@ -48,6 +50,8 @@ interface BrowserSample {
   firstUsefulGraphMs: number;
   layoutResponseEndMs: number;
   layoutTransferBytes: number;
+  layoutUrl: string;
+  renderedTopology: TopologyFingerprint;
   cooldownMs: number;
   cooldownReached: boolean;
   maxLongTaskMs: number;
@@ -62,6 +66,7 @@ interface BrowserSample {
   pageErrors: string[];
   failedResponses: Array<{ status: number; url: string }>;
   screenshot?: string;
+  screenshotStage?: 'settled-before-interaction';
 }
 
 interface VariantSummary {
@@ -274,7 +279,11 @@ async function selectV1Project(page: Page, project: string, timeoutMs: number): 
       if (!/view graph|查看图谱/iu.test(candidate.textContent ?? '')) return false;
       let ancestor: Element | null = candidate;
       for (let depth = 0; ancestor && depth < 6; depth += 1, ancestor = ancestor.parentElement) {
-        if (ancestor.textContent?.includes(projectName)) return true;
+        const headings = [...ancestor.querySelectorAll('h3')];
+        if (
+          headings.length === 1
+          && headings[0]!.textContent?.trim() === projectName
+        ) return true;
       }
       return false;
     });
@@ -355,6 +364,7 @@ async function measurePage(
   variant: Variant,
   phase: Phase,
   run: number,
+  expectedTopology: TopologyFingerprint,
   screenshotPath?: string,
 ): Promise<BrowserSample> {
   const page = await context.newPage();
@@ -362,13 +372,21 @@ async function measurePage(
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const failedResponses: Array<{ status: number; url: string }> = [];
+  const renderedLayouts: Array<Promise<RenderedGraphObservation>> = [];
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('response', (response) => {
-    if (response.status() >= 400 && !new URL(response.url()).pathname.endsWith('/favicon.ico')) {
+    const responseUrl = new URL(response.url());
+    if (response.status() >= 400 && !responseUrl.pathname.endsWith('/favicon.ico')) {
       failedResponses.push({ status: response.status(), url: response.url() });
+    }
+    if (response.ok() && responseUrl.pathname.endsWith('/api/layout')) {
+      renderedLayouts.push(response.json().then((layout: LayoutLike) => ({
+        url: response.url(),
+        layout,
+      })));
     }
   });
   await session.send('Performance.enable');
@@ -391,7 +409,16 @@ async function measurePage(
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: options.timeoutMs });
     if (variant === 'v1') await selectV1Project(page, options.project, options.timeoutMs);
     const useful = await waitForUsefulGraph(page, options.timeoutMs);
+    const rendered = assertRenderedGraphIdentity(
+      variant.toUpperCase(),
+      options.project,
+      expectedTopology,
+      await Promise.all(renderedLayouts),
+    );
     const cooldown = await waitForCooldown(session, useful.firstUsefulGraphMs, options.cooldownTimeoutMs);
+    if (screenshotPath) {
+      await page.screenshot({ path: screenshotPath, type: 'png', animations: 'disabled' });
+    }
     const interaction = await exerciseCanvas(page, options.interactionMs);
     const idle = await measureIdle(session, options.idleMs);
     const state = await page.evaluate(() => {
@@ -400,9 +427,6 @@ async function measurePage(
       }).__CBM_GRAPH_LAB__;
       return { longTasks: lab.longTasks };
     });
-    if (screenshotPath) {
-      await page.screenshot({ path: screenshotPath, type: 'png', animations: 'disabled' });
-    }
     const maxLongTaskMs = state.longTasks.length === 0
       ? 0
       : Math.max(...state.longTasks.map((task) => task.duration));
@@ -411,6 +435,8 @@ async function measurePage(
       variant,
       run,
       ...useful,
+      layoutUrl: rendered.url,
+      renderedTopology: rendered.topology,
       cooldownMs: cooldown.cooldownMs,
       cooldownReached: cooldown.reached,
       maxLongTaskMs: Number(maxLongTaskMs.toFixed(3)),
@@ -427,6 +453,7 @@ async function measurePage(
       pageErrors,
       failedResponses,
       screenshot: screenshotPath ? basename(screenshotPath) : undefined,
+      screenshotStage: screenshotPath ? 'settled-before-interaction' : undefined,
     };
   } catch (error) {
     const debug = await page.evaluate(() => {
@@ -578,6 +605,7 @@ async function main(): Promise<void> {
             variant,
             'cold',
             run,
+            topology[variant],
             screenshotPath,
           ));
         } finally {
@@ -592,7 +620,14 @@ async function main(): Promise<void> {
     };
     try {
       for (const variant of ['v1', 'v2'] as const) {
-        await measurePage(warmContexts[variant], options, variant, 'warm', 0);
+        await measurePage(
+          warmContexts[variant],
+          options,
+          variant,
+          'warm',
+          0,
+          topology[variant],
+        );
       }
       for (let run = 1; run <= options.runs; run += 1) {
         const order: Variant[] = run % 2 === 1 ? ['v1', 'v2'] : ['v2', 'v1'];
@@ -606,6 +641,7 @@ async function main(): Promise<void> {
             variant,
             'warm',
             run,
+            topology[variant],
             screenshotPath,
           ));
         }
