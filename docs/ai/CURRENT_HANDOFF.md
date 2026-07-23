@@ -10,10 +10,10 @@ status: ACTIVE
 repository: Cheurteenyt/Ariad
 branch: v2/r182-maintenance-consolidation
 base_sha: 2420906d38e585c87b3f692116531cc3e7e838f2
-last_completed_code_sha: d1e7a81f039bbc30c2964f9ad0d9cab5a419546e
+last_completed_code_sha: 10e04583d7a7870370e422152a614a66828ad248
 active_audit: NONE
 active_audit_blob_oid: NONE
-updated_at_utc: 2026-07-23T10:38:22Z
+updated_at_utc: 2026-07-23T10:44:54Z
 implementer_role: codex
 ```
 
@@ -50,6 +50,7 @@ No external audit is active in this owner-directed maintenance round.
 |----------|-------------|----------|---------|------------------|------------|
 | `2420906d38e585c87b3f692116531cc3e7e838f2` | pending | owner decision | R182 baseline and contracts | repository state inspected | pending |
 | `d1e7a81f039bbc30c2964f9ad0d9cab5a419546e` | pending | owner decision | R169E is paused and unscheduled; `DATA-CARRY-01` remains open | `npm run docs:check` passed | pending |
+| `10e04583d7a7870370e422152a614a66828ad248` | pending | owner decision | canonical benchmark synthesis added and linked from the portal | `npm run docs:check` passed | [PR #82](https://github.com/Cheurteenyt/Ariad/pull/82) pending |
 
 ## Exact validation evidence
 
@@ -58,8 +59,8 @@ command: npm run docs:check
 working_directory: v2
 environment: Windows / PowerShell / GitHub CLI
 exit_code: 0
-result_summary: 89 Markdown files validated; 79 are portal-reachable; benchmark specification checks passed.
-not_run: The consolidated benchmark summary has not yet been written.
+result_summary: 90 Markdown files validated; 80 are portal-reachable; all link, metadata, reachability, and benchmark specification checks passed.
+not_run: Product suites are outside this documentation-only candidate; GitHub CI and CodeQL are the publication authority.
 ```
 
 ## Reset recovery
@@ -88,15 +89,16 @@ npm run docs:check
 
 ## Current working state
 
-- **Last completed finding:** R169E is recorded as paused and unscheduled in
-  both canonical documents; `DATA-CARRY-01` remains explicitly open.
-- **Current finding:** Synthesize the published token-economy evidence without
-  introducing data or unsupported claims.
+- **Last completed finding:** The canonical benchmark summary now distinguishes
+  the broad V1 improvement, mixed `grep/read` result, fixed T01/T02 mechanisms,
+  evidence-based T03/T04 no-fix decision, and experiment limits.
+- **Current finding:** Candidate publication checks are running on PR #82.
 - **Dirty files expected:** `NONE` at a pushed checkpoint.
 - **Unpushed commits expected:** `0` at a pushed checkpoint.
 - **Known blocker:** None.
-- **Single next action:** Read every required benchmark source section and map
-  each requested figure to an existing anchor before drafting the summary.
+- **Single next action:** Wait for candidate CI and CodeQL, then archive this
+  handoff, restore the inactive handoff-guide wording, and publish the final
+  documentation-only candidate.
 
 ## Security confirmation
 
@@ -109,8 +111,8 @@ npm run docs:check
 
 - [x] The owner decision and required scope are recorded.
 - [x] The R169 status is updated in both canonical documents.
-- [ ] The consolidated benchmark summary is sourced and portal-reachable.
-- [ ] The full affordable local documentation suite is recorded above.
+- [x] The consolidated benchmark summary is sourced and portal-reachable.
+- [x] The full affordable local documentation suite is recorded above.
 - [ ] GitHub Actions is green on the candidate SHA.
-- [ ] No important work exists only in the current environment.
+- [x] No important work exists only in the current environment.
 - [ ] The handoff is ready to archive under `docs/history/round-reports/`.
