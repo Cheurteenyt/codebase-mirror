@@ -237,8 +237,8 @@ describe('R155: Atomic State + Fingerprint v2 + Special File Safety', () => {
 
   // ── Regression ────────────────────────────────────────────────────────
 
-  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8 (no bump)', () => {
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
+  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 9 (R184)', () => {
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(9);
   });
 
   it('regression: CURRENT_DISCOVERY_POLICY_VERSION is 3 (coverage modes)', () => {

@@ -1,0 +1,428 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "r184-ariad-vs-graphify-2026-07-23",
+  "generated_from_sealed_evidence": true,
+  "preregistration_git_sha": "1ed1d4c8a1697ed7ea8f5ac66f79dbf4a42105cf",
+  "product_revisions": {
+    "baseline_ariad": "0789b3019d1847605ebe60a3be6abd16363249fe",
+    "postfix_ariad": "a699e27626673d29f91344b4b2d6a059ac63d728",
+    "graphify": "2fa6cd3d5548577f8c5f591b713f0bf80c1af183"
+  },
+  "evidence_seals": {
+    "baseline": {
+      "result_manifest_sha256": "aa577017d3d5b7cb460e052a9453598724f8c76588215ba1323dd272d5dbd44e",
+      "file_count": 76904,
+      "total_bytes": 841016669,
+      "seal_payload_sha256": "efd815f15ecb8d5c7f8fc6ba277c999dadabc8e8d066d73656e3d1318aaf8bf2"
+    },
+    "postfix": {
+      "result_manifest_sha256": "b92f2ed241b0479e2600a7401d64cd34b2268c2281cfa0310c49a7d289548538",
+      "file_count": 76611,
+      "total_bytes": 833533115,
+      "seal_payload_sha256": "8cefc9cee75d788161d5eb5ec33d942b0f4f62e80c27c90d44289b9844bff56a"
+    }
+  },
+  "execution": {
+    "index_update_cells": {
+      "cold": 32,
+      "nochange": 32,
+      "mutation": 2,
+      "nonzero_exit_codes": 0
+    },
+    "query_cells": {
+      "primary": 256,
+      "rerun_metadata": 49,
+      "first_attempt_invalid": 21,
+      "accepted_replacements": 14,
+      "unresolved_invalid": 7
+    },
+    "visual_cells": {
+      "total": 80,
+      "completed": 80,
+      "failed": 0
+    }
+  },
+  "postfix_index_medians": [
+    {
+      "product": "ariad",
+      "target": "fixture",
+      "cold_wall_ms": 770.3,
+      "nochange_wall_ms": 523.3,
+      "cold_peak_mib": 361.0,
+      "cold_artifact_mib": 0.12,
+      "cold_nodes": 40,
+      "cold_edges": 39,
+      "nochange_artifact_growth": 1.0
+    },
+    {
+      "product": "graphify",
+      "target": "fixture",
+      "cold_wall_ms": 1224.4,
+      "nochange_wall_ms": 1216.6,
+      "cold_peak_mib": 65.1,
+      "cold_artifact_mib": 0.04,
+      "cold_nodes": 50,
+      "cold_edges": 82,
+      "nochange_artifact_growth": 1.212
+    },
+    {
+      "product": "ariad",
+      "target": "p-limit",
+      "cold_wall_ms": 755.7,
+      "nochange_wall_ms": 526.5,
+      "cold_peak_mib": 449.8,
+      "cold_artifact_mib": 0.25,
+      "cold_nodes": 173,
+      "cold_edges": 209,
+      "nochange_artifact_growth": 1.0
+    },
+    {
+      "product": "graphify",
+      "target": "p-limit",
+      "cold_wall_ms": 1342.6,
+      "nochange_wall_ms": 1356.5,
+      "cold_peak_mib": 67.1,
+      "cold_artifact_mib": 0.05,
+      "cold_nodes": 88,
+      "cold_edges": 102,
+      "nochange_artifact_growth": 1.467
+    },
+    {
+      "product": "ariad",
+      "target": "zod",
+      "cold_wall_ms": 2384.5,
+      "nochange_wall_ms": 796.5,
+      "cold_peak_mib": 1020.6,
+      "cold_artifact_mib": 15.94,
+      "cold_nodes": 7607,
+      "cold_edges": 18331,
+      "nochange_artifact_growth": 1.0
+    },
+    {
+      "product": "graphify",
+      "target": "zod",
+      "cold_wall_ms": 25521.3,
+      "nochange_wall_ms": 27856.5,
+      "cold_peak_mib": 910.9,
+      "cold_artifact_mib": 3.55,
+      "cold_nodes": 4328,
+      "cold_edges": 6063,
+      "nochange_artifact_growth": 1.208
+    },
+    {
+      "product": "ariad",
+      "target": "fastapi",
+      "cold_wall_ms": 3718.9,
+      "nochange_wall_ms": 2115.8,
+      "cold_peak_mib": 1028.0,
+      "cold_artifact_mib": 13.86,
+      "cold_nodes": 9160,
+      "cold_edges": 22423,
+      "nochange_artifact_growth": 1.0
+    },
+    {
+      "product": "graphify",
+      "target": "fastapi",
+      "cold_wall_ms": 59095.2,
+      "nochange_wall_ms": 101919.7,
+      "cold_peak_mib": 939.5,
+      "cold_artifact_mib": 8.12,
+      "cold_nodes": 7494,
+      "cold_edges": 14022,
+      "nochange_artifact_growth": 3.299
+    }
+  ],
+  "query_aggregates": {
+    "baseline": [
+      {
+        "mode": "cold",
+        "arm": "A",
+        "valid": 32,
+        "total": 32,
+        "passes": 21,
+        "uncached_tokens_p50": 19820,
+        "wall_ms_p50": 19001
+      },
+      {
+        "mode": "cold",
+        "arm": "B",
+        "valid": 30,
+        "total": 32,
+        "passes": 21,
+        "uncached_tokens_p50": 18523,
+        "wall_ms_p50": 34484
+      },
+      {
+        "mode": "cold",
+        "arm": "C",
+        "valid": 30,
+        "total": 32,
+        "passes": 20,
+        "uncached_tokens_p50": 27664,
+        "wall_ms_p50": 54202
+      },
+      {
+        "mode": "cold",
+        "arm": "D",
+        "valid": 28,
+        "total": 32,
+        "passes": 19,
+        "uncached_tokens_p50": 22276,
+        "wall_ms_p50": 33317
+      },
+      {
+        "mode": "warm",
+        "arm": "A",
+        "valid": 32,
+        "total": 32,
+        "passes": 23,
+        "uncached_tokens_p50": 47576,
+        "wall_ms_p50": 18943
+      },
+      {
+        "mode": "warm",
+        "arm": "B",
+        "valid": 32,
+        "total": 32,
+        "passes": 26,
+        "uncached_tokens_p50": 52222,
+        "wall_ms_p50": 25939
+      },
+      {
+        "mode": "warm",
+        "arm": "C",
+        "valid": 32,
+        "total": 32,
+        "passes": 24,
+        "uncached_tokens_p50": 84169,
+        "wall_ms_p50": 36709
+      },
+      {
+        "mode": "warm",
+        "arm": "D",
+        "valid": 31,
+        "total": 32,
+        "passes": 19,
+        "uncached_tokens_p50": 47489,
+        "wall_ms_p50": 25818
+      }
+    ],
+    "postfix": [
+      {
+        "mode": "cold",
+        "arm": "A",
+        "valid": 32,
+        "total": 32,
+        "passes": 21,
+        "uncached_tokens_p50": 17482,
+        "wall_ms_p50": 19448,
+        "tool_calls_p50": 2.0
+      },
+      {
+        "mode": "cold",
+        "arm": "B",
+        "valid": 30,
+        "total": 32,
+        "passes": 21,
+        "uncached_tokens_p50": 13044,
+        "wall_ms_p50": 30907,
+        "tool_calls_p50": 3.5
+      },
+      {
+        "mode": "cold",
+        "arm": "C",
+        "valid": 30,
+        "total": 32,
+        "passes": 22,
+        "uncached_tokens_p50": 25927,
+        "wall_ms_p50": 49725,
+        "tool_calls_p50": 8.0
+      },
+      {
+        "mode": "cold",
+        "arm": "D",
+        "valid": 29,
+        "total": 32,
+        "passes": 21,
+        "uncached_tokens_p50": 14487,
+        "wall_ms_p50": 29607,
+        "tool_calls_p50": 4.0
+      },
+      {
+        "mode": "warm",
+        "arm": "A",
+        "valid": 32,
+        "total": 32,
+        "passes": 22,
+        "uncached_tokens_p50": 44622,
+        "wall_ms_p50": 16777,
+        "tool_calls_p50": 2.0
+      },
+      {
+        "mode": "warm",
+        "arm": "B",
+        "valid": 32,
+        "total": 32,
+        "passes": 24,
+        "uncached_tokens_p50": 54570,
+        "wall_ms_p50": 23927,
+        "tool_calls_p50": 3.0
+      },
+      {
+        "mode": "warm",
+        "arm": "C",
+        "valid": 32,
+        "total": 32,
+        "passes": 27,
+        "uncached_tokens_p50": 76526,
+        "wall_ms_p50": 37970,
+        "tool_calls_p50": 5.0
+      },
+      {
+        "mode": "warm",
+        "arm": "D",
+        "valid": 32,
+        "total": 32,
+        "passes": 22,
+        "uncached_tokens_p50": 53268,
+        "wall_ms_p50": 26203,
+        "tool_calls_p50": 3.5
+      }
+    ]
+  },
+  "postfix_task_passes": [
+    {
+      "task": "T01",
+      "A": "8/8",
+      "B": "8/8",
+      "C": "8/8",
+      "D": "8/8"
+    },
+    {
+      "task": "T02",
+      "A": "8/8",
+      "B": "8/8",
+      "C": "8/8",
+      "D": "8/8"
+    },
+    {
+      "task": "T03",
+      "A": "7/8",
+      "B": "7/8",
+      "C": "8/8",
+      "D": "8/8"
+    },
+    {
+      "task": "T04",
+      "A": "3/8",
+      "B": "5/7",
+      "C": "4/7",
+      "D": "2/6"
+    },
+    {
+      "task": "T05",
+      "A": "0/8",
+      "B": "0/8",
+      "C": "0/8",
+      "D": "0/8"
+    },
+    {
+      "task": "T06",
+      "A": "1/8",
+      "B": "1/7",
+      "C": "6/8",
+      "D": "1/7"
+    },
+    {
+      "task": "T07",
+      "A": "8/8",
+      "B": "8/8",
+      "C": "8/8",
+      "D": "8/8"
+    },
+    {
+      "task": "T08",
+      "A": "8/8",
+      "B": "8/8",
+      "C": "7/7",
+      "D": "8/8"
+    }
+  ],
+  "postfix_evidence_use": {
+    "A": {
+      "valid_cells": 64,
+      "graph_used": 0,
+      "human_memory_used": 0
+    },
+    "B": {
+      "valid_cells": 62,
+      "graph_used": 62,
+      "human_memory_used": 0
+    },
+    "C": {
+      "valid_cells": 62,
+      "graph_used": 62,
+      "vault_used": 16,
+      "human_memory_used": 0
+    },
+    "D": {
+      "valid_cells": 61,
+      "graph_used": 34,
+      "human_memory_used": 9,
+      "source_only": 27
+    }
+  },
+  "postfix_visual_selected": [
+    {
+      "target": "fixture",
+      "viewport": "desktop",
+      "cache": "cold",
+      "product": "ariad",
+      "task_success": "0/5",
+      "first_usable_ms_p50": 402.2,
+      "interaction_fps_p50": 128.174,
+      "long_task_ms_p95": 0,
+      "accessibility_failures": 0
+    },
+    {
+      "target": "fixture",
+      "viewport": "desktop",
+      "cache": "cold",
+      "product": "graphify",
+      "task_success": "0/5",
+      "first_usable_ms_p50": 228.7,
+      "interaction_fps_p50": 126.154,
+      "long_task_ms_p95": 72,
+      "accessibility_failures": 50
+    },
+    {
+      "target": "zod",
+      "viewport": "desktop",
+      "cache": "cold",
+      "product": "ariad",
+      "task_success": "0/5",
+      "first_usable_ms_p50": 750.9,
+      "interaction_fps_p50": 127.142,
+      "long_task_ms_p95": 0,
+      "accessibility_failures": 0
+    },
+    {
+      "target": "zod",
+      "viewport": "desktop",
+      "cache": "cold",
+      "product": "graphify",
+      "task_success": "0/5",
+      "first_usable_ms_p50": 255.7,
+      "interaction_fps_p50": 126.645,
+      "long_task_ms_p95": 188,
+      "accessibility_failures": 180
+    }
+  ],
+  "visual_score_boundary": {
+    "all_task_groups_passed": false,
+    "ariad_t09_signals": "3/4",
+    "ariad_t10_signals": "5/6",
+    "unexpected_ariad_console_page_http_clipping_overlap_failures": 0,
+    "unscored_post_seal_diagnostic": "The visible exact-scope HUD showed References -> packages/zod with out:136 and in:18 within one second. The frozen scorer did not capture that signal, so the sealed T10 score remains 5/6."
+  }
+}

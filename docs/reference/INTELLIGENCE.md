@@ -14,7 +14,7 @@ V2 knows if the code graph is stale. It uses multiple signals (R143+):
 
 1. **DB state** (authoritative, R143+): `cross_file_calls_stale` column in
    the `projects` table. If `1`, the graph is STALE regardless of age or git.
-   Also tracks `extractor_semantics_version` (currently 8) — a mismatch with
+   Also tracks `extractor_semantics_version` (currently 9) — a mismatch with
    `CURRENT_EXTRACTOR_SEMANTICS_VERSION` forces a full reindex.
 2. **Last successful index** (R144+): `last_successful_index_at` column,
    separate from `indexed_at` (which updates on any write, including failed

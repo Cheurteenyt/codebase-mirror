@@ -114,7 +114,7 @@ describe('R111: Import Resolution Correctness Lock', () => {
     const edges = getCallEdgesForCallee(db, 'foo');
     // R111: should create exactly 1 edge (to dir/index.ts::foo)
     expect(edges.length).toBe(1);
-    expect(edges[0].target_qn).toContain('dir/index.ts');
+    expect(edges[0].target_qn.replaceAll('\\', '/')).toContain('dir/index.ts');
     expect(edges[0].target_qn).not.toContain('c.ts');
     const props = JSON.parse(edges[0].properties_json);
     expect(props.resolution).toBe('cross_file_import_exact');

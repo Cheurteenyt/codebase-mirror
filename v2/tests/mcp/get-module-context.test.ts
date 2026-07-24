@@ -103,6 +103,62 @@ describe('get_module_context V2 root resolution', () => {
     }
   });
 
+  it('resolves an exact directory path as one bounded architecture context', async () => {
+    const harness = createHarness([
+      {
+        id: 21,
+        label: 'File',
+        name: 'benchUtil.ts',
+        qualifiedName: 'test::packages/bench/benchUtil.ts',
+        filePath: 'packages\\bench\\benchUtil.ts',
+      },
+      {
+        id: 22,
+        label: 'Function',
+        name: 'makeSchema',
+        qualifiedName: 'test::packages/bench/benchUtil.ts::makeSchema',
+        filePath: 'packages\\bench\\benchUtil.ts',
+      },
+      {
+        id: 23,
+        label: 'File',
+        name: 'index.ts',
+        qualifiedName: 'test::packages/zod/src/index.ts',
+        filePath: 'packages\\zod\\src\\index.ts',
+      },
+    ], [
+      { source: 21, target: 23, type: 'IMPORTS' },
+    ]);
+    try {
+      const response = await callTool(harness.tool, 'packages/bench');
+      expect(response.isError).not.toBe(true);
+      const parsed = JSON.parse(response.content[0].text);
+      expect(parsed.module).toMatchObject({
+        cbm_node_id: null,
+        label: 'Directory',
+        file_path: 'packages/bench',
+      });
+      expect(parsed.scope).toMatchObject({
+        exact: true,
+        kind: 'directory',
+        total_nodes: 2,
+        total_internal_edges: 0,
+        boundary: {
+          exact: true,
+          total_relations: 1,
+          dependencies: [{
+            direction: 'outgoing',
+            external_key: 'packages/zod',
+            type: 'IMPORTS',
+            count: 1,
+          }],
+        },
+      });
+    } finally {
+      harness.close();
+    }
+  });
+
   it('falls back to a Class or Interface only when no Module or File matches', async () => {
     const harness = createHarness([
       { id: 2, label: 'Class', name: 'AuthService', qualifiedName: 'test::AuthService', filePath: 'src/auth.ts' },

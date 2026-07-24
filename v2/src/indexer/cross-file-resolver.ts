@@ -53,6 +53,7 @@
 //     20-50ms. These estimates are approximate — R128 will add a benchmark.
 
 import type Database from 'better-sqlite3';
+import { posix } from 'node:path';
 import type { UnresolvedCallSite, ImportBinding, ExportBinding } from './fast-walker.js';
 import { BUILTIN_METHOD_NAMES } from './fast-walker.js';
 import { CURRENT_EXTRACTOR_SEMANTICS_VERSION } from './schema.js';
@@ -234,55 +235,70 @@ export function replaceExportsForFiles(
  *
  * @param sourceModule  The module path as written in the import (e.g. './b')
  * @param currentFile   The file path of the importing file (e.g. 'a.ts')
- * @param knownFiles    Set of known file paths in the project
+ * @param knownFiles    Portable path to persisted path for known project files
  * @returns The resolved file path, or null if not found
  */
+function toPortableProjectPath(filePath: string): string {
+  return filePath.replaceAll('\\', '/');
+}
+
 function resolveModulePath(
   sourceModule: string,
   currentFile: string,
-  knownFiles: Set<string>,
+  knownFiles: Map<string, string>,
 ): string | null {
   // Only resolve relative imports (./ or ../)
   if (!sourceModule.startsWith('.')) return null;
 
-  // Get the directory of the current file
-  const currentDir = currentFile.includes('/')
-    ? currentFile.substring(0, currentFile.lastIndexOf('/'))
-    : '';
-
-  // Resolve the relative path
-  let resolved = sourceModule;
-  // Handle ./ and ../
-  const parts = (currentDir ? currentDir.split('/') : []);
-  const modParts = resolved.split('/');
-  const resultParts: string[] = [];
-  for (const p of parts) resultParts.push(p);
-  for (const p of modParts) {
-    if (p === '.') continue;
-    if (p === '..') {
-      resultParts.pop();
-      continue;
-    }
-    resultParts.push(p);
-  }
-  const basePath = resultParts.join('/');
+  // DB paths use the host separator (`\` on Windows), while ESM import
+  // specifiers always use `/`. Resolve in a portable project-path namespace
+  // and return the original persisted path so downstream maps remain stable.
+  const portableCurrentFile = toPortableProjectPath(currentFile);
+  const currentDir = posix.dirname(portableCurrentFile);
+  const basePath = posix.normalize(posix.join(
+    currentDir === '.' ? '' : currentDir,
+    toPortableProjectPath(sourceModule),
+  ));
+  const findKnownFile = (candidate: string): string | null =>
+    knownFiles.get(candidate) ?? null;
 
   // R111: First, try basePath directly (handles imports with explicit extensions
   // like './b.ts', './b.js', './dir/index.ts'). Before R111, this case was missed:
   // importing './b.ts' produced basePath='b.ts', then the extension loop tried
   // 'b.ts.ts', 'b.ts.tsx', etc. — never matching the actual file 'b.ts'.
-  if (knownFiles.has(basePath)) return basePath;
+  const directMatch = findKnownFile(basePath);
+  if (directMatch) return directMatch;
+
+  // TypeScript's NodeNext/Node16 resolution permits source files to import the
+  // emitted JavaScript path (for example `./publish.js`) while the indexed
+  // source is `publish.ts`.
+  const emittedExtensionSubstitutions: Readonly<Record<string, readonly string[]>> = {
+    '.js': ['.ts', '.tsx', '.d.ts', '.jsx'],
+    '.jsx': ['.tsx', '.d.ts'],
+    '.mjs': ['.mts', '.d.mts'],
+    '.cjs': ['.cts', '.d.cts'],
+  };
+  const sourceExtension = posix.extname(basePath);
+  const sourceBase = sourceExtension
+    ? basePath.slice(0, -sourceExtension.length)
+    : basePath;
+  for (const replacement of emittedExtensionSubstitutions[sourceExtension] ?? []) {
+    const substitutedMatch = findKnownFile(sourceBase + replacement);
+    if (substitutedMatch) return substitutedMatch;
+  }
 
   // Try common extensions
   const extensions = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
   for (const ext of extensions) {
     const candidate = basePath + ext;
-    if (knownFiles.has(candidate)) return candidate;
+    const match = findKnownFile(candidate);
+    if (match) return match;
   }
   // Try index files
   for (const ext of extensions) {
     const candidate = basePath + '/index' + ext;
-    if (knownFiles.has(candidate)) return candidate;
+    const match = findKnownFile(candidate);
+    if (match) return match;
   }
   return null;
 }
@@ -315,6 +331,14 @@ export function clearCrossFileCallEdges(
     `DELETE FROM edges
      WHERE project = ? AND type = 'CALLS'
        AND properties_json LIKE '%"resolution":"cross_file%'`
+  ).run(project);
+  // Module dependencies are rebuilt by the same resolver. Remove only the
+  // derived exact edges owned by this pass; legacy or user-authored IMPORTS
+  // relationships remain untouched.
+  db.prepare(
+    `DELETE FROM edges
+     WHERE project = ? AND type = 'IMPORTS'
+       AND properties_json LIKE '%"resolution":"cross_file_module_exact"%'`,
   ).run(project);
   return info.changes;
 }
@@ -365,20 +389,33 @@ export function rebuildCrossFileCallsEdges(
   //    - globalSymbolIndex: name → QN[] (for name-based fallback resolution)
   //    - qnToId: QN → node id (for edge source_id/target_id resolution)
   //    - fileQnToPath: file QN → file path (for import-aware resolution)
-  //    - knownFiles: set of file paths (for module path resolution)
+  //    - knownFiles: portable path to persisted path (for module resolution)
   const allNodes = db.prepare(
-    'SELECT id, name, qualified_name, file_path FROM nodes WHERE project = ?'
-  ).all(project) as Array<{ id: number; name: string; qualified_name: string; file_path: string }>;
+    'SELECT id, label, name, qualified_name, file_path FROM nodes WHERE project = ?'
+  ).all(project) as Array<{
+    id: number;
+    label: string;
+    name: string;
+    qualified_name: string;
+    file_path: string;
+  }>;
 
   const globalSymbolIndex = new Map<string, string[]>();
   const qnToId = new Map<string, number>();
-  const knownFiles = new Set<string>();
+  const knownFiles = new Map<string, string>();
+  const fileNodeIdByPath = new Map<string, number>();
   // R110: map from (filePath, symbolName) → QN for import-aware resolution.
   // This lets us resolve an import to a specific symbol in a specific file.
   const fileSymbolIndex = new Map<string, Map<string, string>>(); // filePath → (name → QN)
   for (const node of allNodes) {
     qnToId.set(node.qualified_name, node.id);
-    knownFiles.add(node.file_path);
+    const portableFilePath = toPortableProjectPath(node.file_path);
+    if (!knownFiles.has(portableFilePath)) {
+      knownFiles.set(portableFilePath, node.file_path);
+    }
+    if (node.label === 'File' && !fileNodeIdByPath.has(node.file_path)) {
+      fileNodeIdByPath.set(node.file_path, node.id);
+    }
     // Build per-file symbol index for import-aware resolution
     let fileMap = fileSymbolIndex.get(node.file_path);
     if (!fileMap) {
@@ -820,6 +857,54 @@ export function rebuildCrossFileCallsEdges(
     `INSERT INTO edges (project, source_id, target_id, type, properties_json)
      VALUES (?, ?, ?, ?, ?)`
   );
+
+  // Publish one exact file-level module dependency per source/target pair.
+  // Imports are stored once per binding, so grouping prevents a destructured
+  // import from inflating architecture traffic and Graph UI node degrees.
+  const moduleDependencies = new Map<string, {
+    sourceId: number;
+    targetId: number;
+    sourceModule: string;
+    bindingCount: number;
+    importKinds: Set<string>;
+  }>();
+  for (const imp of allImports) {
+    if (imp.import_kind === 'default_export' || !imp.source_module.startsWith('.')) continue;
+    const resolvedFile = resolveModulePath(imp.source_module, imp.file_path, knownFiles);
+    if (!resolvedFile) continue;
+    const sourceId = fileNodeIdByPath.get(imp.file_path);
+    const targetId = fileNodeIdByPath.get(resolvedFile);
+    if (!sourceId || !targetId || sourceId === targetId) continue;
+    const dependencyKey = `${sourceId}\0${targetId}`;
+    const dependency = moduleDependencies.get(dependencyKey);
+    if (dependency) {
+      dependency.bindingCount += 1;
+      dependency.importKinds.add(imp.import_kind);
+    } else {
+      moduleDependencies.set(dependencyKey, {
+        sourceId,
+        targetId,
+        sourceModule: imp.source_module,
+        bindingCount: 1,
+        importKinds: new Set([imp.import_kind]),
+      });
+    }
+  }
+  for (const dependency of moduleDependencies.values()) {
+    insertEdge.run(
+      project,
+      dependency.sourceId,
+      dependency.targetId,
+      'IMPORTS',
+      JSON.stringify({
+        source_module: dependency.sourceModule,
+        resolution: 'cross_file_module_exact',
+        confidence: 1,
+        binding_count: dependency.bindingCount,
+        import_kinds: [...dependency.importKinds].sort(),
+      }),
+    );
+  }
 
   let edgesInserted = 0;
   for (const cs of allCallSites) {

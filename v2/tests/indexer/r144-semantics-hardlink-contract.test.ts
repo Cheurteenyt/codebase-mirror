@@ -45,16 +45,16 @@ describe('R144: Semantics v8 + Hardlink Language Contract', () => {
 
   // ── MIG-R144-01: semantics bumped to 8 ────────────────────────────────
 
-  it('MIG-R144-01a: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8', () => {
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
+  it('MIG-R144-01a: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 9 (R184 graph contract)', () => {
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(9);
   });
 
-  it('MIG-R144-01b: full reindex sets version=8 in DB', async () => {
+  it('MIG-R144-01b: full reindex sets the current version in DB', async () => {
     writeFileSync(join(projectDir, 'a.ts'), 'export function a() { return 1; }\n');
     await indexProjectWasm({ project: projectName, rootPath: projectDir, incremental: false, useWasm: true, workers: 0 });
     const db = new Database(defaultCodeDbPath(projectName), { readonly: true });
     const row = db.prepare('SELECT extractor_semantics_version AS v FROM projects WHERE name = ?').get(projectName) as { v: number };
-    expect(row.v).toBe(8);
+    expect(row.v).toBe(9);
     db.close();
   });
 

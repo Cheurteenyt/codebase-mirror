@@ -102,7 +102,7 @@ export interface FastFileResult {
 // ── Node type sets (same as worker.ts) ─────────────────────────────────
 
 const FUNCTION_TYPES = [
-  'function_declaration', 'function_definition', 'function',
+  'function_declaration', 'function_definition',
   'arrow_function', 'generator_function_declaration', 'generator_function',
 ];
 

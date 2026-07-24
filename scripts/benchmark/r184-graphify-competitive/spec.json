@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "r184-ariad-vs-graphify-2026-07-23",
+  "frozen_before_scored_runs": true,
+  "query_model": {
+    "provider": "openai-codex",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "medium",
+    "codex_cli": "0.144.4"
+  },
+  "repetitions": {
+    "cold_one_shot": 4,
+    "warm_continuous": 4,
+    "arm_order": [
+      ["A", "B", "C", "D"],
+      ["B", "C", "D", "A"],
+      ["C", "D", "A", "B"],
+      ["D", "A", "B", "C"]
+    ]
+  },
+  "arms": {
+    "A": {
+      "name": "optimized-source",
+      "description": "Optimized rg and focused read-only source inspection, with Select-Object only to bound a focused read, without a code graph."
+    },
+    "B": {
+      "name": "graphify-hybrid",
+      "description": "Graphify MCP first for structural questions, with focused source fallback."
+    },
+    "C": {
+      "name": "graphify-obsidian-hybrid",
+      "description": "Graphify MCP plus its deterministic Obsidian export and equivalent human notes, with focused source fallback."
+    },
+    "D": {
+      "name": "ariad-hybrid",
+      "description": "Ariad bounded MCP and linked human memory first for structural questions, with the cheapest exact source operation for literal evidence."
+    }
+  },
+  "competitor": {
+    "name": "Graphify",
+    "repository": "https://github.com/Graphify-Labs/graphify",
+    "version": "0.9.25",
+    "git_commit": "2fa6cd3d5548577f8c5f591b713f0bf80c1af183",
+    "wheel": "graphifyy-0.9.25-py3-none-any.whl",
+    "wheel_sha256": "e902205873d129e9c76c11fea4268480042603590290ed600707354e74314c0c",
+    "python": "3.11",
+    "license": "MIT",
+    "installation": "isolated external virtual environment with the mcp extra; no install command or hooks"
+  },
+  "corpus": [
+    {
+      "id": "fixture",
+      "kind": "controlled",
+      "source": "v2/tests/fixtures/r184-competitive-lab",
+      "license": "Ariad repository fixture"
+    },
+    {
+      "id": "p-limit",
+      "kind": "small-javascript",
+      "repository": "https://github.com/sindresorhus/p-limit",
+      "commit": "df476048d023ff868cd45b35ee47f5fb0ca2b25a",
+      "license": "MIT"
+    },
+    {
+      "id": "zod",
+      "kind": "medium-typescript-monorepo",
+      "repository": "https://github.com/colinhacks/zod",
+      "commit": "912f0f51b0ced654d0069741e7160834dca742ee",
+      "license": "MIT"
+    },
+    {
+      "id": "fastapi",
+      "kind": "large-python",
+      "repository": "https://github.com/fastapi/fastapi",
+      "commit": "704fbe1439341994100622853f515a8af7ccc2eb",
+      "license": "MIT"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T01",
+      "family": "bounded-transitive-callers",
+      "target": "p-limit",
+      "question": "In production code only, return both call sites of validateConcurrency and the only production call site one additional caller hop above pLimit. Use repository-relative forward-slash paths and this exact JSON shape: {\"direct_call_sites\":[\"path:line\"],\"depth_2_call_sites\":[\"function@path:line\"]}. Sort arrays lexicographically.",
+      "answer_format": "json",
+      "answer": {
+        "direct_call_sites": ["index.js:10", "index.js:95"],
+        "depth_2_call_sites": ["limitFunction@index.js:118"]
+      }
+    },
+    {
+      "id": "T02",
+      "family": "alias-aware-type-impact",
+      "target": "fixture",
+      "question": "If the exported interface PipelineEnvelope changes, return the exact sorted set of production source files whose declarations, aliases, re-exports, imports, or type annotations directly or transitively depend on that type. Include its declaration file and exclude docs, config, and tests. Return only a JSON string array of repository-relative forward-slash paths.",
+      "answer_format": "json",
+      "answer": [
+        "src/analysis/scoring.ts",
+        "src/api/routes.ts",
+        "src/contracts/envelope.ts",
+        "src/contracts/public.ts",
+        "src/delivery/publish.ts",
+        "src/ingestion/reader.ts",
+        "src/ingestion/validation.ts",
+        "src/orchestration/pipeline.ts",
+        "src/orchestration/scheduler.ts"
+      ]
+    },
+    {
+      "id": "T03",
+      "family": "route-to-terminal-chain",
+      "target": "fixture",
+      "question": "Trace POST /pipeline/run to the terminal durable-write function. Return only this exact four-step format using the route-entry line followed by function definition lines: name@path:line -> name@path:line -> name@path:line -> name@path:line.",
+      "answer_format": "chain",
+      "answer": [
+        "POST /pipeline/run@src/api/routes.ts:13",
+        "runPipelineRoute@src/api/routes.ts:8",
+        "runPipeline@src/orchestration/pipeline.ts:6",
+        "commitDelivery@src/delivery/publish.ts:6"
+      ]
+    },
+    {
+      "id": "T04",
+      "family": "cross-domain-dependency",
+      "target": "zod",
+      "question": "Return the exact evidence that packages/bench executes and imports the repository's current packages/zod implementation. Use this JSON shape: {\"dependency\":\"packages/bench -> packages/zod\",\"import\":\"binding@path:line\",\"runner\":\"path:line\",\"script\":\"path:line\"}.",
+      "answer_format": "json",
+      "answer": {
+        "dependency": "packages/bench -> packages/zod",
+        "import": "zodNext@packages/bench/benchUtil.ts:3",
+        "runner": "packages/bench/index.ts:9",
+        "script": "packages/bench/package.json:14"
+      }
+    },
+    {
+      "id": "T05",
+      "family": "linked-human-decision-and-risk",
+      "target": "fixture",
+      "question": "Before changing retry behavior around commitDelivery, return the controlling ADR, the active risk, the durable-write owner, the retry owner, and the three required constraints. Use this exact JSON shape: {\"adr\":\"ID\",\"risk\":\"ID\",\"write_owner\":\"symbol\",\"retry_owner\":\"symbol\",\"constraints\":[\"constraint\"]}. Sort constraints lexicographically and use only the short normalized phrases present in the notes.",
+      "answer_format": "json",
+      "answer": {
+        "adr": "ADR-007",
+        "risk": "RISK-004",
+        "write_owner": "commitDelivery",
+        "retry_owner": "runPipeline",
+        "constraints": [
+          "idempotent for the envelope id",
+          "one durable write per call",
+          "stable receipt id"
+        ]
+      }
+    },
+    {
+      "id": "T06",
+      "family": "minimum-edit-context",
+      "target": "fastapi",
+      "question": "Prepare the minimum production edit context for changing the signature of get_request_handler. Return its definition, its only direct production call site with the enclosing method, and the two production construction or refresh sites that invoke get_route_handler. Use this exact JSON shape: {\"definition\":\"symbol@path:line\",\"direct_callers\":[\"caller@path:line\"],\"construction_sites\":[\"path:line\"]}. Sort arrays lexicographically.",
+      "answer_format": "json",
+      "answer": {
+        "definition": "get_request_handler@fastapi/routing.py:368",
+        "direct_callers": [
+          "APIRoute.get_route_handler@fastapi/routing.py:1218"
+        ],
+        "construction_sites": [
+          "fastapi/routing.py:1209",
+          "fastapi/routing.py:1262"
+        ]
+      }
+    },
+    {
+      "id": "T07",
+      "family": "bounded-completeness-and-truncation",
+      "target": "fixture",
+      "question": "Request at most one direct production caller of sharedCheckpoint while still reporting the known total and whether that bounded evidence is complete or truncated. Return the lexicographically first caller and this exact JSON shape: {\"returned\":[\"caller@path:call-line\"],\"known_total\":number,\"complete\":boolean,\"truncated\":boolean}.",
+      "answer_format": "json",
+      "answer": {
+        "returned": [
+          "alphaCheckpoint@src/domains/alpha.ts:4"
+        ],
+        "known_total": 4,
+        "complete": false,
+        "truncated": true
+      }
+    },
+    {
+      "id": "T08",
+      "family": "incremental-edit-rename-delete",
+      "target": "fixture-mutated",
+      "question": "After the registered edit, rename, addition, and deletion followed by the arm's official incremental update, return the current commitDelivery definition, its direct production call sites, whether obsoleteLegacyPath is present, and whether the old publish.ts path remains. Use this exact JSON shape: {\"definition\":\"symbol@path:line\",\"direct_call_sites\":[\"caller@path:line\"],\"obsolete_present\":boolean,\"old_path_present\":boolean}. Sort the call sites lexicographically.",
+      "answer_format": "json",
+      "answer": {
+        "definition": "commitDelivery@src/delivery/commit.ts:6",
+        "direct_call_sites": [
+          "auditDelivery@src/monitoring/audit.ts:5",
+          "runPipeline@src/orchestration/pipeline.ts:9"
+        ],
+        "obsolete_present": false,
+        "old_path_present": false
+      }
+    }
+  ]
+}

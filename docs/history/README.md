@@ -42,6 +42,7 @@ Later native-accounting evidence lives under
 - [R181 structural cost root-cause correction](round-reports/R181_STRUCTURAL_COST_ROOT_CAUSE.md)
 - [R182 maintenance consolidation](round-reports/R182_MAINTENANCE_CONSOLIDATION.md)
 - [R183 Graph UI visual intelligence](round-reports/R183_GRAPH_UI_VISUAL_INTELLIGENCE.md)
+- [R184 Ariad versus Graphify truth audit](round-reports/R184_ARIAD_GRAPHIFY_TRUTH_AUDIT.md)
 
 ## Changelog archive
 

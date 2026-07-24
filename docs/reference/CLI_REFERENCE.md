@@ -55,7 +55,7 @@ cbm-v2 index --project my-app --root /path/to/repo --discovery-mode fast
 - **Broken symlinks** (R152+R153): ENOENT on `realpath(symlink)` is a WARNING, not an error. Discovery remains complete. The graph is indexed successfully. If the alias was previously valid (recorded in `alias_history`), the old canonical target is protected from deletion (R153).
 - **ELOOP** (R153): symlink loops are WARNINGs. Same alias-history protection as ENOENT applies if the alias was previously valid.
 - **Root validation**: `assertDiscoveryRoot` verifies the root exists, is a directory, is readable (stat + isDirectory + realpath + readdir) before any DB mutation. A missing or unreadable root returns an error WITHOUT wiping the existing graph.
-- **Semantics versioning**: the indexer tracks `CURRENT_EXTRACTOR_SEMANTICS_VERSION` (currently 8). If the DB was produced by a previous extractor version, incremental mode marks it stale and forces a full reindex.
+- **Semantics versioning**: the indexer tracks `CURRENT_EXTRACTOR_SEMANTICS_VERSION` (currently 9). If the DB was produced by a previous extractor version, incremental mode marks it stale and forces a full reindex.
 - **Cross-file CALLS resolution**: after extraction, the resolver matches call-sites to definitions across files using persistent `call_sites`, `imports`, and `exports` tables.
 - **Outcome field** (R153): `IndexResult.outcome` is one of `SUCCESS`, `SUCCESS_WITH_WARNINGS`, `STALE`, `PARTIAL`, `FAILED`. The CLI prints warnings BEFORE the outcome banner.
 

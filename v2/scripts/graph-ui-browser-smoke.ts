@@ -5,44 +5,14 @@ import {
   isHelpRequest,
   type GraphBrowserSmokeObservation,
 } from './graph-ui-lab-core.js';
-import { graphKeyboardTraversalAction } from './graph-ui-browser-smoke-core.js';
+import {
+  GRAPH_BROWSER_SMOKE_USAGE,
+  graphKeyboardTraversalAction,
+  parseGraphBrowserSmokeOptions,
+  type GraphBrowserSmokeOptions,
+} from './graph-ui-browser-smoke-core.js';
 
-interface Options {
-  baseUrl: string;
-  project: string;
-  timeoutMs: number;
-  browserExecutable?: string;
-}
-
-const USAGE = 'Usage: npm run smoke:graph-ui:browser -- --project <name> '
-  + '[--base-url http://127.0.0.1:9749] [--timeout-ms 30000] '
-  + '[--browser-executable <path>]';
-
-function option(argv: readonly string[], name: string, fallback?: string): string | undefined {
-  const index = argv.indexOf(`--${name}`);
-  return index >= 0 ? argv[index + 1] : fallback;
-}
-
-function parseOptions(argv: readonly string[]): Options {
-  const project = option(argv, 'project');
-  if (!project) throw new Error(USAGE);
-  const baseUrl = new URL(option(argv, 'base-url', 'http://127.0.0.1:9749')!);
-  if (!['http:', 'https:'].includes(baseUrl.protocol)) {
-    throw new Error(`Unsupported Graph UI URL: ${baseUrl.toString()}`);
-  }
-  const timeoutMs = Number(option(argv, 'timeout-ms', '30000'));
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 5000 || timeoutMs > 120000) {
-    throw new Error('--timeout-ms must be an integer between 5000 and 120000');
-  }
-  return {
-    baseUrl: baseUrl.toString().replace(/\/$/u, ''),
-    project,
-    timeoutMs,
-    browserExecutable: option(argv, 'browser-executable'),
-  };
-}
-
-async function launchBrowser(options: Options): Promise<Browser> {
+async function launchBrowser(options: GraphBrowserSmokeOptions): Promise<Browser> {
   const launchOptions = {
     headless: true,
     args: [
@@ -97,16 +67,29 @@ async function graphState(
   return { visualMode, viewPressed: viewPressed === 'true', flowLens };
 }
 
-async function exerciseGraph(page: Page, options: Options): Promise<GraphBrowserSmokeObservation> {
+async function exerciseGraph(
+  page: Page,
+  options: GraphBrowserSmokeOptions,
+): Promise<GraphBrowserSmokeObservation> {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const failedResponses: Array<{ status: number; url: string }> = [];
+  let projectIdentityVerified = false;
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('response', (response) => {
-    if (response.status() >= 400 && !new URL(response.url()).pathname.endsWith('/favicon.ico')) {
+    const responseUrl = new URL(response.url());
+    if (
+      responseUrl.pathname === '/api/layout'
+      && responseUrl.searchParams.get('project') === options.project
+      && response.status() >= 200
+      && response.status() < 300
+    ) {
+      projectIdentityVerified = true;
+    }
+    if (response.status() >= 400 && !responseUrl.pathname.endsWith('/favicon.ico')) {
       failedResponses.push({ status: response.status(), url: response.url() });
     }
   });
@@ -161,6 +144,11 @@ async function exerciseGraph(page: Page, options: Options): Promise<GraphBrowser
   ), undefined, { timeout: options.timeoutMs });
   const dependencies = await graphState(canvas, dependenciesButton);
 
+  const detailPanel = page.locator('.graph-detail-panel');
+  if (await detailPanel.count() > 0) {
+    await page.keyboard.press('Escape');
+    await detailPanel.waitFor({ state: 'detached', timeout: options.timeoutMs });
+  }
   await structureButton.click();
   await page.waitForFunction(() => {
     const element = document.querySelector('canvas[role="application"]');
@@ -172,6 +160,8 @@ async function exerciseGraph(page: Page, options: Options): Promise<GraphBrowser
 
   return {
     graphTabSelected: await graphTab.getAttribute('aria-selected') === 'true',
+    projectIdentityVerified,
+    projectChipExpected: options.viewportWidth >= 640,
     projectVisible: await page.locator('header').getByText(options.project, { exact: true }).isVisible(),
     canvas: {
       cssWidth: Math.round(canvasBox.width),
@@ -194,14 +184,14 @@ async function exerciseGraph(page: Page, options: Options): Promise<GraphBrowser
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (isHelpRequest(argv)) {
-    console.log(USAGE);
+    console.log(GRAPH_BROWSER_SMOKE_USAGE);
     return;
   }
-  const options = parseOptions(argv);
+  const options = parseGraphBrowserSmokeOptions(argv);
   const browser = await launchBrowser(options);
   try {
     const context = await browser.newContext({
-      viewport: { width: 1440, height: 960 },
+      viewport: { width: options.viewportWidth, height: options.viewportHeight },
       deviceScaleFactor: 1,
       colorScheme: 'dark',
       locale: 'en-US',
@@ -215,6 +205,10 @@ async function main(): Promise<void> {
         result: 'PASS',
         project: options.project,
         baseUrl: options.baseUrl,
+        viewport: {
+          width: options.viewportWidth,
+          height: options.viewportHeight,
+        },
         browser: browser.version(),
         observation,
       }, null, 2));

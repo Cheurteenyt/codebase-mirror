@@ -145,11 +145,11 @@ describe('R139: Unified Path Containment', () => {
 
   // ── TEST-R139-07: Pin CURRENT_EXTRACTOR_SEMANTICS_VERSION ───────────────
 
-  it('schema contract: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8', () => {
+  it('schema contract: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 9', () => {
     // R139: A single test that pins the exact version. Other tests use the
     // constant dynamically — this one catches accidental changes.
     // R141: Bumped from 6 → 7 (discovery policy lock).
     // R144: Bumped from 7 → 8 (hardlink language contract).
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(9);
   });
 });

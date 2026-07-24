@@ -1083,6 +1083,7 @@ export async function routeScope(
       total_nodes: page.total_nodes,
       total_internal_edges: page.total_internal_edges,
     },
+    boundary: page.boundary,
     nodes,
     layout: encodedCursor == null ? layout : undefined,
     edges: page.edges.map((edge) => ({

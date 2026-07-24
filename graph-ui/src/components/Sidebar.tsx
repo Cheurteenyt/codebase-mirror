@@ -360,6 +360,16 @@ export function Sidebar({
   const completeSearchFailed = exactSearch.error != null
     && exactData == null
     && (filtered?.length ?? 0) === 0;
+  const exactDirectoryKey = useMemo(() => {
+    if (!exactData) return null;
+    const key = activeSearchQuery.replaceAll("\\", "/")
+      .replace(/^\.\/+|\/+$/gu, "");
+    if (!key.includes("/")) return null;
+    const prefix = `${key}/`;
+    return exactData.nodes.some((node) => (
+      node.file_path?.replaceAll("\\", "/").startsWith(prefix)
+    )) ? key : null;
+  }, [activeSearchQuery, exactData]);
 
   const topLevel = useMemo(() => {
     const directories = [...tree.children.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -467,16 +477,13 @@ export function Sidebar({
         </span>
       </div>
       <div className="shrink-0 border-b border-border/30 px-3 pb-2.5">
-        <div className="relative">
-          <input
-            type="text"
-            aria-label="Search paths or symbols"
-            placeholder={t.graph.search}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="w-full rounded-lg border border-white/[0.09] bg-white/[0.05] px-3 py-2 text-[12px] text-foreground outline-none transition-all placeholder:text-foreground/35 focus:border-cyan-400/50 focus:bg-white/[0.07] focus:ring-2 focus:ring-cyan-400/20"
-          />
-        </div>
+        <input
+          aria-label="Search paths or symbols"
+          placeholder={t.graph.search}
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          className="w-full rounded-lg border border-white/[0.09] bg-white/[0.05] px-3 py-2 text-[12px] text-foreground outline-none transition-all placeholder:text-foreground/35 focus:border-cyan-400/50 focus:bg-white/[0.07] focus:ring-2 focus:ring-cyan-400/20"
+        />
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
@@ -495,42 +502,50 @@ export function Sidebar({
               >
                 {exactData ? (
                   <span className="text-emerald-100/70">
-                    Exact project search · {exactData.nodes.length.toLocaleString()} /{" "}
-                    {exactData.total_matches.toLocaleString()} matches loaded
+                    Exact search · {exactData.nodes.length.toLocaleString()}/
+                    {exactData.total_matches.toLocaleString()} loaded
                   </span>
                 ) : staleExactDataIgnored ? (
                   <span className="text-sky-100/65">
-                    Stale exact results for another query were ignored · {(filtered?.length ?? 0).toLocaleString()} overview matches shown
+                    Updating exact search · {(filtered?.length ?? 0).toLocaleString()} overview matches
                   </span>
                 ) : exactSearch.loading ? (
                   <span className="text-sky-100/65">
-                    Searching the complete project… {(filtered?.length ?? 0).toLocaleString()} overview matches shown
+                    Searching project… · {(filtered?.length ?? 0).toLocaleString()} overview matches
                   </span>
                 ) : (
                   <span className="text-amber-100/60">
-                    Overview matches only · exact project search unavailable
+                    Overview only · exact search unavailable
                   </span>
                 )}
               </div>
+              {exactDirectoryKey && (
+                <button
+                  onClick={() => onSelectPath(exactDirectoryKey, new Set())}
+                  className="mx-3 my-2 min-h-10 w-[calc(100%-1.5rem)] rounded-lg border border-sky-300/20 bg-sky-300/[0.06] px-3 text-[11px] font-medium text-sky-100/75 hover:bg-sky-300/[0.1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200/50"
+                >
+                  Open directory {exactDirectoryKey}
+                </button>
+              )}
               {exactSearch.error && (
                 <div
                   role="alert"
                   className="mx-3 my-2 rounded-lg border border-amber-300/15 bg-amber-200/[0.04] p-2 text-[10px] leading-relaxed text-amber-100/70"
                 >
-                  <p>Could not verify the complete project: {exactSearch.error}</p>
+                  <p>Exact search failed: {exactSearch.error}</p>
                   <button
                     type="button"
                     onClick={exactSearch.retry}
                     className="mt-1 min-h-9 rounded-md border border-amber-200/20 px-2 font-medium text-amber-50 hover:bg-amber-200/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/50"
                   >
-                    {exactSearch.errorPhase === "more" ? "Retry next page" : "Retry exact search"}
+                    {exactSearch.errorPhase === "more" ? "Retry page" : "Retry search"}
                   </button>
                 </div>
               )}
               {searchResults.length === 0 && !exactSearchPending ? (
                 <p className="px-4 py-6 text-center text-[12px] text-foreground/40">
                   {completeSearchFailed
-                    ? "Nothing matched in the representative overview. Complete-project search failed; results outside the overview are unknown."
+                    ? "No overview match. Exact search failed; matches outside it are unknown."
                     : t.common.noMatches}
                 </p>
               ) : (
@@ -556,7 +571,7 @@ export function Sidebar({
                   aria-busy={exactSearch.loadingMore}
                   className="mx-3 my-2 min-h-10 w-[calc(100%-1.5rem)] rounded-lg border border-sky-300/20 bg-sky-300/[0.06] px-3 text-[11px] font-medium text-sky-100/75 hover:bg-sky-300/[0.1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200/50 disabled:cursor-wait disabled:opacity-50"
                 >
-                  {exactSearch.loadingMore ? "Loading more exact matches…" : "Load more exact matches"}
+                  {exactSearch.loadingMore ? "Loading more…" : "Load more"}
                 </button>
               )}
             </>

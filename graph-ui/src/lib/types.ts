@@ -210,6 +210,13 @@ export interface GraphNodeSearchData {
 
 export type GraphScopeKind = "domain" | "community" | "directory";
 
+export interface GraphScopeBoundaryDependency {
+  direction: "incoming" | "outgoing";
+  external_key: string;
+  type: string;
+  count: number;
+}
+
 export interface GraphScopeData {
   contract_version: 1;
   exact: true;
@@ -219,6 +226,15 @@ export interface GraphScopeData {
     key: string;
     total_nodes: number;
     total_internal_edges: number;
+  };
+  boundary: {
+    exact: true;
+    total_relations: number;
+    incoming_relations: number;
+    outgoing_relations: number;
+    returned_groups: number;
+    truncated: boolean;
+    dependencies: GraphScopeBoundaryDependency[];
   };
   nodes: GraphNode[];
   edges: Array<GraphEdge & { id: number }>;

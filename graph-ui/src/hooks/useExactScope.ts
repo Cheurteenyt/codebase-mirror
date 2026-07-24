@@ -21,6 +21,7 @@ export function useExactScope(
     if (first && (
       page.scope.total_nodes !== first.scope.total_nodes
       || page.scope.total_internal_edges !== first.scope.total_internal_edges
+      || page.boundary.total_relations !== first.boundary.total_relations
     )) return "Exact scope totals changed within one graph revision";
     return null;
   }, [key, kind]);

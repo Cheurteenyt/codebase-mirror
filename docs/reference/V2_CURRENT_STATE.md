@@ -2,7 +2,7 @@
 
 > **Status:** Canonical product snapshot
 > **Audience:** Users, integrators, contributors, and maintainers
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-23 at `2420906`
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-24 at `a699e27`
 
 This document answers one question: **what is active in the product now?**
 Implementation history belongs in the [changelog](../../v2/CHANGELOG.md),
@@ -21,6 +21,7 @@ and measured claims belong in [performance reports](../performance/reports/).
 | Graph UI behavior | `graph-ui/src/` and [Graph UI guide](../../graph-ui/README.md) |
 | Release history | `v2/CHANGELOG.md` |
 | Native token measurements | [V1/V2 token truth audit](../performance/reports/V1_V2_TOKEN_TRUTH_AUDIT_2026-07-20.md) |
+| Current competitive measurements | [R184 Ariad versus Graphify truth audit](../performance/reports/R184_ARIAD_VS_GRAPHIFY_TRUTH_AUDIT_2026-07-24.md) |
 
 Do not copy volatile versions or test counts into new documents. Link to the
 authority above.
@@ -51,6 +52,9 @@ This boundary is intentional and regression-tested.
 - Persistent nodes, edges, call sites, imports, exports, file metadata, and
   discovery state in SQLite.
 - Cross-file call resolution is strongest for TypeScript and JavaScript.
+  Directed File-to-File `IMPORTS` edges retain exact resolution, confidence,
+  binding, and import-kind evidence. Portable NodeNext requests map emitted
+  `.js` names back to TypeScript source files on Windows and Linux.
 - Content-hash and nanosecond-mtime incremental checks, deletion handling,
   deterministic path normalization, and semantics-version reindex gates.
 - Structured freshness and completeness signals rather than silent partial
@@ -60,6 +64,9 @@ This boundary is intentional and regression-tested.
 
 - Eight read-oriented MCP tools, including bounded exact source lookup and
   `prepare_edit_context`.
+- `get_module_context` accepts an exact directory path and returns bounded
+  scope membership, internal-edge counts, incoming/outgoing boundary groups,
+  linked memory, and explicit truncation.
 - Exact source profiles for literal matches, TypeScript type dependents, direct
   callers, tracked top-level inventory, and bounded call chains.
 - Deterministic ordering, output bounds, ambiguity, staleness, coverage,
@@ -78,6 +85,9 @@ This boundary is intentional and regression-tested.
   reuses loaded topology, and fades before exact symbols take over.
 - The overview is an explicit representative sample; exact search and
   snapshot-bound pagination provide off-sample access.
+- Exact directory search promotes a distinct directory action. Its compact
+  scope HUD exposes the strongest external dependency and exact outgoing and
+  incoming totals without adding a permanent panel.
 - Responsive navigation, keyboard access, reduced-motion handling, and
   visible partial/error states.
 
@@ -127,6 +137,26 @@ These findings are repository- and protocol-specific. Historical `-67%` to
 `-87%` scenario estimates are not native transport measurements. See
 [Token economy](../performance/TOKEN_ECONOMY.md) for the claim boundary.
 
+The sealed R184 comparison adds a different competitor boundary:
+
+- Ariad's median cold/no-change indexing is faster than Graphify 0.9.25 on all
+  four pinned targets, from the controlled fixture through FastAPI;
+- Ariad's graph counts and artifact byte sizes remain stable after no-change
+  updates, while Graphify artifacts grow by median factors from 1.212x to
+  3.299x;
+- Ariad is not a universal query or token winner. Its post-fix arm passes 43
+  of 61 valid cells, versus 49 of 62 for Graphify plus Obsidian;
+- Ariad is exact across all valid repetitions for T01, T02, T03, T07, and T08,
+  but remains weak on T04 cross-domain evidence and T06 minimum edit context;
+- every arm fails T05, so human memory is not yet a measured competitive win;
+- neither Graph UI passes the strict visual task family. Graphify renders
+  sooner; Ariad has fewer long tasks, zero measured accessibility failures,
+  and no unexpected console, page, HTTP, clipping, or overlap failures.
+
+See the
+[R184 report](../performance/reports/R184_ARIAD_VS_GRAPHIFY_TRUTH_AUDIT_2026-07-24.md)
+for the sealed evidence, invalid-run policy, and exact claim limits.
+
 ## Known limitations
 
 ### Retrieval and token economy
@@ -141,6 +171,11 @@ These findings are repository- and protocol-specific. Historical `-67%` to
   the measured small target for exact bounded output and fewer agent loops.
 - Graph evidence must not be claimed when the agent completed a hybrid task
   using source operations only.
+- R184 T04 still ranks similarly named package internals above exact
+  cross-directory import evidence too often. T06 does not yet return a
+  consistently minimal role-labelled edit set.
+- Human-memory retrieval found the relevant surface in R184 T05 but did not
+  reliably normalize the controlling ADR, risk, owners, and constraints.
 
 ### Index precision and coverage
 
@@ -160,6 +195,10 @@ These findings are repository- and protocol-specific. Historical `-67%` to
   pagination remain the authoritative paths.
 - Visual quality and perceived performance require continued measurement
   against the reproducible Graph UI lab, not screenshot-only claims.
+- R184 T09 still fails to make one requested symbol-to-symbol direction
+  immediately legible. The T10 product renders its exact directory boundary,
+  but the frozen collector missed that HUD signal; the sealed 5/6 score remains
+  unchanged until a corrected preregistered rerun.
 
 ### Windows and inactive publication primitives
 
@@ -202,13 +241,16 @@ The full inactive contract is documented in
 
 ## Next engineering priorities
 
-1. Implement literal-aware CLI route-entry resolution and protect T08 with an
-   exact regression.
-2. Reduce cumulative context and fixed schema/tool-selection cost without
+1. Rank exact cross-directory import evidence for T04 and return a minimal,
+   role-labelled `prepare_edit_context` set for T06.
+2. Define a controlling-note/owner/constraint retrieval contract before
+   retesting T05 human memory.
+3. Repair the visual task collector, then improve T09/T10 dependency direction
+   without adding a renderer, permanent panel, or unbounded payload.
+4. Reduce cumulative context and fixed schema/tool-selection cost without
    weakening correctness or evidence.
-3. Continue Graph UI fidelity and perception work through the benchmark lab.
-4. Remove portable-product tests from POSIX shell assumptions.
-5. Revisit generation publication only if production scale demonstrates the
+5. Remove portable-product tests from POSIX shell assumptions.
+6. Revisit generation publication only if production scale demonstrates the
    need; if reactivated, require its missing integration and platform gates.
 
 ## Validation contract

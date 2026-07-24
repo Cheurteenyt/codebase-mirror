@@ -171,6 +171,26 @@ describe('CodeGraphReader — getNeighbors column collision regression', () => {
   });
 
   it('reconstructs an exact architecture scope incrementally without dangling or duplicate edges', () => {
+    reader.close();
+    const setup = new Database(dbPath);
+    setup.prepare(
+      `INSERT INTO nodes (
+        id, project, label, name, qualified_name, file_path,
+        start_line, end_line, properties_json
+      ) VALUES (80, 'test', 'File', 'index.ts', 'test::packages/zod/index.ts',
+        'packages/zod/index.ts', 1, 100, '{}')`,
+    ).run();
+    setup.prepare(
+      `INSERT INTO edges (id, project, source_id, target_id, type, properties_json)
+       VALUES (5, 'test', 40, 80, 'IMPORTS', '{"resolution":"cross_file_module_exact"}')`,
+    ).run();
+    setup.prepare(
+      `INSERT INTO edges (id, project, source_id, target_id, type, properties_json)
+       VALUES (6, 'test', 80, 40, 'CALLS', '{"resolution":"cross_file_import_exact"}')`,
+    ).run();
+    setup.close();
+    reader = new CodeGraphReader(dbPath);
+
     let cursor = { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 };
     const collectedNodes: number[] = [];
     const collectedEdges: number[] = [];
@@ -218,6 +238,37 @@ describe('CodeGraphReader — getNeighbors column collision regression', () => {
     expect(directory.nodes.map((node) => node.id)).toEqual([10, 20, 30, 40, 50]);
     expect(directory.total_nodes).toBe(5);
     expect(directory.total_internal_edges).toBe(2);
+
+    const authDirectory = reader.getExactScopePage(
+      'test',
+      'directory',
+      'src/auth',
+      { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 },
+      10,
+      10,
+    );
+    expect(authDirectory.boundary).toEqual({
+      exact: true,
+      total_relations: 2,
+      incoming_relations: 1,
+      outgoing_relations: 1,
+      returned_groups: 2,
+      truncated: false,
+      dependencies: [
+        {
+          direction: 'incoming',
+          external_key: 'packages/zod',
+          type: 'CALLS',
+          count: 1,
+        },
+        {
+          direction: 'outgoing',
+          external_key: 'packages/zod',
+          type: 'IMPORTS',
+          count: 1,
+        },
+      ],
+    });
   });
 
   it('does not confuse a same-named file with the selected directory', () => {

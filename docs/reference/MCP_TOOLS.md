@@ -121,7 +121,9 @@ treated as whole-project coverage.
 
 ### 2. `get_module_context`
 
-**Purpose**: Full context of a module, file, class, or interface — code structure + human notes + ADRs + bugs + refactors.
+**Purpose**: Bounded context for a module, directory, file, class, or
+interface — code structure, exact dependency boundary, human notes, ADRs,
+bugs, and refactors.
 
 **Input**:
 ```json
@@ -137,7 +139,11 @@ treated as whole-project coverage.
 }
 ```
 
-**Output**: Module info, code neighbors (up to `max_nodes`), human notes (non-ADR/bug/refactor), ADRs, bugs, refactors, risk score, documentation coverage.
+**Output**: Module info, code neighbors (up to `max_nodes`), human notes
+(non-ADR/bug/refactor), ADRs, bugs, refactors, risk score, and documentation
+coverage. An exact directory path returns `scope.kind = "directory"`, exact
+node/internal-edge totals, incoming/outgoing boundary groups, returned counts,
+and explicit truncation.
 
 `max_nodes` is an integer bounded to `0..1000`; the response reports the exact
 neighbor total, returned count, and whether the list was truncated.
@@ -147,6 +153,12 @@ neighbor total, returned count, and whether the list was truncated.
 `module_name` also accepts portable or absolute file paths. Ambiguous matches
 return candidate qualified names and paths instead of silently choosing one;
 missing matches suggest nearby context roots.
+
+Portable paths containing a directory separator probe an exact directory scope
+before normal symbol resolution. The directory response scans at most 80 code
+nodes for human context, returns at most 200 unique linked notes, and reports
+whether either the code page or human-context scan is incomplete. A file path
+does not match the directory probe and keeps the normal resolution order.
 
 ### 3. `get_undocumented_hotspots`
 

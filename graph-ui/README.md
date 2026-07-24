@@ -2,7 +2,7 @@
 
 > **Status:** Canonical contributor entry point
 > **Audience:** Frontend contributors and maintainers
-> **Last verified:** `0.78.0-alpha.1` / 2026-07-23
+> **Last verified:** `0.78.0-alpha.1` / 2026-07-24
 
 The Graph UI is a React/Vite frontend embedded into the V2 npm package. Product
 usage starts in the [root README](../README.md); this file covers development
@@ -51,6 +51,7 @@ production build; do not relax a budget to accept an update.
 - [Graph UI architecture](../docs/architecture/V2_ARCHITECTURE.md#9-graph-ui)
 - [Performance and perception lab](../docs/performance/GRAPH_UI_PERFORMANCE_PERCEPTION_LAB.md)
 - [R183 visual-intelligence evidence](../docs/performance/reports/R183_GRAPH_UI_VISUAL_INTELLIGENCE_2026-07-23.md)
+- [R184 Ariad versus Graphify truth audit](../docs/performance/reports/R184_ARIAD_VS_GRAPHIFY_TRUTH_AUDIT_2026-07-24.md)
 - [Deep Graph UI audit](../docs/performance/reports/GRAPH_UI_V2_DEEP_AUDIT_2026-07-16.md)
 - [Performance, token, and UI audit](../docs/performance/reports/PERFORMANCE_TOKEN_UI_AUDIT_2026-07-15.md)
 
@@ -58,6 +59,10 @@ production build; do not relax a budget to accept an update.
 
 - Keep representative overview data distinct from exact search and detail
   results.
+- Keep exact directory membership and its incoming/outgoing dependency
+  boundary revision-bound and distinct from a homonymous layout community.
+  Show only the strongest reference group in the compact HUD; complete bounded
+  groups remain backend evidence.
 - Bind paginated exact reads to the graph snapshot and discard stale pages.
 - Preserve one renderer and interaction model across Structure and
   Dependencies views.

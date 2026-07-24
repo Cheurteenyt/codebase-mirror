@@ -282,8 +282,8 @@ describe('R153: Alias History + Historical Target Safety', () => {
 
   // ── Regression ────────────────────────────────────────────────────────
 
-  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8 (R144, R153 no bump)', () => {
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
+  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 9 (R184)', () => {
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(9);
   });
 
   it('regression: alias_history table persists across full reindex (R153)', async () => {

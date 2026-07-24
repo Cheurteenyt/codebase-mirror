@@ -2,6 +2,30 @@
 
 ## 0.78.0-alpha.1 — bounded exact source lookup (2026-07-20)
 
+### R184 competitive truth correction
+
+- Preregistered, executed, reconciled, and sealed a four-arm Ariad versus
+  optimized source, Graphify, and Graphify plus Obsidian comparison across a
+  controlled fixture, p-limit, zod, and FastAPI. The current report publishes
+  wins, ties, losses, invalid cells, graph-caused evidence, and unsupported
+  conclusions separately.
+- Replaced Windows-hostile NodeNext import matching with portable path and
+  extension resolution. File-to-File `IMPORTS` edges are now exact,
+  deduplicated, directed, and evidence-bearing; extractor semantics advances
+  from 8 to 9 so incompatible databases force a full reindex.
+- Added bounded exact directory context to `get_module_context`, including
+  exact membership/internal-edge totals, incoming/outgoing dependency groups,
+  linked human memory, and explicit truncation.
+- Promoted exact directories in Graph UI search and reused the existing scope
+  HUD to show the strongest external dependency with outgoing/incoming totals.
+  No renderer, permanent panel, production dependency, or bundle-budget
+  exception was added.
+- The measured result is deliberately mixed: Ariad wins index/update time and
+  exact failure visibility, but Graphify remains lighter on small indexing,
+  renders sooner, and Graphify plus Obsidian leads the minimum-edit-context
+  task. Every arm fails the human-rationale task, and neither UI passes the
+  strict visual task family.
+
 ### MCP precision and token economy
 
 - Extended `lookup_source_text` without adding a ninth MCP tool: the default

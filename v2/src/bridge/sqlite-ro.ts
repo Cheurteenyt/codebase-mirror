@@ -95,8 +95,26 @@ export interface ExactScopePage {
   edges: CodeEdge[];
   total_nodes: number;
   total_internal_edges: number;
+  boundary: ExactScopeBoundarySummary;
   structure_layout: ExactScopeLayoutPlan;
   next_cursor: ExactScopeCursorState | null;
+}
+
+export interface ExactScopeBoundaryDependency {
+  direction: 'incoming' | 'outgoing';
+  external_key: string;
+  type: string;
+  count: number;
+}
+
+export interface ExactScopeBoundarySummary {
+  exact: true;
+  total_relations: number;
+  incoming_relations: number;
+  outgoing_relations: number;
+  returned_groups: number;
+  truncated: boolean;
+  dependencies: ExactScopeBoundaryDependency[];
 }
 
 export interface ArchitectureDomainSummary {
@@ -236,6 +254,7 @@ interface ExactScopeMembership {
   nodeIds: number[];
   nodeIdsJson: string;
   totalInternalEdges: number | null;
+  boundary: ExactScopeBoundarySummary | null;
   structureLayout: ExactScopeLayoutPlan | null;
 }
 
@@ -248,6 +267,29 @@ interface ProjectExactScopeIndex {
 }
 
 const MAX_EXACT_DIRECTORY_MEMBERSHIPS = 24;
+const MAX_EXACT_SCOPE_BOUNDARY_GROUPS = 24;
+
+interface ExactScopeBoundaryRow {
+  direction: 'incoming' | 'outgoing';
+  type: string;
+  file_path: string | null;
+  label: string;
+  count: number;
+}
+
+function exactScopeBoundaryKey(
+  kind: ExactScopeKind,
+  key: string,
+  filePath: string | null,
+  label: string,
+): string {
+  if (kind === 'domain') return graphDomainKey(filePath, label);
+  if (kind === 'community') return graphCommunityKey(filePath, label);
+  const normalizedPath = normalizeGraphPath(filePath ?? '');
+  if (!normalizedPath || !normalizedPath.includes('/')) return '(root)';
+  const scopeDepth = Math.max(1, normalizeGraphPath(key).split('/').filter(Boolean).length);
+  return normalizedPath.split('/').filter(Boolean).slice(0, scopeDepth).join('/');
+}
 
 /** Row from `SELECT (subquery) AS n, (subquery) AS e`. */
 interface CountAllRow {
@@ -1105,6 +1147,7 @@ export class CodeGraphReader {
       nodeIds,
       nodeIdsJson: JSON.stringify(nodeIds),
       totalInternalEdges: null,
+      boundary: null,
       structureLayout: layoutRows ? buildExactScopeLayout(layoutRows, key) : null,
     });
 
@@ -1183,6 +1226,15 @@ export class CodeGraphReader {
       nodeIds: [],
       nodeIdsJson: '[]',
       totalInternalEdges: 0,
+      boundary: {
+        exact: true,
+        total_relations: 0,
+        incoming_relations: 0,
+        outgoing_relations: 0,
+        returned_groups: 0,
+        truncated: false,
+        dependencies: [],
+      },
       structureLayout: buildExactScopeLayout([], key),
     };
   }
@@ -1245,6 +1297,74 @@ export class CodeGraphReader {
       ).get(membership.nodeIdsJson, project) as CountRow | undefined)?.c ?? 0;
     }
     const totalInternalEdges = membership.totalInternalEdges;
+    if (membership.boundary == null) {
+      const boundaryRows = membership.nodeIds.length === 0 ? [] : this.db.prepare(
+        `WITH scope_nodes AS MATERIALIZED (
+           SELECT CAST(value AS INTEGER) AS id FROM json_each(?)
+         )
+         SELECT
+           CASE
+             WHEN source_scope.id IS NOT NULL THEN 'outgoing'
+             ELSE 'incoming'
+           END AS direction,
+           e.type,
+           external_node.file_path,
+           external_node.label,
+           COUNT(*) AS count
+         FROM edges e
+         LEFT JOIN scope_nodes source_scope ON source_scope.id = e.source_id
+         LEFT JOIN scope_nodes target_scope ON target_scope.id = e.target_id
+         JOIN nodes external_node
+           ON external_node.project = e.project
+          AND external_node.id = CASE
+            WHEN source_scope.id IS NOT NULL THEN e.target_id
+            ELSE e.source_id
+          END
+         WHERE e.project = ?
+           AND (
+             (source_scope.id IS NOT NULL AND target_scope.id IS NULL)
+             OR (source_scope.id IS NULL AND target_scope.id IS NOT NULL)
+           )
+         GROUP BY direction, e.type, external_node.file_path, external_node.label`,
+      ).all(membership.nodeIdsJson, project) as ExactScopeBoundaryRow[];
+      const grouped = new Map<string, ExactScopeBoundaryDependency>();
+      let totalRelations = 0;
+      let incomingRelations = 0;
+      let outgoingRelations = 0;
+      for (const row of boundaryRows) {
+        const externalKey = exactScopeBoundaryKey(kind, key, row.file_path, row.label);
+        const groupKey = `${row.direction}\0${externalKey}\0${row.type}`;
+        const count = Number(row.count) || 0;
+        totalRelations += count;
+        if (row.direction === 'incoming') incomingRelations += count;
+        else outgoingRelations += count;
+        const existing = grouped.get(groupKey);
+        if (existing) existing.count += count;
+        else grouped.set(groupKey, {
+          direction: row.direction,
+          external_key: externalKey,
+          type: row.type,
+          count,
+        });
+      }
+      const allDependencies = [...grouped.values()].sort((left, right) => (
+        right.count - left.count
+        || left.direction.localeCompare(right.direction)
+        || left.external_key.localeCompare(right.external_key)
+        || left.type.localeCompare(right.type)
+      ));
+      const dependencies = allDependencies.slice(0, MAX_EXACT_SCOPE_BOUNDARY_GROUPS);
+      membership.boundary = {
+        exact: true,
+        total_relations: totalRelations,
+        incoming_relations: incomingRelations,
+        outgoing_relations: outgoingRelations,
+        returned_groups: dependencies.length,
+        truncated: dependencies.length < allDependencies.length,
+        dependencies,
+      };
+    }
+    const boundary = membership.boundary;
 
     let nodes: CodeNode[] = [];
     let batchEndNodeId = requestedBatchEnd;
@@ -1281,6 +1401,7 @@ export class CodeGraphReader {
         edges: [],
         total_nodes: totalNodes,
         total_internal_edges: totalInternalEdges,
+        boundary,
         structure_layout: structureLayout,
         next_cursor: null,
       };
@@ -1341,6 +1462,7 @@ export class CodeGraphReader {
       edges,
       total_nodes: totalNodes,
       total_internal_edges: totalInternalEdges,
+      boundary,
       structure_layout: structureLayout,
       next_cursor: nextCursor,
     };

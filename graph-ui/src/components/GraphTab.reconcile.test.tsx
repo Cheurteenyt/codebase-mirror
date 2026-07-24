@@ -132,6 +132,20 @@ const exactScopeState = (loadMore = vi.fn()) => ({
       total_nodes: 3,
       total_internal_edges: 1,
     },
+    boundary: {
+      exact: true as const,
+      total_relations: 1,
+      incoming_relations: 0,
+      outgoing_relations: 1,
+      returned_groups: 1,
+      truncated: false,
+      dependencies: [{
+        direction: "outgoing" as const,
+        external_key: "packages/zod",
+        type: "IMPORTS",
+        count: 1,
+      }],
+    },
     nodes: [
       { ...makeNode(10, "exact-ten"), cluster_id: 0 },
       { ...makeNode(20, "exact-twenty"), cluster_id: 0 },
@@ -390,6 +404,7 @@ describe("GraphTab server-refresh state reconciliation", () => {
     await waitFor(() => expect(screen.getByTestId("graph-canvas-node-count")).toHaveTextContent("2"));
     expect(screen.getByTestId("graph-canvas-layout")).toHaveTextContent("exact-directory-file-v1");
     expect(screen.getByText(/3 exact nodes/i)).toBeInTheDocument();
+    expect(screen.getByText(/References → packages\/zod · out:1 in:0/u)).toBeInTheDocument();
     expect(useExactScopeMock).toHaveBeenLastCalledWith(
       "test",
       "domain",

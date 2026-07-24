@@ -248,8 +248,8 @@ describe('R145: Legacy Schema + WAL Coherence', () => {
 
   // ── Regression: R144 findings stay fixed ──────────────────────────────
 
-  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8 (R144 MIG-R144-01)', () => {
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
+  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 9 (R184)', () => {
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(9);
   });
 
   it('regression: two code hardlinks with different extensions → both indexed (R144 IDX-R144-01)', () => {

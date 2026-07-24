@@ -54,7 +54,7 @@ Key modules:
 - `v2/src/indexer/fast-walker.ts` — AST walker for exports/imports/calls
 - `v2/src/indexer/cross-file-resolver.ts` — matches call-sites to definitions
 - `v2/src/indexer/indexer.ts` — orchestrator: full/incremental, parallel workers
-- `v2/src/indexer/schema.ts` — SQLite schema, `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8`
+- `v2/src/indexer/schema.ts` — SQLite schema, `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 9`
 
 ## 4. V1 C Engine — Separate Producer/Reference
 
@@ -73,12 +73,13 @@ the code graph independently with its native indexer.
 The code graph is stored in a SQLite database (`<project>.db`) with:
 
 - `nodes` — exported symbols (functions, classes, types)
-- `edges` — call relationships (caller → callee)
+- `edges` — directed call relationships and deduplicated File-to-File imports;
+  import evidence retains resolution, confidence, binding, and import kind
 - `file_hashes` — file content hashes for incremental indexing
 - `projects` — project metadata (root path, fingerprint, stale flag)
 - `alias_history` — historical alias targets for protection
 
-Schema version: `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8`
+Schema version: `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 9`
 Discovery policy version: `CURRENT_DISCOVERY_POLICY_VERSION = 3`
 
 ## 6. Human Memory Graph
@@ -104,7 +105,8 @@ V2 syncs human memory to/from Obsidian vaults:
 The MCP (Model Context Protocol) server exposes these 8 tools:
 
 1. `get_project_overview` — summarize graph, human-memory, coverage, and freshness state
-2. `get_module_context` — return code and human context for one module or file
+2. `get_module_context` — return bounded code, dependency-boundary, and human
+   context for one module, directory, file, class, or interface
 3. `get_undocumented_hotspots` — rank critical code nodes without documentation
 4. `create_human_note` — create a human-memory note and optionally link code nodes
 5. `link_note_to_code_node` — link an existing note to an existing code node
@@ -266,6 +268,13 @@ LRU order. This avoids both the former key collision with a homonymous
 community and an eager full-project descendant map. Selecting a community or a
 non-domain tree path enables the exact page immediately; continuation and edge
 membership stay in SQLite through a materialized `json_each` CTE.
+
+The same cached exact membership computes its complete external boundary.
+Incoming and outgoing relationships are grouped deterministically by external
+directory and relation type, with exact total and returned counts plus
+truncation. The Graph UI shows only the strongest group in its compact scope
+HUD; `get_module_context` can return the bounded group set to an agent. Neither
+surface infers dependency direction from the representative overview.
 
 The exact scope is not laid out as one uniform symbol disk. Once per cached
 membership, the read bridge derives a deterministic `exact-directory-file-v1`

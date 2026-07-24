@@ -45,6 +45,7 @@ import {
 import { CAS_DB_FILENAME } from "../src/storage/internal/generation-cas-store.js";
 import { openCasStore } from "../src/storage/internal/generation-cas-store.js";
 import {
+  CURRENT_EXTRACTOR_SEMANTICS_VERSION,
   CURRENT_DISCOVERY_POLICY_VERSION,
   initIndexerSchema,
   updateProjectStats,
@@ -165,7 +166,7 @@ function populateStagingDb(dbPath: string, genIndex: number): void {
     N_EDGES,
     false, // crossFileCallsStale
     true, // callSitesInitialized
-    8, // extractorSemanticsVersion
+    CURRENT_EXTRACTOR_SEMANTICS_VERSION,
     null, // indexError
     true, // aliasHistoryInitialized
     CURRENT_DISCOVERY_POLICY_VERSION,

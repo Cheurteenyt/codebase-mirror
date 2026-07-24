@@ -33,7 +33,7 @@
 >
 > **Foundation package version:** 0.75.0 (R169A/R169B history)
 > **Current package version at last verification:** 0.76.0
-> **Semantics:** `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8`,
+> **Semantics:** `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 9`,
 > `CURRENT_DISCOVERY_POLICY_VERSION = 3`
 > **Manifest format:** `CURRENT_GENERATION_MANIFEST_VERSION = 1`
 

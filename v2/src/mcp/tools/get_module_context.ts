@@ -5,12 +5,15 @@ import { safeJsonParse } from '../../constants.js';
 import { ToolDefinition } from './index.js';
 import { computeRiskScore } from '../../reports/risk.js';
 import type { CodeNode } from '../../bridge/sqlite-ro.js';
+import type { HumanNode } from '../../human/schema.js';
+
+const DIRECTORY_CONTEXT_NODE_CAP = 80;
 
 export class GetModuleContextTool extends BaseTool {
   get definition(): ToolDefinition {
     return {
       name: 'get_module_context',
-      description: 'Get the full context of a module: code structure (functions, dependencies, neighbors) AND human memory (notes, ADRs, bugs, refactors linked to it). The flagship V2 tool for agents — single call returns everything needed to understand a module.',
+      description: 'Get bounded, explicit context for a module or directory: code structure, exact dependency boundaries, and linked human memory. Counts and truncation fields distinguish complete results from a representative first page.',
       annotations: {
         title: 'Get module context',
         readOnlyHint: true,
@@ -24,7 +27,7 @@ export class GetModuleContextTool extends BaseTool {
           project: { type: 'string' },
           module_name: {
             type: 'string',
-            description: 'Module, file, class, or interface name (or file path; case-insensitive substring match)',
+            description: 'Module, directory, file, class, or interface name (directory/file paths use portable separators; names use case-insensitive substring matching)',
           },
           include_code: { type: 'boolean', default: true },
           include_human: { type: 'boolean', default: true },
@@ -63,6 +66,127 @@ export class GetModuleContextTool extends BaseTool {
       const codeReader = this.codeReader;
       if (!codeReader) {
         return this.error('Code graph reader not configured. Index the project first.');
+      }
+
+      // A path can name an architecture scope rather than one file. Resolving
+      // `packages/bench` through the file-name fallback produced an ambiguity
+      // error even though the exact directory membership is deterministic.
+      // Probe exact directory scope first; a file path is not treated as a
+      // directory by getExactScopePage, so normal file resolution remains
+      // unchanged.
+      const normalizedModuleName = moduleName
+        .replace(/\\/gu, '/')
+        .replace(/^\.\//u, '')
+        .replace(/\/+$/u, '');
+      if (normalizedModuleName.includes('/')) {
+        const directoryLimit = Math.max(1, Math.min(maxNodes, DIRECTORY_CONTEXT_NODE_CAP));
+        const directory = codeReader.getExactScopePage(
+          project,
+          'directory',
+          normalizedModuleName,
+          { after_node_id: 0, batch_end_node_id: 0, after_edge_id: 0 },
+          directoryLimit,
+          directoryLimit,
+        );
+        if (directory.total_nodes > 0) {
+          const returnedNodes = maxNodes === 0 ? [] : directory.nodes.slice(0, maxNodes);
+          const returnedNodeIds = returnedNodes.map((node) => node.id);
+          const result: Record<string, unknown> = {
+            module: {
+              cbm_node_id: null,
+              name: normalizedModuleName.split('/').at(-1) ?? normalizedModuleName,
+              qualified_name: `${project}::directory:${normalizedModuleName}`,
+              file_path: normalizedModuleName,
+              label: 'Directory',
+              degree: directory.total_internal_edges + directory.boundary.total_relations,
+              properties: {},
+            },
+            scope: {
+              exact: true,
+              kind: 'directory',
+              key: normalizedModuleName,
+              total_nodes: directory.total_nodes,
+              total_internal_edges: directory.total_internal_edges,
+              boundary: directory.boundary,
+            },
+          };
+
+          if (includeCode) {
+            result['code_nodes'] = returnedNodes.map((node) => ({
+              id: node.id,
+              label: node.label,
+              name: node.name,
+              qualified_name: node.qualified_name,
+              file_path: node.file_path,
+              start_line: node.start_line,
+              end_line: node.end_line,
+            }));
+            result['code_edges'] = directory.edges.map((edge) => ({
+              id: edge.id,
+              source_id: edge.source_id,
+              target_id: edge.target_id,
+              type: edge.type,
+            }));
+            result['code_stats'] = {
+              nodes_count: directory.total_nodes,
+              nodes_returned: returnedNodes.length,
+              internal_edges_count: directory.total_internal_edges,
+              internal_edges_returned: directory.edges.length,
+              boundary_relations_count: directory.boundary.total_relations,
+              truncated: directory.next_cursor != null || returnedNodes.length < directory.total_nodes,
+            };
+          }
+
+          const includeAnyHuman = includeHuman || includeAdrs || includeBugs || includeRefactors;
+          const noteLinksByNode = includeAnyHuman && returnedNodeIds.length > 0
+            ? this.humanStore.getBulkNoteCountsByCbmNodeIds(project, returnedNodeIds)
+            : new Map<number, number>();
+          const notesByNode = includeAnyHuman && returnedNodeIds.length > 0
+            ? this.humanStore.getBulkNotesByCbmNodeIds(project, returnedNodeIds, 201)
+            : new Map<number, HumanNode[]>();
+          const uniqueNotes = new Map<number, HumanNode>();
+          for (const notes of notesByNode.values()) {
+            for (const note of notes) {
+              if (!uniqueNotes.has(note.id)) uniqueNotes.set(note.id, note);
+            }
+          }
+          const notes = [...uniqueNotes.values()].slice(0, 200);
+          const mapNotes = (selected: HumanNode[]) => selected.map((note) => ({
+            id: note.id,
+            label: note.label,
+            title: note.title,
+            status: note.status,
+            updated_at: note.updated_at,
+            obsidian_path: note.obsidian_path,
+            body_excerpt: note.body_markdown.slice(0, 500),
+          }));
+          if (includeHuman) {
+            result['human_notes'] = mapNotes(notes.filter((note) =>
+              note.label !== 'ADR' && note.label !== 'BugNote' && note.label !== 'RefactorPlan'
+            ));
+          }
+          if (includeAdrs) result['adrs'] = mapNotes(notes.filter((note) => note.label === 'ADR'));
+          if (includeBugs) result['bugs'] = mapNotes(notes.filter((note) => note.label === 'BugNote'));
+          if (includeRefactors) {
+            result['refactors'] = mapNotes(notes.filter((note) => note.label === 'RefactorPlan'));
+          }
+
+          const linkedNodesScanned = [...noteLinksByNode.values()].filter((count) => count > 0).length;
+          result['stats'] = {
+            documentation_coverage: returnedNodeIds.length > 0
+              ? linkedNodesScanned / returnedNodeIds.length
+              : 0,
+            risk_score: null,
+            risk_level: 'not_computed_for_directory',
+            linked_notes_returned: notes.length,
+            linked_note_links_scanned: [...noteLinksByNode.values()]
+              .reduce((total, count) => total + count, 0),
+            nodes_scanned_for_human_context: returnedNodeIds.length,
+            scope_scan_complete: returnedNodes.length === directory.total_nodes,
+          };
+
+          return this.json(result);
+        }
       }
 
       // Resolve a context root in an explicit order. Native V2 graphs always

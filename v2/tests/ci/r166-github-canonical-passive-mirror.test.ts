@@ -12,8 +12,8 @@
  *   - documentation no longer instructs contributors to push to GitLab
  *   - version is bumped to 0.71.0
  *
- * Extractor semantics remain at version 8. Discovery policy version 3 is the
- * canonical coverage-mode contract.
+ * Extractor semantics are version 9 after the R184 graph-contract change.
+ * Discovery policy version 3 remains the canonical coverage-mode contract.
  */
 
 import { describe, it, expect } from "vitest";
@@ -545,8 +545,8 @@ describe("R166 — package version bumped", () => {
 describe("R166 — semantics and discovery version contracts", () => {
   const schema = readRepoFile("v2/src/indexer/schema.ts");
 
-  it("CURRENT_EXTRACTOR_SEMANTICS_VERSION is still 8", () => {
-    expect(schema).toMatch(/CURRENT_EXTRACTOR_SEMANTICS_VERSION\s*=\s*8\b/);
+  it("CURRENT_EXTRACTOR_SEMANTICS_VERSION is 9 after R184", () => {
+    expect(schema).toMatch(/CURRENT_EXTRACTOR_SEMANTICS_VERSION\s*=\s*9\b/);
   });
 
   it("CURRENT_DISCOVERY_POLICY_VERSION is 3", () => {

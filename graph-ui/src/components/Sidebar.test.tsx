@@ -277,10 +277,41 @@ describe("Sidebar ARIA tree keyboard navigation", () => {
       target: { value: "outside" },
     });
 
-    await waitFor(() => expect(screen.getByText(/Exact project search/u)).toBeInTheDocument());
-    expect(screen.getByText(/1 \/ 1 matches loaded/u)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Exact search/u)).toBeInTheDocument());
+    expect(screen.getByText(/1\/1 loaded/u)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open outside.ts at hidden/outside.ts" }));
     expect(onSelectNode).toHaveBeenCalledWith(exactNode);
+  });
+
+  it("promotes an exact path query to an actionable directory scope", async () => {
+    const exactNode = makeNode(
+      99,
+      "benchUtil.ts",
+      "packages\\bench\\benchUtil.ts",
+    );
+    vi.spyOn(api, "searchNodes").mockResolvedValue(
+      makeSearchPage("packages/bench", [exactNode]),
+    );
+    const onSelectPath = vi.fn();
+    render(
+      <Sidebar
+        project="test"
+        nodes={[makeNode(1, "visible.ts", "src/visible.ts")]}
+        onSelectPath={onSelectPath}
+        onSelectNode={vi.fn()}
+        selectedPath={null}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search paths or symbols" }), {
+      target: { value: "packages/bench" },
+    });
+
+    const openDirectory = await screen.findByRole("button", {
+      name: /Open directory packages\/bench/u,
+    });
+    fireEvent.click(openDirectory);
+    expect(onSelectPath).toHaveBeenCalledWith("packages/bench", new Set());
   });
 
   it("revalidates an active exact query when exactRefreshKey changes", async () => {
@@ -339,13 +370,13 @@ describe("Sidebar ARIA tree keyboard navigation", () => {
       target: { value: "outside" },
     });
 
-    await waitFor(() => expect(screen.getByText(/Stale exact results for another query were ignored/u))
+    await waitFor(() => expect(screen.getByText(/Updating exact search/u))
       .toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Open outside-local.ts at src/outside-local.ts" }))
       .toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open stale-exact.ts at hidden/stale-exact.ts" }))
       .not.toBeInTheDocument();
-    expect(screen.queryByText(/Exact project search/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Exact search/u)).not.toBeInTheDocument();
   });
 
   it("does not claim there are no matches when complete-project search fails", async () => {
@@ -365,7 +396,7 @@ describe("Sidebar ARIA tree keyboard navigation", () => {
     });
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Search backend unavailable"));
-    expect(screen.getByText(/Complete-project search failed; results outside the overview are unknown/u))
+    expect(screen.getByText(/Exact search failed; matches outside it are unknown/u))
       .toBeInTheDocument();
     expect(screen.queryByText(/^No matches$/u)).not.toBeInTheDocument();
   });

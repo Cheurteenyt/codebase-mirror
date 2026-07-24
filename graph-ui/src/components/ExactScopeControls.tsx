@@ -1,3 +1,5 @@
+import type { GraphScopeData } from "../lib/types";
+
 interface ExactScopeControlsProps {
   hud: ExactScopeHudProps | null;
   active: boolean;
@@ -18,6 +20,7 @@ interface ExactScopeHudProps {
   totalInternalEdges: number;
   complete: boolean;
   selectedCount: number;
+  boundary: GraphScopeData["boundary"];
 }
 
 function ExactScopeHud({
@@ -27,7 +30,9 @@ function ExactScopeHud({
   totalInternalEdges,
   complete,
   selectedCount,
+  boundary,
 }: ExactScopeHudProps) {
+  const dependency = boundary.dependencies[0];
   return (
     <details className="group absolute left-14 top-3 z-20 max-w-[calc(100%-8rem)] overflow-hidden rounded-xl border border-white/10 bg-[#071219]/88 text-[10px] text-foreground/70 shadow-xl backdrop-blur-md lg:left-4 lg:top-4 lg:max-w-[min(760px,calc(100%-16rem))] lg:text-[11px]">
       <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 font-mono marker:content-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cyan-400/70">
@@ -42,6 +47,12 @@ function ExactScopeHud({
         {selectedCount > 0 && (
           <span className="hidden whitespace-nowrap text-cyan-300/65 md:inline">
             {selectedCount.toLocaleString()} selected
+          </span>
+        )}
+        {dependency && (
+          <span className="hidden whitespace-nowrap text-cyan-300/65 md:inline">
+            References {dependency.direction === "outgoing" ? "→" : "←"} {dependency.external_key}
+            {" · "}out:{boundary.outgoing_relations} in:{boundary.incoming_relations}
           </span>
         )}
       </summary>

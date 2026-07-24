@@ -14,7 +14,7 @@
 
 Codebase Memory V2 is a **hybrid** code intelligence system:
 
-1. **Native WASM indexer** (V2) — 112 languages via tree-sitter WASM grammars. The most advanced semantic precision on TypeScript/JavaScript: cross-file CALLS resolution, module validity lock, type/value default separation, builtin truth lock. Semantics version 8.
+1. **Native WASM indexer** (V2) — 112 languages via tree-sitter WASM grammars. The most advanced semantic precision on TypeScript/JavaScript: cross-file CALLS resolution, directed file imports, module validity lock, type/value default separation, builtin truth lock. Semantics version 9.
 
 2. **Human memory graph** (V2) — ADRs, bug notes, refactor plans, conventions, legacy zone markers, risk assessments, activity journal — synced to an Obsidian-compatible Markdown vault.
 
@@ -37,6 +37,21 @@ upstream project at commit
 That snapshot is not part of the active V2 runtime. Its original MIT notice is
 preserved in [`v1-reference/LICENSE`](v1-reference/LICENSE); Ariad's own code is
 licensed separately under the root [MIT license](LICENSE).
+
+## Measured competitive position
+
+The current [Ariad versus Graphify truth audit](docs/performance/reports/R184_ARIAD_VS_GRAPHIFY_TRUTH_AUDIT_2026-07-24.md)
+does not declare a universal winner. On the pinned corpus, Ariad indexes and
+rechecks repositories substantially faster, keeps no-change graph counts and
+artifact sizes stable, and exposes exact bounded freshness and failure
+metadata. Graphify remains lighter on small indexing workloads and reaches its
+static visualization sooner; Graphify plus Obsidian also leads the measured
+minimum-edit-context task. Every arm failed the rationale-retrieval task.
+
+Ariad is therefore aimed at repeated safe-change preparation on a living
+repository, not at replacing optimized source lookup or copying Graphify's
+visual language. Use exact source inspection for cheap literals, and consult
+the report before making token, correctness, or Graph UI claims.
 
 ## Current version
 
@@ -195,7 +210,7 @@ the TOML string. Restart Codex after editing the configuration, then use
 │   │  tree-sitter WASM       │  │  tree-sitter C           │  │
 │   │  112 languages          │  │  158 languages           │  │
 │   │  cross-file resolver    │  │  DB producer/reference   │  │
-│   │  semantics v8           │  │                          │  │
+│   │  semantics v9           │  │                          │  │
 │   └───────────┬─────────────┘  └──────────┬───────────────┘  │
 │               │                           │                  │
 │               v                           v                  │
@@ -225,12 +240,13 @@ V2 includes a **native code indexer** that does NOT require the V1 C binary:
 
 - **112 languages** via pre-built tree-sitter WASM grammars (`tree-sitter-wasm`)
 - **Cross-file CALLS resolution** — persistent `call_sites`, `imports`, `exports` tables; resolver matches call-sites to definitions across files
+- **Directed file imports** — exact deduplicated File-to-File `IMPORTS` edges with resolution, confidence, binding, and import-kind evidence, including portable NodeNext `.js`-to-TypeScript resolution
 - **Module validity lock** — detects duplicate exports, default marker collisions, unresolved star sources, invalid builtins
 - **Type/value default separation** — `interface`/`type alias` defaults excluded from runtime count
 - **Builtin truth lock** — `isBuiltin()` from `node:module`; `node:fake` rejected, `node:test` accepted
 - **Incremental indexing** — content hash + mtime_ns fast-skip; deletion-only fast path
 - **Parallel workers** — multi-threaded WASM parsing for large projects
-- **Semantics versioning** — `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 8`; incremental mode forces full reindex when extractor output changes
+- **Semantics versioning** — `CURRENT_EXTRACTOR_SEMANTICS_VERSION = 9`; incremental mode forces full reindex when extractor output changes
 - **Discovery completeness lock** — `DiscoveryResult` with structured errors; partial discovery preserves the existing graph (no silent wipe)
 - **Canonical root propagation** — symlinked roots produce `file_path` without `..`
 - **File identity contract** — `dev:ino` dedup with `0:0` fallback; deterministic hardlink selection
@@ -346,11 +362,12 @@ d3-force canvas and two task views over the same graph:
     the same canvas. The backend adds a deterministic directory -> file ->
     symbol plan computed from the complete exact membership, so the first page
     already shows the whole bounded architecture while drawing only the loaded
-    symbols. Raw internal topology remains available immediately and dense
-    scopes expose an explicit Load more action. Selecting a loaded symbol keeps
-    that exact scope mounted, opens its detail, and emphasizes only the visible
-    incident relations; keyboard community browsing skips file surfaces whose
-    symbols have not been loaded yet
+    symbols. Raw internal topology remains available immediately, a compact
+    reference summary exposes the strongest exact dependency with incoming and
+    outgoing totals, and dense scopes expose an explicit Load more action.
+    Selecting a loaded symbol keeps that exact scope mounted, opens its detail,
+    and emphasizes only the visible incident relations; keyboard community
+    browsing skips file surfaces whose symbols have not been loaded yet
   - **Explain a coupling path** (on demand): arm the selected symbol as a path
     start, then choose any other symbol with the existing project search or
     map. The detail panel shows the exact shortest source-to-target chain,

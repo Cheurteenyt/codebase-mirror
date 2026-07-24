@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "r184-ariad-vs-graphify-visual-2026-07-23",
+  "blind_seed": "r184-graph-ui-truth-2026-07-23",
+  "targets": ["fixture", "zod"],
+  "repetitions": {
+    "cold_fresh_browser_context": 5,
+    "warm_persistent_browser_context": 5,
+    "warm_prime_runs": 1,
+    "server_lifecycle": "one stable unmodified product server per target"
+  },
+  "viewports": [
+    {"id": "desktop", "width": 1920, "height": 1080},
+    {"id": "narrow", "width": 380, "height": 958}
+  ],
+  "capture_stage": "initial-pre-interaction",
+  "tasks": [
+    {
+      "id": "T09",
+      "target": "fixture",
+      "question": "Identify the largest architectural areas, locate commitDelivery, determine the direction of the runPipeline dependency, then return to the initial architecture context.",
+      "required_observations": [
+        "largest areas identified from visible evidence",
+        "commitDelivery located",
+        "runPipeline -> commitDelivery direction identified",
+        "initial architecture context restored"
+      ],
+      "mechanical_signals": [
+        "largest_areas_visible",
+        "commit_delivery_located",
+        "run_pipeline_direction_visible",
+        "architecture_context_restored"
+      ]
+    },
+    {
+      "id": "T10",
+      "target": "zod",
+      "question": "Locate packages/bench, identify its dependency on packages/zod, inspect the exact zodNext import evidence, clear the selection, restore the overview, and repeat the recovery at the narrow viewport.",
+      "required_observations": [
+        "packages/bench located",
+        "packages/bench -> packages/zod direction identified",
+        "zodNext exact evidence located",
+        "selection cleared",
+        "overview restored on desktop",
+        "overview restored without clipping on narrow viewport"
+      ],
+      "mechanical_signals": [
+        "packages_bench_located",
+        "packages_bench_to_zod_direction_visible",
+        "zod_next_exact_evidence_located",
+        "selection_cleared",
+        "overview_restored",
+        "narrow_viewport_unclipped"
+      ]
+    }
+  ],
+  "metrics": [
+    "task_success",
+    "task_time_ms",
+    "actions",
+    "context_loss_events",
+    "first_usable_render_ms",
+    "interaction_fps_p50",
+    "interaction_fps_p95",
+    "long_task_ms_p95",
+    "idle_cpu_percent",
+    "heap_mib",
+    "console_errors",
+    "page_errors",
+    "http_errors",
+    "clipping_failures",
+    "overlap_failures",
+    "accessibility_failures"
+  ]
+}

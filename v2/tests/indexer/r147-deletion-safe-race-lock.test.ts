@@ -173,8 +173,8 @@ describe('R147: Deletion-Safe Race Lock', () => {
     expect(r.crossFileCallsStale).toBe(true);
   });
 
-  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8 (R144)', () => {
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
+  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 9 (R184)', () => {
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(9);
   });
 
   it('regression: two code hardlinks with different extensions → both indexed (R144)', () => {

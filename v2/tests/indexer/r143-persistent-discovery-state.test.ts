@@ -360,7 +360,7 @@ describe('R143: Persistent Discovery State', () => {
     expect(files.some(f => f.endsWith('real.ts'))).toBe(true);
   });
 
-  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 8 (R144 MIG-R144-01)', () => {
-    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(8);
+  it('regression: CURRENT_EXTRACTOR_SEMANTICS_VERSION is 9 (R184)', () => {
+    expect(CURRENT_EXTRACTOR_SEMANTICS_VERSION).toBe(9);
   });
 });

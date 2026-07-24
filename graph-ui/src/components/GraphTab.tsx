@@ -914,10 +914,6 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
           selectedNodeId={selectedNode?.id ?? null}
           onSelectNode={handleSidebarNodeSelect}
           onSelectPath={(path, ids) => {
-             if (ids.size === 0) {
-               navigateHome();
-               return;
-             }
              const domain = filteredData.layout?.domains.find((candidate) => candidate.key === path);
              if (domain) handleScopeSelect({
                kind: "domain",
@@ -1086,6 +1082,7 @@ export function GraphTab({ project, active = true }: GraphTabProps) {
                     totalInternalEdges: exactScope.data.scope.total_internal_edges,
                     complete: exactScope.data.complete,
                     selectedCount: highlightedIds?.size ?? 0,
+                    boundary: exactScope.data.boundary,
                   } : null}
                   active={exactScopeActive}
                   loading={exactScope.loading && !exactScope.data}
