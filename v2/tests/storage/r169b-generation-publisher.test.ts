@@ -73,6 +73,7 @@ import {
 import {
   initIndexerSchema,
   updateProjectStats,
+  CURRENT_EXTRACTOR_SEMANTICS_VERSION,
   CURRENT_DISCOVERY_POLICY_VERSION,
 } from "../../src/indexer/schema.js";
 
@@ -307,8 +308,10 @@ describe("R169B-STEP2 publisher — prepareGenerationForPublication (validation)
     }
   });
 
-  it("rejects extractor_semantics_version != 8 (STAGING_DB_STATE_INVALID)", () => {
-    const { reservation } = reserveAndPopulateValid({ wrongSemantics: 7 });
+  it("rejects a non-current extractor_semantics_version (STAGING_DB_STATE_INVALID)", () => {
+    const { reservation } = reserveAndPopulateValid({
+      wrongSemantics: CURRENT_EXTRACTOR_SEMANTICS_VERSION - 1,
+    });
         try {
       prepareGenerationForPublication(reservation);
       expect.fail("expected call to throw GenerationStoreError with code STAGING_DB_STATE_INVALID");
@@ -425,11 +428,11 @@ describe("R169B-STEP2 publisher — prepareGenerationForPublication (hash + re-s
     expect(prepared.manifest.dbFile).toBe(`generations/generation-${prepared.generationId}.db`);
   });
 
-  it("the manifest has formatVersion=1, semantics=8, current discovery policy, and DB rootFingerprint", () => {
+  it("the manifest has formatVersion=1, current semantics and discovery policy, and DB rootFingerprint", () => {
     const { reservation } = reserveAndPopulateValid();
     const prepared = prepareGenerationForPublication(reservation);
     expect(prepared.manifest.formatVersion).toBe(1);
-    expect(prepared.manifest.extractorSemanticsVersion).toBe(8);
+    expect(prepared.manifest.extractorSemanticsVersion).toBe(CURRENT_EXTRACTOR_SEMANTICS_VERSION);
     expect(prepared.manifest.discoveryPolicyVersion).toBe(CURRENT_DISCOVERY_POLICY_VERSION);
     expect(prepared.manifest.rootFingerprint).toBe(FIXTURE_ROOT_FINGERPRINT);
   });

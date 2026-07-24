@@ -20,6 +20,7 @@ import {
   initIndexerSchema,
   updateProjectStats,
   computeRootFingerprint,
+  CURRENT_EXTRACTOR_SEMANTICS_VERSION,
   CURRENT_DISCOVERY_POLICY_VERSION,
 } from "../../src/indexer/schema.js";
 import {
@@ -90,7 +91,7 @@ export interface CreateStagingDbOptions {
   readonly withLastError?: string;
   /** If true, leave last_successful_index_at NULL (causes STAGING_DB_STATE_INVALID). */
   readonly noSuccessfulIndex?: boolean;
-  /** If true, set extractor_semantics_version=7 (causes STAGING_DB_STATE_INVALID). */
+  /** Override extractor semantics; a non-current value causes STAGING_DB_STATE_INVALID. */
   readonly wrongSemantics?: number;
   /** Override discovery_policy_version (non-current values cause STAGING_DB_STATE_INVALID). */
   readonly wrongDiscovery?: number;
@@ -179,7 +180,7 @@ export function createValidStagingDb(
     effectiveEdgeCount,
     options.stale ?? false, // crossFileCallsStale
     true, // callSitesInitialized
-    options.wrongSemantics ?? 8, // extractorSemanticsVersion
+    options.wrongSemantics ?? CURRENT_EXTRACTOR_SEMANTICS_VERSION,
     options.withLastError ?? null, // indexError
     true, // aliasHistoryInitialized
     options.wrongDiscovery ?? CURRENT_DISCOVERY_POLICY_VERSION,

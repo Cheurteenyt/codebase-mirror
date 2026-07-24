@@ -78,9 +78,9 @@ import { statSync } from 'node:fs';
  *        R152/R153 NOTE: R152 changed the broken-symlink policy (warnings only,
  *        no globalDeletionUncertainty) and R153 added the alias_history table
  *        for historical-target protection. Neither changes the extractor's AST
- *        output for a stable file, so the semantics version remains 8. A v8 DB
- *        upgraded to R153 code will simply have an empty alias_history until
- *        the next successful run populates it.
+ *        output for a stable file, so R153 kept semantics version 8. A v8 DB
+ *        upgraded to R153 code simply had an empty alias_history until the
+ *        next successful run populated it.
  *   v9 - R184 removes the tree-sitter `function` keyword token from function
  *        declarations, resolves Windows project paths and NodeNext `.js`
  *        specifiers to TypeScript sources, and publishes exact file-level
