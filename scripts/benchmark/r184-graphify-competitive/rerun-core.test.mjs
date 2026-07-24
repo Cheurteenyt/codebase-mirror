@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildRerunPlan, reconcileReruns } from './rerun-core.mjs';
+import { buildRerunPlan, reconcileReruns, rerunPhase } from './rerun-core.mjs';
 
 const spec = {
   tasks: [{ id: 'T01' }, { id: 'T02' }, { id: 'T03' }],
@@ -12,6 +12,16 @@ const spec = {
     ],
   },
 };
+
+test('rerun phase accepts baseline and postfix but rejects drift', () => {
+  assert.equal(rerunPhase('baseline'), 'baseline');
+  assert.equal(rerunPhase('postfix', 'postfix', 'postfix'), 'postfix');
+  assert.throws(() => rerunPhase('preflight'), /Unsupported rerun phase/u);
+  assert.throws(
+    () => rerunPhase('baseline', 'postfix'),
+    /do not share phase baseline/u,
+  );
+});
 
 test('rerun plan limits cold work and rebuilds complete warm sessions', () => {
   const plan = buildRerunPlan([

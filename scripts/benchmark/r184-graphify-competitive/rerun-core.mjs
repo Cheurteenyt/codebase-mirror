@@ -8,6 +8,17 @@ export function sha256Text(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+export function rerunPhase(...phases) {
+  const [phase] = phases;
+  if (!['baseline', 'postfix'].includes(phase)) {
+    throw new Error(`Unsupported rerun phase: ${phase ?? 'missing'}`);
+  }
+  if (phases.some((candidate) => candidate !== phase)) {
+    throw new Error(`Rerun artifacts do not share phase ${phase}`);
+  }
+  return phase;
+}
+
 export function buildRerunPlan(rows, spec) {
   const taskOrder = spec.tasks.map((task) => task.id);
   const taskRank = new Map(taskOrder.map((task, index) => [task, index]));

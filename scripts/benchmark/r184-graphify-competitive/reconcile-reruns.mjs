@@ -5,7 +5,7 @@ import {
 } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-import { reconcileReruns, sha256Text } from './rerun-core.mjs';
+import { reconcileReruns, rerunPhase, sha256Text } from './rerun-core.mjs';
 
 const spec = JSON.parse(readFileSync(new URL('./spec.json', import.meta.url), 'utf8'));
 
@@ -42,6 +42,7 @@ if (
 ) {
   throw new Error('Rerun reconciliation inputs do not share the frozen benchmark identity');
 }
+const phase = rerunPhase(primary.phase, reruns.phase, plan.phase);
 if (plan.primary_summary_sha256 !== sha256Text(primaryText)) {
   throw new Error('Primary summary hash does not match the frozen rerun plan');
 }
@@ -56,7 +57,7 @@ const output = {
   schema_version: 1,
   benchmark_id: spec.benchmark_id,
   generated_at_utc: new Date().toISOString(),
-  phase: 'baseline',
+  phase,
   primary_summary: resolve(options.primary),
   primary_summary_sha256: sha256Text(primaryText),
   rerun_summary: resolve(options.reruns),

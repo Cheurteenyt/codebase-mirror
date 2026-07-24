@@ -7,7 +7,7 @@ import {
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildRerunPlan, sha256Text } from './rerun-core.mjs';
+import { buildRerunPlan, rerunPhase, sha256Text } from './rerun-core.mjs';
 
 const spec = JSON.parse(readFileSync(new URL('./spec.json', import.meta.url), 'utf8'));
 
@@ -55,12 +55,14 @@ for (const required of [
 
 const summaryText = readFileSync(resolve(options.summary), 'utf8');
 const summary = JSON.parse(summaryText);
-if (summary.benchmark_id !== spec.benchmark_id || summary.phase !== 'baseline') {
-  throw new Error('The rerun source must be the frozen R184 baseline summary');
+if (summary.benchmark_id !== spec.benchmark_id) {
+  throw new Error('The rerun source must share the frozen R184 benchmark identity');
 }
+const phase = rerunPhase(summary.phase);
 const plan = {
   schema_version: 1,
   benchmark_id: spec.benchmark_id,
+  phase,
   preregistration_sha: options.prereg_sha,
   created_at_utc: new Date().toISOString(),
   primary_summary: resolve(options.summary),
@@ -81,7 +83,7 @@ for (const group of plan.groups) {
     fileURLToPath(new URL('./run.mjs', import.meta.url)),
     'run',
     '--lab-root', resolve(options.lab_root),
-    '--phase', 'baseline',
+    '--phase', phase,
     '--mode', group.mode,
     '--repetition', String(group.repetition),
     '--prereg-sha', options.prereg_sha,
