@@ -6,14 +6,15 @@
 schema_version: 1
 kind: implementation-handoff
 round: R184
-status: LOCAL_VALIDATED
+status: GITHUB_VALIDATED
 repository: Cheurteenyt/Ariad
 branch: codex/r184-graphify-truth-audit
 base_sha: 0789b3019d1847605ebe60a3be6abd16363249fe
 postfix_product_sha: a699e27626673d29f91344b4b2d6a059ac63d728
 benchmark_preregistration_sha: 1ed1d4c8a1697ed7ea8f5ac66f79dbf4a42105cf
-last_local_validated_sha: 6f6cccf31ca8fbd8fbcf298a8be3f2bff312c556
-updated_at_utc: 2026-07-24T02:31:13Z
+last_local_validated_sha: bb54cb85a0fc7eb7d75984bb1a373ebdbf2a3f8a
+github_validated_sha: bb54cb85a0fc7eb7d75984bb1a373ebdbf2a3f8a
+updated_at_utc: 2026-07-24T02:46:24Z
 implementer_role: codex
 ```
 
@@ -40,6 +41,8 @@ implementer_role: codex
 | `get_module_context` treated directory paths as ambiguous file names | exact bounded directory context before normal symbol resolution | `get-module-context.test.ts` |
 | UI search did not promote an exact directory task | exact directory action and compact strongest-reference HUD | Sidebar, hook, and reconciliation tests |
 | UI additions exceeded the existing manifest budget | reduced duplicated copy and reused the existing scope summary | production bundle gate |
+| The initial bundle margin varied across Windows and Linux gzip output | removed an unnecessary DOM wrapper and shortened exact-search status copy instead of raising the budget | frontend, package, and Docker bundle gates |
+| The publication benchmark still populated extractor semantics 8 | bound the benchmark fixture to `CURRENT_EXTRACTOR_SEMANTICS_VERSION` | publication benchmark invariant gate |
 | Invalid query reruns could be cherry-picked or incompletely sealed | strict first-attempt audit, full warm-prefix reruns, reconciliation, and external rerun inclusion | benchmark harness tests |
 
 ## Evidence summary
@@ -63,26 +66,27 @@ and its
 
 ## Validation and publication
 
-Local product validation is complete. GitHub checks, exact merge, mirror
+Local product validation and GitHub checks are complete on
+`bb54cb85a0fc7eb7d75984bb1a373ebdbf2a3f8a`. Exact merge, mirror
 verification, branch deletion, final-main reindex, and packaged Graph UI
 startup remain publication gates.
 
 ```text
 backend_npm_ci: pass; 0 vulnerabilities
 backend_docs_typecheck_build: pass
-backend_targeted: 132/132 pass
+backend_targeted: 152/152 pass
 benchmark_harness: 19/19 pass
 frontend_npm_ci_audit: pass; 0 vulnerabilities
-frontend_typecheck_build: pass; manifest JS 122.99/123 KiB; CSS 14.91/15 KiB
+frontend_typecheck_build: pass; manifest JS 122.91/123 KiB; CSS 14.91/15 KiB
 frontend_tests: 238/238 pass
 embedded_package: pass
 packaged_browser_desktop: pass at 1440x960; zero console/page/HTTP errors
 packaged_browser_narrow: pass at 380x800; zero console/page/HTTP errors
-fresh_self_index: 664 files; 10,932 nodes; 24,834 edges; 0 errors
+fresh_self_index: 664 files; 10,934 nodes; 24,839 edges; 0 errors
 windows_full_suite: 1,548/2,079 pass; 531 failures remain in POSIX-only symlink, mode, Bash, Unix-command, and shell-redirection contracts
-github_pr: pending
-github_ci: pending
-codeql: pending
+github_pr: https://github.com/Cheurteenyt/Ariad/pull/84
+github_ci: pass; https://github.com/Cheurteenyt/Ariad/actions/runs/30062396575
+codeql: pass; https://github.com/Cheurteenyt/Ariad/actions/runs/30062396612
 mirror: pending
 merge_commit: pending
 final_main_reindex: pending
