@@ -105,6 +105,46 @@ for (const [role, path] of Object.entries(roots)) {
   if (!existsSync(path)) throw new Error(`Missing ${role} evidence root: ${path}`);
 }
 
+const rerunPlans = findFiles(
+  roots.phase_results,
+  (path) => path.endsWith(`${sep}rerun-plan.json`),
+);
+if (rerunPlans.length > 1) {
+  throw new Error(`Expected at most one rerun plan, found ${rerunPlans.length}`);
+}
+let rerunMetadataCount = 0;
+if (rerunPlans.length === 1) {
+  const rerunPlan = JSON.parse(readFileSync(rerunPlans[0], 'utf8'));
+  const rerunRoot = resolve(rerunPlan.rerun_results_root ?? '');
+  const rerunRelativeToLab = relative(labRoot, rerunRoot);
+  if (
+    !rerunPlan.rerun_results_root
+    || rerunRelativeToLab === ''
+    || rerunRelativeToLab === '..'
+    || rerunRelativeToLab.startsWith(`..${sep}`)
+    || !existsSync(rerunRoot)
+  ) {
+    throw new Error(`Invalid external rerun result root: ${rerunPlan.rerun_results_root ?? 'missing'}`);
+  }
+  rerunMetadataCount = findFiles(
+    rerunRoot,
+    (path) => path.endsWith('.meta.json'),
+  ).length;
+  if (rerunMetadataCount !== rerunPlan.expected_rerun_metadata_count) {
+    throw new Error(
+      `Incomplete rerun matrix: ${rerunMetadataCount}/`
+      + `${rerunPlan.expected_rerun_metadata_count}`,
+    );
+  }
+  const rerunRelativeToPhase = relative(roots.phase_results, rerunRoot);
+  if (
+    rerunRelativeToPhase === '..'
+    || rerunRelativeToPhase.startsWith(`..${sep}`)
+  ) {
+    roots.query_reruns = rerunRoot;
+  }
+}
+
 const phaseManifestPath = join(roots.phase_results, 'result-manifest.json');
 const sealPath = join(roots.phase_results, `${options.phase}-seal.json`);
 if (existsSync(phaseManifestPath) || existsSync(sealPath)) {
@@ -193,6 +233,7 @@ const manifest = {
     index_nochange: indexNoChange.length,
     index_mutation: indexMutation.length,
     query_cells: queryMetadata.length,
+    query_rerun_cells: rerunMetadataCount,
     visual_samples: visualSamples.length,
   },
   files: entries,
