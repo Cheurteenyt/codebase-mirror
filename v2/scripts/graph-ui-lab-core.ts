@@ -71,6 +71,8 @@ export interface PerceptionTask {
 
 export interface GraphBrowserSmokeObservation {
   graphTabSelected: boolean;
+  projectIdentityVerified: boolean;
+  projectChipExpected: boolean;
   projectVisible: boolean;
   canvas: {
     cssWidth: number;
@@ -296,7 +298,12 @@ export function blindLabels(seed: string): Readonly<Record<'v1' | 'v2', 'A' | 'B
 export function assertGraphBrowserSmoke(observation: GraphBrowserSmokeObservation): void {
   const failures: string[] = [];
   if (!observation.graphTabSelected) failures.push('graph tab is not selected after navigation');
-  if (!observation.projectVisible) failures.push('selected project is not visible in the application shell');
+  if (!observation.projectIdentityVerified) {
+    failures.push('the successful layout response did not identify the requested project');
+  }
+  if (observation.projectChipExpected && !observation.projectVisible) {
+    failures.push('selected project is not visible in the desktop application shell');
+  }
   if (
     observation.canvas.cssWidth < 320
     || observation.canvas.cssHeight < 200

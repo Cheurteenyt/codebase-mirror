@@ -123,6 +123,8 @@ describe('graph UI comparison lab contract', () => {
   it('fails closed when the packaged browser smoke does not exercise the graph', () => {
     const valid = {
       graphTabSelected: true,
+      projectIdentityVerified: true,
+      projectChipExpected: true,
       projectVisible: true,
       canvas: { cssWidth: 1200, cssHeight: 800, pixelWidth: 1200, pixelHeight: 800 },
       initial: { visualMode: 'architecture', viewPressed: true, flowLens: 'off' },
@@ -135,6 +137,15 @@ describe('graph UI comparison lab contract', () => {
     } as const;
 
     expect(() => assertGraphBrowserSmoke(valid)).not.toThrow();
+    expect(() => assertGraphBrowserSmoke({
+      ...valid,
+      projectChipExpected: false,
+      projectVisible: false,
+    })).not.toThrow();
+    expect(() => assertGraphBrowserSmoke({
+      ...valid,
+      projectIdentityVerified: false,
+    })).toThrow(/layout response did not identify the requested project/u);
     expect(() => assertGraphBrowserSmoke({
       ...valid,
       graphTabSelected: false,
